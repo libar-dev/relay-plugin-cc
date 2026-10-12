@@ -1,0 +1,808 @@
+{
+  "unset": {
+    "start": "job: <job>\nstate: starting\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\n",
+    "spawnHomes": [
+      null,
+      null,
+      null
+    ],
+    "requests": [
+      {
+        "method": "thread/start",
+        "params": {
+          "cwd": "<tmp>/work",
+          "model": "gpt-test",
+          "approvalPolicy": "never",
+          "sandbox": "danger-full-access",
+          "config": {
+            "web_search": "live"
+          },
+          "serviceName": "claude_code_codex_plugin",
+          "ephemeral": false
+        }
+      },
+      {
+        "method": "turn/start",
+        "params": {
+          "threadId": "thr_1",
+          "input": [
+            {
+              "type": "text",
+              "text": "First turn.",
+              "text_elements": []
+            }
+          ],
+          "clientUserMessageId": "brief-<job>",
+          "model": "gpt-test",
+          "effort": "low",
+          "sandboxPolicy": {
+            "type": "dangerFullAccess"
+          },
+          "approvalPolicy": "never",
+          "outputSchema": null
+        }
+      },
+      {
+        "method": "turn/steer",
+        "params": {
+          "threadId": "thr_1",
+          "input": [
+            {
+              "type": "text",
+              "text": "Also check the tests.",
+              "text_elements": []
+            }
+          ],
+          "clientUserMessageId": "<message-2>",
+          "expectedTurnId": "turn_1"
+        }
+      },
+      {
+        "method": "thread/resume",
+        "params": {
+          "threadId": "thr_1",
+          "cwd": "<tmp>/work",
+          "model": "gpt-test",
+          "approvalPolicy": "never",
+          "sandbox": "danger-full-access",
+          "config": {
+            "web_search": "live"
+          }
+        }
+      },
+      {
+        "method": "turn/start",
+        "params": {
+          "threadId": "thr_1",
+          "input": [
+            {
+              "type": "text",
+              "text": "[quick] Second turn.",
+              "text_elements": []
+            }
+          ],
+          "clientUserMessageId": "<message-3>",
+          "model": "gpt-test",
+          "effort": "low",
+          "sandboxPolicy": {
+            "type": "dangerFullAccess"
+          },
+          "approvalPolicy": "never",
+          "outputSchema": null
+        }
+      },
+      {
+        "method": "thread/resume",
+        "params": {
+          "threadId": "thr_1",
+          "cwd": "<tmp>/work",
+          "model": "gpt-test",
+          "approvalPolicy": "never",
+          "sandbox": "danger-full-access",
+          "config": {
+            "web_search": "live"
+          }
+        }
+      },
+      {
+        "method": "turn/start",
+        "params": {
+          "threadId": "thr_1",
+          "input": [
+            {
+              "type": "text",
+              "text": "[quick] Third turn.",
+              "text_elements": []
+            }
+          ],
+          "clientUserMessageId": "<message-4>",
+          "model": "gpt-test",
+          "effort": "low",
+          "sandboxPolicy": {
+            "type": "dangerFullAccess"
+          },
+          "approvalPolicy": "never",
+          "outputSchema": null
+        }
+      }
+    ],
+    "snapshots": [
+      {
+        "phase": "start-and-steer",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 1\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "status": {
+          "jobsHome": "<tmp>/jobs",
+          "repoSlug": "<repo>",
+          "jobs": [
+            {
+              "id": "<job>",
+              "kind": "task",
+              "state": "completed",
+              "storedState": "completed",
+              "stalled": false,
+              "deadReason": null,
+              "sessionId": "thr_1",
+              "turnId": "turn_1",
+              "model": "gpt-test",
+              "effort": "low",
+              "fast": false,
+              "serviceTier": null,
+              "mode": "yolo",
+              "webSearch": "live",
+              "cwd": "<tmp>/work",
+              "attempts": 1,
+              "errorMessage": null,
+              "createdAt": "<time>",
+              "completedAt": "<time>",
+              "jobDir": "<tmp>/jobs/<repo>/<job>",
+              "reportPath": "<tmp>/jobs/<repo>/<job>/report.md",
+              "summary": "First turn.",
+              "relay": null,
+              "relayViolations": [],
+              "automaticResumes": [],
+              "attemptRecords": [
+                {
+                  "attempt": 1,
+                  "source": "brief",
+                  "automatic": false,
+                  "messageId": null,
+                  "startedAt": "<time>",
+                  "turnId": "turn_1",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                }
+              ],
+              "server": null,
+              "undelivered": [],
+              "dropped": []
+            }
+          ]
+        },
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+      },
+      {
+        "phase": "continue",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 2\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "status": {
+          "jobsHome": "<tmp>/jobs",
+          "repoSlug": "<repo>",
+          "jobs": [
+            {
+              "id": "<job>",
+              "kind": "task",
+              "state": "completed",
+              "storedState": "completed",
+              "stalled": false,
+              "deadReason": null,
+              "sessionId": "thr_1",
+              "turnId": "turn_2",
+              "model": "gpt-test",
+              "effort": "low",
+              "fast": false,
+              "serviceTier": null,
+              "mode": "yolo",
+              "webSearch": "live",
+              "cwd": "<tmp>/work",
+              "attempts": 2,
+              "errorMessage": null,
+              "createdAt": "<time>",
+              "completedAt": "<time>",
+              "jobDir": "<tmp>/jobs/<repo>/<job>",
+              "reportPath": "<tmp>/jobs/<repo>/<job>/report.md",
+              "summary": "First turn.",
+              "relay": null,
+              "relayViolations": [],
+              "automaticResumes": [],
+              "attemptRecords": [
+                {
+                  "attempt": 1,
+                  "source": "brief",
+                  "automatic": false,
+                  "messageId": null,
+                  "startedAt": "<time>",
+                  "turnId": "turn_1",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                },
+                {
+                  "attempt": 2,
+                  "source": "continue",
+                  "automatic": false,
+                  "messageId": "<message-3>",
+                  "startedAt": "<time>",
+                  "turnId": "turn_2",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                }
+              ],
+              "server": null,
+              "undelivered": [],
+              "dropped": []
+            }
+          ]
+        },
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+      },
+      {
+        "phase": "resume",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 3\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "status": {
+          "jobsHome": "<tmp>/jobs",
+          "repoSlug": "<repo>",
+          "jobs": [
+            {
+              "id": "<job>",
+              "kind": "task",
+              "state": "completed",
+              "storedState": "completed",
+              "stalled": false,
+              "deadReason": null,
+              "sessionId": "thr_1",
+              "turnId": "turn_3",
+              "model": "gpt-test",
+              "effort": "low",
+              "fast": false,
+              "serviceTier": null,
+              "mode": "yolo",
+              "webSearch": "live",
+              "cwd": "<tmp>/work",
+              "attempts": 3,
+              "errorMessage": null,
+              "createdAt": "<time>",
+              "completedAt": "<time>",
+              "jobDir": "<tmp>/jobs/<repo>/<job>",
+              "reportPath": "<tmp>/jobs/<repo>/<job>/report.md",
+              "summary": "First turn.",
+              "relay": null,
+              "relayViolations": [],
+              "automaticResumes": [],
+              "attemptRecords": [
+                {
+                  "attempt": 1,
+                  "source": "brief",
+                  "automatic": false,
+                  "messageId": null,
+                  "startedAt": "<time>",
+                  "turnId": "turn_1",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                },
+                {
+                  "attempt": 2,
+                  "source": "continue",
+                  "automatic": false,
+                  "messageId": "<message-3>",
+                  "startedAt": "<time>",
+                  "turnId": "turn_2",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                },
+                {
+                  "attempt": 3,
+                  "source": "resume",
+                  "automatic": false,
+                  "messageId": "<message-4>",
+                  "startedAt": "<time>",
+                  "turnId": "turn_3",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                }
+              ],
+              "server": null,
+              "undelivered": [],
+              "dropped": []
+            }
+          ]
+        },
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+      }
+    ]
+  },
+  "inherited": {
+    "start": "job: <job>\nstate: starting\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\n",
+    "spawnHomes": [
+      "<tmp>/user/.codex",
+      "<tmp>/user/.codex",
+      "<tmp>/user/.codex"
+    ],
+    "requests": [
+      {
+        "method": "thread/start",
+        "params": {
+          "cwd": "<tmp>/work",
+          "model": "gpt-test",
+          "approvalPolicy": "never",
+          "sandbox": "danger-full-access",
+          "config": {
+            "web_search": "live"
+          },
+          "serviceName": "claude_code_codex_plugin",
+          "ephemeral": false
+        }
+      },
+      {
+        "method": "turn/start",
+        "params": {
+          "threadId": "thr_1",
+          "input": [
+            {
+              "type": "text",
+              "text": "First turn.",
+              "text_elements": []
+            }
+          ],
+          "clientUserMessageId": "brief-<job>",
+          "model": "gpt-test",
+          "effort": "low",
+          "sandboxPolicy": {
+            "type": "dangerFullAccess"
+          },
+          "approvalPolicy": "never",
+          "outputSchema": null
+        }
+      },
+      {
+        "method": "turn/steer",
+        "params": {
+          "threadId": "thr_1",
+          "input": [
+            {
+              "type": "text",
+              "text": "Also check the tests.",
+              "text_elements": []
+            }
+          ],
+          "clientUserMessageId": "<message-2>",
+          "expectedTurnId": "turn_1"
+        }
+      },
+      {
+        "method": "thread/resume",
+        "params": {
+          "threadId": "thr_1",
+          "cwd": "<tmp>/work",
+          "model": "gpt-test",
+          "approvalPolicy": "never",
+          "sandbox": "danger-full-access",
+          "config": {
+            "web_search": "live"
+          }
+        }
+      },
+      {
+        "method": "turn/start",
+        "params": {
+          "threadId": "thr_1",
+          "input": [
+            {
+              "type": "text",
+              "text": "[quick] Second turn.",
+              "text_elements": []
+            }
+          ],
+          "clientUserMessageId": "<message-3>",
+          "model": "gpt-test",
+          "effort": "low",
+          "sandboxPolicy": {
+            "type": "dangerFullAccess"
+          },
+          "approvalPolicy": "never",
+          "outputSchema": null
+        }
+      },
+      {
+        "method": "thread/resume",
+        "params": {
+          "threadId": "thr_1",
+          "cwd": "<tmp>/work",
+          "model": "gpt-test",
+          "approvalPolicy": "never",
+          "sandbox": "danger-full-access",
+          "config": {
+            "web_search": "live"
+          }
+        }
+      },
+      {
+        "method": "turn/start",
+        "params": {
+          "threadId": "thr_1",
+          "input": [
+            {
+              "type": "text",
+              "text": "[quick] Third turn.",
+              "text_elements": []
+            }
+          ],
+          "clientUserMessageId": "<message-4>",
+          "model": "gpt-test",
+          "effort": "low",
+          "sandboxPolicy": {
+            "type": "dangerFullAccess"
+          },
+          "approvalPolicy": "never",
+          "outputSchema": null
+        }
+      }
+    ],
+    "snapshots": [
+      {
+        "phase": "start-and-steer",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 1\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "status": {
+          "jobsHome": "<tmp>/jobs",
+          "repoSlug": "<repo>",
+          "jobs": [
+            {
+              "id": "<job>",
+              "kind": "task",
+              "state": "completed",
+              "storedState": "completed",
+              "stalled": false,
+              "deadReason": null,
+              "sessionId": "thr_1",
+              "turnId": "turn_1",
+              "model": "gpt-test",
+              "effort": "low",
+              "fast": false,
+              "serviceTier": null,
+              "mode": "yolo",
+              "webSearch": "live",
+              "cwd": "<tmp>/work",
+              "attempts": 1,
+              "errorMessage": null,
+              "createdAt": "<time>",
+              "completedAt": "<time>",
+              "jobDir": "<tmp>/jobs/<repo>/<job>",
+              "reportPath": "<tmp>/jobs/<repo>/<job>/report.md",
+              "summary": "First turn.",
+              "relay": null,
+              "relayViolations": [],
+              "automaticResumes": [],
+              "attemptRecords": [
+                {
+                  "attempt": 1,
+                  "source": "brief",
+                  "automatic": false,
+                  "messageId": null,
+                  "startedAt": "<time>",
+                  "turnId": "turn_1",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                }
+              ],
+              "server": null,
+              "undelivered": [],
+              "dropped": []
+            }
+          ]
+        },
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+      },
+      {
+        "phase": "continue",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 2\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "status": {
+          "jobsHome": "<tmp>/jobs",
+          "repoSlug": "<repo>",
+          "jobs": [
+            {
+              "id": "<job>",
+              "kind": "task",
+              "state": "completed",
+              "storedState": "completed",
+              "stalled": false,
+              "deadReason": null,
+              "sessionId": "thr_1",
+              "turnId": "turn_2",
+              "model": "gpt-test",
+              "effort": "low",
+              "fast": false,
+              "serviceTier": null,
+              "mode": "yolo",
+              "webSearch": "live",
+              "cwd": "<tmp>/work",
+              "attempts": 2,
+              "errorMessage": null,
+              "createdAt": "<time>",
+              "completedAt": "<time>",
+              "jobDir": "<tmp>/jobs/<repo>/<job>",
+              "reportPath": "<tmp>/jobs/<repo>/<job>/report.md",
+              "summary": "First turn.",
+              "relay": null,
+              "relayViolations": [],
+              "automaticResumes": [],
+              "attemptRecords": [
+                {
+                  "attempt": 1,
+                  "source": "brief",
+                  "automatic": false,
+                  "messageId": null,
+                  "startedAt": "<time>",
+                  "turnId": "turn_1",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                },
+                {
+                  "attempt": 2,
+                  "source": "continue",
+                  "automatic": false,
+                  "messageId": "<message-3>",
+                  "startedAt": "<time>",
+                  "turnId": "turn_2",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                }
+              ],
+              "server": null,
+              "undelivered": [],
+              "dropped": []
+            }
+          ]
+        },
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+      },
+      {
+        "phase": "resume",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 3\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "status": {
+          "jobsHome": "<tmp>/jobs",
+          "repoSlug": "<repo>",
+          "jobs": [
+            {
+              "id": "<job>",
+              "kind": "task",
+              "state": "completed",
+              "storedState": "completed",
+              "stalled": false,
+              "deadReason": null,
+              "sessionId": "thr_1",
+              "turnId": "turn_3",
+              "model": "gpt-test",
+              "effort": "low",
+              "fast": false,
+              "serviceTier": null,
+              "mode": "yolo",
+              "webSearch": "live",
+              "cwd": "<tmp>/work",
+              "attempts": 3,
+              "errorMessage": null,
+              "createdAt": "<time>",
+              "completedAt": "<time>",
+              "jobDir": "<tmp>/jobs/<repo>/<job>",
+              "reportPath": "<tmp>/jobs/<repo>/<job>/report.md",
+              "summary": "First turn.",
+              "relay": null,
+              "relayViolations": [],
+              "automaticResumes": [],
+              "attemptRecords": [
+                {
+                  "attempt": 1,
+                  "source": "brief",
+                  "automatic": false,
+                  "messageId": null,
+                  "startedAt": "<time>",
+                  "turnId": "turn_1",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                },
+                {
+                  "attempt": 2,
+                  "source": "continue",
+                  "automatic": false,
+                  "messageId": "<message-3>",
+                  "startedAt": "<time>",
+                  "turnId": "turn_2",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                },
+                {
+                  "attempt": 3,
+                  "source": "resume",
+                  "automatic": false,
+                  "messageId": "<message-4>",
+                  "startedAt": "<time>",
+                  "turnId": "turn_3",
+                  "state": "completed",
+                  "servers": [
+                    {
+                      "pid": "<pid>",
+                      "startTime": "<time>",
+                      "startedAt": "<time>",
+                      "code": 0,
+                      "signal": null,
+                      "endedAt": "<time>",
+                      "stdoutClosedBeforeExit": true,
+                      "partialStdoutBytes": 0,
+                      "stderrTail": ""
+                    }
+                  ],
+                  "endedAt": "<time>",
+                  "hasReport": true
+                }
+              ],
+              "server": null,
+              "undelivered": [],
+              "dropped": []
+            }
+          ]
+        },
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+      }
+    ]
+  }
+}

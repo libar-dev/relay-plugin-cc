@@ -1,0 +1,8 @@
+{
+  "name": "relay",
+  "version": "2.0.0",
+  "description": "Run jobs on Codex, Grok Build and ZCode from Claude Code like Claude agents.",
+  "author": {
+    "name": "Libar"
+  }
+}

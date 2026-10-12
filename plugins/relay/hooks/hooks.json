@@ -1,0 +1,51 @@
+{
+  "description": "Session exports, the optional stop-time review gate, and the relay:job relay hook, which carries the relay's prompt, messages and report.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/session-lifecycle.mjs\" SessionStart",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/stop-review-gate.mjs\"",
+            "timeout": 900
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|SubagentHandback|StructuredOutput",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/relay-guard.mjs\"",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^relay:job$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/relay-guard.mjs\"",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

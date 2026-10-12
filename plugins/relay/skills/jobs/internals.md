@@ -1,0 +1,42 @@
+# Job agents: how the plugin carries a job
+
+Read this when a job died or was recovered, a relay misbehaved, a job runs in a git worktree, or you change the plugin. Launching
+and talking to a job is in [`SKILL.md`](SKILL.md).
+
+## How the relay is carried by code
+
+The relay is a model, so it carries no content. A plugin hook does, and acts only inside a `relay:job` subagent (a main session started with `--agent relay:job` is not touched):
+
+- The relay runs `start --from-relay`. The hook adds the relay's transcript path and agent id, and the companion reads the prompt from the transcript, byte for byte. The job is bound to the relay's agent id; the relay cannot wait on, read or hand back another job.
+- Before every relay tool call and when it stops, the hook reads the relay's transcript and delivers every message the relay received, in order, exactly once: `cancel` cancels, other text steers the running turn or continues the ended job. A message sent before the job existed is delivered when it starts. Each delivery is recorded in the job's `inbox/relay/` by the transcript entry's id.
+- A `cancel` counts as delivered once the job is in a terminal state. A cancel that fails is recorded as a `relay-violation:` and stays pending while the job runs and tries remain. A terminal job closes it as done; three started tries close it as failed.
+- The hook denies the relay's hand-back and blocks its stop while the job runs or a message is owed, even on a `completed` job. A message is owed while the hook has not delivered it, or while it is acknowledged and not run yet (`undelivered:`). The hand-back is rewritten to exactly what `result <job>` prints. Under the Workflow tool the hook adds `--state-only`, and compares the relay's final text with the state block, ignoring trailing whitespace.
+- The relay may run only `start`, `wait`, `result`, `status` and `cancel`. Anything else is refused with a reason that restates its job.
+- The hook sets each relay wait to `--timeout-seconds 120` with a Bash timeout of 180 seconds and adds `--exit-zero-while-running`, so a timed-out wait on a running job prints `still running: …` and exits 0. A waiting relay therefore makes a tool call about every two minutes, and the harness's stall timer, which is off during a tool call, can fire only when the relay's own model call stalls.
+- Nothing traps the relay: after eight consecutive blocks it is let go, and a transcript that cannot be read lets it go on. Both are recorded on the job: `result` and `status` print a `relay-violation:` line.
+- When the harness includes a user-request entry, the relay drops it. The job receives the computed task and the messages delivered after it.
+
+## Takeover under the Workflow tool
+
+The harness marks each `agent()` call by the key it writes to the run's `journal.jsonl`, and the plugin stores that key as `relay.journalKey` in the job's `job.json` when the relay starts the job. When a fresh relay takes the job over, its binding (agent id, transcript and the same key) goes to the job's `relay.json`, which readers merge over `job.json`'s, because the worker alone writes `job.json` while it lives. A fresh relay for the same call in the same run (a stall, a lost or throttled reply, a usage-limit wait, a retry from the workflows view, `resumeFromRunId`) takes over the running job; the block gets one `relay-adopted:` line per hand-over and `status` shows `adopted:N`.
+
+## What the relay depends on in Claude Code
+
+The relay reads two things Claude Code does not publish as an interface: the agent transcript and the Workflow tool's run journal (`journal.jsonl`). Its markers were read from Claude Code 2.1.287 and 2.1.288 (`scripts/lib/harness/workflow.mjs`), and its hooks need `SubagentHandback`, so the floor is Claude Code 2.1.271. A Claude Code update can break it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json` must hold the call's key as `relay.journalKey` (once another relay has adopted the job, its `relay.json` holds the binding), and the script must get the state block back.
+
+The relay works with no Claude Code mod loaded: it runs on command hooks and the transcript.
+
+## Automatic recovery
+
+If the backend server dies before the turn finishes, the worker resumes the saved session once with "Your session was cut off. Continue the task from where you stopped, then write the final report." If the worker dies, the relay's wait (the hook adds `--auto-resume`) can spend that same retry. Start, a user continue and each delivered user message renew the shared allowance. A second server death in one attempt returns `failed`; a worker death after the allowance was spent returns `dead`. Every recovery appears as `automatic-resume:` with its cause in the state block. All resumes keep the first launch's cwd, mode, network, writable roots, web search, model, effort, tier, backend and Grok home. A job keeps its tier even when the `fast-tier` setting changes while it runs.
+
+## Git worktrees
+
+- `write` in a linked git worktree also opens the worktree's gitdir and the common `.git` directory, packed-refs locks included, so Codex can commit.
+- In a workflow script, `isolation: 'worktree'` works: with no `cd:`, the job runs in the worktree, and the state block carries `note: isolated worktree <path>`.
+
+## The job directory
+
+`job.json`, `events.jsonl` (backend events and finished messages, including large results), `report.md`, `stderr.log`, `server.stderr.log` (the server's stderr, capped at 1 MiB), `brief.md`, `inbox/` (messages, with `claimed/` and `outcomes/` below it), `attempts/` (earlier reports) and `worker.lease.d/` (the worker lease, as numbered records). A relay job adds `inbox/relay/` (one record per delivered message), `relay-guard.json`, `relay-violations.jsonl` once a violation is recorded, and `relay.json` once another relay adopts it.
+
+`prune` removes terminal or dead jobs in this repository, or every slug with `--all`; durations take `d`, `h` or `m`, and the default is `14d`. It keeps jobs with a live worker, removes old relay pointers unless their job remains, and prints each job's id, state and age, then the bytes freed. `--dry-run` only lists.

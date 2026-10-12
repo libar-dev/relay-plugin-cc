@@ -1,0 +1,427 @@
+{
+ "_source": "cut from two real transcripts, Claude Code 2.1.287, 2026-10-02, paths, project names and remotes replaced with neutral ones",
+ "entries": {
+  "prompt": {
+   "why": "trial 2 line 1: the relay's first prompt, a user entry whose content is a string",
+   "entry": {
+    "parentUuid": null,
+    "isSidechain": true,
+    "promptId": "a2bdc613-1fc9-41b1-850d-df2b4e18c38e",
+    "agentId": "a5e7c8e31144e8f4a",
+    "type": "user",
+    "message": {
+     "role": "user",
+     "content": "model: gpt-6.1-sol\neffort: low\ncd: /private/tmp/claude-example/-home-example-example-project/d75b4e79-acbe-4b70-abc7-00acd7b06752/scratchpad/trial\nbrief: /private/tmp/claude-example/-home-example-example-project/d75b4e79-acbe-4b70-abc7-00acd7b06752/scratchpad/trial/brief-2.md\n---"
+    },
+    "uuid": "3fd88e29-7a21-4db0-b05d-623b1a8e3b3f",
+    "timestamp": "2026-10-02T13:36:02.949Z",
+    "userType": "external",
+    "entrypoint": "cli",
+    "cwd": "/home/example/dev-example/example-project",
+    "sessionId": "d75b4e79-acbe-4b70-abc7-00acd7b06752",
+    "version": "2.1.287",
+    "gitBranch": "example-branch"
+   }
+  },
+  "systemReminder": {
+   "why": "trial 2 line 2: harness metadata (isMeta) right after the prompt",
+   "entry": {
+    "parentUuid": "3fd88e29-7a21-4db0-b05d-623b1a8e3b3f",
+    "isSidechain": true,
+    "promptId": "a2bdc613-1fc9-41b1-850d-df2b4e18c38e",
+    "agentId": "a5e7c8e31144e8f4a",
+    "type": "user",
+    "message": {
+     "role": "user",
+     "content": "<system-reminder>\nYour final report is delivered through SubagentHandback: when your work is complete, call SubagentHandback({message: <your full report>}). The call ends your run, so make it your last step. Only a SubagentHandback call reaches your caller as your result; plain text you write at the end is not delivered.\n</system-reminder>"
+    },
+    "isMeta": true,
+    "uuid": "b83c879c-52e1-4b6c-838c-36a70dc32858",
+    "timestamp": "2026-10-02T13:36:03.008Z",
+    "userType": "external",
+    "entrypoint": "cli",
+    "cwd": "/home/example/dev-example/example-project",
+    "sessionId": "d75b4e79-acbe-4b70-abc7-00acd7b06752",
+    "version": "2.1.287",
+    "gitBranch": "example-branch"
+   }
+  },
+  "bashToolUse": {
+   "why": "trial 2 line 12: an assistant Bash tool_use",
+   "entry": {
+    "parentUuid": "547e0182-9538-447a-a1fa-91a59079b788",
+    "isSidechain": true,
+    "agentId": "a5e7c8e31144e8f4a",
+    "message": {
+     "model": "claude-haiku-4-5-20251001",
+     "id": "msg_011CfdVvLkPavMo47UghcBtT",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_0125rSamqxQFSyZUcuGv52nf",
+       "name": "Bash",
+       "input": {
+        "command": "node \"/home/example/dev-example/example-project/plugins/relay/scripts/companion.mjs\" draft-path --name prompt"
+       },
+       "caller": {
+        "type": "direct"
+       }
+      }
+     ],
+     "container": null,
+     "stop_reason": null,
+     "stop_sequence": null,
+     "stop_details": null,
+     "usage": {
+      "input_tokens": 10,
+      "cache_creation_input_tokens": 8229,
+      "cache_read_input_tokens": 0,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 8229,
+       "ephemeral_1h_input_tokens": 0
+      },
+      "output_tokens": 1,
+      "service_tier": "standard",
+      "inference_geo": "not_available"
+     },
+     "input_transformations": [],
+     "diagnostics": null,
+     "context_management": null
+    },
+    "wireToolInputs": {
+     "toolu_0125rSamqxQFSyZUcuGv52nf": {
+      "command": "node \"/home/example/dev-example/example-project/plugins/relay/scripts/companion.mjs\" draft-path --name prompt"
+     }
+    },
+    "serverClassifierRequest": "eb3ef99a-d6f0-4b6c-b6b4-285f1eceda97",
+    "apiBlockIndex": 1,
+    "requestId": "req_011CfdVvLQ4doEnMtycqZQYj",
+    "attributionAgent": "relay:job",
+    "attributionPlugin": "relay",
+    "type": "assistant",
+    "uuid": "6f495970-8388-4199-a78d-1542db67e597",
+    "timestamp": "2026-10-02T13:36:10.743Z",
+    "perTurnEffort": null,
+    "userType": "external",
+    "entrypoint": "cli",
+    "cwd": "/home/example/dev-example/example-project",
+    "sessionId": "d75b4e79-acbe-4b70-abc7-00acd7b06752",
+    "version": "2.1.287",
+    "gitBranch": "example-branch"
+   }
+  },
+  "bashToolResult": {
+   "why": "trial 2 line 16: its tool_result",
+   "entry": {
+    "parentUuid": "6f495970-8388-4199-a78d-1542db67e597",
+    "isSidechain": true,
+    "promptId": "a2bdc613-1fc9-41b1-850d-df2b4e18c38e",
+    "agentId": "a5e7c8e31144e8f4a",
+    "type": "user",
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "tool_use_id": "toolu_0125rSamqxQFSyZUcuGv52nf",
+       "type": "tool_result",
+       "content": "/home/example/.relay-jobs/drafts/prompt-sON0tF/prompt.md",
+       "is_error": false
+      }
+     ]
+    },
+    "uuid": "c1a31115-c1a1-4089-abfe-c28abbb6f3d4",
+    "timestamp": "2026-10-02T13:36:11.012Z",
+    "toolUseResult": {
+     "stdout": "/home/example/.relay-jobs/drafts/prompt-sON0tF/prompt.md",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "sourceToolAssistantUUID": "6f495970-8388-4199-a78d-1542db67e597",
+    "userType": "external",
+    "entrypoint": "cli",
+    "cwd": "/home/example/dev-example/example-project",
+    "sessionId": "d75b4e79-acbe-4b70-abc7-00acd7b06752",
+    "version": "2.1.287",
+    "gitBranch": "example-branch"
+   }
+  },
+  "autoMode": {
+   "why": "trial 2 line 20: an attachment that is not a message",
+   "entry": {
+    "parentUuid": "10b7d3b5-459f-4e71-aa0d-7b763773c771",
+    "isSidechain": true,
+    "agentId": "a5e7c8e31144e8f4a",
+    "attachment": {
+     "type": "auto_mode",
+     "autoModeConsentFlow": false,
+     "bashFirst": true,
+     "bashFirstSteer": "relaxed",
+     "steerOnly": false,
+     "bypass": false
+    },
+    "type": "attachment",
+    "uuid": "a2877f9c-0c4e-47b5-8907-0fcb2b33c532",
+    "timestamp": "2026-10-02T13:36:11.569Z",
+    "rendered": [
+     {
+      "content": "<system-reminder>\n## Auto Mode Active\n\nBias toward working without stopping for clarifying questions — when you'd normally pause to check, make the reasonable call and keep going; they'll redirect you if needed. If the user, a skill, or the shape of the task suggests they want you to ask (with AskUserQuestion or otherwise), do so. And even absent that signal, it's still fine to stop when you're genuinely blocked — unclear direction, missing input, a decision only they can make.\n\nBefore any command that could discard uncommitted work — `git checkout`/`restore`/`reset`/`clean`, `rm -rf` in the repo, restoring from a snapshot — run `git status` first and stash (with `-u` for untracked) or commit anything that's there. When staging or committing, review what's included (`git status` after a broad `git add`), and if you see anything suspicious that might reveal secrets — even if the filename looks innocuous — double-check the file's contents before pushing.\n\nYou can do much of your work through the Bash tool when it is the simpler route: read files with cat, head, or sed -n, search with grep and find, and make small, mechanical file changes with sed, heredocs, or short scripts instead of the dedicated Read, Edit, or Write tools. The choice is yours: prefer Edit or Write when a shell edit would be fragile, such as exact or multi-line replacements, or sed/awk flags that differ between GNU and BSD/macOS.\n</system-reminder>"
+     }
+    ],
+    "renderedRole": "system",
+    "userType": "external",
+    "entrypoint": "cli",
+    "cwd": "/home/example/dev-example/example-project",
+    "sessionId": "d75b4e79-acbe-4b70-abc7-00acd7b06752",
+    "version": "2.1.287",
+    "gitBranch": "example-branch"
+   }
+  },
+  "queuedBeforeStart": {
+   "why": "trial 2 line 21: a SendMessage queued_command, origin coordinator, delivered before the job started",
+   "entry": {
+    "parentUuid": "a2877f9c-0c4e-47b5-8907-0fcb2b33c532",
+    "isSidechain": true,
+    "agentId": "a5e7c8e31144e8f4a",
+    "attachment": {
+     "type": "queued_command",
+     "prompt": "Also run `sw_vers -productVersion` and add its output as a third line of your report.",
+     "source_uuid": "63e4e7c3-874e-4941-94c0-f8cea5490fb3",
+     "origin": {
+      "kind": "coordinator"
+     },
+     "isMeta": true
+    },
+    "type": "attachment",
+    "uuid": "d3697d1a-4a60-4493-96fe-150ca91e8766",
+    "timestamp": "2026-10-02T13:36:11.569Z",
+    "rendered": [
+     {
+      "content": "<system-reminder>\nThe coordinator sent a message while you were working:\nAlso run `sw_vers -productVersion` and add its output as a third line of your report.\n\nAddress this before completing your current task.\n</system-reminder>"
+     }
+    ],
+    "renderedRole": "system",
+    "userType": "external",
+    "entrypoint": "cli",
+    "cwd": "/home/example/dev-example/example-project",
+    "sessionId": "d75b4e79-acbe-4b70-abc7-00acd7b06752",
+    "version": "2.1.287",
+    "gitBranch": "example-branch"
+   }
+  },
+  "queuedDuringRun": {
+   "why": "trial 1 line 21: a SendMessage queued_command, origin coordinator, while the job ran",
+   "entry": {
+    "parentUuid": "2a128ec5-4927-40c9-bf5f-5018b5836655",
+    "isSidechain": true,
+    "agentId": "ab649771d6f35c096",
+    "attachment": {
+     "type": "queued_command",
+     "prompt": "What is 17 times 23? Answer it as the fourth line of your report.",
+     "source_uuid": "ea496ba2-1089-4386-bd92-6e51d6b91ff5",
+     "origin": {
+      "kind": "coordinator"
+     },
+     "isMeta": true
+    },
+    "type": "attachment",
+    "uuid": "22d083d0-3729-444b-a416-3e13a35b9041",
+    "timestamp": "2026-10-02T13:02:50.183Z",
+    "rendered": [
+     {
+      "content": "<system-reminder>\nThe coordinator sent a message while you were working:\nWhat is 17 times 23? Answer it as the fourth line of your report.\n\nAddress this before completing your current task.\n</system-reminder>"
+     }
+    ],
+    "renderedRole": "system",
+    "userType": "external",
+    "entrypoint": "cli",
+    "cwd": "/home/example/dev-example/example-project",
+    "sessionId": "d75b4e79-acbe-4b70-abc7-00acd7b06752",
+    "version": "2.1.287",
+    "gitBranch": "example-branch"
+   }
+  },
+  "handbackToolUse": {
+   "why": "trial 1 line 39: the relay's SubagentHandback tool_use",
+   "entry": {
+    "parentUuid": "0c8631b0-1cf6-42c5-b7fc-a967fc781c0f",
+    "isSidechain": true,
+    "agentId": "ab649771d6f35c096",
+    "message": {
+     "model": "claude-haiku-4-5-20251001",
+     "id": "msg_011CfdTorUP2VmrrgDK4UM4k",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_013VjVHceoVMQPip39z2a1mk",
+       "name": "SubagentHandback",
+       "input": {
+        "message": "state: completed\njob: job-muqz3x0d-cd9698fb\nsession: 01a0fcb5-d574-7dd1-9297-fd23eb1a14c9\nmodel: gpt-6.1-sol\neffort: low\nduration: 5m 31s\nattempts: 1\nreport: /home/example/.relay-jobs/trial-527bb799/job-muqz3x0d-cd9698fb/report.md\nmode: yolo\nweb-search: live\ncwd: /private/tmp/claude-example/-home-example-example-project/d75b4e79-acbe-4b70-abc7-00acd7b06752/scratchpad/trial\n---\n@libar-dev/relay-plugin-cc 2.0.0\ntypescript 7.0.2 — [https://www.npmjs.com/package/typescript](https://www.npmjs.com/package/typescript)\nFri Oct  2 13:08:14 UTC 2026\n17 times 23 is 391"
+       },
+       "caller": {
+        "type": "direct"
+       }
+      }
+     ],
+     "container": null,
+     "stop_reason": null,
+     "stop_sequence": null,
+     "stop_details": null,
+     "usage": {
+      "input_tokens": 8,
+      "cache_creation_input_tokens": 519,
+      "cache_read_input_tokens": 10601,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 519,
+       "ephemeral_1h_input_tokens": 0
+      },
+      "output_tokens": 4,
+      "service_tier": "standard",
+      "inference_geo": "not_available"
+     },
+     "input_transformations": [],
+     "diagnostics": null,
+     "context_management": null
+    },
+    "wireToolInputs": {
+     "toolu_013VjVHceoVMQPip39z2a1mk": {
+      "message": "state: completed\njob: job-muqz3x0d-cd9698fb\nsession: 01a0fcb5-d574-7dd1-9297-fd23eb1a14c9\nmodel: gpt-6.1-sol\neffort: low\nduration: 5m 31s\nattempts: 1\nreport: /home/example/.relay-jobs/trial-527bb799/job-muqz3x0d-cd9698fb/report.md\nmode: yolo\nweb-search: live\ncwd: /private/tmp/claude-example/-home-example-example-project/d75b4e79-acbe-4b70-abc7-00acd7b06752/scratchpad/trial\n---\n@libar-dev/relay-plugin-cc 2.0.0\ntypescript 7.0.2 — [https://www.npmjs.com/package/typescript](https://www.npmjs.com/package/typescript)\nFri Oct  2 13:08:14 UTC 2026\n17 times 23 is 391"
+     }
+    },
+    "serverClassifierRequest": "db773b55-1607-47cc-b91d-09eb31f40eec",
+    "apiBlockIndex": 1,
+    "requestId": "req_011CfdTorAHpYATfaDkA3Gsq",
+    "attributionAgent": "relay:job",
+    "attributionSkill": "relay:jobs",
+    "attributionPlugin": "relay",
+    "type": "assistant",
+    "uuid": "44a4419a-f601-4288-b43e-496584df99f0",
+    "timestamp": "2026-10-02T13:08:28.479Z",
+    "perTurnEffort": null,
+    "userType": "external",
+    "entrypoint": "cli",
+    "cwd": "/home/example/dev-example/example-project",
+    "sessionId": "d75b4e79-acbe-4b70-abc7-00acd7b06752",
+    "version": "2.1.287",
+    "gitBranch": "example-branch"
+   }
+  },
+  "handbackToolResult": {
+   "why": "trial 1 line 42: its tool_result",
+   "entry": {
+    "parentUuid": "44a4419a-f601-4288-b43e-496584df99f0",
+    "isSidechain": true,
+    "promptId": "88b0fa51-22f8-4526-9d34-69242c21a90d",
+    "agentId": "ab649771d6f35c096",
+    "type": "user",
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "tool_use_id": "toolu_013VjVHceoVMQPip39z2a1mk",
+       "type": "tool_result",
+       "content": [
+        {
+         "type": "text",
+         "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+        }
+       ]
+      }
+     ]
+    },
+    "uuid": "3dd78e73-d9b8-43e9-8231-7669bbb49e6a",
+    "timestamp": "2026-10-02T13:08:29.225Z",
+    "toolUseResult": {
+     "success": true,
+     "message": "Report delivered to your caller."
+    },
+    "serverClassifierContext": {
+     "request": "db773b55-1607-47cc-b91d-09eb31f40eec",
+     "context": {
+      "git_state": {
+       "cwd": "/home/example/dev-example/example-project",
+       "root": "/home/example/dev-example/example-project",
+       "branch": "example-branch",
+       "default_branch": "main",
+       "status": {
+        "clean": false,
+        "counts": {
+         "staged": 0,
+         "modified": 0,
+         "untracked": null,
+         "untracked_normal": 2
+        },
+        "porcelain": null,
+        "truncated": false
+       },
+       "visibility": {
+        "origin": {
+         "host": "github.com",
+         "remote": "example/repo",
+         "visibility": "public"
+        },
+        "push_remote": "origin",
+        "remotes": [
+         {
+          "name": "origin",
+          "host": "github.com",
+          "remote": "example/repo",
+          "visibility": "public"
+         }
+        ],
+        "visibility_cache": [
+         {
+          "host": "github.com",
+          "remote": "example/repo",
+          "visibility": "public"
+         }
+        ]
+       }
+      },
+      "live_cwd": "/home/example/dev-example/example-project",
+      "platform": "macos"
+     }
+    },
+    "toolEndsTurn": true,
+    "sourceToolAssistantUUID": "44a4419a-f601-4288-b43e-496584df99f0",
+    "userType": "external",
+    "entrypoint": "cli",
+    "cwd": "/home/example/dev-example/example-project",
+    "sessionId": "d75b4e79-acbe-4b70-abc7-00acd7b06752",
+    "version": "2.1.287",
+    "gitBranch": "example-branch"
+   }
+  },
+  "messageAfterHandback": {
+   "why": "trial 1 line 45: a SendMessage after the hand-back, a user entry with isMeta and origin coordinator, wrapped",
+   "entry": {
+    "parentUuid": "79ee3726-d0a7-45b5-87f9-7f8a37baf130",
+    "isSidechain": true,
+    "promptId": "88b0fa51-22f8-4526-9d34-69242c21a90d",
+    "agentId": "ab649771d6f35c096",
+    "type": "user",
+    "message": {
+     "role": "user",
+     "content": "The coordinator sent a message while you were working:\nRun `node --version` and `uname -m` and report both outputs, one per line.\n\nAddress this before completing your current task."
+    },
+    "isMeta": true,
+    "uuid": "131da462-24f2-417c-9dd2-df14dd225bc5",
+    "timestamp": "2026-10-02T13:09:07.286Z",
+    "origin": {
+     "kind": "coordinator"
+    },
+    "userType": "external",
+    "entrypoint": "cli",
+    "cwd": "/home/example/dev-example/example-project",
+    "sessionId": "d75b4e79-acbe-4b70-abc7-00acd7b06752",
+    "version": "2.1.287",
+    "gitBranch": "example-branch"
+   }
+  }
+ }
+}

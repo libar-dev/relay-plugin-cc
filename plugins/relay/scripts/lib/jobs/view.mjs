@@ -1,0 +1,352 @@
+import { backendFor, DEFAULT_BACKEND } from "../backends/index.mjs";
+// What readers print about a job: a short `key: value` block first, then, when there is
+// one, a line of three dashes and the report exactly as the backend wrote it.
+
+import fs from "node:fs";
+
+import { isWorkerAlive } from "./lease.mjs";
+import { isWorkerLease, readLease } from "./lease.mjs";
+import { jobPaths, readJob, TERMINAL_STATES } from "./store.mjs";
+import { messageAccount, readRelayViolations } from "./messages.mjs";
+
+export const EXIT = {
+  ok: 0,
+  usage: 1,
+  noReport: 3,
+  running: 4,
+  cancelled: 5
+};
+
+export function loadJobView(jobDir, options = {}) {
+  let job = readJob(jobDir);
+  if (!job) {
+    throw new Error(`No job.json in ${jobDir}.`);
+  }
+  let view = computeJobView(job, options);
+  if (view.state === "dead") {
+    // The worker may have published its terminal state and exited while the liveness
+    // check ran. Read that publication before reporting a death from an older snapshot.
+    job = readJob(jobDir) ?? job;
+    view = computeJobView(job, options);
+  }
+  const paths = jobPaths(jobDir);
+  const hasReport = fs.existsSync(paths.report) && fs.readFileSync(paths.report, "utf8").trim().length > 0;
+  // Owed work is running under a live worker, or undelivered without one.
+  const lease = readLease(jobDir);
+  const workerLive = isWorkerLease(lease);
+  const account = messageAccount(jobDir);
+  if (workerLive && account.undelivered.length > 0) {
+    view = { ...view, state: "running", deadReason: null };
+  }
+  const undelivered = workerLive ? [] : account.undelivered;
+  const relayViolations = readRelayViolations(jobDir);
+  return { job, jobDir, paths, ...view, hasReport, undelivered, dropped: account.dropped, relayViolations };
+}
+
+export function isTerminalView(view) {
+  return TERMINAL_STATES.has(view.state) || view.state === "dead";
+}
+
+// The exit code `wait` and `result` give for a job view.
+export function exitCodeFor(view) {
+  if (!isTerminalView(view)) {
+    return EXIT.running;
+  }
+  if (view.state === "cancelled") {
+    return EXIT.cancelled;
+  }
+  if (view.undelivered?.length > 0) {
+    return EXIT.noReport;
+  }
+  if (view.state === "completed" && view.hasReport) {
+    return EXIT.ok;
+  }
+  return EXIT.noReport;
+}
+
+function lastAttempt(job) {
+  return Array.isArray(job.attempts) && job.attempts.length > 0 ? job.attempts[job.attempts.length - 1] : null;
+}
+
+// Where a relay job came from: `relay: <agent id>`, then the Workflow run when the relay ran
+// inside a workflow script, and the agent's label (its description) when it has one. A label
+// is printed on one line: whitespace collapsed, cut to 80 characters.
+function oneLineLabel(label) {
+  const text = typeof label === "string" ? label.replace(/\s+/g, " ").trim() : "";
+  return Array.from(text).slice(0, 80).join("");
+}
+
+function relayLine(relay) {
+  let line = `relay: ${relay.agentId}`;
+  if (relay.workflowRunId) {
+    line += ` workflow ${relay.workflowRunId}`;
+  }
+  const label = oneLineLabel(relay.label);
+  if (label) {
+    line += ` "${label}"`;
+  }
+  return line;
+}
+
+// One line per relay the job's current relay took over from (a harness re-spawn), oldest
+// first: `relay-adopted: <new id> took over from <old id> at <time> as "<new label>"`.
+export function relayAdoptionLines(relay) {
+  const previous = Array.isArray(relay?.previous) ? relay.previous : [];
+  return previous.map((entry, index) => {
+    const next = previous[index + 1]?.agentId ?? relay.agentId;
+    const as = oneLineLabel(entry.by);
+    return `relay-adopted: ${next} took over from ${entry.agentId} at ${entry.replacedAt}${as ? ` as "${as}"` : ""}`;
+  });
+}
+
+function relayListPart(relay) {
+  if (!relay) {
+    return [];
+  }
+  const label = oneLineLabel(relay.label);
+  const adopted = Array.isArray(relay.previous) && relay.previous.length > 0 ? [`adopted:${relay.previous.length}`] : [];
+  if (relay.workflowRunId) {
+    return [`workflow:${relay.workflowRunId}/${label || relay.agentId}`, ...adopted];
+  }
+  return [label ? `relay:${relay.agentId}/${label}` : `relay:${relay.agentId}`, ...adopted];
+}
+
+// The state block names a non-default backend and includes the lines it declares.
+export function backendLines(request) {
+  const backend = backendFor(request);
+  return [...(backend === DEFAULT_BACKEND ? [] : [`backend: ${backend.name}`]), ...backend.view.lines(request)];
+}
+
+export function backendJson(request) {
+  const backend = backendFor(request);
+  return { ...(backend === DEFAULT_BACKEND ? {} : { backend: backend.name }), ...backend.view.json(request) };
+}
+
+export function backendSettingLines(request) {
+  return backendFor(request).view.settingLines?.(request) ?? [];
+}
+
+
+export function renderJobBlock(view) {
+  const { job } = view;
+  const request = job.request ?? {};
+  const end = isTerminalView(view) ? job.completedAt ?? job.updatedAt ?? null : null;
+  const lines = [
+    `state: ${view.state}`,
+    `job: ${job.id}`,
+    `session: ${job.sessionId ?? "none"}`,
+    `model: ${request.model ?? "default"}`,
+    `effort: ${request.effort ?? "default"}`,
+    ...backendLines(request),
+    `duration: ${formatDuration(job.createdAt, end) ?? "unknown"}`,
+    `attempts: ${Array.isArray(job.attempts) ? job.attempts.length : 0}`,
+    `report: ${view.hasReport ? view.paths.report : "none"}`,
+    `dir: ${view.jobDir}`
+  ];
+  if (job.kind && job.kind !== "task") {
+    lines.push(`kind: ${job.kind}`);
+  }
+  if (request.fast) lines.push("tier: fast");
+  lines.push(...backendSettingLines(request));
+  if (request.mode) {
+    lines.push(`mode: ${request.mode}`);
+  }
+  if (request.webSearch) {
+    lines.push(`web-search: ${request.webSearch}`);
+  }
+  if (request.cwd) {
+    lines.push(`cwd: ${request.cwd}`);
+  }
+  if (job.relay) {
+    lines.push(relayLine(job.relay), ...relayAdoptionLines(job.relay));
+  }
+  for (const note of request.notes ?? []) {
+    lines.push(`note: ${note}`);
+  }
+  const attempt = lastAttempt(job);
+  const inference = attempt?.completionInference;
+  if (inference && attempt.turnId === job.turnId) {
+    const line = backendFor(request).view.completionInferenceLine?.(inference, { sessionId: job.sessionId ?? null, turnId: job.turnId ?? null });
+    if (line) lines.push(line);
+  }
+  if (view.state === "dead") {
+    lines.push(`error: the job's worker died (${view.deadReason}). Run resume to continue it.`);
+  } else if (job.errorMessage && view.state !== "completed") {
+    lines.push(`error: ${String(job.errorMessage).replace(/\s+/g, " ").trim()}`);
+  }
+  if (view.stalled) {
+    lines.push(`stalled: no event since ${job.lastEventAt ?? job.startedAt ?? job.createdAt}`);
+  }
+  for (const violation of view.relayViolations ?? []) {
+    const first = String(violation.reason ?? "").split(/\r?\n/)[0];
+    lines.push(`relay-violation: ${violation.kind}: ${first}`);
+  }
+  if (view.undelivered?.length > 0) {
+    lines.push(`undelivered: ${view.undelivered.length} message(s) acknowledged but not run yet (${view.undelivered.join(", ")}); resume runs them`);
+  }
+  if (view.dropped?.length > 0) {
+    lines.push(`not-delivered: ${view.dropped.length} message(s) dropped (${view.dropped.map((entry) => `${entry.id}: ${entry.reason}`).join("; ")})`);
+  }
+  for (const entry of job.automaticResumes ?? []) {
+    lines.push(`automatic-resume: ${entry.id} after attempt ${entry.fromAttempt} at ${entry.at}${entry.reason ? ` (${entry.reason})` : ""}`);
+  }
+  if (Array.isArray(job.capacityRetries) && job.capacityRetries.length > 0) {
+    lines.push(`capacity-retries: ${job.capacityRetries.length}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+// What `result` prints: the state block, then, when there is a report, `---` and the whole
+// report. Read straight from the files, so nothing between here and the reader cuts it.
+export function renderResultText(view) {
+  let text = renderJobBlock(view);
+  if (view.hasReport) {
+    const report = fs.readFileSync(view.paths.report, "utf8");
+    text += `---\n${report}${report.endsWith("\n") ? "" : "\n"}`;
+  }
+  return text;
+}
+
+export function renderJobWithReport(view) {
+  let text = renderJobBlock(view);
+  if (view.hasReport && isTerminalView(view)) {
+    const report = fs.readFileSync(view.paths.report, "utf8");
+    text += `---\n${report}${report.endsWith("\n") ? "" : "\n"}`;
+  }
+  return text;
+}
+
+function firstLine(text) {
+  return (
+    String(text ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) ?? ""
+  );
+}
+
+function summarizeJob(view) {
+  const { job } = view;
+  let summary = job.summary ?? "";
+  if (!summary && fs.existsSync(view.paths.brief)) {
+    summary = firstLine(fs.readFileSync(view.paths.brief, "utf8"));
+  }
+  return summary.length > 80 ? `${Array.from(summary).slice(0, 77).join("")}...` : summary;
+}
+
+export function renderJobList(views, options = {}) {
+  if (views.length === 0) {
+    return `No jobs${options.scope ? ` ${options.scope}` : ""}.\n`;
+  }
+  const lines = [`jobs: ${views.length}`];
+  for (const view of views) {
+    const request = view.job.request ?? {};
+    const end = isTerminalView(view) ? view.job.completedAt ?? view.job.updatedAt ?? null : null;
+    const parts = [
+      view.job.id,
+      view.state + (view.stalled ? " (stalled)" : ""),
+      view.job.kind ?? "task",
+      `${request.model ?? "default"}/${request.effort ?? "default"}`,
+      ...backendLines(request),
+      formatDuration(view.job.createdAt, end) ?? "?",
+      summarizeJob(view),
+      ...relayListPart(view.job.relay),
+      ...(view.job.automaticResumes?.length ? [`automatic-resumes: ${view.job.automaticResumes.length}`] : [])
+    ];
+    lines.push(parts.join("  "));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function jobViewJson(view) {
+  return {
+    id: view.job.id,
+    kind: view.job.kind ?? "task",
+    state: view.state,
+    storedState: view.storedState,
+    stalled: view.stalled,
+    deadReason: view.deadReason,
+    sessionId: view.job.sessionId ?? null,
+    turnId: view.job.turnId ?? null,
+    model: view.job.request?.model ?? null,
+    effort: view.job.request?.effort ?? null,
+    ...backendJson(view.job.request),
+    fast: Boolean(view.job.request?.fast),
+    serviceTier: view.job.serviceTier ?? null,
+    mode: view.job.request?.mode ?? null,
+    webSearch: view.job.request?.webSearch ?? null,
+    cwd: view.job.request?.cwd ?? null,
+    attempts: Array.isArray(view.job.attempts) ? view.job.attempts.length : 0,
+    errorMessage: view.job.errorMessage ?? null,
+    createdAt: view.job.createdAt ?? null,
+    completedAt: view.job.completedAt ?? null,
+    jobDir: view.jobDir,
+    reportPath: view.hasReport ? view.paths.report : null,
+    summary: summarizeJob(view),
+    relay: view.job.relay ?? null,
+    relayViolations: view.relayViolations ?? [],
+    automaticResumes: view.job.automaticResumes ?? [],
+    attemptRecords: view.job.attempts ?? [],
+    server: view.job.server ?? null,
+    undelivered: view.undelivered ?? [],
+    dropped: view.dropped ?? []
+  };
+}
+
+export function sortViewsNewestFirst(views) {
+  return [...views].sort((a, b) => String(b.job.createdAt ?? "").localeCompare(String(a.job.createdAt ?? "")));
+}
+
+const ACTIVE_STATES = new Set(["starting", "running"]);
+const STALLED_AFTER_MS = 10 * 60 * 1000;
+// A job whose worker never recorded its pid is dead after this long.
+const WORKER_START_GRACE_MS = 60 * 1000;
+
+// The state a reader reports. `dead` is never written: it is computed when the state is
+// not terminal and the worker pid is gone or belongs to another process start time.
+export function computeJobView(job, options = {}) {
+  const now = options.now ?? Date.now();
+  const stored = job?.state ?? "starting";
+  let state = stored;
+  let deadReason = null;
+  if (!TERMINAL_STATES.has(stored)) {
+    if (job?.worker?.pid) {
+      if (!isWorkerAlive(job.worker)) {
+        state = "dead";
+        deadReason = `worker ${job.worker.pid} is gone`;
+      }
+    } else {
+      const created = Date.parse(job?.launchPendingAt ?? job?.createdAt ?? "");
+      if (Number.isFinite(created) && now - created > (options.workerStartGraceMs ?? WORKER_START_GRACE_MS)) {
+        state = "dead";
+        deadReason = "the worker never started";
+      }
+    }
+  }
+  const lastEvent = Date.parse(job?.lastEventAt ?? job?.startedAt ?? job?.createdAt ?? "");
+  const stalled =
+    ACTIVE_STATES.has(state) && Number.isFinite(lastEvent) && now - lastEvent > (options.stalledAfterMs ?? STALLED_AFTER_MS);
+  return { state, storedState: stored, deadReason, stalled };
+}
+
+export function formatDuration(startValue, endValue = null) {
+  const start = Date.parse(startValue ?? "");
+  if (!Number.isFinite(start)) {
+    return null;
+  }
+  const end = endValue ? Date.parse(endValue) : Date.now();
+  if (!Number.isFinite(end) || end < start) {
+    return null;
+  }
+  const total = Math.round((end - start) / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}

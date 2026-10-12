@@ -1,0 +1,21 @@
+{
+  "name": "libar-relay",
+  "owner": {
+    "name": "Libar"
+  },
+  "metadata": {
+    "description": "Run jobs on Codex, Grok Build and ZCode from Claude Code like Claude agents.",
+    "version": "2.0.0"
+  },
+  "plugins": [
+    {
+      "name": "relay",
+      "description": "Run jobs on Codex, Grok Build and ZCode from Claude Code like Claude agents.",
+      "version": "2.0.0",
+      "author": {
+        "name": "Libar"
+      },
+      "source": "./plugins/relay"
+    }
+  ]
+}

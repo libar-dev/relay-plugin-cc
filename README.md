@@ -1,0 +1,263 @@
+# relay
+
+Run jobs on Codex, Grok Build and ZCode from Claude Code like Claude agents.
+
+Launch a `relay:job` agent with the Agent tool or from a Workflow script. The job runs on
+OpenAI's Codex, xAI's Grok Build or Z.ai's ZCode while Claude coordinates the work. Send it a
+message to steer a running turn or continue the same session after it reports. Each job has a
+detached worker and survives the Claude session. After a server death, or a worker death while
+the agent waits on it, the job resumes its session once. The agent returns the report verbatim
+with a state block that says what happened.
+
+`relay` started as a fork of [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc)
+1.0.6. [NOTICE](NOTICE) keeps the attribution and license terms. [docs/design.md](docs/design.md)
+explains the design.
+
+## Backends
+
+A backend is named by its harness. The model family goes in `model:`.
+
+| `backend:` | Harness | Models | Sign-in |
+|---|---|---|---|
+| `codex` (default) | Codex CLI app-server | GPT models | `codex login` |
+| `grok` | `grok agent stdio` | Grok models | `grok login` in the selected Grok home |
+| `zcode` | `zcode app-server` | GLM (GLM-5.3, GLM-5.3-Flash), the only route for it | `zcode login` |
+
+`/relay:review` and `/relay:adversarial-review` run on any backend (`--backend`, Codex unless
+chosen). The stop-time review gate and transfer run on Codex.
+
+## Install
+
+Requirements:
+
+- Claude Code 2.1.271 or later, for hooks on `SubagentHandback`.
+- Node.js 22 or later.
+- macOS or Linux. The process sweep reads the process table with `ps`.
+- At least one backend CLI, signed in: the Codex CLI, Grok Build or ZCode. This release was
+  checked against Codex 0.162.0, Grok Build 1.0.50 and ZCode 3.14.4.
+
+```bash
+claude plugin marketplace add libar-dev/relay-plugin-cc
+claude plugin install relay@libar-relay
+```
+
+Then run `/reload-plugins` in open sessions, or start a new one.
+
+Update the plugin:
+
+```bash
+claude plugin marketplace update libar-relay
+claude plugin update relay@libar-relay
+```
+
+A session keeps the version it loaded until `/reload-plugins`. Running jobs finish on the version
+that started them.
+
+### Auto mode
+
+In auto mode, Claude Code's classifier checks every agent launch. By default it blocks launching
+an agent that runs without approvals or a sandbox, and a job in the default `mode: yolo` is one,
+so the classifier can block a `relay:job` launch. The plugin cannot change your Claude Code
+settings, so add an exception yourself. The classifier reads `autoMode` only from
+`~/.claude/settings.json`, managed settings and `--settings`, never from a project's `.claude/`
+files:
+
+```json
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Launching a relay:job agent of the relay plugin is allowed: it runs one job on Codex, Grok Build or ZCode, with no sandbox in mode: yolo, and its brief names where the job may write."
+    ]
+  }
+}
+```
+
+Keep `"$defaults"`: an `allow` list without it replaces the built-in exceptions.
+`claude auto-mode config` prints the rules the classifier uses. A `permissions.allow` rule such
+as `Agent(relay:job)` does not help here, because Claude Code drops `Agent` allow rules when a
+session enters auto mode. If the classifier still blocks a launch, ask for the launch in your own
+message, or leave auto mode for that step.
+
+## The first hour
+
+**Check the backends.** Run `/relay:setup`. It finds every backend home on the machine (the
+Codex home, `~/.grok` and each `~/.grok-<name>`, and ZCode) and prints one block for each: binary
+and version, sign-in, default model and effort, the models you can name in `model:`, and what the
+backend can do. It makes no model call, and a missing or signed-out backend never fails the page.
+When Codex is missing, `/relay:setup` offers to install Codex for you with npm. When it is signed
+out, run `!codex login`.
+
+**Launch a job.** Jobs run in `mode: yolo` by default, with no sandbox and no approvals, because
+jobs need the network and web search. In `yolo` the brief is the only fence, so name where the job
+may write. This first job asks for `mode: write` instead, the Codex workspace sandbox:
+
+```
+Agent({ subagent_type: "relay:job", description: "fix flaky test", run_in_background: true, prompt: `model: gpt-6-astra
+effort: high
+mode: write
+cd: /abs/path/to/repo
+---
+The test "retries on timeout" in tests/net.test.mjs fails one run in five. Find why and fix it.
+Write only under src/ and tests/. Report the cause, the change and the test run.` })
+```
+
+The header sets the job. `model:` and `effort:` are required, and `default` takes the home's own
+setting. The brief after `---` reaches the job byte for byte. When the job ends, the agent returns
+a state block and the report:
+
+```
+state: completed
+job: job-mur1abcd-1a2b3c4d
+session: <the Codex session id>
+model: gpt-6-astra
+effort: high
+duration: 6m 40s
+attempts: 1
+report: ~/.relay-jobs/<repo>/<job>/report.md
+dir: ~/.relay-jobs/<repo>/<job>
+mode: write
+web-search: live
+cwd: /abs/path/to/repo
+relay: <the relay's agent id>
+---
+<the report, as Codex wrote it>
+```
+
+`completed` means the job finished its answer, not that its commands passed. Read the report.
+
+**Talk to it.** A message reaches the job within about two minutes. The relay agent waits on the
+job in two-minute steps, so Claude Code's stall timer never fires on a long job, and its hook
+delivers a message at the next step. Send the agent "Also check the retry path in
+src/net/client.mjs." with `SendMessage` while the job runs, and Codex gets it inside the running
+turn. Sent after the job has ended, the same message starts a new turn on the same session, and the
+agent returns the new report. The message `cancel` cancels the job.
+
+**In a workflow.** A Workflow script runs a job with `agent(prompt, { agentType: 'relay:job' })` and
+gets the state block back as a string. The `relay:jobs` skill has the rules, and the section
+[What the relay depends on in Claude Code](#what-the-relay-depends-on-in-claude-code) says what a
+Claude Code update can break.
+
+## Reference
+
+### The header
+
+| Key | Values | Default |
+|---|---|---|
+| `backend` | `codex`, `grok`, `zcode` | `codex` |
+| `model` | a model name, or `default` | required |
+| `effort` | a backend effort name, such as `low`, `high`, `xhigh`, `max` or `ultra`, or `default` | required |
+| `mode` | `yolo`, `write`, `read-only` | `yolo` |
+| `grok-home` | Grok only: `jobs` for `~/.grok-jobs`, another name, a path, or `default` for `~/.grok` | `default` |
+| `fast` | `true` asks OpenAI for its priority tier after `/relay:setup --fast-tier allowed` | `false` |
+| `network` | `true`, `false`; `write` and `read-only` only | `false` |
+| `web-search` | `live`, `cached`, `disabled` | `live` |
+| `cd` | absolute working directory | the agent's directory |
+| `add-dir` | absolute extra writable root, repeatable; Codex `write` only | none |
+| `brief` | absolute path of the brief file; nothing follows `---` | the text after `---` |
+
+The `relay:jobs` skill describes every key, GLM on ZCode, Grok homes and the state block's lines.
+An unknown header key fails the start with a usage error that lists the known keys. Each backend
+accepts only the modes and web-search settings it supports. Grok supports all three modes and only
+`web-search: live`. ZCode supports `yolo` and `read-only`, with `web-search: live` or `disabled`.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `/relay:setup` | every backend home in one shape; `--backend codex\|grok\|zcode [--grok-home H]` checks one and exits non-zero when it is not ready |
+| `/relay:setup --fast-tier allowed\|off` | with `off`, the default, jobs ignore `fast: true`; with `allowed`, it asks for the priority tier |
+| `/relay:setup --job-mcp-off name,...\|none` | Codex jobs turn off these MCP servers |
+| `/relay:rescue <task>` | hand an investigation or a fix to a `relay:job` agent; `--backend`, `--model`, `--effort`, `--grok-home`, `--read-only` and `--write` become its header, `--background` runs the agent in the background |
+| `/relay:status [job] [--all]` | this repository's newest 20 jobs, every repository's with `--all`, or one job's state block |
+| `/relay:result [job]` | a job's state block and report; without a job, the newest finished job of this repository |
+| `/relay:cancel [job]` | interrupt the turn; the worker is killed if the job has not ended 10 s later; without a job, the only active job of this repository |
+| `/relay:review` | a review of the working tree or of a branch, on Codex's own reviewer or, with `--backend grok\|zcode`, the plugin's prompt |
+| `/relay:adversarial-review [focus]` | a review that questions the approach and its assumptions; its answer must be review JSON |
+| `/relay:transfer [--source <jsonl>]` | import the current Claude Code session into a Codex session you resume with `codex resume <id>` |
+
+Every job has its own directory under `$RELAY_JOBS_HOME` (default `~/.relay-jobs`), its own
+worker and its own server process. Jobs belong to no Claude session and survive its end. The skill's
+"Direct use" section lists the companion's commands for scripts.
+
+### Review flags
+
+`/relay:review` and `/relay:adversarial-review` take the same flags. A review runs read-only and
+is recorded as a job, so `/relay:status` lists it.
+
+| Flag | What it does |
+|---|---|
+| `--backend codex\|grok\|zcode` | the backend; Codex when omitted |
+| `--model <m>`, `--effort <e>` | as in a header; without them, the backend's defaults, and effort `high` on ZCode. Codex's own reviewer takes no effort, so `--effort` there prints a `note:` |
+| `--grok-home <H>` | the Grok home, as in a header; Grok only |
+| `--base <ref>` | review the branch against `<ref>` |
+| `--scope auto\|working-tree\|branch` | `auto`, the default, reviews the working tree when it has changes, else the branch against the default branch |
+| `--wait`, `--background` | run in the foreground, or as a Claude background task; without either, the command asks |
+| `[focus]` | text after the flags; `/relay:adversarial-review` only |
+
+Grok and ZCode read only the diff inlined in their prompt, so they refuse a change above two files
+or 256 KiB before anything starts. An adversarial answer that does not match the review schema
+fails the review with the raw answer in the report.
+
+### The stop-time review gate
+
+`/relay:setup --enable-review-gate` turns on the stop-time review gate for this repository, every
+worktree and session of it; `/relay:setup --disable-review-gate` turns it off. It is off by default
+and runs on Codex only, in the default Codex home at its default model and effort. When the main
+thread stops after a turn, one read-only Codex job reviews that turn's edits and blocks the stop
+only when Codex answers `BLOCK:`. The gate skips, with a note, while a background task, a Workflow
+or a job of this repository runs, while a stop-hook continuation is already in progress, and when
+Codex is unavailable or the review fails. Grok and ZCode do not run it; use `/relay:review` on
+those.
+
+Each review is a Codex job and costs usage. Turn the gate on for sessions you watch.
+
+### Codex configuration
+
+Codex jobs use the global `codex` binary and its own configuration: the Codex home's
+`config.toml` (`~/.codex`, or `CODEX_HOME` when it is set), and a project's `.codex/config.toml`
+when Codex trusts the project. `model: default` and `effort: default` take the configured `model`
+and `model_reasoning_effort`:
+
+```toml
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
+```
+
+Your Codex sign-in, API key and provider configuration apply as they do in the Codex CLI.
+
+## What the relay depends on in Claude Code
+
+The relay reads two things Claude Code does not publish as an interface: the agent transcript and
+the Workflow tool's run journal. Its markers were read from Claude Code 2.1.287 and 2.1.288, and its
+hooks need `SubagentHandback`, so the floor is Claude Code 2.1.271. A Claude Code update can break
+it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json`
+must hold the call's key as `relay.journalKey` (once another relay has adopted the job, its
+`relay.json` holds the binding), and the script must get the state block back. Repeat this check
+after a Claude Code update.
+
+The hooks are PreToolUse on `Bash`, `Write`, `SubagentHandback` and `StructuredOutput`,
+SubagentStop on `relay:job`, SessionStart and Stop. Claude Code gives subagents the
+`SubagentHandback` tool only in auto mode. In other modes, the SubagentStop hook checks the relay's
+final text against the job's result instead. The relay works with no Claude Code mod loaded. It
+runs on command hooks and the transcript.
+
+## Development
+
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.0.0. It is private and
+not published to npm. Clone the repository and run:
+
+```bash
+npm ci
+npm test
+npm run check
+```
+
+`npm test` runs every file in `tests/` with `node --test` and takes about two minutes. Run it
+outside any sandbox. Its process tests use `ps` to find and stop test processes. The tests drive
+fake backend binaries and never start a real backend. `npm run check` type-checks every script with
+TypeScript, without an installed Codex CLI.
+
+Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
+[docs/backends.md](docs/backends.md) for the backend contract, and
+[docs/design.md](docs/design.md) for the behavior and the reasons behind it.
