@@ -1,5 +1,5 @@
 ---
-description: Run a read-only code review of the local git diff (working tree or branch): Codex's own reviewer on Codex, the plugin's review prompt on Grok, ZCode or Kimi
+description: Run a read-only code review of the local git diff (working tree or branch): Codex's own reviewer on Codex, the plugin's review prompt on Grok, ZCode or Kimi; pick one with --backend
 argument-hint: '[--wait|--background] [--backend codex|grok|zcode|kimi] [--model <m>] [--effort <e>] [--grok-home H] [--kimi-home H] [--base <ref>] [--scope auto|working-tree|branch]'
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
@@ -15,7 +15,7 @@ Core constraint:
 - Your only job is to run the review and return the companion's output verbatim to the user.
 
 Execution mode rules:
-- If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground, as with `--wait`, and say so in one line before the output ("Ran in the foreground, the default when Claude runs this review.").
+- If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground, as with `--wait`, and begin your reply with exactly this line before the output: `Ran in the foreground: the default when Claude starts a review without --wait or --background.`
 - If the raw arguments include `--wait`, do not ask. Run the review in the foreground.
 - If the raw arguments include `--background`, do not ask. Run the review in a Claude background task.
 - Otherwise, when the user typed the command, estimate the review size before asking:
