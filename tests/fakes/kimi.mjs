@@ -155,12 +155,15 @@ function finish(reason) {
   record({ type: 'turn.ended', agentId: 'main', turnId: turn.turnId, reason, ...(error ? { error } : {}) });
   if (reason !== 'cancelled') record({ type: 'prompt.completed', agentId: 'main', promptId: turn.promptId, reason });
   state.completed = [...(state.completed || []), { text: turn.text, reason }]; save();
+  // Kimi starts a turn of its own as it goes idle, before ACP's answer reaches the client.
+  if (options.ownTurnAfterMs && !state.ownTurnRan) { state.ownTurnRan = true; save(); if (options.ownTurnAfterMs <= 1) ownTurn(); else setTimeout(ownTurn, options.ownTurnAfterMs); }
   // Kimi's ACP layer answers end_turn for a failed turn.
   if (turn.rpcId !== null) send({ id: turn.rpcId, result: { stopReason: reason === 'cancelled' ? 'cancelled' : 'end_turn' } });
-  if (options.ownTurnAfterMs && !state.ownTurnRan) { state.ownTurnRan = true; save(); setTimeout(ownTurn, options.ownTurnAfterMs); }
 }
 // A turn Kimi starts on its own (a background task finished): only the record shows it.
 function ownTurn() {
+  // Kimi runs a turn of its own only when idle; during a turn the notice joins that turn.
+  if (active) return setTimeout(ownTurn, 10);
   const turnId = nextTurnId();
   own = { turnId };
   const input = [{ type: 'text', text: '<notification id="task:bash-1:completed">done</notification>' }];
