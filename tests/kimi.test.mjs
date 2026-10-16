@@ -7,6 +7,7 @@ import { kimiEventRecorder } from "../plugins/relay/scripts/lib/backends/kimi/co
 import { WireCursor, countPrompts, promptTurn, openTurn } from "../plugins/relay/scripts/lib/backends/kimi/wire.mjs";
 import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
+import { isWorkerAlive } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 import { companion, finishJob, jobDir, promptFile, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 import { makeTempDir } from "./support/helpers.mjs";
 import { installFakeKimi } from "./fakes/kimi.mjs";
@@ -287,6 +288,28 @@ test("a prompt sent while Kimi runs a turn of its own waits behind it and owns t
   assert.equal(ctx.kimi().queuedBehindOwn, 1, "the prompt was queued behind Kimi's own turn");
   assert.equal(report(ctx, id), "Report for: [quick] Next.\n");
   assert.equal(readJob(ctx, id).state, "completed");
+});
+
+test("a server killed while a prompt queued behind Kimi's own turn runs: one recovery, the old observer stops, and the worker exits", async t => {
+  const ctx = fixture(t, { ownTurnAfterMs: 1, ownTurnMs: 600, turnMs: 400 });
+  const { id } = startJob(ctx, HEADER, "First.");
+  const dir = jobDir(ctx, id);
+  await waitFor(() => readJob(ctx, id).turnId);
+  postInboxMessage(dir, { kind: "steer", text: "[long] Next." });
+  // ACP answered the queued prompt at once; once its turn runs, only the record tracks it.
+  await waitFor(() => ctx.kimi().turns.some(turn => turn.text === "[long] Next."));
+  const worker = readJob(ctx, id).worker;
+  t.after(() => { if (isWorkerAlive(worker)) process.kill(worker.pid, "SIGKILL"); });
+  process.kill(readJob(ctx, id).serverPid, "SIGKILL");
+  await finishJob(ctx, id);
+  const job = readJob(ctx, id);
+  assert.equal(job.state, "completed");
+  assert.equal(job.automaticResumes.length, 1);
+  assert.equal(ctx.kimi().queuedBehindOwn, 1);
+  assert.equal(ctx.kimi().turns.filter(turn => turn.text === "[long] Next.").length, 1, "the queued prompt is not sent again");
+  assert.ok(events(ctx, id).some(e => e.method === "kimi/wireObserverStopped" && e.params.reason === "Kimi's server ended"), "the first connection's observer stopped");
+  // The lease is gone (finishJob), and the worker process ends: nothing is left polling.
+  await waitFor(() => !isWorkerAlive(worker), 5000);
 });
 
 test("server death mid-turn records the exit; a second death in the attempt fails it", async t => {

@@ -89,7 +89,7 @@ function startTurn(turn, rpcId) {
     record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'tool', content: [{ type: 'text', text: 'ok' }], toolCallId: 'tool_1' } } });
   }
   if (options.die) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 80); return; }
-  const ms = turn.text.startsWith('[quick]') ? 30 : options.turnMs || 100;
+  const ms = turn.text.startsWith('[quick]') ? 30 : turn.text.startsWith('[long]') ? 30000 : options.turnMs || 100;
   active.timer = setTimeout(() => finish(options.failTurn ? 'failed' : 'completed'), ms);
 }
 function finish(reason) {
