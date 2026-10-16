@@ -656,3 +656,29 @@ test("the record reader joins a prompt's forms by Kimi's prompt id: input, start
   assert.equal(wire.prompts.get("d").started, false);
   assert.equal(wire.prompts.get("e").terminal.type, "prompt.aborted");
 });
+
+test("the record reader keeps Kimi's engine turns apart from its prompt turns: a notification run inside a prompt's turn ends with it, and nothing stays running", t => {
+  // The shape a live Kimi 2.2.0 session wrote (2026-10-17): a background task ended during the
+  // brief's last model call, and its notification ran as engine turn 1 inside prompt turn 0.
+  const dir = makeTempDir("relay-kimi-wire-");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "wire.jsonl");
+  const line = value => `${JSON.stringify(value)}\n`;
+  const assistant = (text, toolCalls = []) => line({ type: "agent.message.appended", message: { message: { role: "assistant", content: [{ type: "text", text }], toolCalls } } });
+  fs.writeFileSync(file, [
+    line({ type: "agent.message.appended", message: { message: { role: "user", content: [{ type: "text", text: "Brief." }] }, meta: { source: "input", promptId: "p0", origin: { kind: "user" } } } }),
+    line({ type: "agent.turn.started", turnId: 0, queueItemId: "p0" }),
+    line({ type: "turn.prompt", input: [{ type: "text", text: "Brief." }], origin: { kind: "user" }, promptId: "p0", turnId: 0 }),
+    assistant("", [{ id: "a", name: "Bash" }]), assistant("STARTED"),
+    line({ type: "agent.turn.ended", turnId: 0, outcome: "done" }),
+    line({ type: "agent.message.appended", message: { message: { role: "user", content: [{ type: "text", text: "<notification/>" }] }, meta: { source: "notify" } } }),
+    line({ type: "agent.turn.started", turnId: 1 })
+  ].join(""));
+  const wire = new KimiWire(() => file).read();
+  assert.equal(wire.busy, true, "the notification's engine turn runs");
+  fs.appendFileSync(file, assistant("", [{ id: "b", name: "Bash" }]) + assistant("OWNDONE") + line({ type: "agent.turn.ended", turnId: 1, outcome: "done" }) + line({ type: "turn.ended", turnId: 0, reason: "completed" }));
+  wire.read();
+  assert.equal(wire.busy, false, "both ended: nothing runs");
+  assert.equal(wire.turns.get(0).report, "OWNDONE", "the prompt turn's last text, as Kimi ended it");
+  assert.equal(wire.prompts.get("p0").turnId, 0);
+});

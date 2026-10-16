@@ -587,7 +587,10 @@ binaries and never start a real backend.
   milliseconds. The connection reads that record with one reader of its own, which advances by
   byte offset and keeps a line still being written, with any UTF-8 character it splits, for the
   next read; it tracks each turn by Kimi's turn id and knows which turn runs, Kimi's own or a
-  prompt relay sent. Before a prompt goes, the connection notes the offset. The prompt is the first
+  prompt relay sent. Kimi records engine turns (`agent.turn.started`, `agent.turn.ended`) apart
+  from prompt turns (`turn.prompt`, `turn.ended`): a background task's notice that arrives as a
+  prompt turn ends runs as a second engine turn inside it. Kimi counts as busy while either kind
+  runs, and a turn's messages are its prompt turn's. Before a prompt goes, the connection notes the offset. The prompt is the first
   one with its exact text first recorded after that offset, joined across its records by Kimi's
   prompt id: delivered when Kimi commits the user input (`agent.message.appended`), started when
   `agent.turn.started` names it or `turn.prompt` runs it, completed at its turn's `turn.ended`.

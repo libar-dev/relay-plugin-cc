@@ -38,6 +38,8 @@ async function scripted(t, onPrompt) {
   const named = [];
   const connection = new KimiConnection(client, { kimiHome: home, cwd: home, mode: "yolo", model: null, effort: null }, { state: {}, saveState() {}, tap() {} });
   await connection.open({ sessionId: "session_s1" });
+  // A run still waiting when its test ends stops with the connection.
+  t.after(() => connection.close());
   const run = prompt => connection.run({ prompt, clientId: "m1", source: "brief", onPending() {}, onTurnId(id) { named.push(id); } });
   return { file, append: data => fs.appendFileSync(file, data), run, named };
 }
@@ -100,4 +102,19 @@ test("a record still being written when relay reads, and a UTF-8 character split
   assert.equal(result.turnStatus, "completed", JSON.stringify(result.error));
   assert.equal(result.finalMessage, "naïve 界 done");
   assert.ok(Date.now() - started >= 650, "the run ended before the turn's last record");
+});
+
+test("after a prompt turn that ran a notification as a second engine turn, a prompt the record never shows still fails after the grace", async t => {
+  /** @type {any} */
+  let ctx;
+  ctx = await scripted(t, async () => ({ stopReason: "end_turn" }));
+  ctx.append(line({ type: "agent.turn.started", turnId: 0, queueItemId: "p0" })
+    + line({ type: "turn.prompt", input: [{ type: "text", text: "Brief." }], origin: { kind: "user" }, promptId: "p0", turnId: 0 })
+    + line({ type: "agent.turn.ended", turnId: 0, outcome: "done" })
+    + line({ type: "agent.turn.started", turnId: 1 })
+    + line({ type: "agent.turn.ended", turnId: 1, outcome: "done" })
+    + turnEnded(0));
+  const result = await Promise.race([ctx.run("Never recorded."), new Promise(resolve => setTimeout(() => resolve({ turnStatus: "still waiting" }), 3000))]);
+  assert.equal(result.turnStatus, "failed");
+  assert.equal(result.teardown, true);
 });

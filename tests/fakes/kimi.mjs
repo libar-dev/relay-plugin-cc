@@ -175,6 +175,7 @@ function ownTurn() {
     setTimeout(end, Math.max(0, (own.queuedAt ?? Date.now()) + (options.ownTurnMs || 400) - Date.now()));
   };
   const end = () => {
+    record({ type: 'agent.turn.ended', kind: 'event', turnId, outcome: 'done' });
     record({ type: 'turn.ended', agentId: 'main', turnId, reason: 'completed' });
     own = null;
     // The hand-off runs Kimi's prompt hooks before the queued prompt is committed: it can pause.
