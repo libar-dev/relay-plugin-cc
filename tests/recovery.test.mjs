@@ -234,9 +234,11 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
 
   // A live process standing in for an old app-server. `ignoreTerm` makes it ignore SIGTERM
   // (and write `marker` when it gets one); `descendant` makes it start a detached child of
-  // its own, whose identity it publishes.
+  // its own, whose identity it publishes. It is returned only once its handlers are in place:
+  // a sweep that signals it sooner would meet the default SIGTERM action, not the stand-in.
   async function oldServer(t, { ignoreTerm = false, marker = null, descendant = false } = {}) {
     const pidFile = path.join(makeTempDir("relay-old-server-"), "child");
+    const ready = `${pidFile}.ready`;
     const script = `
       const fs = require("fs");
       process.on("SIGTERM", () => { if (${JSON.stringify(marker)}) fs.writeFileSync(${JSON.stringify(marker)}, ""); if (!${ignoreTerm}) process.exit(0); });
@@ -245,10 +247,11 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
         fs.writeFileSync(${JSON.stringify(pidFile)} + ".tmp", String(child.pid));
         fs.renameSync(${JSON.stringify(pidFile)} + ".tmp", ${JSON.stringify(pidFile)});
       }
+      fs.writeFileSync(${JSON.stringify(ready)}, "");
       setInterval(() => {}, 1000);`;
     const server = spawn(process.execPath, ["-e", script], { stdio: "ignore" });
     const closed = once(server, "close");
-    await waitFor(() => readProcessStartTime(server.pid) && (!descendant || fs.existsSync(pidFile)));
+    await waitFor(() => readProcessStartTime(server.pid) && fs.existsSync(ready) && (!descendant || fs.existsSync(pidFile)));
     const identity = { pid: server.pid, startTime: readProcessStartTime(server.pid), startedAt: new Date().toISOString() };
     const childPid = descendant ? Number(fs.readFileSync(pidFile, "utf8")) : null;
     const child = childPid ? { pid: childPid, startTime: readProcessStartTime(childPid) } : null;
