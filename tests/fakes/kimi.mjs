@@ -45,7 +45,38 @@ let sessionId, active = null, own = null, mode = 'default', model = 'kimi-code/k
 const pendingReverse = new Map();
 const queued = [];
 const update = value => send({ method: 'session/update', params: { sessionId, update: value } });
-const reverse = (method, params) => { const id = reverseId++; pendingReverse.set(id, method); send({ id, method, params: { sessionId, ...params } }); };
+const reverse = (method, params) => { const id = reverseId++; pendingReverse.set(id, method); send({ id, method, params: { sessionId, ...params } }); return id; };
+const calls = new Map();
+const call = (method, params) => new Promise((resolve, reject) => calls.set(reverse(method, params), { resolve, reject }));
+// Kimi's AcpHostFileSystem: text reads and writes go to a client that declares them, and append,
+// which ACP lacks, is a read and a write only when the client declares both.
+const files = {
+  async readText(file, options = {}) {
+    if (!clientCaps.fs?.readTextFile) return fs.readFileSync(file, 'utf8');
+    return (await call('fs/read_text_file', { path: file, ...options })).content;
+  },
+  async writeText(file, data) {
+    if (!clientCaps.fs?.writeTextFile) { fs.writeFileSync(file, data); state.localWrites = (state.localWrites || 0) + 1; save(); return; }
+    await call('fs/write_text_file', { path: file, content: data });
+  },
+  async appendText(file, data) {
+    if (!clientCaps.fs?.readTextFile || !clientCaps.fs?.writeTextFile) { fs.appendFileSync(file, data); state.localWrites = (state.localWrites || 0) + 1; save(); return; }
+    let existing = '';
+    try { existing = await this.readText(file); } catch (error) { if (error.code !== -32002) throw error; }
+    await this.writeText(file, existing + data);
+  }
+};
+// A tool's file operation; a refusal is the tool's error, and the turn goes on.
+async function fileOp([op, name, ...args]) {
+  const file = path.join(process.cwd(), name);
+  try {
+    if (op === 'append') await files.appendText(file, args[0]);
+    else if (op === 'write') await files.writeText(file, args[0]);
+    else if (op === 'read') return { op, content: await files.readText(file, args[0]) };
+    else if (op === 'edit') await files.writeText(file, (await files.readText(file)).replace(args[0], args[1]));
+    return { op, ok: true };
+  } catch (error) { return { op, error: error.message }; }
+}
 function wireOf(id) {
   const session = state.sessions[id];
   const dir = path.join(home, 'sessions', 'wd_' + path.basename(session.cwd) + '_' + crypto.createHash('sha256').update(session.cwd).digest('hex').slice(0, 12), id, 'agents', 'main');
@@ -91,7 +122,14 @@ function startTurn(turn, rpcId) {
   }
   if (options.die) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 80); return; }
   const ms = turn.text.startsWith('[quick]') ? 30 : turn.text.startsWith('[long]') ? 30000 : options.turnMs || 100;
-  active.timer = setTimeout(() => finish(options.failTurn ? 'failed' : 'completed'), ms);
+  const schedule = () => { if (active?.turnId === turn.turnId) active.timer = setTimeout(() => finish(options.failTurn ? 'failed' : 'completed'), ms); };
+  if (!options.fileOps) return schedule();
+  (async () => {
+    const results = [];
+    for (const op of options.fileOps) results.push(await fileOp(op));
+    state.fileOps = [...(state.fileOps || []), ...results]; save();
+    schedule();
+  })();
 }
 function finish(reason) {
   if (!active) return;
@@ -134,7 +172,13 @@ function ownTurn() {
 }
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line); state.requests.push(m); save();
-  if (m.id !== undefined && !m.method) { state.answers.push({ id: m.id, method: pendingReverse.get(m.id), result: m.result, error: m.error }); save(); return; }
+  if (m.id !== undefined && !m.method) {
+    state.answers.push({ id: m.id, method: pendingReverse.get(m.id), result: m.result, error: m.error }); save();
+    const waiting = calls.get(m.id);
+    calls.delete(m.id);
+    if (waiting) m.error ? waiting.reject(Object.assign(new Error(m.error.message), { code: m.error.code })) : waiting.resolve(m.result);
+    return;
+  }
   const reply = result => send({ id: m.id, result });
   const error = (code, message, data) => send({ id: m.id, error: data === undefined ? { code, message } : { code, message, data } });
   switch (m.method) {

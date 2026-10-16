@@ -239,7 +239,7 @@ test("Kimi review runs read-only, refusing every write and command, with its hom
   assert.equal(state.starts.length, 1);
   assert.equal(state.starts[0].env.KIMI_CODE_HOME, home);
   const requests = method => state.requests.filter(r => r.method === method);
-  assert.deepEqual(requests("initialize")[0].params.clientCapabilities, { fs: { readTextFile: false, writeTextFile: true }, terminal: true });
+  assert.deepEqual(requests("initialize")[0].params.clientCapabilities, { fs: { readTextFile: true, writeTextFile: true }, terminal: true });
   assert.deepEqual(requests("session/set_mode").map(r => r.params.modeId), ["default"]);
   assert.deepEqual(requests("session/set_config_option").map(r => [r.params.configId, r.params.value]), [["model", "kimi-code/k3"], ["thinking", "high"]]);
   assert.deepEqual(state.answers.map(a => [a.method, a.result?.outcome?.optionId ?? a.error?.message]), [
@@ -258,6 +258,19 @@ test("Kimi review runs read-only, refusing every write and command, with its hom
   assert.match(status, new RegExp(`^kimi-home: ${home}$`, "m"));
   assert.match(status, /^kind: review$/m);
   assert.match(status, new RegExp(`^session: ${job.sessionId}$`, "m"));
+});
+
+test("a Kimi review that appends to a file reads it through relay and leaves it unchanged, on both review commands", t => {
+  for (const command of ["review", "adversarial-review"]) {
+    const ctx = kimi(t, { answer: JSON.stringify(VERDICT), fileOps: [["append", "src/app.js", "// appended\n"]] });
+    const file = path.join(ctx.work, "src", "app.js");
+    const before = fs.readFileSync(file, "utf8");
+    assert.equal(companion(ctx, [command, "--backend", "kimi"]).status, 0, command);
+    assert.equal(fs.readFileSync(file, "utf8"), before, command);
+    const answers = ctx.kimi().answers;
+    assert.deepEqual(answers.map(a => a.method), ["fs/read_text_file", "fs/write_text_file"], command);
+    assert.equal(answers[1].error.message, "This job is read-only: file writes are refused.", command);
+  }
 });
 
 test("adversarial review on ZCode and Grok: the schema travels in the prompt and the plugin checks the answer", t => {

@@ -298,7 +298,7 @@ test("modes: yolo is Kimi's auto and allows; read-only is default, rejects, and 
     await finishJob(ctx, id);
     assert.deepEqual(requests(ctx, "session/set_mode").map(r => r.params.modeId), [mode === "yolo" ? "auto" : "default"]);
     const caps = requests(ctx, "initialize")[0].params.clientCapabilities;
-    assert.deepEqual(caps, mode === "yolo" ? { fs: { readTextFile: false, writeTextFile: false }, terminal: false } : { fs: { readTextFile: false, writeTextFile: true }, terminal: true });
+    assert.deepEqual(caps, mode === "yolo" ? { fs: { readTextFile: false, writeTextFile: false }, terminal: false } : { fs: { readTextFile: true, writeTextFile: true }, terminal: true });
     assert.deepEqual(answer(ctx, "session/request_permission").map(a => a.result.outcome), [{ outcome: "selected", optionId: mode === "yolo" ? "approve_once" : "reject" }]);
     if (mode === "read-only") {
       assert.deepEqual(answer(ctx, "fs/write_text_file").map(a => a.error), [{ code: -32000, message: "This job is read-only: file writes are refused." }]);
@@ -308,6 +308,31 @@ test("modes: yolo is Kimi's auto and allows; read-only is default, rejects, and 
     } else {
       assert.equal(ctx.kimi().localWrites, 1, "yolo writes locally");
     }
+  }
+});
+
+test("read-only serves Kimi's file reads and refuses its writes: an append, an overwrite and an edit leave the file as it was", async t => {
+  const original = "original\nsecond\n";
+  const fileOps = [["append", "notes.txt", "appended\n"], ["read", "notes.txt", { line: 2, limit: 1 }], ["write", "notes.txt", "overwritten\n"], ["edit", "notes.txt", "original", "edited"], ["append", "missing.txt", "x"]];
+  for (const mode of ["read-only", "yolo"]) {
+    const ctx = fixture(t, { fileOps });
+    const notes = path.join(ctx.work, "notes.txt");
+    fs.writeFileSync(notes, original);
+    const { id } = startJob(ctx, `${HEADER}\nmode: ${mode}`, "[quick] Change the notes.");
+    await finishJob(ctx, id);
+    if (mode === "yolo") {
+      // Kimi's own filesystem: every operation lands.
+      assert.equal(fs.readFileSync(notes, "utf8"), "overwritten\n");
+      assert.ok(fs.existsSync(path.join(ctx.work, "missing.txt")));
+      continue;
+    }
+    assert.equal(fs.readFileSync(notes, "utf8"), original, "the file is unchanged");
+    assert.ok(!fs.existsSync(path.join(ctx.work, "missing.txt")));
+    assert.equal(ctx.kimi().localWrites ?? 0, 0, "nothing was written past the client");
+    // The append and the edit read through relay first; every write is refused.
+    assert.deepEqual(answer(ctx, "fs/read_text_file").map(a => a.result?.content ?? a.error.code), [original, "second\n", original, -32002]);
+    assert.deepEqual(answer(ctx, "fs/write_text_file").map(a => a.error?.message), Array(4).fill("This job is read-only: file writes are refused."));
+    assert.deepEqual(ctx.kimi().fileOps.map(op => op.error ?? op.content ?? "ok"), Array(1).fill("This job is read-only: file writes are refused.").concat(["second\n"], Array(3).fill("This job is read-only: file writes are refused.")));
   }
 });
 

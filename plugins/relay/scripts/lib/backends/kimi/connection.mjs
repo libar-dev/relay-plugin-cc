@@ -56,12 +56,30 @@ function rpcError(error) {
 
 // Read-only: Kimi's `default` mode asks before most tools and every request is rejected, but its
 // git policy approves Write and Edit inside a git work tree without asking. The client declares
-// file writes and terminals, so Kimi sends both here, and refuses each.
-const READ_ONLY_CAPABILITIES = { fs: { readTextFile: false, writeTextFile: true }, terminal: true };
+// file writes and terminals, so Kimi sends both here, and refuses each. It declares file reads
+// too: Kimi has no append request, and emulates one as a read and a write only when the client
+// serves both; otherwise it appends to the file itself, past the refused write.
+const READ_ONLY_CAPABILITIES = { fs: { readTextFile: true, writeTextFile: true }, terminal: true };
 const READ_ONLY_REFUSALS = {
   "fs/write_text_file": "This job is read-only: file writes are refused.",
   "terminal/create": "This job is read-only: shell commands are refused."
 };
+
+// ACP `fs/read_text_file`: an absolute path, and an optional 1-based `line` and `limit`.
+/** @param {{ path?: string, line?: number, limit?: number }} [params] */
+async function readTextFile({ path: file, line, limit } = {}) {
+  if (typeof file !== "string" || !path.isAbsolute(file)) throw Object.assign(new Error(`Invalid params: path must be absolute: ${file}`), { rpcCode: -32602 });
+  const content = await fs.promises.readFile(file, "utf8");
+  if (line == null && limit == null) return content;
+  const lines = content.split(/(?<=\n)/);
+  const start = Math.max(0, (line ?? 1) - 1);
+  return lines.slice(start, limit == null ? undefined : start + limit).join("");
+}
+
+function readError(error, file) {
+  if (error.code === "ENOENT") return { code: -32002, message: `Resource not found: ${file}` };
+  return { code: error.rpcCode ?? -32603, message: error.message };
+}
 
 // Kimi modes: `auto` never asks; `default` asks before writes and shell commands.
 const KIMI_MODES = { yolo: "auto", "read-only": "default" };
@@ -324,6 +342,11 @@ export async function connect(request, hooks) {
     initializeParams: acpInitializeParams(readOnly ? READ_ONLY_CAPABILITIES : ACP_INITIALIZE_PARAMS.clientCapabilities),
     onServerRequest(message, transport) {
       if (answerPermission(request.mode, message, transport)) return;
+      if (readOnly && message.method === "fs/read_text_file") {
+        const answer = reply => { try { transport.sendMessage({ id: message.id, ...reply }); } catch {} };
+        readTextFile(message.params).then(content => answer({ result: { content } }), error => answer({ error: readError(error, message.params?.path) }));
+        return;
+      }
       const refusal = readOnly ? READ_ONLY_REFUSALS[message.method] : undefined;
       if (refusal) {
         transport.tap({ method: "kimi/readOnlyRefused", params: { id: message.id, method: message.method, path: message.params?.path, command: message.params?.command } });

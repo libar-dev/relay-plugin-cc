@@ -615,7 +615,9 @@ binaries and never start a real backend.
   offered allow option. `read-only` is Kimi's `default` mode with every permission request
   rejected. Kimi's own git policy approves file writes inside a git work tree without asking, so
   a `read-only` client also declares file writes and terminals, and refuses each
-  `fs/write_text_file` and `terminal/create` Kimi then sends it. `write` is a usage error: Kimi
+  `fs/write_text_file` and `terminal/create` Kimi then sends it. It declares and serves file
+  reads (`fs/read_text_file`) too: ACP has no append, and Kimi emulates one as a read and a write
+  only when the client serves both, appending to the file itself otherwise. `write` is a usage error: Kimi
   has no workspace sandbox. `web-search: live` only: ACP cannot remove Kimi's web tools.
 - **Homes and sign-in.** `kimi-home: default` is `~/.kimi-code`, a name is `~/.kimi-code-<name>`,
   a path is taken as given; the resolved `KIMI_CODE_HOME` is stored at launch. Each home signs in
@@ -802,7 +804,9 @@ would need `grok agent`.
   ends it by closing Kimi's server. `read-only` refuses the shell, so it starts no background
   command.
 - `read-only` rests on Kimi sending file writes and shell commands to a client that declares
-  them. `Write` creates missing parent directories locally before its refused write. A tool that
+  them. `Write` creates missing parent directories locally before its refused write, and Kimi's
+  file adapter keeps binary writes (bytes that are not UTF-8) and exclusive creates on its own
+  filesystem. A tool that
   writes another way, such as a plugin's stdio MCP server, is not covered; in Kimi's default mode
   an MCP call asks and is rejected, unless the home's `[[permission.rules]]` allow it.
 - Kimi runs each shell command in a session of its own. After a server SIGKILL the command
