@@ -71,6 +71,8 @@ mode: yolo
 
 `yolo` approves tools and removes `GROK_SANDBOX`. `write` uses `workspace`; `read-only`
 uses `read-only`. A profile Grok refuses fails the job with Grok's error; there is no
-fallback. On macOS, Grok can refuse `read-only` when `/var/run/docker.sock` is a symlink.
+fallback. On macOS, Grok can refuse `read-only` when `/var/run/docker.sock` is a symlink. On
+Linux, it refuses `read-only` when it cannot reach a runtime socket it denies, such as
+`/run/podman/podman.sock` under a root-only `/run/podman`; `write` still runs.
 Grok's macOS profiles do not enforce child-process network restrictions. `network` on a
 sandboxed job prints a note.

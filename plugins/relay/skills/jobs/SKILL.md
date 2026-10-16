@@ -88,7 +88,7 @@ subscription sign-in. `grok-home: jobs` selects `~/.grok-jobs`; `default` select
   and memory are disabled in the process environment, but Grok still loads installed Claude
   plugins. The chosen home's MCP servers and hooks, and the working directory's Grok rules,
   remain active.
-- Reviews run on Grok with `--backend grok` (see Reviews), always under Grok's `read-only` profile. On a Mac where Grok refuses that profile, the review fails with Grok's error. The stop gate and `transfer` remain Codex only.
+- Reviews run on Grok with `--backend grok` (see Reviews), always under Grok's `read-only` profile. Where Grok refuses that profile (on a Mac whose `/var/run/docker.sock` is a symlink, or on Linux where it cannot reach a runtime socket such as `/run/podman/podman.sock`), the review fails with Grok's error. The stop gate and `transfer` remain Codex only.
 
 ## Kimi jobs
 

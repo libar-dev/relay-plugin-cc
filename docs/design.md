@@ -744,8 +744,10 @@ Inside Codex's `write` sandbox, `ps` is denied, so the plugin's process tests fa
 full suite outside it. The inferred completion of a collaborator turn rests on a fake, not on a
 real multi-agent turn: it is no pattern for another backend.
 
-**Grok.** Where Grok refuses its `read-only` profile (a machine whose `/var/run/docker.sock` is a
-symlink), read-only jobs and every Grok review fail with Grok's error. `web-search: disabled` is
+**Grok.** Where Grok refuses its `read-only` profile (a Mac whose `/var/run/docker.sock` is a
+symlink, or Linux where it cannot reach a runtime socket it denies, such as
+`/run/podman/podman.sock` under a root-only `/run/podman`), read-only jobs and every Grok review
+fail with Grok's error. `web-search: disabled` is
 refused until removing both web tools is proved. Setup does not show Grok's per-model efforts; that
 would need `grok agent`.
 
