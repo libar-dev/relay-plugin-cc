@@ -32,7 +32,7 @@ function textParts(input) {
 
 /**
  * @typedef {{ turnId: number, origin: string | null, promptId: string | null, ended: any, report: string, didWork: boolean }} KimiTurn
- * @typedef {{ promptId: string, at: number, texts: string[], delivered: boolean, turnId: number | null, started: boolean, terminal: any }} KimiPrompt
+ * @typedef {{ promptId: string, at: number, text: string | null, delivered: boolean, turnId: number | null, started: boolean, terminal: any }} KimiPrompt
  */
 
 const NEWLINE = 0x0a;
@@ -117,12 +117,12 @@ export class KimiWire {
   forgetRunning() { this.running = null; this.engine = null; }
 
   /**
-   * The first prompt relay sent with this text, first recorded at or after byte `from`. Its own
-   * text matches, or one text part does, as hook text may come without its marker.
+   * The first prompt relay sent with this text, first recorded at or after byte `from`. Only the
+   * prompt's own text counts: a hook's part, which Kimi marks in the record, never matches.
    */
   promptSince(from, text) {
     for (const prompt of this.prompts.values()) {
-      if (prompt.at >= from && prompt.texts.includes(text)) return prompt;
+      if (prompt.at >= from && prompt.text === text) return prompt;
     }
     return null;
   }
@@ -141,16 +141,16 @@ export class KimiWire {
   prompt(promptId, at) {
     let prompt = this.prompts.get(promptId);
     if (!prompt) {
-      prompt = { promptId, at, texts: [], delivered: false, turnId: null, started: false, terminal: null };
+      prompt = { promptId, at, text: null, delivered: false, turnId: null, started: false, terminal: null };
       this.prompts.set(promptId, prompt);
     }
     return prompt;
   }
 
-  // A prompt's texts, from the first record form that carries its content.
+  // A prompt's own text, from the first record form that carries its content.
   inputOf(prompt, content) {
-    if (prompt.texts.length > 0 || !Array.isArray(content)) return;
-    prompt.texts = [...new Set([promptText(content), ...textParts(content).map(part => part.text ?? "")])];
+    if (prompt.text !== null || !Array.isArray(content)) return;
+    prompt.text = promptText(content);
   }
 
   started(promptId, turnId, at) {

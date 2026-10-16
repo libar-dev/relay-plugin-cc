@@ -595,7 +595,8 @@ binaries and never start a real backend.
   prompt id: delivered when Kimi commits the user input (`agent.message.appended`), started when
   `agent.turn.started` names it or `turn.prompt` runs it, completed at its turn's `turn.ended`.
   Kimi's `UserPromptSubmit` hooks put their text in front of the prompt's own parts, marked as the
-  hook's; matching leaves those parts out. `completed` completes, `cancelled` interrupts, `failed`
+  hook's (the record keeps the mark); matching leaves those parts out, so a hook's text never
+  stands for a prompt. `completed` completes, `cancelled` interrupts, `failed`
   fails with Kimi's `[code] message`. A prompt a hook blocked ends with `prompt.completed`
   (`blocked`) and no turn, and fails the job with that reason; one cancelled before it started
   ends with `prompt.aborted` and interrupts. The report is the turn's assistant text after its last tool call, from the

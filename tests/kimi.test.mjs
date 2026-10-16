@@ -242,6 +242,17 @@ test("a prompt Kimi's hooks put text in front of is still the prompt: its turn, 
   assert.equal(sentWith(dies, "Hooked once."), 1);
 });
 
+test("a hook part never stands in for a prompt: a brief lost with its server runs once, though the recovery prompt's hook text equals it", async t => {
+  // The server dies before Kimi records the brief. Kimi's hook puts the same text, marked as the
+  // hook's, in front of the recovery prompt; that prompt is not the brief's delivery.
+  const ctx = fixture(t, { dieBeforeRecord: true, hookText: "Run tests.", turnMs: 50 });
+  const { id } = startJob(ctx, HEADER, "Run tests.");
+  await finishJob(ctx, id);
+  assert.equal(readJob(ctx, id).state, "completed");
+  assert.equal(ctx.kimi().turns.filter(turn => turn.text === "Run tests.").length, 1, "the brief ran once");
+  assert.equal(sentWith(ctx, "Run tests."), 2, "sent again after the death, as it never reached Kimi");
+});
+
 test("two identical messages both run; after a death, each one's own record decides whether it arrived", async t => {
   // The second copy reached Kimi's record before its server died: it is not sent a third time.
   const kept = fixture(t, { dieAfterInput: 2, turnMs: 50 });
@@ -599,7 +610,7 @@ test("the record reader keeps turns and prompts by id, the report after the last
   ].join(""));
   const wire = new KimiWire(() => file).read();
   assert.deepEqual([...wire.prompts.keys()], ["p0"], "a task prompt is not one relay sent");
-  assert.deepEqual(wire.prompts.get("p0"), { promptId: "p0", at: fs.readFileSync(file, "utf8").indexOf('{"type":"turn.prompt"'), texts: ["Same", ""], delivered: false, turnId: 0, started: true, terminal: null });
+  assert.deepEqual(wire.prompts.get("p0"), { promptId: "p0", at: fs.readFileSync(file, "utf8").indexOf('{"type":"turn.prompt"'), text: "Same", delivered: false, turnId: 0, started: true, terminal: null });
   assert.equal(wire.turns.get(0).report, "after tool");
   assert.equal(wire.turns.get(0).didWork, true);
   assert.equal(wire.turns.get(1).origin, "task");
@@ -634,8 +645,9 @@ test("the record reader joins a prompt's forms by Kimi's prompt id: input, start
   fs.writeFileSync(file, input("a", [hook, text("Same")]));
   const wire = new KimiWire(() => file).read();
   // Delivered: the input is committed, and no turn exists for it yet.
-  assert.deepEqual(wire.prompts.get("a"), { promptId: "a", at: 0, texts: ["Same", "<hook>branch: main</hook>"], delivered: true, turnId: null, started: false, terminal: null });
+  assert.deepEqual(wire.prompts.get("a"), { promptId: "a", at: 0, text: "Same", delivered: true, turnId: null, started: false, terminal: null });
   assert.equal(wire.promptSince(0, "Same").promptId, "a", "the hook's text is set apart");
+  assert.equal(wire.promptSince(0, "<hook>branch: main</hook>"), null, "a hook's part never matches");
   const second = fs.statSync(file).size;
   fs.appendFileSync(file, started("a", 0, [hook, text("Same")]) + line({ type: "turn.ended", turnId: 0, reason: "completed" })
     + input("b", [text("Same")]) + started("b", 1, [text("Same")]) + line({ type: "turn.ended", turnId: 1, reason: "completed" }));
@@ -644,9 +656,11 @@ test("the record reader joins a prompt's forms by Kimi's prompt id: input, start
   assert.equal(wire.prompts.get("a").started, true);
   assert.equal(wire.turns.get(0).promptId, "a");
   assert.equal(wire.promptSince(second, "Same").promptId, "b", "the same text sent again is another prompt");
-  // A hook part without its marker still leaves the prompt's own part to match.
-  fs.appendFileSync(file, input("c", [text("<unmarked hook/>"), text("Other")]));
-  assert.equal(wire.read().promptSince(0, "Other").promptId, "c");
+  // Kimi always marks a hook's part (its record keeps the part's meta). A part without the mark
+  // is the prompt's own text, and no single part matches alone.
+  fs.appendFileSync(file, input("c", [text("<unmarked/>"), text("Other")]));
+  assert.equal(wire.read().promptSince(0, "Other"), null);
+  assert.equal(wire.promptSince(0, "<unmarked/>Other").promptId, "c");
   // Blocked before its input was committed: Kimi keeps the message in its context and completes
   // the prompt as blocked. Cancelled before it started: prompt.aborted.
   fs.appendFileSync(file, line({ type: "context.append_message", message: { role: "user", id: "d", content: [text("Blocked")], origin: { kind: "user" } } })
