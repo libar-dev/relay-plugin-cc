@@ -744,7 +744,14 @@ rl.on("line", (line) => {
             setTimeout(() => {
               const end = () => {
                 if (deathKind === "kill") process.kill(process.pid, "SIGKILL");
-                else if (deathKind === "partial") process.stdout.write('{"method":"item/completed","text":"' + "界".repeat(1000), () => process.stdout.end());
+                else if (deathKind === "partial") {
+                  // With stdout ended, the client closes stdin and sends SIGTERM 50 ms later if this
+                  // process still runs, which a loaded machine can cause. It exits 0 either way,
+                  // through process.exit: a natural exit drops the SIGTERM handler before it ends.
+                  process.on("SIGTERM", () => process.exit(0));
+                  process.stdin.on("end", () => process.exit(0));
+                  process.stdout.write('{"method":"item/completed","text":"' + "界".repeat(1000), () => process.stdout.end());
+                }
                 else process.exit(0);
               };
               process.stderr.write("s".repeat(Number(process.env.FAKE_CODEX_STDERR_BYTES || 0)) + "stderr-tail-" + process.pid + "\\n", end);
