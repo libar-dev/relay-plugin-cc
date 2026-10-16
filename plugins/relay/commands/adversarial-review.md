@@ -40,7 +40,7 @@ Backend selection (the flags mirror a job header's keys):
 - A combination a job would refuse (`--grok-home` without Grok) is refused the same way, before anything runs.
 - Every review is read-only and recorded as a job: `/relay:status` lists it, with `backend:` on Grok and ZCode as for a job.
 
-The answer is review JSON. Codex is held to the schema by its own `outputSchema`; Grok and ZCode get the schema in the prompt and the plugin checks the answer. An answer that is not review JSON fails the review (`<backend> returned no valid review JSON`), keeps the raw answer in the report and exits non-zero; there is no second try. Grok and ZCode read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. A Grok review always runs under Grok's `read-only` profile; on a Mac where Grok refuses that profile, the review fails with Grok's error.
+The answer is review JSON. Codex is held to the schema by its own `outputSchema`; Grok and ZCode get the schema in the prompt and the plugin checks the answer. An answer that is not review JSON fails the review (`<backend> returned no valid review JSON`), keeps the raw answer in the report and exits non-zero; there is no second try. Grok and ZCode read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. A Grok review always runs under Grok's `read-only` profile; where Grok refuses that profile (on a Mac whose `/var/run/docker.sock` is a symlink, or on Linux where it cannot reach a runtime socket such as `/run/podman/podman.sock`), the review fails with Grok's error.
 
 Argument handling:
 - Preserve the user's arguments exactly.

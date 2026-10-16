@@ -684,8 +684,10 @@ turn off servers supplied by an installed Codex plugin. A job that hits a usage 
 Inside Codex's `write` sandbox, `ps` is denied, so the plugin's process tests fail there; run the
 full suite outside it.
 
-**Grok.** Where Grok refuses its `read-only` profile (a machine whose `/var/run/docker.sock` is a
-symlink), read-only jobs and every Grok review fail with Grok's error. `web-search: disabled` is
+**Grok.** Where Grok refuses its `read-only` profile (a Mac whose `/var/run/docker.sock` is a
+symlink, or Linux where it cannot reach a runtime socket it denies, such as
+`/run/podman/podman.sock` under a root-only `/run/podman`), read-only jobs and every Grok review
+fail with Grok's error. `web-search: disabled` is
 refused until removing both web tools is proved. Setup does not show Grok's per-model efforts; that
 would need `grok agent`.
 

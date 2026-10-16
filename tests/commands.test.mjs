@@ -121,7 +121,7 @@ test("rescue turns --backend and --grok-home into header lines; the review comma
     const source = read(`commands/${name}.md`);
     assert.match(source, /^argument-hint: '\[--wait\|--background\] \[--backend codex\|grok\|zcode\] \[--model <m>\] \[--effort <e>\] \[--grok-home H\] /m, name);
     assert.match(source, /above two files or 256 KiB the review is refused/, name);
-    assert.match(source, /on a Mac where Grok refuses that profile, the review fails with Grok's error/, name);
+    assert.match(source, /where Grok refuses that profile \(on a Mac whose `\/var\/run\/docker\.sock` is a symlink, or on Linux where it cannot reach a runtime socket such as `\/run\/podman\/podman\.sock`\), the review fails with Grok's error/, name);
   }
   assert.match(read("commands/adversarial-review.md"), /`<backend> returned no valid review JSON`/);
   const skill = read("skills/jobs/SKILL.md");

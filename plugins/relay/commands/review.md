@@ -39,7 +39,7 @@ Backend selection (the flags mirror a job header's keys):
 - On Codex, `--effort` is ignored with a `note:` line: Codex's own reviewer takes no effort.
 - Every review is read-only and recorded as a job: `/relay:status` lists it, with `backend:` on Grok and ZCode as for a job.
 
-Grok and ZCode read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. Return that message as it is. A Grok review always runs under Grok's `read-only` profile; on a Mac where Grok refuses that profile, the review fails with Grok's error.
+Grok and ZCode read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. Return that message as it is. A Grok review always runs under Grok's `read-only` profile; where Grok refuses that profile (on a Mac whose `/var/run/docker.sock` is a symlink, or on Linux where it cannot reach a runtime socket such as `/run/podman/podman.sock`), the review fails with Grok's error.
 
 Argument handling:
 - Preserve the user's arguments exactly.
