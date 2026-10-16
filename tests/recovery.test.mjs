@@ -19,6 +19,7 @@ import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 import { COMPANION, RELAY_CMD, companion, decision, jobDirOf, pre, readJobJson, relayContext, relayStart, updated, waitFor } from "./support/relay-fixture.mjs";
 import { installFakeGrok } from "./fakes/grok.mjs";
 import { installFakeZcode } from "./fakes/zcode.mjs";
+import { installFakeKimi } from "./fakes/kimi.mjs";
 import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finishJob } from "./support/job-helpers.mjs";
 
 // Worker recovery and cancellation
@@ -614,7 +615,7 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
 {
   const waitFor = waitForJob;
 
-  for (const backend of ['codex', 'grok', 'zcode']) {
+  for (const backend of ['codex', 'grok', 'zcode', 'kimi']) {
     test(`${backend}: recovery preserves a nested companion job sharing its process group`, async t => {
       const outer = setup(t, { turnMs: 3000 });
       const inner = setup(t, { turnMs: 6000 });
@@ -628,6 +629,10 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
         binary = installFakeZcode(outer.bin, { turnMs: 3000 }).binary;
         outer.env.ZCODE_BINARY = binary;
         header = 'backend: zcode\nmodel: default\neffort: default';
+      } else if (backend === 'kimi') {
+        binary = installFakeKimi(outer.bin, { turnMs: 3000 }).binary;
+        outer.env.KIMI_BINARY = binary;
+        header = 'backend: kimi\nmodel: default\neffort: default';
       }
       const script = new URL('../plugins/relay/scripts/companion.mjs', import.meta.url).pathname;
       const marker = path.join(outer.root, 'nested-started');

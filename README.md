@@ -1,9 +1,10 @@
 # relay
 
-Run jobs on Codex, Grok Build and ZCode from Claude Code like Claude agents.
+Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents.
 
 Launch a `relay:job` agent with the Agent tool or from a Workflow script. The job runs on
-OpenAI's Codex, xAI's Grok Build or Z.ai's ZCode while Claude coordinates the work. Send it a
+OpenAI's Codex, xAI's Grok Build, Z.ai's ZCode or Moonshot AI's Kimi Code while Claude
+coordinates the work. Send it a
 message to steer a running turn or continue the same session after it reports. Each job has a
 detached worker and survives the Claude session. After a server death, or a worker death while
 the agent waits on it, the job resumes its session once. The agent returns the report verbatim
@@ -22,6 +23,7 @@ A backend is named by its harness. The model family goes in `model:`.
 | `codex` (default) | Codex CLI app-server | GPT models | `codex login` |
 | `grok` | `grok agent stdio` | Grok models | `grok login` in the selected Grok home |
 | `zcode` | `zcode app-server` | GLM (GLM-5.3, GLM-5.3-Flash), the only route for it | `zcode login` |
+| `kimi` | `kimi acp` | Kimi models (K3, K2.8, K2.7) | `kimi login` in the selected Kimi home |
 
 `/relay:review` and `/relay:adversarial-review` run on any backend (`--backend`, Codex unless
 chosen). The stop-time review gate and transfer run on Codex.
@@ -33,8 +35,8 @@ Requirements:
 - Claude Code 2.1.271 or later, for hooks on `SubagentHandback`.
 - Node.js 22 or later.
 - macOS or Linux. The process sweep reads the process table with `ps`.
-- At least one backend CLI, signed in: the Codex CLI, Grok Build or ZCode. This release was
-  checked against Codex 0.162.0, Grok Build 1.0.50 and ZCode 3.14.4.
+- At least one backend CLI, signed in: the Codex CLI, Grok Build, ZCode or Kimi Code. This release
+  was checked against Codex 0.162.0, Grok Build 1.0.50, ZCode 3.14.4 and Kimi Code 2.2.0.
 
 ```bash
 claude plugin marketplace add libar-dev/relay-plugin-cc
@@ -67,7 +69,7 @@ files:
   "autoMode": {
     "allow": [
       "$defaults",
-      "Launching a relay:job agent of the relay plugin is allowed: it runs one job on Codex, Grok Build or ZCode, with no sandbox in mode: yolo, and its brief names where the job may write."
+      "Launching a relay:job agent of the relay plugin is allowed: it runs one job on Codex, Grok Build, ZCode or Kimi Code, with no sandbox in mode: yolo, and its brief names where the job may write."
     ]
   }
 }
@@ -82,7 +84,8 @@ message, or leave auto mode for that step.
 ## The first hour
 
 **Check the backends.** Run `/relay:setup`. It finds every backend home on the machine (the
-Codex home, `~/.grok` and each `~/.grok-<name>`, and ZCode) and prints one block for each: binary
+Codex home, `~/.grok` and each `~/.grok-<name>`, ZCode, and `~/.kimi-code` and each
+`~/.kimi-code-<name>`) and prints one block for each: binary
 and version, sign-in, default model and effort, the models you can name in `model:`, and what the
 backend can do. It makes no model call, and a missing or signed-out backend never fails the page.
 When Codex is missing, `/relay:setup` offers to install Codex for you with npm. When it is signed
@@ -91,8 +94,8 @@ out, run `!codex login`.
 **Launch a job.** Jobs run in `mode: yolo` by default, with no sandbox and no approvals, so that
 existing headers and Workflow scripts keep running as they did. In a check with Codex 0.162.0 and
 Grok Build 1.0.50, `mode: write` with `network: true` covered web search, package installs, git
-commits and child processes, but not `ps` or writes outside the working directory; ZCode has no
-`write` mode. In `yolo` the brief is the only fence, so name where the job may write. This first
+commits and child processes, but not `ps` or writes outside the working directory; ZCode and Kimi
+have no `write` mode. In `yolo` the brief is the only fence, so name where the job may write. This first
 job asks for `mode: write` instead, the Codex workspace sandbox:
 
 ```
@@ -147,11 +150,12 @@ Claude Code update can break.
 
 | Key | Values | Default |
 |---|---|---|
-| `backend` | `codex`, `grok`, `zcode` | `codex` |
+| `backend` | `codex`, `grok`, `zcode`, `kimi` | `codex` |
 | `model` | a model name, or `default` | required |
 | `effort` | a backend effort name, such as `low`, `high`, `xhigh`, `max` or `ultra`, or `default` | required |
 | `mode` | `yolo`, `write`, `read-only` | `yolo` |
 | `grok-home` | Grok only: `jobs` for `~/.grok-jobs`, another name, a path, or `default` for `~/.grok` | `default` |
+| `kimi-home` | Kimi only: `jobs` for `~/.kimi-code-jobs`, another name, a path, or `default` for `~/.kimi-code` | `default` |
 | `fast` | `true` asks OpenAI for its priority tier after `/relay:setup --fast-tier allowed` | `false` |
 | `network` | `true`, `false`; `write` and `read-only` only | `false` |
 | `web-search` | `live`, `cached`, `disabled` | `live` |
@@ -159,19 +163,22 @@ Claude Code update can break.
 | `add-dir` | absolute extra writable root, repeatable; Codex `write` only | none |
 | `brief` | absolute path of the brief file; nothing follows `---` | the text after `---` |
 
-The `relay:jobs` skill describes every key, GLM on ZCode, Grok homes and the state block's lines.
+The `relay:jobs` skill describes every key, GLM on ZCode, Grok and Kimi homes and the state block's
+lines.
 An unknown header key fails the start with a usage error that lists the known keys. Each backend
 accepts only the modes and web-search settings it supports. Grok supports all three modes and only
 `web-search: live`. ZCode supports `yolo` and `read-only`, with `web-search: live` or `disabled`.
+Kimi supports `yolo` and `read-only` and only `web-search: live`, and a running Kimi turn takes no
+message: a message sent while it runs becomes the next turn.
 
 ### Commands
 
 | Command | What it does |
 |---|---|
-| `/relay:setup` | every backend home in one shape; `--backend codex\|grok\|zcode [--grok-home H]` checks one and exits non-zero when it is not ready |
+| `/relay:setup` | every backend home in one shape; `--backend codex\|grok\|zcode\|kimi [--grok-home H\|--kimi-home H]` checks one and exits non-zero when it is not ready |
 | `/relay:setup --fast-tier allowed\|off` | with `off`, the default, jobs ignore `fast: true`; with `allowed`, it asks for the priority tier |
 | `/relay:setup --job-mcp-off name,...\|none` | Codex jobs turn off these MCP servers |
-| `/relay:rescue <task>` | hand an investigation or a fix to a `relay:job` agent; `--backend`, `--model`, `--effort`, `--grok-home`, `--read-only` and `--write` become its header, `--background` runs the agent in the background |
+| `/relay:rescue <task>` | hand an investigation or a fix to a `relay:job` agent; `--backend`, `--model`, `--effort`, `--grok-home`, `--kimi-home`, `--read-only` and `--write` become its header, `--background` runs the agent in the background |
 | `/relay:status [job] [--all]` | this repository's newest 20 jobs, every repository's with `--all`, or one job's state block |
 | `/relay:result [job]` | a job's state block and report; without a job, the newest finished job of this repository |
 | `/relay:cancel [job]` | interrupt the turn; the worker is killed if the job has not ended 10 s later; without a job, the only active job of this repository |
@@ -190,15 +197,16 @@ is recorded as a job, so `/relay:status` lists it.
 
 | Flag | What it does |
 |---|---|
-| `--backend codex\|grok\|zcode` | the backend; Codex when omitted |
+| `--backend codex\|grok\|zcode\|kimi` | the backend; Codex when omitted |
 | `--model <m>`, `--effort <e>` | as in a header; without them, the backend's defaults, and effort `high` on ZCode. Codex's own reviewer takes no effort, so `--effort` there prints a `note:` |
 | `--grok-home <H>` | the Grok home, as in a header; Grok only |
+| `--kimi-home <H>` | the Kimi home, as in a header; Kimi only |
 | `--base <ref>` | review the branch against `<ref>` |
 | `--scope auto\|working-tree\|branch` | `auto`, the default, reviews the working tree when it has changes, else the branch against the default branch |
 | `--wait`, `--background` | run in the foreground, or as a Claude background task; without either, the command asks |
 | `[focus]` | text after the flags; `/relay:adversarial-review` only |
 
-Grok and ZCode read only the diff inlined in their prompt, so they refuse a change above two files
+Grok, ZCode and Kimi read only the diff inlined in their prompt, so they refuse a change above two files
 or 256 KiB before anything starts. An adversarial answer that does not match the review schema
 fails the review with the raw answer in the report.
 
@@ -212,8 +220,8 @@ message describes them, against the working tree as it stands, and blocks the st
 answers `BLOCK:`. It gets no diff of the turn, so it cannot tell Claude's edits from changes that
 were already in the working tree. The gate skips, with a note, while a background task, a Workflow
 or a job of this repository runs, while a stop-hook continuation is already in progress, and when
-Codex is unavailable or the review fails. Grok and ZCode do not run it; use `/relay:review` on
-those.
+Codex is unavailable or the review fails. Grok, ZCode and Kimi do not run it; use `/relay:review`
+on those.
 
 Each review is a Codex job and costs usage. Turn the gate on for sessions you watch.
 

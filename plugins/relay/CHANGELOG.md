@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A fourth backend, `backend: kimi`, runs Moonshot AI's Kimi Code through `kimi acp`. Jobs, the
+  relay, cancel, continue, recovery, Workflow adoption, both reviews and setup work as on the other
+  backends. `kimi-home:` selects the Kimi home (`default` is `~/.kimi-code`, a name is
+  `~/.kimi-code-<name>`), and `/relay:setup` lists every Kimi home it finds.
+- A running Kimi turn takes no message: a message sent while it runs becomes the next turn.
+- Kimi supports `yolo` (Kimi's Never Ask mode) and `read-only` (Kimi's default mode, with every
+  permission request rejected and every file write and shell command refused by the plugin), and
+  only `web-search: live`.
+- A Kimi turn's outcome and report come from the session's own record, because Kimi's ACP layer
+  answers `end_turn` for a turn that failed.
 - The tests that wait for an orphaned process accept a child subreaper, such as `systemd --user`,
   as its new parent, so they pass on Linux desktops.
 - The docs say why `yolo` is the default: existing headers and Workflow scripts keep running as

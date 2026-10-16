@@ -41,7 +41,7 @@ async function waitFor(predicate, { timeoutMs = 5000, intervalMs = 50 } = {}) {
   throw new Error("Timed out waiting for condition.");
 }
 
-// Setup checks every backend home it finds: a scratch HOME, and Grok and ZCode pointed at
+// Setup checks every backend home it finds: a scratch HOME, and Grok, ZCode and Kimi pointed at
 // binaries that do not exist, so no test reads a real home or runs a real install.
 function setupEnv(binDir, extra = {}) {
   return {
@@ -49,6 +49,7 @@ function setupEnv(binDir, extra = {}) {
     HOME: makeTempDir("relay-setup-home-"),
     GROK_BINARY: path.join(binDir, "grok"),
     ZCODE_BINARY: path.join(binDir, "zcode"),
+    KIMI_BINARY: path.join(binDir, "kimi"),
     ...extra
   };
 }

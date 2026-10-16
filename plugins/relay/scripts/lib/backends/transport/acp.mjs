@@ -1,4 +1,5 @@
-// The ACP messages Grok uses. Grok's queue, interjections and prompt ids stay in its connection.
+// The ACP messages Grok and Kimi use. Grok's queue and interjections, and Kimi's session record,
+// stay in their connections.
 export const ACP_INITIALIZE_PARAMS = {
   protocolVersion: 1,
   clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
@@ -32,8 +33,13 @@ export function setConfigOption(client, sessionId, configId, value) {
   return client.request("session/set_config_option", { sessionId, configId, value });
 }
 
-export function promptSession(client, sessionId, text) {
-  return client.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+// A client that serves file writes and terminals itself declares them, and the agent sends them.
+export function acpInitializeParams(clientCapabilities) {
+  return { ...ACP_INITIALIZE_PARAMS, clientCapabilities };
+}
+
+export function promptSession(client, sessionId, text, prompt = [{ type: "text", text }]) {
+  return client.request("session/prompt", { sessionId, prompt });
 }
 
 export function cancelSession(client, sessionId) { client.notify("session/cancel", { sessionId }); }

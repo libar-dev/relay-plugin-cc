@@ -1,0 +1,207 @@
+import fs from "node:fs";
+import path from "node:path";
+import { writeExecutable } from "../support/helpers.mjs";
+import { realHomeGuardSource } from "../support/isolate-env.mjs";
+
+// A fake `kimi` built from the shapes Kimi Code 2.2.0 sent in live probes: `--version`,
+// `provider list --json`, and `acp`, which answers ACP and keeps each session's record in
+// `$KIMI_CODE_HOME/sessions/<bucket>/<id>/agents/main/wire.jsonl` as Kimi does. Like Kimi, it
+// answers `end_turn` for a turn that failed (the record says `failed`), refuses a second prompt
+// while a turn runs, reads a leading `/word` as a command, forgets the mode on a load, and runs a
+// prompt sent during a turn of its own after that turn, with no ACP events for either.
+export function installFakeKimi(bin, options = {}) {
+  const statePath = path.join(bin, "fake-kimi-state.json");
+  const binary = path.join(bin, "kimi");
+  writeExecutable(binary, `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const options = ${JSON.stringify(options)};
+${realHomeGuardSource("kimi")}
+const file = ${JSON.stringify(statePath)};
+let state = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { starts: [], requests: [], answers: [], turns: [], sessions: {} };
+const save = () => { const temp = file + '.' + process.pid; fs.writeFileSync(temp, JSON.stringify(state)); fs.renameSync(temp, file); };
+const kimiEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('KIMI_')));
+fs.appendFileSync(file + '.invocations', JSON.stringify({ args: process.argv.slice(2), env: kimiEnv() }) + '\\n');
+const args = process.argv.slice(2);
+if (args[0] === '--version' && options.versionFail) { console.error('VERSION DENIED'); process.exit(9); }
+if (args[0] === '--version') { console.log('2.2.0-fake'); process.exit(0); }
+const MODELS = {
+  'kimi-code/k3': { provider: 'managed:kimi-code', model: 'k3', displayName: 'K3', supportEfforts: ['low', 'high', 'max'], defaultEffort: 'max' },
+  'kimi-code/kimi-for-coding-highspeed': { provider: 'managed:kimi-code', model: 'kimi-for-coding-highspeed', displayName: 'K2.7 Code Highspeed' }
+};
+if (args[0] === 'provider' && args[1] === 'list') {
+  if (options.providersHangMs) { setTimeout(() => process.exit(0), options.providersHangMs); return; }
+  const providers = options.signedOut ? {} : { 'managed:kimi-code': { baseUrl: 'https://api.example.invalid/coding/v1', type: 'kimi', apiKey: 'FAKE-SECRET-KEY', oauth: { storage: 'file', key: 'oauth/kimi-code-env-fake', oauthHost: 'https://auth.example.invalid' } } };
+  console.log(JSON.stringify({ providers, models: options.signedOut ? {} : MODELS }, null, 2));
+  process.exit(0);
+}
+if (args[0] !== 'acp') { console.error('fake kimi: unsupported ' + args.join(' ')); process.exit(2); }
+state.starts.push({ args, env: kimiEnv(), cwd: process.cwd(), pid: process.pid }); save();
+const send = message => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\\n');
+const home = process.env.KIMI_CODE_HOME;
+let sessionId, active = null, own = null, mode = 'default', model = 'kimi-code/k3', clientCaps = {}, reverseId = 0;
+const pendingReverse = new Map();
+const queued = [];
+const update = value => send({ method: 'session/update', params: { sessionId, update: value } });
+const reverse = (method, params) => { const id = reverseId++; pendingReverse.set(id, method); send({ id, method, params: { sessionId, ...params } }); };
+function wireOf(id) {
+  const session = state.sessions[id];
+  const dir = path.join(home, 'sessions', 'wd_' + path.basename(session.cwd) + '_' + crypto.createHash('sha256').update(session.cwd).digest('hex').slice(0, 12), id, 'agents', 'main');
+  refuseRealHome(dir);
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'wire.jsonl');
+}
+const record = value => fs.appendFileSync(wireOf(sessionId), JSON.stringify({ ...value, time: Date.now() }) + '\\n');
+const promptRecords = (turn, origin) => {
+  if (origin === 'user') record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'user', content: turn.input }, meta: { source: 'input', promptId: turn.promptId, origin: { kind: 'user' } } } });
+  record({ type: 'agent.turn.started', kind: 'event', turnId: turn.turnId, queueItemId: turn.promptId });
+  record({ type: 'turn.prompt', agentId: 'main', input: turn.input, origin: { kind: origin }, promptId: turn.promptId, turnId: turn.turnId });
+};
+const nextTurnId = () => { state.turnCounter = (state.turnCounter ?? 0) + 1; save(); return state.turnCounter - 1; };
+function configOptions() {
+  return [
+    { type: 'select', id: 'model', currentValue: model, options: Object.keys(MODELS).map(value => ({ value })) },
+    { type: 'select', id: 'mode', currentValue: mode, options: ['default', 'plan', 'auto', 'yolo'].map(value => ({ value })) }
+  ];
+}
+function startTurn(turn, rpcId) {
+  active = { ...turn, rpcId };
+  state.turns.push({ text: turn.text, promptId: turn.promptId, turnId: turn.turnId, sessionId, mode }); save();
+  promptRecords(turn, 'user');
+  if (options.dieAfterRecord && state.turns.length === 1) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 50); return; }
+  if (options.permission) reverse('session/request_permission', { options: [{ optionId: 'approve_once', name: 'Approve once', kind: 'allow_once' }, { optionId: 'approve_always', name: 'Approve for this session', kind: 'allow_always' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }], toolCall: { toolCallId: turn.turnId + ':tool_perm', title: 'Bash' } });
+  for (const [index, offered] of (options.permissionOptions || []).entries()) reverse('session/request_permission', { options: offered, toolCall: { toolCallId: turn.turnId + ':tool_' + index, title: 'Bash' } });
+  if (options.writes) {
+    if (clientCaps.fs?.writeTextFile) reverse('fs/write_text_file', { path: path.join(process.cwd(), 'notes.txt'), content: 'x' });
+    else { fs.writeFileSync(path.join(process.cwd(), 'notes.txt'), 'x'); state.localWrites = (state.localWrites || 0) + 1; save(); }
+    if (clientCaps.terminal) reverse('terminal/create', { command: 'touch', args: ['touched.txt'], cwd: process.cwd() });
+  }
+  if (options.unsupported) reverse('client/missing', { question: 'unhandled' });
+  update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } });
+  if (options.tools) {
+    update({ sessionUpdate: 'tool_call', toolCallId: turn.turnId + ':tool_1', title: 'Bash', kind: 'execute', status: 'pending' });
+    for (let i = 0; i < 3; i++) update({ sessionUpdate: 'tool_call_update', toolCallId: turn.turnId + ':tool_1', status: 'in_progress' });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: turn.turnId + ':tool_1', status: 'completed' });
+    record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'assistant', content: [{ type: 'text', text: 'Before the tool. ' }], toolCalls: [] } } });
+    record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'assistant', content: [{ type: 'text', text: 'Preamble.' }], toolCalls: [{ id: 'tool_1', name: 'Bash' }] } } });
+    record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'tool', content: [{ type: 'text', text: 'ok' }], toolCallId: 'tool_1' } } });
+  }
+  if (options.die) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 80); return; }
+  const ms = turn.text.startsWith('[quick]') ? 30 : options.turnMs || 100;
+  active.timer = setTimeout(() => finish(options.failTurn ? 'failed' : 'completed'), ms);
+}
+function finish(reason) {
+  if (!active) return;
+  const turn = active; active = null; clearTimeout(turn.timer);
+  if (reason === 'completed') {
+    const answer = process.env.FAKE_REVIEW_ANSWER ?? options.answer ?? 'Report for: ' + turn.text;
+    if (turn.rpcId !== null) for (const text of [answer.slice(0, 3), answer.slice(3)]) if (text) update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
+    record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'assistant', content: [{ type: 'think', think: 'x' }, { type: 'text', text: answer }], toolCalls: [] } } });
+  }
+  if (reason === 'cancelled') record({ type: 'turn.cancel', agentId: 'main', turnId: turn.turnId, target: 'active', reason: 'user_cancelled' });
+  const error = reason === 'failed' ? options.failError ?? { code: 'provider.connection_error', message: 'Connection error.', name: 'APIConnectionError', retryable: true } : undefined;
+  record({ type: 'agent.turn.ended', kind: 'event', turnId: turn.turnId, outcome: reason === 'completed' ? 'done' : reason });
+  record({ type: 'turn.ended', agentId: 'main', turnId: turn.turnId, reason, ...(error ? { error } : {}) });
+  if (reason !== 'cancelled') record({ type: 'prompt.completed', agentId: 'main', promptId: turn.promptId, reason });
+  state.completed = [...(state.completed || []), { text: turn.text, reason }]; save();
+  // Kimi's ACP layer answers end_turn for a failed turn.
+  if (turn.rpcId !== null) send({ id: turn.rpcId, result: { stopReason: reason === 'cancelled' ? 'cancelled' : 'end_turn' } });
+  if (options.ownTurnAfterMs && !state.ownTurnRan) { state.ownTurnRan = true; save(); setTimeout(ownTurn, options.ownTurnAfterMs); }
+}
+// A turn Kimi starts on its own (a background task finished): only the record shows it.
+function ownTurn() {
+  const turnId = nextTurnId();
+  own = { turnId };
+  const input = [{ type: 'text', text: '<notification id="task:bash-1:completed">done</notification>' }];
+  record({ type: 'agent.turn.started', kind: 'event', turnId });
+  record({ type: 'turn.prompt', agentId: 'main', input, origin: { kind: 'task' }, turnId });
+  record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'assistant', content: [{ type: 'text', text: 'The background task finished.' }], toolCalls: [] } } });
+  setTimeout(() => {
+    record({ type: 'turn.ended', agentId: 'main', turnId, reason: 'completed' });
+    own = null;
+    const next = queued.shift();
+    if (next) startTurn(next, null);
+  }, options.ownTurnMs || 400);
+}
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const m = JSON.parse(line); state.requests.push(m); save();
+  if (m.id !== undefined && !m.method) { state.answers.push({ id: m.id, method: pendingReverse.get(m.id), result: m.result, error: m.error }); save(); return; }
+  const reply = result => send({ id: m.id, result });
+  const error = (code, message, data) => send({ id: m.id, error: data === undefined ? { code, message } : { code, message, data } });
+  switch (m.method) {
+    case 'initialize':
+      if (options.dieInitialize) { setTimeout(() => process.exit(17), 30); break; }
+      clientCaps = m.params?.clientCapabilities ?? {};
+      reply({ protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: true, audio: false, embeddedContext: true }, sessionCapabilities: { list: {}, resume: {}, close: {}, delete: {}, fork: {}, additionalDirectories: {} }, mcpCapabilities: { http: true, sse: true }, auth: { logout: {} } }, authMethods: [{ id: 'login', type: 'terminal', name: 'Login with Kimi account', args: ['--login'] }], agentInfo: { name: 'Kimi Code CLI', version: '2.2.0-fake' } });
+      break;
+    case 'session/new':
+      sessionId = 'session_fake-' + (Object.keys(state.sessions).length + 1);
+      state.sessions[sessionId] = { cwd: m.params.cwd, mcpServers: m.params.mcpServers }; save();
+      record({ type: 'metadata', protocol_version: '1.5', created_at: Date.now() });
+      mode = 'default';
+      reply({ sessionId, configOptions: configOptions(), modes: { currentModeId: mode } });
+      update({ sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'compact' }] });
+      break;
+    case 'session/load': {
+      if (!state.sessions[m.params.sessionId]) { error(-32602, 'Invalid params: Unknown sessionId: ' + m.params.sessionId); break; }
+      sessionId = m.params.sessionId;
+      for (const turn of state.turns.filter(entry => entry.sessionId === sessionId)) update({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: turn.text } });
+      mode = 'default';
+      reply({ configOptions: configOptions(), modes: { currentModeId: mode } });
+      break;
+    }
+    case 'session/set_mode':
+      if (!['default', 'plan', 'auto', 'yolo'].includes(m.params.modeId)) { error(-32602, 'Invalid params: Unknown modeId: ' + m.params.modeId); break; }
+      mode = m.params.modeId; reply({}); break;
+    case 'session/set_config_option':
+      if (m.params.configId === 'model') {
+        if (!MODELS[m.params.value]) { error(-32603, 'Internal error', { details: 'Model "' + m.params.value + '" is not configured in config.toml.' }); break; }
+        model = m.params.value; reply({ configOptions: configOptions() }); break;
+      }
+      if (m.params.configId === 'thinking') {
+        const efforts = MODELS[model].supportEfforts ?? ['on', 'max'];
+        if (!efforts.includes(m.params.value)) { error(-32602, 'Invalid params: Unknown thinking value: ' + m.params.value, { configId: 'thinking', value: m.params.value }); break; }
+        reply({ configOptions: configOptions() }); break;
+      }
+      error(-32602, 'Invalid params: Unknown configId: ' + m.params.configId); break;
+    case 'session/prompt': {
+      if (options.authError) { error(-32000, 'Authentication required'); break; }
+      if (active) { error(-32600, 'Invalid request: another turn is already in progress', { code: 'turn.agent_busy' }); state.busyRefusals = (state.busyRefusals || 0) + 1; save(); break; }
+      const blocks = m.params.prompt;
+      const first = blocks[0];
+      if (first?.type === 'text' && first.text.startsWith('/')) {
+        const name = first.text.slice(1).trim().split(' ')[0];
+        if (name && !name.includes('/')) { state.commands = [...(state.commands || []), name]; save(); update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Unknown ACP command: /' + name + '. Use /help to see available commands.' } }); reply({ stopReason: 'end_turn' }); break; }
+      }
+      if (options.noRecord) { reply({ stopReason: 'end_turn' }); break; }
+      // The first process dies before Kimi records the prompt: it never reached the session.
+      if (options.dieBeforeRecord && !state.diedBeforeRecord) { state.diedBeforeRecord = true; save(); setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 30); break; }
+      const text = blocks.filter(part => part.type === 'text').map(part => part.text).join('');
+      const turn = { text, input: blocks, promptId: 'msg_fake' + (state.turns.length + 1), turnId: nextTurnId() };
+      // The engine queues a prompt sent during a turn of its own, and ACP answers at once.
+      if (own) { queued.push(turn); state.queuedBehindOwn = (state.queuedBehindOwn || 0) + 1; save(); reply({ stopReason: 'end_turn' }); break; }
+      startTurn(turn, m.id);
+      break;
+    }
+    case 'session/cancel': if (active) finish('cancelled'); break;
+    default: if (m.id !== undefined && m.method) error(-32601, 'Method not found');
+  }
+});
+`);
+  const state = () => {
+    const recorded = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : { starts: [], requests: [], answers: [], turns: [], sessions: {} };
+    const lines = fs.existsSync(`${statePath}.invocations`) ? fs.readFileSync(`${statePath}.invocations`, "utf8").split("\n").filter(Boolean) : [];
+    return { ...recorded, invocations: lines.map(line => JSON.parse(line)) };
+  };
+  return { binary, state };
+}
+
+// A home signed in the way `kimi login` leaves it: the credentials file setup looks for.
+export function signInFakeKimiHome(home) {
+  const dir = path.join(home, "credentials");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "kimi-code-env-fake.json"), JSON.stringify({ access_token: "fake", refresh_token: "fake" }));
+  fs.writeFileSync(path.join(home, "config.toml"), 'default_model = "kimi-code/k3"\n\n[thinking]\nenabled = true\neffort = "high"\n');
+}

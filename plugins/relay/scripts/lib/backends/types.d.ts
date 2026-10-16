@@ -4,7 +4,7 @@
 
 import type { ChildProcess } from "node:child_process";
 
-export type BackendName = "codex" | "grok" | "zcode";
+export type BackendName = "codex" | "grok" | "zcode" | "kimi";
 export type Mode = "yolo" | "write" | "read-only";
 export type WebSearch = "live" | "cached" | "indexed" | "disabled";
 
@@ -14,7 +14,7 @@ export type WebSearch = "live" | "cached" | "indexed" | "disabled";
 export interface Backend {
   /** The header's `backend:` value. */
   name: BackendName;
-  /** The name in text a person reads: "Codex", "Grok", "ZCode". */
+  /** The name in text a person reads: "Codex", "Grok", "ZCode", "Kimi". */
   label: string;
   /** What the backend can do. The one declaration of each fact. */
   capabilities: Capabilities;

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { companion, jobDirs, makeHome, readJob, setup } from "./support/job-helpers.mjs";
 import { installFakeGrok } from "./fakes/grok.mjs";
 import { installFakeZcode } from "./fakes/zcode.mjs";
+import { installFakeKimi } from "./fakes/kimi.mjs";
 import { initGitRepo, run } from "./support/helpers.mjs";
 
 const VERDICT = {
@@ -55,6 +56,19 @@ function zcode(t, options = {}, files, untracked) {
   return ctx;
 }
 
+function kimi(t, options = {}, files, untracked) {
+  const ctx = setup(t, { behavior: "review-ok" });
+  const fake = installFakeKimi(ctx.bin, options);
+  ctx.env.KIMI_BINARY = fake.binary;
+  ctx.env.RELAY_JOBS_KIMI_POLL_MS = "20";
+  ctx.kimi = fake.state;
+  if (files !== null) repo(ctx, files, untracked);
+  return ctx;
+}
+
+// The fake each review test reads its turns from.
+const turnsOf = (ctx, backend) => ({ zcode: () => ctx.zcode().turns, grok: () => ctx.grok().turns, kimi: () => ctx.kimi().turns })[backend]();
+
 function codex(t, behavior = "review-ok") {
   const ctx = setup(t, { behavior });
   repo(ctx);
@@ -70,7 +84,7 @@ const onlyJob = (ctx) => {
 test("selection errors fail before a job exists, with the job path's messages", t => {
   const ctx = codex(t);
   const cases = [
-    [["review", "--backend", "kimi"], "backend must be codex, grok or zcode."],
+    [["review", "--backend", "other"], "backend must be codex, grok, zcode or kimi."],
     [["adversarial-review", "--grok-home", "jobs"], "grok-home is only valid with backend: grok."]
   ];
   for (const [args, message] of cases) {
@@ -215,18 +229,50 @@ test("Grok review runs under Grok's read-only profile, with its home and a Grok 
   assert.equal("threadId" in payload, false);
 });
 
+test("Kimi review runs read-only, refusing every write and command, with its home and a Kimi heading", t => {
+  const ctx = kimi(t, { answer: "needs changes\n[high] src/app.js:1: unguarded first item", writes: true, permission: true });
+  const home = path.join(ctx.user, ".kimi-code-jobs");
+  const result = companion(ctx, ["review", "--backend", "kimi", "--kimi-home", "jobs", "--model", "kimi-code/k3", "--effort", "high"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^# Kimi Review\n\nTarget: working tree diff\n\nneeds changes\n/);
+  const state = ctx.kimi();
+  assert.equal(state.starts.length, 1);
+  assert.equal(state.starts[0].env.KIMI_CODE_HOME, home);
+  const requests = method => state.requests.filter(r => r.method === method);
+  assert.deepEqual(requests("initialize")[0].params.clientCapabilities, { fs: { readTextFile: false, writeTextFile: true }, terminal: true });
+  assert.deepEqual(requests("session/set_mode").map(r => r.params.modeId), ["default"]);
+  assert.deepEqual(requests("session/set_config_option").map(r => [r.params.configId, r.params.value]), [["model", "kimi-code/k3"], ["thinking", "high"]]);
+  assert.deepEqual(state.answers.map(a => [a.method, a.result?.outcome?.optionId ?? a.error?.message]), [
+    ["session/request_permission", "reject"],
+    ["fs/write_text_file", "This job is read-only: file writes are refused."],
+    ["terminal/create", "This job is read-only: shell commands are refused."]
+  ]);
+  assert.match(state.turns[0].text, /You are Kimi performing a code review\./);
+  assert.match(state.turns[0].text, /items\[0\]\.id/);
+  const job = onlyJob(ctx);
+  assert.equal(job.request.backend, "kimi");
+  assert.equal(job.request.kimiHome, home);
+  assert.equal(job.request.mode, "read-only");
+  const status = companion(ctx, ["status", job.id]).stdout;
+  assert.match(status, /^backend: kimi$/m);
+  assert.match(status, new RegExp(`^kimi-home: ${home}$`, "m"));
+  assert.match(status, /^kind: review$/m);
+  assert.match(status, new RegExp(`^session: ${job.sessionId}$`, "m"));
+});
+
 test("adversarial review on ZCode and Grok: the schema travels in the prompt and the plugin checks the answer", t => {
   for (const [backend, label, install, answer, selection] of [
     ["zcode", "ZCode", zcode, JSON.stringify(VERDICT), ["--model", "glm-5.3-flash", "--effort", "max"]],
     // A single ```json fence around the whole answer is unwrapped.
-    ["grok", "Grok", grok, "```json\n" + JSON.stringify(VERDICT, null, 2) + "\n```", ["--model", "grok-4.6", "--effort", "low"]]
+    ["grok", "Grok", grok, "```json\n" + JSON.stringify(VERDICT, null, 2) + "\n```", ["--model", "grok-4.6", "--effort", "low"]],
+    ["kimi", "Kimi", kimi, JSON.stringify(VERDICT), ["--model", "kimi-code/k3", "--effort", "max"]]
   ]) {
     const ctx = install(t, { answer });
     const result = companion(ctx, ["adversarial-review", "--backend", backend, ...selection, "focus on empty lists"]);
     assert.equal(result.status, 0, `${backend}: ${result.stderr}`);
     assert.match(result.stdout, new RegExp(`^# ${label} Adversarial Review\n\nTarget: working tree diff\nVerdict: needs-attention\n`));
     assert.match(result.stdout, /- \[high\] Unguarded first item \(src\/app\.js:1\)/);
-    const prompt = (backend === "zcode" ? ctx.zcode() : ctx.grok()).turns[0].text;
+    const prompt = turnsOf(ctx, backend)[0].text;
     assert.match(prompt, new RegExp(`You are ${label} performing an adversarial software review\\.`));
     assert.match(prompt, /User focus: focus on empty lists/);
     assert.match(prompt, /This request carries no schema parameter, so the schema is below\./);
@@ -235,7 +281,10 @@ test("adversarial review on ZCode and Grok: the schema travels in the prompt and
     assert.equal(job.kind, "adversarial-review");
     assert.equal(job.state, "completed");
     assert.equal(job.summary, VERDICT.summary);
-    if (backend === "zcode") {
+    if (backend === "kimi") {
+      assert.deepEqual(ctx.kimi().requests.filter(r => r.method === "session/set_config_option").map(r => [r.params.configId, r.params.value]), [["model", "kimi-code/k3"], ["thinking", "max"]]);
+      assert.deepEqual(ctx.kimi().requests.filter(r => r.method === "session/set_mode").map(r => r.params.modeId), ["default"]);
+    } else if (backend === "zcode") {
       const [input] = ctx.zcode().inputs;
       assert.deepEqual([input.modelSelection.modelId, input.modelSelection.options.reasoningLevel], ["GLM-5.3-Flash", "max"]);
     } else {
@@ -252,12 +301,14 @@ test("invalid review JSON fails the review on every backend and keeps the raw an
   const raw = {
     codex: "The change looks risky, but here is prose instead of JSON.",
     grok: "Looks fine to me.",
-    zcode: JSON.stringify({ verdict: "approve", summary: "No findings." })
+    zcode: JSON.stringify({ verdict: "approve", summary: "No findings." }),
+    kimi: "Approved, no JSON here."
   };
   for (const [backend, label, make] of [
     ["codex", "Codex", () => codex(t, "adversarial-invalid-json")],
     ["grok", "Grok", () => grok(t, { answer: raw.grok })],
-    ["zcode", "ZCode", () => zcode(t, { answer: raw.zcode })]
+    ["zcode", "ZCode", () => zcode(t, { answer: raw.zcode })],
+    ["kimi", "Kimi", () => kimi(t, { answer: raw.kimi })]
   ]) {
     const ctx = make();
     const result = companion(ctx, ["adversarial-review", "--backend", backend]);
@@ -369,15 +420,15 @@ test("a failed ZCode review turn fails the job with ZCode's error under a ZCode 
 });
 
 // An inline-only review sees the whole change or does not start.
-test("untracked files count toward the inline limits and are inlined whole on Grok and ZCode, both commands", t => {
-  for (const [backend, label, install] of [["grok", "Grok", grok], ["zcode", "ZCode", zcode]]) {
+test("untracked files count toward the inline limits and are inlined whole on Grok, ZCode and Kimi, both commands", t => {
+  for (const [backend, label, install] of [["grok", "Grok", grok], ["zcode", "ZCode", zcode], ["kimi", "Kimi", kimi]]) {
     for (const command of ["review", "adversarial-review"]) {
       const what = `${backend} ${command}`;
       // 30 KiB: above the 24 KiB per-file cut Codex's context uses, below the limit.
       const below = install(t, { answer: JSON.stringify(VERDICT) }, {}, { "src/new.js": sized(30 * 1024, "UNTRACKED_TAIL") });
       const ok = companion(below, [command, "--backend", backend]);
       assert.equal(ok.status, 0, `${what}: ${ok.stderr}`);
-      const prompt = (backend === "zcode" ? below.zcode() : below.grok()).turns[0].text;
+      const prompt = turnsOf(below, backend)[0].text;
       assert.ok(prompt.includes(sized(30 * 1024, "UNTRACKED_TAIL").trimEnd()), what);
       assert.doesNotMatch(prompt, /exceeds \d+ byte limit/, what);
 
@@ -386,14 +437,14 @@ test("untracked files count toward the inline limits and are inlined whole on Gr
       assert.equal(refused.status, 1, what);
       assert.equal(refused.stderr, refusal("1 file / more than 256 KiB", label), what);
       assert.equal(jobDirs(above).length, 0, what);
-      assert.equal(backend === "zcode" ? fs.existsSync(above.zcodeState) : above.grok().starts.length > 0, false, what);
+      assert.equal(backend === "zcode" ? fs.existsSync(above.zcodeState) : backend === "kimi" ? above.kimi().starts.length > 0 : above.grok().starts.length > 0, false, what);
     }
   }
 });
 
-// --base and --scope branch select the branch diff on Grok and ZCode.
-test("--base and --scope branch reach Grok and ZCode reviews: the branch diff, not the dirty working tree", t => {
-  for (const [backend, install] of [["grok", grok], ["zcode", zcode]]) {
+// --base and --scope branch select the branch diff on Grok, ZCode and Kimi.
+test("--base and --scope branch reach Grok, ZCode and Kimi reviews: the branch diff, not the dirty working tree", t => {
+  for (const [backend, install] of [["grok", grok], ["zcode", zcode], ["kimi", kimi]]) {
     for (const target of [["--base", "main"], ["--scope", "branch"]]) {
       const ctx = install(t, { answer: JSON.stringify(VERDICT) }, null);
       const git = (...args) => assert.equal(run("git", args, { cwd: ctx.work }).status, 0, args.join(" "));
@@ -407,7 +458,7 @@ test("--base and --scope branch reach Grok and ZCode reviews: the branch diff, n
         const what = `${backend} ${command} ${target.join(" ")}`;
         const result = companion(ctx, [command, "--backend", backend, ...target]);
         assert.equal(result.status, 0, `${what}: ${result.stderr}`);
-        const turns = (backend === "zcode" ? ctx.zcode() : ctx.grok()).turns;
+        const turns = turnsOf(ctx, backend);
         const prompt = turns[turns.length - 1].text;
         assert.match(prompt, /Target: branch diff against main/, what);
         assert.match(prompt, /BRANCH_ONLY_MARKER/, what);
@@ -418,7 +469,7 @@ test("--base and --scope branch reach Grok and ZCode reviews: the branch diff, n
 });
 
 // An answer counts only if it matches review-output.schema.json.
-test("schema-invalid review JSON fails the review on Codex, Grok and ZCode", t => {
+test("schema-invalid review JSON fails the review on Codex, Grok, ZCode and Kimi", t => {
   const finding = VERDICT.findings[0];
   const cases = [
     ["enum", { ...VERDICT, verdict: "banana" }],
@@ -430,7 +481,8 @@ test("schema-invalid review JSON fails the review on Codex, Grok and ZCode", t =
   for (const [backend, label, make] of [
     ["codex", "Codex", () => codex(t)],
     ["grok", "Grok", () => grok(t)],
-    ["zcode", "ZCode", () => zcode(t)]
+    ["zcode", "ZCode", () => zcode(t)],
+    ["kimi", "Kimi", () => kimi(t)]
   ]) {
     const ctx = make();
     for (const [name, answer] of cases) {
@@ -456,7 +508,7 @@ test("task selects its requested backend and validates it before launch", t => {
   for (const name of ["unknown", ""]) {
     const invalid = companion(ctx, ["task", "--backend", name, "Task"]);
     assert.equal(invalid.status, 1);
-    assert.equal(invalid.stderr.trim(), "backend must be codex, grok or zcode.");
+    assert.equal(invalid.stderr.trim(), "backend must be codex, grok, zcode or kimi.");
     assert.equal(jobDirs(ctx).length, 0);
   }
   const result = companion(ctx, ["task", "--backend", "grok", "--json", "Task"]);

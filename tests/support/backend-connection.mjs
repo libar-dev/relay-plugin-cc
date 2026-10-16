@@ -9,7 +9,7 @@ export async function scriptedConnection(backend, client, request, hooks = {}) {
   const initialize = mock.method(SpawnedServerClient.prototype, "initialize", async () => {});
   const connect = mock.method(CodexAppServerClient, "connect", async () => client);
   try {
-    const connection = await backendNamed(backend).connect(request, { state: {}, saveState() {}, tap() {}, ...hooks, env: { GROK_BINARY: process.execPath, ZCODE_BINARY: process.execPath, ...hooks.env } });
+    const connection = await backendNamed(backend).connect(request, { state: {}, saveState() {}, tap() {}, ...hooks, env: { GROK_BINARY: process.execPath, ZCODE_BINARY: process.execPath, KIMI_BINARY: process.execPath, ...hooks.env } });
     connection.client = client;
     return connection;
   } finally {

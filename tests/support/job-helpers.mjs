@@ -20,8 +20,8 @@ export function setup(t, options = {}) {
   installFakeCodex(bin, options.behavior ?? "job", { turnMs: options.turnMs ?? 50 });
   const env = {
     ...buildEnv(bin), HOME: user, USERPROFILE: user, CODEX_HOME: undefined,
-    // Setup checks every backend it finds: point Grok and ZCode at this bin, never at a real install.
-    GROK_BINARY: path.join(bin, "grok"), ZCODE_BINARY: path.join(bin, "zcode"),
+    // Setup checks every backend it finds: point Grok, ZCode and Kimi at this bin, never at a real install.
+    GROK_BINARY: path.join(bin, "grok"), ZCODE_BINARY: path.join(bin, "zcode"), KIMI_BINARY: path.join(bin, "kimi"),
     RELAY_JOBS_HOME: jobs, RELAY_JOBS_POLL_MS: "20", RELAY_JOBS_WAIT_POLL_MS: "20",
     RELAY_JOBS_HEARTBEAT_MS: "200", ...options.env
   };

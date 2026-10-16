@@ -1,7 +1,7 @@
 # Backends
 
 A backend is a harness the relay runs jobs on: Codex's `codex app-server`, Grok Build's
-`grok agent stdio`, or ZCode's `zcode app-server`. Each one is a folder under
+`grok agent stdio`, ZCode's `zcode app-server`, or Kimi Code's `kimi acp`. Each one is a folder under
 `plugins/relay/scripts/lib/backends/` whose `index.mjs` exports one object of type `Backend`,
 declared in [`lib/backends/types.d.ts`](../plugins/relay/scripts/lib/backends/types.d.ts). That
 file is the contract; this page says how the rest of the plugin uses it.
@@ -13,7 +13,7 @@ lib/backends/
   setup.mjs            helpers the setup probes share
   transport/
     stdio-rpc.mjs      a JSON-RPC client over a child process's stdio, with the server's end record
-    acp.mjs            the Agent Client Protocol messages Grok uses
+    acp.mjs            the Agent Client Protocol messages Grok and Kimi use
   codex/
     index.mjs          the backend object
     connection.mjs     the connection: threads, turns, steers, interrupts, capacity errors
@@ -37,6 +37,12 @@ lib/backends/
     request.mjs        ZCode's request rules
     defaults.mjs       the default effort
     setup.mjs          the setup probe
+  kimi/
+    index.mjs          the backend object
+    connection.mjs     the connection: ACP sessions, read-only refusals, delivery records
+    wire.mjs           reads of a session's `wire.jsonl`: each turn's end, report and prompt count
+    request.mjs        Kimi homes and Kimi's request rules
+    setup.mjs          the setup probe
 ```
 
 ## The registry
@@ -45,14 +51,14 @@ lib/backends/
 
 | Export | What it gives |
 |---|---|
-| `BACKENDS` | every backend, in page order: Codex, Grok, ZCode |
+| `BACKENDS` | every backend, in page order: Codex, Grok, ZCode, Kimi |
 | `DEFAULT_BACKEND` | the backend of a header with no `backend:` line, of a review with no `--backend`, and of a `task` with no `--backend` |
-| `backendNames(separator, lastSeparator)` | the names joined for a message: "codex, grok or zcode" |
+| `backendNames(separator, lastSeparator)` | the names joined for a message: "codex, grok, zcode or kimi" |
 | `backendNamed(name)` | the backend, or a usage error naming every valid value |
 | `backendFor(request)` | the backend of a stored request; a request without `backend` is the default's |
 | `backendWith(capability)` | the one backend that has a capability; it throws unless exactly one has it |
 | `BACKEND_HEADER_KEYS` | every backend's own header keys, mapped to their request fields |
-| `backendHeaderValues(options)` | those keys read from command flags, so `start` and the reviews take `--grok-home` |
+| `backendHeaderValues(options)` | those keys read from command flags, so `start` and the reviews take `--grok-home` and `--kimi-home` |
 
 `task --backend <name>` checks the name with `backendNamed` and stores it in the request. The stop
 gate picks its backend with `backendWith("stopGate")`: it probes that backend, starts its review
@@ -64,7 +70,7 @@ with `task --backend <name>`, and names it in every message. `transfer` runs on
 
 | Member | What it is |
 |---|---|
-| `name`, `label` | the header's `backend:` value, and the name a person reads: "Codex", "Grok", "ZCode" |
+| `name`, `label` | the header's `backend:` value, and the name a person reads: "Codex", "Grok", "ZCode", "Kimi" |
 | `capabilities` | what the backend can do, the one declaration of each fact |
 | `capabilityNotes` | words that qualify a capability on setup's `can:` line |
 | `request` | how a header becomes this backend's launch request |
@@ -93,7 +99,7 @@ Generic code derives the rest:
 `request` holds the rest of a backend's rules:
 
 - `headerKeys`: the header keys only this backend takes, mapped to the request field each sets
-  (Grok's `grok-home` → `grokHome`). The header parser accepts the union of every backend's keys
+  (Grok's `grok-home` → `grokHome`, Kimi's `kimi-home` → `kimiHome`). The header parser accepts the union of every backend's keys
   and refuses one given with another backend.
 - `defaultSource`: the end of the "is required" message, "Use `model: default` to ...".
 - `defaultEffort`: the effort `effort: default` gives a job (`high` on ZCode); null leaves it to
@@ -106,11 +112,12 @@ Generic code derives the rest:
 ## The state view
 
 - `view.lines(request)` supplies lines after `backend:`, which generic code prints for every
-  backend but the default. Grok prints `grok-home:` for a home other than `~/.grok`.
+  backend but the default. Grok prints `grok-home:` for a home other than `~/.grok`, and Kimi
+  `kimi-home:` for one other than `~/.kimi-code`.
 - `view.settingLines?(request)` supplies backend settings at the settings position of the launch
   block and the state block, after `tier: fast`. Codex uses it for `mcp-off:`.
 - `view.json(request)` supplies the backend's fields for `status --json` and `start --json`,
-  beside `backend`. Grok adds `grokHome`. A setting line adds no JSON field.
+  beside `backend`. Grok adds `grokHome` and Kimi `kimiHome`. A setting line adds no JSON field.
 - `view.completionInferenceLine?(inference, { sessionId, turnId })` formats the current attempt's
   recorded inference as a `note:` line, or returns null when it does not apply. Generic code
   passes the inference as backend data and does not read it. Codex checks the inference's thread
@@ -177,17 +184,26 @@ evidence and control state.
 
 `eventRecorder(write, touch)` decides what reaches `events.jsonl`. Every notification calls
 `touch`, which moves the job's last-event time. Codex writes every notification, Grok joins
-streamed chunks into one entry, and ZCode leaves out telemetry, token deltas and tool progress.
+streamed chunks into one entry, ZCode leaves out telemetry, token deltas and tool progress, and
+Kimi joins chunks and leaves out command lists and a running tool's progress.
+
+A connection may take a turn's outcome from somewhere other than its protocol's answer. Kimi's
+ACP layer answers `end_turn` for a turn that failed, and sends nothing for a turn Kimi starts on
+its own, so its `run` reads the session's `wire.jsonl` for the turn's end and report. A backend
+whose turns take no message mid-turn throws from `steer`, and the worker runs the message as the
+next turn.
 
 ## Backend state
 
 The worker merges each `saveState` patch into `job.backendState`, and a new worker hands the
 saved record back as `hooks.state`. Grok stores `binary`, `promptIds` and `deliveries` there;
-ZCode stores `binary`; Codex stores nothing. A Grok delivery holds its message id, kind, text,
+Kimi stores `binary` and `deliveries`; ZCode stores `binary`; Codex stores nothing. A Grok delivery holds its message id, kind, text,
 method, session id, timestamp and the count of matching copies Grok held before sending.
 Refusing or giving up an interjection saves `refused` and moves later identical open deliveries
 down one place. The next connection checks this record against session replay and persisted
-history before it resends work.
+history before it resends work. A Kimi delivery holds the message id, kind, exact text, session id,
+timestamp, and how many user prompts with that text the session's `wire.jsonl` held before
+sending; after a death, a larger count there means the message arrived.
 
 ## Reviews
 

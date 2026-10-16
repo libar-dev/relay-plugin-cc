@@ -1,6 +1,6 @@
 # Design
 
-`relay` has one goal. A Claude Code main thread runs a job on Codex, Grok Build or ZCode the way
+`relay` has one goal. A Claude Code main thread runs a job on Codex, Grok Build, ZCode or Kimi Code the way
 it runs a Claude agent, and the job does not get lost. This page says how the plugin does that and
 why. Read it before you change the plugin.
 
@@ -32,7 +32,7 @@ recovery stay in that attempt. The previous attempt's report moves to `attempts/
 ### The prompt
 
 ```
-backend: codex             # default; or grok, zcode
+backend: codex             # default; or grok, zcode, kimi
 model: gpt-6-astra
 effort: xhigh
 mode: yolo                 # default; or write, read-only
@@ -42,7 +42,7 @@ cd: /abs/path/to/worktree  # default: the directory the agent starts in
 ```
 
 The keys are `backend`, `model`, `effort`, `mode`, `network`, `web-search`, `fast`, `cd`, `add-dir`
-(repeatable), `brief` and `grok-home`; the README's table lists their values.
+(repeatable), `brief`, `grok-home` and `kimi-home`; the README's table lists their values.
 
 - **Only the header configures the job.** The brief goes to the backend without interpretation, so "do not edit
   files" in a brief leaves `mode` as it is. A forwarder agent that reinterpreted requests dropped a
@@ -58,7 +58,7 @@ The keys are `backend`, `model`, `effort`, `mode`, `network`, `web-search`, `fas
   Workflow script keeps running as it did. A live check (Codex 0.162.0 and Grok Build 1.0.50, on
   macOS) found `write` with `network: true` enough for web search, package installs, git commits
   and child processes, and not enough for `ps` or for writes outside the working directory; with
-  `network` at its default, Codex's `write` had no DNS. ZCode has no `write` mode. A job that runs
+  `network` at its default, Codex's `write` had no DNS. ZCode and Kimi have no `write` mode. A job that runs
   `ps`, as the plugin's own tests do, or writes outside its working directory needs `yolo`. The
   brief is then the only fence, so a brief names where the job may write. `network`
   applies to sandboxed modes, and `add-dir` adds writable roots in Codex's `write` mode.
@@ -68,10 +68,10 @@ The keys are `backend`, `model`, `effort`, `mode`, `network`, `web-search`, `fas
   `setup --fast-tier allowed`. The switch is off by default and lives in the jobs home's
   `config.json`, because the concern is one account's usage, not one repository's. With it off,
   `fast: true` runs without the tier and says so in a `note:`, never an error, so a brief written
-  for another machine still runs. Grok and ZCode ignore `fast` with a note.
+  for another machine still runs. Grok, ZCode and Kimi ignore `fast` with a note.
 - **A job keeps its first launch.** Continue, resume and recovery reuse the stored request: working
   directory, mode, network, writable roots, web search, model, effort, tier, backend, and the
-  backend's own fields (Grok's home, Codex's job MCP servers off).
+  backend's own fields (Grok's and Kimi's homes, Codex's job MCP servers off).
 
 `/relay:rescue` builds the same header from its flags and never infers `mode` or `backend` from the
 words of the request.
@@ -84,7 +84,7 @@ words of the request.
   60 seconds of the launch. A relay start that fails prints `state: not started` and `error:`.
 - `completed` means the backend finished its answer, not that the job's commands passed.
 - `stalled:` appears when an active job has sent no event for ten minutes. It is information only.
-- Other lines appear when they apply: `backend:`, `grok-home:`, `kind:` (a review), `tier: fast`,
+- Other lines appear when they apply: `backend:`, `grok-home:`, `kimi-home:`, `kind:` (a review), `tier: fast`,
   `mcp-off:`, `relay:`, `relay-adopted:`, `note:`, `automatic-resume:`, `capacity-retries:`,
   `undelivered:`, `not-delivered:` and `relay-violation:`.
 
@@ -137,8 +137,8 @@ time, a heartbeat every 10 seconds and the last event's time. Detached, it outli
 Claude session. With the start time in its identity, a dead worker and a pid with a different
 recorded start time read as dead (openai/codex-plugin-cc#704: a dead worker shown as running forever).
 
-**The backend server.** A worker starts its own `codex app-server`, `grok agent ... stdio` or
-`zcode app-server` in the job's working directory, a new one after a server end, and stops it when
+**The backend server.** A worker starts its own `codex app-server`, `grok agent ... stdio`,
+`zcode app-server` or `kimi acp` in the job's working directory, a new one after a server end, and stops it when
 its work ends. A review starts its own the same way. There is no shared broker. A long-lived shared
 Codex app-server reused ChatGPT's single-use refresh token and logged out every client of
 `~/.codex` (openai/codex-plugin-cc#789). Leaked brokers are described in
@@ -186,8 +186,8 @@ backend's session exactly once, or ends with an outcome that says why not.
 - **Owed until closed.** A claimed message stays owed until its outcome delivers or closes it, and
   a new worker runs every message a dead one owed.
 - **No double delivery.** Each message carries its id to the backend: Codex's
-  `clientUserMessageId`, ZCode's command id, or a Grok delivery record saved before the request
-  leaves. After a death the resumed session's history says which ids already arrived, and those
+  `clientUserMessageId`, ZCode's command id, or a Grok or Kimi delivery record saved before the
+  request leaves. After a death the resumed session's history says which ids already arrived, and those
   never run again.
 - **Steers settle first.** After a turn ends, the worker waits for every steer request in flight
   before it decides anything. A steer the turn did not take joins the queue.
@@ -262,13 +262,13 @@ jobs started within one second, one failed on a request-rate limit after Codex's
 - A retry never replays work. A turn that failed before doing anything is sent again with the same
   input. A turn that did work (a tool call or commentary) is retried as a continuation on the same
   session with the resume message. A cancel during the wait starts no further turn.
-- ZCode retries model calls itself, so the worker never retries a ZCode turn;
+- ZCode and Kimi retry model calls themselves, so the worker never retries their turns;
   a worker retry would send the message again.
 
 ### Cancel
 
 - **A running job.** `cancel` posts a cancel message, and the worker interrupts the turn (Codex
-  `turn/interrupt`, Grok `session/cancel`, ZCode `stop`). If the job has not ended 10 seconds later,
+  `turn/interrupt`, Grok and Kimi `session/cancel`, ZCode `stop`). If the job has not ended 10 seconds later,
   `cancel` kills the worker's process group, and signals the pid when the group kill fails with
   ESRCH: a worker started in a shell's foreground does not lead its own group, and a cancel never
   reached it (openai/codex-plugin-cc#786).
@@ -433,17 +433,17 @@ derive from that declaration. Workers and reviews drive every backend through th
 connection interface, and the backend's own record lives in `job.backendState`. Tests drive fake
 binaries and never start a real backend.
 
-| | Codex | Grok | ZCode |
-|---|---|---|---|
-| Server | `codex app-server` | `grok agent --no-leader --always-approve stdio` | `zcode app-server` |
-| Protocol | app-server JSON-RPC: threads and turns | ACP (JSON-RPC 2.0) with Grok's `_x.ai/` methods | NDJSON: ZCode Protocol v4 commands and a session subscription |
-| Modes | `yolo`, `write`, `read-only` | `yolo`, `write`, `read-only` | `yolo`, `read-only` |
-| Web search | `live`, `cached`, `disabled` | `live` | `live`, `disabled` |
-| `fast` | priority tier, when allowed | ignored, with a note | ignored, with a note |
-| Home | `CODEX_HOME`, else `~/.codex` | `grok-home:` | `~/.zcode` |
-| Sign-in | the Codex CLI's | `grok login`, per home | `zcode login`, shared |
-| Steer, cancel | `turn/steer`, `turn/interrupt` | `_x.ai/interject`, `session/cancel` | `sendText` with `guide`, `stop` |
-| Capacity retry | yes | yes | no |
+| | Codex | Grok | ZCode | Kimi |
+|---|---|---|---|---|
+| Server | `codex app-server` | `grok agent --no-leader --always-approve stdio` | `zcode app-server` | `kimi acp` |
+| Protocol | app-server JSON-RPC: threads and turns | ACP (JSON-RPC 2.0) with Grok's `_x.ai/` methods | NDJSON: ZCode Protocol v4 commands and a session subscription | ACP, with the session's `wire.jsonl` for each turn's outcome |
+| Modes | `yolo`, `write`, `read-only` | `yolo`, `write`, `read-only` | `yolo`, `read-only` | `yolo`, `read-only` |
+| Web search | `live`, `cached`, `disabled` | `live` | `live`, `disabled` | `live` |
+| `fast` | priority tier, when allowed | ignored, with a note | ignored, with a note | ignored, with a note |
+| Home | `CODEX_HOME`, else `~/.codex` | `grok-home:` | `~/.zcode` | `kimi-home:` |
+| Sign-in | the Codex CLI's | `grok login`, per home | `zcode login`, shared | `kimi login`, per home |
+| Steer, cancel | `turn/steer`, `turn/interrupt` | `_x.ai/interject`, `session/cancel` | `sendText` with `guide`, `stop` | the next turn, `session/cancel` |
+| Capacity retry | yes | yes | no | no |
 
 ### Codex
 
@@ -572,6 +572,44 @@ binaries and never start a real backend.
   never left memory, and a new session replaces it; a session where a turn ran fails the job,
   because its context is lost.
 
+### Kimi
+
+- **Protocol.** `kimi acp` speaks ACP. A new job sends `session/new`, continue and recovery
+  `session/load`, both with an empty MCP server list, then `session/set_mode`, and
+  `session/set_config_option` for the model and the thinking effort; Kimi keeps model and effort
+  across a load but not the mode, so all three go on every open. A message is `session/prompt`.
+  The binary is `KIMI_BINARY`, else the first executable `kimi` on `PATH`, else
+  `~/.kimi-code/bin/kimi`, and the job records its real path.
+- **The session's record decides.** Kimi's ACP layer answers `end_turn` for a turn that failed,
+  and sends nothing for a turn Kimi starts on its own (a background command finished, a goal the
+  model set). Kimi appends every turn to the session's `wire.jsonl` with a durable write within
+  milliseconds. So the connection notes the record's size before it sends, and after the answer
+  reads what was appended: the first user `turn.prompt` with the prompt's exact text, then that
+  turn's `turn.ended`. `completed` completes, `cancelled` interrupts, `failed` fails with Kimi's
+  `[code] message`. The report is the turn's assistant text after its last tool call, from the
+  record. A prompt Kimi queued behind a turn of its own is waited for while that turn runs; one
+  Kimi answered but never recorded fails after 10 seconds with no turn running.
+- **Commands.** Kimi reads a prompt whose first text block starts with `/word` as one of its
+  commands or skills, so a brief or message that starts with `/` goes after an empty text block.
+- **Steer.** A running Kimi turn takes no message: ACP has no steer, and Kimi refuses a second
+  prompt as busy. A message sent while a turn runs becomes the next turn.
+- **Modes.** `yolo` is Kimi's `auto` (Never Ask); a permission request that still arrives gets an
+  offered allow option. `read-only` is Kimi's `default` mode with every permission request
+  rejected. Kimi's own git policy approves file writes inside a git work tree without asking, so
+  a `read-only` client also declares file writes and terminals, and refuses each
+  `fs/write_text_file` and `terminal/create` Kimi then sends it. `write` is a usage error: Kimi
+  has no workspace sandbox. `web-search: live` only: ACP cannot remove Kimi's web tools.
+- **Homes and sign-in.** `kimi-home: default` is `~/.kimi-code`, a name is `~/.kimi-code-<name>`,
+  a path is taken as given; the resolved `KIMI_CODE_HOME` is stored at launch. Each home signs in
+  with its own `kimi login`. Kimi locks a token refresh per home, so jobs share one home safely;
+  a copied credentials file in a second home would not be. Every launch sets
+  `KIMI_CODE_NO_AUTO_UPDATE=1` and `KIMI_DISABLE_CRON=1` and drops inherited `KIMI_MODEL_*`
+  variables, which would replace the header's model and effort.
+- **Recovery.** Before a prompt leaves, the backend saves a delivery record: message id, exact
+  text, session, and how many user prompts with that text the record held. After a death, a
+  larger count in the record means the message arrived, and it does not run again. Kimi retries
+  model calls itself, so the worker never retries a Kimi turn.
+
 ## Reviews
 
 `/relay:review` and `/relay:adversarial-review` run on any backend: `--backend` (Codex unless
@@ -582,13 +620,13 @@ or `adversarial-review`, so `status` lists it. A Codex review turns off the job 
 
 - **Review.** On Codex, `/relay:review` is Codex's own reviewer (`review/start` on an ephemeral
   read-only thread, against the working tree or a base branch), which takes no effort (`--effort`
-  is a `note:`) and no focus text. On Grok and ZCode it is the plugin's `prompts/review.md`.
+  is a `note:`) and no focus text. On Grok, ZCode and Kimi it is the plugin's `prompts/review.md`.
 - **Adversarial review** sends `prompts/adversarial-review.md` through the backend's connection,
-  the one a job uses, on a fresh read-only session. Codex gets the schema as `outputSchema`; Grok
-  and ZCode, which have no schema parameter, get it in the prompt. A Grok review always runs under
-  Grok's `read-only` profile.
-- **Inline limits.** A Grok or ZCode review reads only the inlined change (read-only ZCode has no
-  shell to run git), so it sees the whole change or does not start. Untracked files count toward
+  the one a job uses, on a fresh read-only session. Codex gets the schema as `outputSchema`; Grok,
+  ZCode and Kimi, which have no schema parameter, get it in the prompt. A Grok review always runs
+  under Grok's `read-only` profile, and a Kimi review refuses every write and shell command.
+- **Inline limits.** A Grok, ZCode or Kimi review reads only the inlined change (read-only ZCode and
+  Kimi have no shell to run git), so it sees the whole change or does not start. Untracked files count toward
   the limits and are inlined whole, and a binary file is named and counts as a file. Above two files
   or 256 KiB, the review is refused before any job or process exists, with a message naming
   `--base`, `--scope` and Codex. A Codex adversarial review above the limits gets a summary and
@@ -604,7 +642,8 @@ or `adversarial-review`, so `status` lists it. A Codex review turns off the job 
 `/relay:setup` with no arguments checks every backend home it finds and prints one block for each:
 binary and version, sign-in, default model and effort, the models one can name in `model:`, and a
 `can:` line rendered from the backend's capability declaration. The homes are the Codex home,
-`~/.grok` and every `~/.grok-<name>`, and ZCode (`~/.zcode`, or under `ZCODE_DATA_BASE_DIR`).
+`~/.grok` and every `~/.grok-<name>`, ZCode (`~/.zcode`, or under `ZCODE_DATA_BASE_DIR`), and
+`~/.kimi-code` and every `~/.kimi-code-<name>`.
 
 - **No model call.** Codex: `codex --version`, then one app-server asked `account/read`,
   `config/read` and `model/list`, with no thread. Grok: `grok --version` and `grok models` under the
@@ -612,13 +651,18 @@ binary and version, sign-in, default model and effort, the models one can name i
   `zcode --version`, whether the credentials file is a regular file of more than two bytes (never
   opened), the default model from `provider_config.json`, then one app-server asked to create a
   draft session that ZCode keeps in memory, read its model list, and close it unsaved, with no
-  message. Whether the ZCode sign-in works is known at the first turn.
+  message. Whether the ZCode sign-in works is known at the first turn. Kimi: `kimi --version` and
+  `kimi provider list --json` under the home, reading only its model fields (the output carries
+  the provider's API key field), whether each file-stored sign-in's credentials file is a regular
+  file of more than two bytes (never opened), and the defaults in `config.toml`; whether the sign-in
+  works is known at the first turn.
 - **Limits.** All checks run at once, 10 seconds per command and 20 seconds per app-server, each in
   its own process group, which ends with the check however it ends.
 - **Failure is local.** A missing, signed-out or slow backend, or an unexpected error in one home,
   becomes that block's reason, and the page still prints and exits 0. A ZCode block with no model
   list, or an empty one, is not ready; a draft ZCode does not confirm closed is a warning that names
-  it. `--backend codex|grok|zcode [--grok-home H]` checks one home and exits 1 when it is not ready.
+  it. `--backend codex|grok|zcode|kimi [--grok-home H|--kimi-home H]` checks one home and exits 1 when
+  it is not ready.
 - **Switches** (`--enable-review-gate`, `--disable-review-gate`, `--fast-tier`, `--job-mcp-off`)
   apply before the overview and are a usage error beside `--backend`.
 
@@ -642,7 +686,7 @@ of it. It is off by default, because each review is a Codex job and costs usage.
   `backendWith("stopGate")` names) with 10 minutes. Past that it is cancelled through the job path,
   so nothing of it keeps running. The two Codex probes before it get 10 seconds each and end with
   their process group. All of it stays inside the hook's 900 seconds.
-- It runs on Codex only; on Grok and ZCode, run `/relay:review`.
+- It runs on Codex only; on Grok, ZCode and Kimi, run `/relay:review`.
 
 ## Transfer
 
@@ -726,5 +770,22 @@ would need `grok agent`.
   `session/subscribe` and `session/resume`, which ZCode's source marked for removal when this
   backend was built (source of 2026-09-24). Check one job after every ZCode update.
 
-**Not measured.** Sustained rate limits and simultaneous jobs on one plan for Grok and ZCode,
+**Kimi.**
+
+- A turn Kimi starts on its own (a background command finished, a goal the model set) is not seen
+  over ACP, and its work is not in the job's report; a prompt sent while one runs waits behind it.
+  `read-only` refuses the shell, so it starts no background command.
+- `read-only` rests on Kimi sending file writes and shell commands to a client that declares
+  them. `Write` creates missing parent directories locally before its refused write. A tool that
+  writes another way, such as a plugin's stdio MCP server, is not covered; in Kimi's default mode
+  an MCP call asks and is rejected, unless the home's `[[permission.rules]]` allow it.
+- Kimi runs each shell command in a session of its own. After a server SIGKILL the command
+  outlives it, out of reach of recovery, as above.
+- No isolation per job in one home: sessions, MCP servers, plugins and their session-start skills,
+  hooks and the sign-in are the home's. A home for jobs without MCP servers or plugins is the
+  skill's `kimi-home.md`.
+- The session record's format is undocumented (`protocol_version` 1.5). Check one job after every
+  Kimi update.
+
+**Not measured.** Sustained rate limits and simultaneous jobs on one plan for Grok, ZCode and Kimi,
 and a crash during a partial answer. Nothing caps how many jobs run at once.

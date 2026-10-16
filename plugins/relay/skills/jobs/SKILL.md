@@ -1,6 +1,6 @@
 ---
 name: jobs
-description: "Run jobs on Codex, Grok Build and ZCode from Claude Code like Claude agents, as a `relay:job` agent or from a workflow script. Load it before launching or messaging such an agent, and before running `companion` commands yourself."
+description: "Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents, as a `relay:job` agent or from a workflow script. Load it before launching or messaging such an agent, and before running `companion` commands yourself."
 ---
 
 # Job agents
@@ -26,8 +26,9 @@ cd: /abs/path/to/repo
 
 | Key | Required | Values | Default |
 |---|---|---|---|
-| `backend` | no | `codex`, `grok`, `zcode` | `codex` |
+| `backend` | no | `codex`, `grok`, `zcode`, `kimi` | `codex` |
 | `grok-home` | no | Grok only: `jobs` for `~/.grok-jobs`, another name, an absolute or `~/` path, or `default` | `default` |
+| `kimi-home` | no | Kimi only: `jobs` for `~/.kimi-code-jobs`, another name, an absolute or `~/` path, or `default` | `default` |
 | `model` | yes | a model name, or `default` for the home's config | none |
 | `effort` | yes | `low` ... `xhigh`, `max`, `ultra`, or `default` | none |
 | `fast` | no | `true` selects OpenAI's `priority` tier when the setting `fast-tier` is `allowed`, kept on continue and resume; ignored under `fast-tier: off`, the default, with a `note:` in the state block | `false` |
@@ -89,12 +90,40 @@ subscription sign-in. `grok-home: jobs` selects `~/.grok-jobs`; `default` select
   remain active.
 - Reviews run on Grok with `--backend grok` (see Reviews), always under Grok's `read-only` profile. On a Mac where Grok refuses that profile, the review fails with Grok's error. The stop gate and `transfer` remain Codex only.
 
+## Kimi jobs
+
+`backend: kimi` runs Moonshot AI's Kimi Code through `kimi acp`, using the selected home's
+sign-in. `kimi-home: jobs` selects `~/.kimi-code-jobs`; `default` selects `~/.kimi-code`. `model`
+and `effort` remain required: a model is the home's alias (`kimi-code/k3`,
+`kimi-code/kimi-for-coding`, `kimi-code/kimi-for-coding-highspeed`), and an effort is one the model
+lists (`low`, `high`, `max` on K3; `on`, `max` on K2.7 Highspeed). `default` sends no override;
+Kimi refuses an alias or effort it does not know, and the job fails with Kimi's words. `fast` is
+ignored with a `note:`.
+
+- The same relay, cancel, continue, recovery and Workflow adoption paths apply, and continue and
+  recovery keep the first launch's backend and home. **A running Kimi turn takes no message**:
+  `SendMessage` while a turn runs becomes the next turn (`queued-next-turn`), and a reply comes
+  with that turn's report. The block prints `backend: kimi` and `kimi-home:` for a non-default home.
+- `yolo` is Kimi's Never Ask mode. `read-only` is Kimi's default mode with every permission
+  request rejected, and every file write and shell command refused by the plugin. `write` is a
+  usage error: Kimi has no workspace sandbox. `web-search: live` only.
+- The outcome and the report come from the session's own record (`wire.jsonl`), because Kimi
+  answers `end_turn` over ACP for a turn that failed. Kimi retries model calls itself, so a
+  capacity failure fails the job at once; `resume` continues it.
+- The chosen home's MCP servers, plugins (with their session-start skills), hooks, skills and
+  `AGENTS.md` load in every job. For a home without them, read [`kimi-home.md`](kimi-home.md).
+  `/relay:setup --backend kimi [--kimi-home H]` prints the binary, version, sign-in and models
+  from `kimi provider list --json`, without a model call.
+- A turn Kimi starts on its own (a background command finished) runs unseen: its work is not in
+  the report. Reviews run on Kimi with `--backend kimi` (see Reviews); the stop gate and
+  `transfer` remain Codex only.
+
 ## Reviews
 
-`/relay:review` and `/relay:adversarial-review` (`C review`, `C adversarial-review`) take the header's keys as flags: `--backend codex|grok|zcode` (Codex unless given; nothing stores a default), `--model`, `--effort`, `--grok-home`, beside `--base <ref>` and `--scope auto|working-tree|branch`. A review is read-only and runs in the foreground; it is recorded as a job (`kind: review` or `adversarial-review`), and its block prints `backend:` as a job's does.
+`/relay:review` and `/relay:adversarial-review` (`C review`, `C adversarial-review`) take the header's keys as flags: `--backend codex|grok|zcode|kimi` (Codex unless given; nothing stores a default), `--model`, `--effort`, `--grok-home`, `--kimi-home`, beside `--base <ref>` and `--scope auto|working-tree|branch`. A review is read-only and runs in the foreground; it is recorded as a job (`kind: review` or `adversarial-review`), and its block prints `backend:` as a job's does.
 
 - Codex: the review runs in the Codex home, as a Codex job does. `/relay:review` is Codex's own reviewer, which takes no effort: `--effort` there is a `note:`. `/relay:adversarial-review` sends the plugin's prompt with the schema as Codex's `outputSchema`.
-- Grok and ZCode: the plugin's prompts (`prompts/review.md`, `prompts/adversarial-review.md`) on a fresh read-only session, with the diff inlined. Above two files or 256 KiB the review is refused; narrow it with `--base` or `--scope`, or run it on Codex. The adversarial prompt carries the schema as text and the plugin checks the answer.
+- Grok, ZCode and Kimi: the plugin's prompts (`prompts/review.md`, `prompts/adversarial-review.md`) on a fresh read-only session, with the diff inlined. Above two files or 256 KiB the review is refused; narrow it with `--base` or `--scope`, or run it on Codex. The adversarial prompt carries the schema as text and the plugin checks the answer.
 - An adversarial answer that is not review JSON fails the review on every backend: `error: <backend> returned no valid review JSON`, the raw answer in the report, a non-zero exit. There is no second try.
 
 ## What comes back
@@ -116,7 +145,7 @@ dir: ~/.relay-jobs/<repo>/<job>
 
 - `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the worker died and its automatic retry was spent), or `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
 - `completed` means the job finished its answer, not that its commands passed. Read the report.
-- Lines that may appear: `backend:` and `grok-home:` (see Grok jobs and GLM jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (acknowledged messages not run yet; `resume` runs them), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
+- Lines that may appear: `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (acknowledged messages not run yet; `resume` runs them), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
 
 A failed cancel stays pending while the job runs and tries remain. A terminal job closes it as done, and three started tries close it as failed.
 
@@ -124,7 +153,7 @@ A failed cancel stays pending while the job runs and tries remain. A terminal jo
 
 | You do | While the job runs | After it ended |
 |---|---|---|
-| `SendMessage` with text | steers the running turn; if the turn cannot take it, it becomes the next turn | a new turn on the same thread; the agent returns the new report |
+| `SendMessage` with text | steers the running turn; if the turn cannot take it (always on Kimi), it becomes the next turn | a new turn on the same thread; the agent returns the new report |
 | `SendMessage` with exactly `cancel` | interrupts the turn; if the job has not ended 10 s later, kills the worker | nothing |
 | `TaskStop` on the agent | stops only the wrapper; the job keeps running | nothing |
 
@@ -163,15 +192,15 @@ A message reaches the job within about two minutes, when the relay's current wai
 | `C continue <job> --message-file F` | a new turn on the same thread |
 | `C resume <job> [--message-file F]` | continue a dead or failed job |
 | `C cancel [<job>]` | interrupt the turn; if the job has not ended 10 s later, kill the worker; without a job, the only active job of this repository |
-| `C review [--backend B] [--model M] [--effort E] [--grok-home H] [--base R \| --scope S]` | a read-only review in the foreground, recorded as a job; prints the review |
+| `C review [--backend B] [--model M] [--effort E] [--grok-home H] [--kimi-home H] [--base R \| --scope S]` | a read-only review in the foreground, recorded as a job; prints the review |
 | `C adversarial-review [the same flags] [focus]` | the same, with the adversarial prompt; exits 1 when the answer is not review JSON |
 | `C prune [--older-than 14d] [--all] [--dry-run]` | remove old ended jobs; live workers are kept |
 | `C setup --fast-tier allowed\|off` | with `off`, the default, jobs started from now on ignore `fast: true` and the Codex config sets their tier; with `allowed`, `fast: true` selects `priority` |
 | `C setup --job-mcp-off name,name...\|none` | Codex jobs pass `enabled=false` for each listed name that the Codex home's `config.toml` defines; undefined names are skipped with a note |
-| `C setup [--json]` | every backend home found (the Codex home, `~/.grok` and `~/.grok-*`, ZCode): binary and version, sign-in, default model and effort, models, `can`; exits 0 whatever it finds |
-| `C setup --backend codex\|grok\|zcode [--grok-home H] [--json]` | one backend home; exits 1 when it is not ready |
+| `C setup [--json]` | every backend home found (the Codex home, `~/.grok` and `~/.grok-*`, ZCode, `~/.kimi-code` and `~/.kimi-code-*`): binary and version, sign-in, default model and effort, models, `can`; exits 0 whatever it finds |
+| `C setup --backend codex\|grok\|zcode\|kimi [--grok-home H\|--kimi-home H] [--json]` | one backend home; exits 1 when it is not ready |
 
-A wide fan-out that needs no steering can start its jobs with `C start` a few seconds apart and collect them with `C wait` or `C status`; no Claude agent is held per job. Jobs started within the same second can hit a provider's request-rate limit. For Codex and Grok routes, the worker retries at 30, 60 and 120 s. ZCode retries model calls itself.
+A wide fan-out that needs no steering can start its jobs with `C start` a few seconds apart and collect them with `C wait` or `C status`; no Claude agent is held per job. Jobs started within the same second can hit a provider's request-rate limit. For Codex and Grok routes, the worker retries at 30, 60 and 120 s. ZCode and Kimi retry model calls themselves.
 
 Exit codes of `wait` and `result`: `0` completed with a report, `3` ended without a report or with messages not yet run, `4` still running, `5` cancelled, including with a pending continuation because cancellation takes precedence, `1` usage error.
 

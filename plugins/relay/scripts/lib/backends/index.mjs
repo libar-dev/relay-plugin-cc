@@ -2,9 +2,10 @@ import { UsageError } from "../util/errors.mjs";
 import { codexBackend } from "./codex/index.mjs";
 import { grokBackend } from "./grok/index.mjs";
 import { zcodeBackend } from "./zcode/index.mjs";
+import { kimiBackend } from "./kimi/index.mjs";
 
 
-export const BACKENDS = [codexBackend, grokBackend, zcodeBackend];
+export const BACKENDS = [codexBackend, grokBackend, zcodeBackend, kimiBackend];
 export const DEFAULT_BACKEND = BACKENDS[0];
 
 export function backendNames(separator = ", ", lastSeparator = " or ") {

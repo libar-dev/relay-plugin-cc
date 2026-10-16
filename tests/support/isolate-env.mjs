@@ -26,6 +26,13 @@ for (const name of LEAKED_ENV) {
 for (const name of Object.keys(process.env)) {
   if (name.startsWith("ZCODE_")) delete process.env[name];
 }
+// A shell Kimi started, or a user's own setup, can name a Kimi home or a model to use. The
+// installer puts the real kimi on PATH, so every process gets a binary that does not exist
+// unless its test installs the fake.
+for (const name of Object.keys(process.env)) {
+  if (name.startsWith("KIMI_")) delete process.env[name];
+}
+process.env.KIMI_BINARY = path.join(os.tmpdir(), "relay-tests-no-kimi", "kimi");
 
 if (!process.env.RELAY_JOBS_HOME_FOR_TESTS) {
   process.env.RELAY_JOBS_HOME_FOR_TESTS = fs.mkdtempSync(path.join(os.tmpdir(), "relay-jobs-home-"));

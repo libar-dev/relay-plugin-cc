@@ -1,11 +1,11 @@
 ---
-description: Run a code review of local git state on Codex, Grok or ZCode
-argument-hint: '[--wait|--background] [--backend codex|grok|zcode] [--model <m>] [--effort <e>] [--grok-home H] [--base <ref>] [--scope auto|working-tree|branch]'
+description: Run a code review of local git state on Codex, Grok, ZCode or Kimi
+argument-hint: '[--wait|--background] [--backend codex|grok|zcode|kimi] [--model <m>] [--effort <e>] [--grok-home H] [--kimi-home H] [--base <ref>] [--scope auto|working-tree|branch]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
-Run a code review. On Codex it is Codex's own reviewer; on Grok and ZCode it is the plugin's review prompt on a fresh read-only session, with the diff inlined in the prompt.
+Run a code review. On Codex it is Codex's own reviewer; on Grok, ZCode and Kimi it is the plugin's review prompt on a fresh read-only session, with the diff inlined in the prompt.
 
 Raw slash-command arguments:
 `$ARGUMENTS`
@@ -32,14 +32,14 @@ Execution mode rules:
   - `Run in background`
 
 Backend selection (the flags mirror a job header's keys):
-- `--backend codex|grok|zcode` picks the backend; without it, Codex. Nothing stores a default.
-- `--model <model>` and `--effort <effort>` are passed as given. Without `--model` and `--effort`, Codex and Grok use their configured defaults, and ZCode uses its selected default model at effort `high`, the plugin's default (ZCode's own is `max`), as a job header does.
-- A Codex review runs in the Codex home (`~/.codex`, or `CODEX_HOME`); `--grok-home <name|path>` runs a Grok review in that Grok home.
-- A combination a job would refuse (`--grok-home` without Grok) is refused the same way, before anything runs.
+- `--backend codex|grok|zcode|kimi` picks the backend; without it, Codex. Nothing stores a default.
+- `--model <model>` and `--effort <effort>` are passed as given. Without `--model` and `--effort`, Codex, Grok and Kimi use their configured defaults, and ZCode uses its selected default model at effort `high`, the plugin's default (ZCode's own is `max`), as a job header does.
+- A Codex review runs in the Codex home (`~/.codex`, or `CODEX_HOME`); `--grok-home <name|path>` runs a Grok review in that Grok home, and `--kimi-home <name|path>` a Kimi review in that Kimi home.
+- A combination a job would refuse (`--grok-home` without Grok, `--kimi-home` without Kimi) is refused the same way, before anything runs.
 - On Codex, `--effort` is ignored with a `note:` line: Codex's own reviewer takes no effort.
-- Every review is read-only and recorded as a job: `/relay:status` lists it, with `backend:` on Grok and ZCode as for a job.
+- Every review is read-only and recorded as a job: `/relay:status` lists it, with `backend:` on Grok, ZCode and Kimi as for a job.
 
-Grok and ZCode read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. Return that message as it is. A Grok review always runs under Grok's `read-only` profile; on a Mac where Grok refuses that profile, the review fails with Grok's error.
+Grok, ZCode and Kimi read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. Return that message as it is. A Grok review always runs under Grok's `read-only` profile; on a Mac where Grok refuses that profile, the review fails with Grok's error. A Kimi review runs in Kimi's `default` mode with every write, shell command and permission request refused.
 
 Argument handling:
 - Preserve the user's arguments exactly.

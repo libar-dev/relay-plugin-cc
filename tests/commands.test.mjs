@@ -102,24 +102,26 @@ test("rescue launches the relay:job agent through the same start and wait path",
   assert.deepEqual(fs.readdirSync(path.join(PLUGIN_ROOT, "agents")), ["job.md"]);
 });
 
-test("rescue turns --backend and --grok-home into header lines; the review commands name the backend flags", () => {
+test("rescue turns --backend, --grok-home and --kimi-home into header lines; the review commands name the backend flags", () => {
   const rescue = read("commands/rescue.md");
-  assert.match(rescue, /^argument-hint: .*\[--backend codex\|grok\|zcode\] .*\[--grok-home <name\|path>\]/m);
+  assert.match(rescue, /^argument-hint: .*\[--backend codex\|grok\|zcode\|kimi\] .*\[--grok-home <name\|path>\] \[--kimi-home <name\|path>\]/m);
   assert.match(rescue, /- `--backend <backend>`: the `backend:` header value, passed as given/);
   assert.match(rescue, /- `--grok-home <value>`: the `grok-home:` header value, passed as given/);
+  assert.match(rescue, /- `--kimi-home <value>`: the `kimi-home:` header value, passed as given/);
   const header = /```\n([\s\S]*?)\n```/.exec(rescue)[1].split("\n");
   assert.deepEqual(header, [
     "backend: <only when --backend was given>",
     "model: <model or default>",
     "effort: <effort or default>",
     "grok-home: <only when --grok-home was given>",
+    "kimi-home: <only when --kimi-home was given>",
     "mode: <only when --read-only or --write was given>",
     "---",
     "<the brief, unchanged>"
   ]);
   for (const name of ["review", "adversarial-review"]) {
     const source = read(`commands/${name}.md`);
-    assert.match(source, /^argument-hint: '\[--wait\|--background\] \[--backend codex\|grok\|zcode\] \[--model <m>\] \[--effort <e>\] \[--grok-home H\] /m, name);
+    assert.match(source, /^argument-hint: '\[--wait\|--background\] \[--backend codex\|grok\|zcode\|kimi\] \[--model <m>\] \[--effort <e>\] \[--grok-home H\] \[--kimi-home H\] /m, name);
     assert.match(source, /above two files or 256 KiB the review is refused/, name);
     assert.match(source, /on a Mac where Grok refuses that profile, the review fails with Grok's error/, name);
   }
@@ -132,7 +134,7 @@ test("rescue turns --backend and --grok-home into header lines; the review comma
 
 test("docs name the session, ZCode's default effort as the header does, and \"the job\" where the rename dropped the article", () => {
   assert.match(read("commands/result.md"), /^- The state block: state, job, session, model, effort,/m);
-  const defaults = "Without `--model` and `--effort`, Codex and Grok use their configured defaults, and ZCode uses its selected default model at effort `high`, the plugin's default (ZCode's own is `max`), as a job header does.";
+  const defaults = "Without `--model` and `--effort`, Codex, Grok and Kimi use their configured defaults, and ZCode uses its selected default model at effort `high`, the plugin's default (ZCode's own is `max`), as a job header does.";
   for (const name of ["review", "adversarial-review"]) {
     assert.ok(read(`commands/${name}.md`).includes(defaults), name);
     assert.doesNotMatch(read(`commands/${name}.md`), /without them, the backend's default/, name);
@@ -251,8 +253,8 @@ test("setup command can offer Codex install and still points users to codex logi
   const setup = read("commands/setup.md");
   const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 
-  assert.match(setup, /argument-hint:\s*'\[--backend codex\|grok\|zcode\] \[--grok-home H\] \[--enable-review-gate\|--disable-review-gate\] \[--fast-tier allowed\|off\] \[--job-mcp-off names\|none\]'/);
-  assert.match(setup, /^description: Check every backend the relay can run \(Codex, Grok, ZCode\): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier or job MCP servers$/m);
+  assert.match(setup, /argument-hint:\s*'\[--backend codex\|grok\|zcode\|kimi\] \[--grok-home H\|--kimi-home H\] \[--enable-review-gate\|--disable-review-gate\] \[--fast-tier allowed\|off\] \[--job-mcp-off names\|none\]'/);
+  assert.match(setup, /^description: Check every backend the relay can run \(Codex, Grok, ZCode, Kimi\): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier or job MCP servers$/m);
   assert.match(setup, /AskUserQuestion/);
   assert.match(setup, /npm install -g @openai\/codex/);
   assert.match(setup, /companion\.mjs" setup --json \$ARGUMENTS/);
@@ -316,7 +318,7 @@ test("README carries the first hour, stop gate, Claude Code dependency and devel
   const gate = "It is off by default and runs on Codex only, in the default Codex home at its default model and effort.";
   for (const source of [readme, setup]) {
     assert.ok(source.includes(gate));
-    assert.ok(source.includes("Grok and ZCode do not run it; use `/relay:review` on those."));
+    assert.ok(source.includes("Grok, ZCode and Kimi do not run it; use `/relay:review` on those."));
     assert.ok(source.includes("every worktree and session of it"));
   }
   for (const source of [readme, internals]) {

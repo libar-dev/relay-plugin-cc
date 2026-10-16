@@ -136,7 +136,7 @@ for (const [route, diagnostic] of [
     // Codex resolves through PATH; the other routes support explicit binaries.
     fs.copyFileSync(probe, path.join(ctx.bin, "codex"));
     fs.chmodSync(path.join(ctx.bin, "codex"), 0o755);
-    const failed = companion(ctx, ["setup", ...route, "--job-mcp-off", "node_repl"], { GROK_BINARY: probe, ZCODE_BINARY: probe });
+    const failed = companion(ctx, ["setup", ...route, "--job-mcp-off", "node_repl"], { GROK_BINARY: probe, ZCODE_BINARY: probe, KIMI_BINARY: probe });
     assert.equal(failed.status, 1, failed.stdout);
     assert.ok(failed.stderr.includes(diagnostic), failed.stderr);
     assert.equal(fs.readFileSync(configPath, "utf8"), original);

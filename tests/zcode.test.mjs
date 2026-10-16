@@ -40,7 +40,7 @@ test("header rules: refused combinations fail before a job or a server exists; e
   assert.match(companion(ctx, ["start", "--prompt-file", promptFile(ctx, `${HEADER}\nmode: write`)]).stderr, /no workspace sandbox.*mode: yolo/);
   assert.equal(jobDirs(ctx).length, 0);
   assert.equal(fs.existsSync(ctx.fakeState), false);
-  assert.throws(() => buildLaunchRequest({ model: "default", effort: "default", backend: "kimi" }), /codex, grok or zcode/);
+  assert.throws(() => buildLaunchRequest({ model: "default", effort: "default", backend: "other" }), /codex, grok, zcode or kimi/);
   const request = buildLaunchRequest({ model: "default", effort: "default", backend: "zcode", fast: "true", mode: "read-only", network: "true" }, { baseDir: ctx.work });
   assert.equal(request.backend, "zcode");
   assert.equal(request.effort, "high");
