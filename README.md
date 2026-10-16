@@ -191,6 +191,12 @@ in plain words, for example "review my changes on Kimi". Those two run only when
 Claude cancels a job by sending its agent the message `cancel`. A review Claude starts never stops
 to ask you anything: without `--wait` or `--background` it runs in the foreground.
 
+Claude Code treats each of these runs as a Skill call. A session in `default` permission mode asks
+you before Claude runs one, and `claude -p` refuses the call unless it is allowed. To run the four
+that only read without a prompt, allow `Skill(relay:review)`, `Skill(relay:adversarial-review)`,
+`Skill(relay:status)` and `Skill(relay:result)`, in `permissions.allow` or with
+`claude -p --allowedTools`.
+
 Every job has its own directory under `$RELAY_JOBS_HOME` (default `~/.relay-jobs`), its own
 worker and its own server process. Jobs belong to no Claude session and survive its end. The skill's
 "Direct use" section lists the companion's commands for scripts.

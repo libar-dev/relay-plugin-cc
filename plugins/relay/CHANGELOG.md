@@ -19,7 +19,7 @@
 - Claude can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:status` and
   `/relay:result` itself; they were user-only. A review Claude starts never asks a question: without
   `--wait` or `--background` it runs in the foreground. `/relay:cancel` and `/relay:transfer` stay
-  user-only.
+  user-only. The README gives the allow rules that run the four without Claude Code's prompt.
 - The tests that wait for an orphaned process accept a child subreaper, such as `systemd --user`,
   as its new parent, so they pass on Linux desktops.
 - The docs say why `yolo` is the default: existing headers and Workflow scripts keep running as
