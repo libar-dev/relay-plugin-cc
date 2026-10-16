@@ -38,7 +38,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --backend kimi --kimi-h
 ```
 
 The binary is `KIMI_BINARY` when set, otherwise the first `kimi` on `PATH`, otherwise
-`~/.kimi-code/bin/kimi`; the job records its resolved path. Setup prints the version, the
+`~/.kimi-code/bin/kimi`; the job records its resolved path. A `KIMI_BINARY` name that is not on
+`PATH` fails rather than fall back to `~/.kimi-code/bin/kimi`. Setup prints the version, the
 sign-in, the default model and effort from `config.toml`, and every model with its efforts from
 `kimi provider list --json`.
 
@@ -58,4 +59,5 @@ mode: yolo
 with every permission request rejected, and every file write and shell command refused by the
 plugin. Kimi has no workspace sandbox, so `write` is refused. Every launch sets
 `KIMI_CODE_NO_AUTO_UPDATE=1` and `KIMI_DISABLE_CRON=1`, and drops inherited `KIMI_MODEL_*`
-variables, which would replace the header's model and effort.
+variables, which would replace the header's model and effort, and an inherited
+`KIMI_CODE_TRUST_WORKSPACE`, which would trust the working directory and load its MCP servers.

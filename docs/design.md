@@ -579,7 +579,8 @@ binaries and never start a real backend.
   `session/set_config_option` for the model and the thinking effort; Kimi keeps model and effort
   across a load but not the mode, so all three go on every open. A message is `session/prompt`.
   The binary is `KIMI_BINARY`, else the first executable `kimi` on `PATH`, else
-  `~/.kimi-code/bin/kimi`, and the job records its real path.
+  `~/.kimi-code/bin/kimi`, and the job records its real path. A `KIMI_BINARY` name that is not on
+  `PATH` fails; it never falls back to the installer's location.
 - **The session's record decides.** Kimi's ACP layer answers `end_turn` for a turn that failed,
   and sends nothing for a turn Kimi starts on its own (a background command finished, a goal the
   model set). Kimi appends every turn to the session's `wire.jsonl` with a durable write within
@@ -624,7 +625,11 @@ binaries and never start a real backend.
   with its own `kimi login`. Kimi locks a token refresh per home, so jobs share one home safely;
   a copied credentials file in a second home would not be. Every launch sets
   `KIMI_CODE_NO_AUTO_UPDATE=1` and `KIMI_DISABLE_CRON=1` and drops inherited `KIMI_MODEL_*`
-  variables, which would replace the header's model and effort.
+  variables, which would replace the header's model and effort, and an inherited
+  `KIMI_CODE_TRUST_WORKSPACE`, which would trust the working directory and load that repository's
+  MCP servers, config directories, skills and instructions. Kimi checks the sign-in at
+  `session/new` and `session/load`; a signed-out home fails the job there, with the
+  `kimi login` line for the job's own home.
 - **Recovery.** Before a prompt leaves, the backend saves a delivery record: message id, exact
   text, session, and the record's byte offset. After a death, a prompt with that text first
   recorded after the offset means the message arrived (its input committed, its turn started, or

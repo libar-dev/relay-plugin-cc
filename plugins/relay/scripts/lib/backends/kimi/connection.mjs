@@ -14,13 +14,16 @@ import { KimiWire, wireFile } from "./wire.mjs";
 const POLL_MS = Number(process.env.RELAY_JOBS_KIMI_POLL_MS) || 100;
 const SETTLE_MS = Number(process.env.RELAY_JOBS_KIMI_SETTLE_MS) || 10000;
 
+// An explicit KIMI_BINARY is the one: a name that is not on PATH fails, and never falls back
+// to another installation.
 export function resolveKimiBinary(env = process.env) {
-  const binary = env.KIMI_BINARY || "kimi";
+  const explicit = env.KIMI_BINARY || null;
+  const binary = explicit ?? "kimi";
   const userDir = env.HOME || env.USERPROFILE;
   const candidates = binary.includes(path.sep) ? [path.resolve(binary)] : [
     ...String(env.PATH ?? "").split(path.delimiter).filter(Boolean).map(dir => path.resolve(dir, binary)),
     // The installer's own location, for a PATH that does not name it.
-    ...(userDir ? [path.join(userDir, ".kimi-code", "bin", "kimi")] : [])
+    ...(!explicit && userDir ? [path.join(userDir, ".kimi-code", "bin", "kimi")] : [])
   ];
   for (const candidate of candidates) {
     try {
@@ -33,12 +36,14 @@ export function resolveKimiBinary(env = process.env) {
 }
 
 // A job never updates the binary under itself and schedules nothing that starts turns later.
-// Inherited KIMI_MODEL_* variables would replace the header's model and effort.
+// Inherited KIMI_MODEL_* variables would replace the header's model and effort, and an
+// inherited KIMI_CODE_TRUST_WORKSPACE would trust the job's working directory, loading that
+// repository's MCP servers, config directories, skills and instructions.
 export function kimiEnvironment(request, env = process.env) {
   /** @type {NodeJS.ProcessEnv} */
   const result = {};
   for (const [name, value] of Object.entries(env)) {
-    if (!name.startsWith("KIMI_MODEL_")) result[name] = value;
+    if (!name.startsWith("KIMI_MODEL_") && name !== "KIMI_CODE_TRUST_WORKSPACE") result[name] = value;
   }
   return { ...result, KIMI_CODE_HOME: request.kimiHome, KIMI_CODE_NO_AUTO_UPDATE: "1", KIMI_DISABLE_CRON: "1" };
 }
@@ -177,7 +182,7 @@ export class KimiConnection {
       for (const [configId, value] of [["model", request.model], ["thinking", request.effort]]) {
         if (value != null) await setConfigOption(client, sessionId, configId, value);
       }
-    } catch (error) { throw new Error(rpcError(error).message); }
+    } catch (error) { throw new Error(this.requestError(error).message); }
     // Turns started before this process (a killed one) are never running.
     this.wire.read().forgetRunning();
     return { sessionId, resumed };
@@ -296,7 +301,7 @@ export class KimiConnection {
       }
       case "rejected":
         if (this.client.exitSeen || this.client.exitResolved) return { ...base, turnStatus: "failed", error: { message: outcome.error.message } };
-        return { ...base, turnStatus: "failed", error: this.promptError(outcome.error) };
+        return { ...base, turnStatus: "failed", error: this.requestError(outcome.error) };
       case "terminal": {
         const { type, reason } = outcome.record;
         if (type === "prompt.aborted") return { ...base, turnStatus: "interrupted" };
@@ -317,7 +322,9 @@ export class KimiConnection {
     }
   }
 
-  promptError(error) {
+  // Kimi checks the sign-in at session/new and session/load as well as at a prompt, and answers
+  // -32000 (Authentication required) where the selected home is signed out.
+  requestError(error) {
     const failure = rpcError(error);
     if (error.data?.code === -32000) {
       failure.message = `${failure.message}. Kimi needs a sign-in for ${this.request.kimiHome}: run \`KIMI_CODE_HOME=${this.request.kimiHome} kimi login\`.`;

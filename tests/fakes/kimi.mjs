@@ -188,6 +188,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       reply({ protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: true, audio: false, embeddedContext: true }, sessionCapabilities: { list: {}, resume: {}, close: {}, delete: {}, fork: {}, additionalDirectories: {} }, mcpCapabilities: { http: true, sse: true }, auth: { logout: {} } }, authMethods: [{ id: 'login', type: 'terminal', name: 'Login with Kimi account', args: ['--login'] }], agentInfo: { name: 'Kimi Code CLI', version: '2.2.0-fake' } });
       break;
     case 'session/new':
+      // Kimi checks the sign-in before it creates or loads a session.
+      if (options.authError) { error(-32000, 'Authentication required'); break; }
       sessionId = 'session_fake-' + (Object.keys(state.sessions).length + 1);
       state.sessions[sessionId] = { cwd: m.params.cwd, mcpServers: m.params.mcpServers }; save();
       record({ type: 'metadata', protocol_version: '1.5', created_at: Date.now() });
@@ -196,6 +198,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       update({ sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'compact' }] });
       break;
     case 'session/load': {
+      if (options.authError) { error(-32000, 'Authentication required'); break; }
       if (!state.sessions[m.params.sessionId]) { error(-32602, 'Invalid params: Unknown sessionId: ' + m.params.sessionId); break; }
       sessionId = m.params.sessionId;
       for (const turn of state.turns.filter(entry => entry.sessionId === sessionId)) update({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: turn.text } });
@@ -218,7 +221,6 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       }
       error(-32602, 'Invalid params: Unknown configId: ' + m.params.configId); break;
     case 'session/prompt': {
-      if (options.authError) { error(-32000, 'Authentication required'); break; }
       if (active) { error(-32600, 'Invalid request: another turn is already in progress', { code: 'turn.agent_busy' }); state.busyRefusals = (state.busyRefusals || 0) + 1; save(); break; }
       const blocks = m.params.prompt;
       const first = blocks[0];

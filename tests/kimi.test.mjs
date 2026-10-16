@@ -3,7 +3,7 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { resolveKimiHome } from "../plugins/relay/scripts/lib/backends/kimi/request.mjs";
-import { kimiEventRecorder } from "../plugins/relay/scripts/lib/backends/kimi/connection.mjs";
+import { kimiEventRecorder, resolveKimiBinary } from "../plugins/relay/scripts/lib/backends/kimi/connection.mjs";
 import { KimiWire } from "../plugins/relay/scripts/lib/backends/kimi/wire.mjs";
 import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
@@ -23,6 +23,8 @@ function fixture(t, options = {}) {
   // Inherited from the caller's shell: a job must not take its model or effort from these.
   ctx.env.KIMI_MODEL_NAME = "inherited-model";
   ctx.env.KIMI_MODEL_THINKING_EFFORT = "max";
+  // ... nor trust the working directory, which would load the repository's MCP servers.
+  ctx.env.KIMI_CODE_TRUST_WORKSPACE = "1";
   ctx.kimi = fake.state;
   return ctx;
 }
@@ -80,6 +82,7 @@ test("a turn's report and outcome come from the session record; the server start
     assert.equal(start.env.KIMI_CODE_NO_AUTO_UPDATE, "1");
     assert.equal(start.env.KIMI_DISABLE_CRON, "1");
     assert.deepEqual(Object.keys(start.env).filter(name => name.startsWith("KIMI_MODEL_")), []);
+    assert.equal(start.env.KIMI_CODE_TRUST_WORKSPACE, undefined);
   }
   assert.deepEqual(requests(ctx, "initialize").map(r => r.params), Array(3).fill({ protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: "relay-plugin", version: "1" } }));
   assert.deepEqual(requests(ctx, "session/new").map(r => r.params), [{ cwd: fs.realpathSync(ctx.work), mcpServers: [] }]);
@@ -370,13 +373,28 @@ test("Kimi's refusals fail the start with its words: an unknown effort, an unkno
   for (const [header, options, expected] of [
     ["backend: kimi\nmodel: kimi-code/k3\neffort: medium", {}, /Unknown thinking value: medium/],
     ["backend: kimi\nmodel: kimi-code/nope\neffort: low", {}, /Internal error: Model "kimi-code\/nope" is not configured in config\.toml\./],
-    [HEADER, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\.kimi-code: run `KIMI_CODE_HOME=.*\.kimi-code kimi login`\./]
+    // Kimi checks the sign-in at session/new: the advice names the job's own home.
+    [HEADER, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\/\.kimi-code: run `KIMI_CODE_HOME=.*\/\.kimi-code kimi login`\./],
+    [`${HEADER}\nkimi-home: jobs`, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\/\.kimi-code-jobs: run `KIMI_CODE_HOME=.*\/\.kimi-code-jobs kimi login`\./]
   ]) {
     const ctx = fixture(t, options);
     const { id } = startJob(ctx, header, "[quick] Refused.");
     await finishJob(ctx, id, 3);
     assert.match(readJob(ctx, id).errorMessage, expected);
   }
+});
+
+test("an explicit KIMI_BINARY is the binary: a name that is not on PATH fails and never falls back to ~/.kimi-code/bin/kimi", t => {
+  const dir = makeTempDir("relay-kimi-binary-");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const executable = file => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "#!/bin/sh\n"); fs.chmodSync(file, 0o755); return fs.realpathSync(file); };
+  const installed = executable(path.join(dir, ".kimi-code", "bin", "kimi"));
+  const wrapper = executable(path.join(dir, "bin", "kimi-wrapper"));
+  const env = { HOME: dir, PATH: path.join(dir, "bin") };
+  assert.throws(() => resolveKimiBinary({ ...env, KIMI_BINARY: "missing-kimi-wrapper" }), /^Error: Kimi binary is not executable: missing-kimi-wrapper$/);
+  assert.throws(() => resolveKimiBinary({ ...env, KIMI_BINARY: path.join(dir, "missing") }), /not executable/);
+  assert.equal(resolveKimiBinary({ ...env, KIMI_BINARY: "kimi-wrapper" }), wrapper);
+  assert.equal(resolveKimiBinary(env), installed, "unset, the installer's location serves a PATH without kimi");
 });
 
 test("a prompt sent while Kimi runs a turn of its own waits behind it and owns the report", async t => {
@@ -481,6 +499,7 @@ test("setup checks the version and the providers without starting acp; a signed-
     if (signedOut) assert.match(block.signIn.detail, /no provider is configured \(sign in: KIMI_CODE_HOME=.* kimi login; see kimi-home\.md\)/);
     assert.deepEqual(ctx.kimi().invocations.map(call => call.args.join(" ")).sort(), ["--version", "provider list --json"]);
     assert.equal(ctx.kimi().invocations.find(call => call.args[0] === "provider").env.KIMI_CODE_HOME, home);
+    assert.ok(ctx.kimi().invocations.every(call => call.env.KIMI_CODE_TRUST_WORKSPACE === undefined));
     assert.equal(ctx.kimi().starts.length, 0);
     assert.doesNotMatch(result.stdout, /FAKE-SECRET-KEY/);
   }
