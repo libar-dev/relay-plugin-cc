@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.0 (2026-10-16)
 
 - A fourth backend, `backend: kimi`, runs Moonshot AI's Kimi Code through `kimi acp`. Jobs, the
   relay, cancel, continue, recovery, Workflow adoption, both reviews and setup work as on the other
@@ -29,6 +29,9 @@
 - The docs say what the stop gate can attribute (Claude's last message and the working tree as it
   stands, no diff of the turn), when `cancel` still signals after the process table becomes
   unreadable, and how a new backend is probed, tested and checked before it ships.
+- The docs name the Linux case where Grok refuses its `read-only` profile, so read-only Grok jobs
+  and Grok reviews fail: a runtime socket it denies, such as `/run/podman/podman.sock` under a
+  root-only `/run/podman`. `write` still runs.
 
 ## 2.0.0
 
