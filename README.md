@@ -214,7 +214,7 @@ is recorded as a job, so `/relay:status` lists it.
 | `--kimi-home <H>` | the Kimi home, as in a header; Kimi only |
 | `--base <ref>` | review the branch against `<ref>` |
 | `--scope auto\|working-tree\|branch` | `auto`, the default, reviews the working tree when it has changes, else the branch against the default branch |
-| `--wait`, `--background` | run in the foreground, or as a Claude background task; without either, the command asks |
+| `--wait`, `--background` | run in the foreground, or as a Claude background task; without either, a review you type asks, and a review Claude starts runs in the foreground |
 | `[focus]` | text after the flags; `/relay:adversarial-review` only |
 
 Grok, ZCode and Kimi read only the diff inlined in their prompt, so they refuse a change above two files
@@ -258,10 +258,12 @@ hooks need `SubagentHandback`, so the floor is Claude Code 2.1.271. A Claude Cod
 it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json`
 must hold the call's key as `relay.journalKey` (once another relay has adopted the job, its
 `relay.json` holds the binding), and the script must get the state block back. Repeat this check
-after a Claude Code update. It was last run in full on Claude Code 2.1.296, for the 2.0.0 release: a
-foreground `relay:job` agent's hand-back, a Workflow call's state-block return with its
-`relay.journalKey`, and a background agent steered with `SendMessage`. That check did not restart a
-relay to adopt a job.
+after a Claude Code update. It was last run in full on Claude Code 2.1.302, on Fedora, for the 2.1.0
+release, on Codex, Grok, ZCode and Kimi: a foreground `relay:job` agent's hand-back, a Workflow
+call's state-block return with its `relay.journalKey`, a relay restarted with `TaskStop` and
+`resumeFromRunId` that adopted its running job, a background agent steered and then continued with
+`SendMessage`, and a cancel by message. The 2.0.0 release was checked on Claude Code 2.1.296,
+without the adoption.
 
 The hooks are PreToolUse on `Bash`, `Write`, `SubagentHandback` and `StructuredOutput`,
 SubagentStop on `relay:job`, SessionStart and Stop. Claude Code gives subagents the

@@ -229,7 +229,7 @@ test("Grok review runs under Grok's read-only profile, with its home and a Grok 
   assert.equal("threadId" in payload, false);
 });
 
-test("Kimi review runs read-only, refusing every write and command, with its home and a Kimi heading", t => {
+test("Kimi review runs read-only, refusing every write and command sent to the client, with its home and a Kimi heading", t => {
   const ctx = kimi(t, { answer: "needs changes\n[high] src/app.js:1: unguarded first item", writes: true, permission: true });
   const home = path.join(ctx.user, ".kimi-code-jobs");
   const result = companion(ctx, ["review", "--backend", "kimi", "--kimi-home", "jobs", "--model", "kimi-code/k3", "--effort", "high"]);

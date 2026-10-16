@@ -105,8 +105,10 @@ ignored with a `note:`.
   `SendMessage` while a turn runs becomes the next turn (`queued-next-turn`), and a reply comes
   with that turn's report. The block prints `backend: kimi` and `kimi-home:` for a non-default home.
 - `yolo` is Kimi's Never Ask mode. `read-only` is Kimi's default mode with every permission
-  request rejected, and every file write and shell command refused by the plugin. `write` is a
-  usage error: Kimi has no workspace sandbox. `web-search: live` only.
+  request rejected, and relay refuses the file writes and terminal commands Kimi sends through
+  the client. That is not an OS sandbox: Kimi's hooks, the MCP servers and plugins it starts, and
+  its other local operations can still have side effects. `write` is a usage error: Kimi has no
+  workspace sandbox. `web-search: live` only.
 - The outcome and the report come from the session's own record (`wire.jsonl`), because Kimi
   answers `end_turn` over ACP for a turn that failed. Kimi retries model calls itself, so a
   capacity failure fails the job at once; `resume` continues it.
@@ -115,12 +117,14 @@ ignored with a `note:`.
   `/relay:setup --backend kimi [--kimi-home H]` prints the binary, version, sign-in and models
   from `kimi provider list --json`, without a model call.
 - A turn Kimi starts on its own (a background command finished) runs unseen: its work is not in
-  the report. Reviews run on Kimi with `--backend kimi` (see Reviews); the stop gate and
+  the report. A completed job confirms the turn relay sent, and only that turn: not the background
+  tasks Kimi started, which may still run or be lost. A message queued behind a turn of Kimi's own
+  cannot be cancelled over ACP; relay cancels it by ending Kimi's server. Reviews run on Kimi with `--backend kimi` (see Reviews); the stop gate and
   `transfer` remain Codex only.
 
 ## Reviews
 
-`/relay:review` and `/relay:adversarial-review` (`C review`, `C adversarial-review`) take the header's keys as flags: `--backend codex|grok|zcode|kimi` (Codex unless given; nothing stores a default), `--model`, `--effort`, `--grok-home`, `--kimi-home`, beside `--base <ref>` and `--scope auto|working-tree|branch`. A review is read-only and runs in the foreground; it is recorded as a job (`kind: review` or `adversarial-review`), and its block prints `backend:` as a job's does.
+`/relay:review` and `/relay:adversarial-review` (`C review`, `C adversarial-review`) take the header's keys as flags: `--backend codex|grok|zcode|kimi` (Codex unless given; nothing stores a default), `--model`, `--effort`, `--grok-home`, `--kimi-home`, beside `--base <ref>` and `--scope auto|working-tree|branch`. A review is read-only and runs in the foreground, or as a Claude background task with `--background`; it is recorded as a job (`kind: review` or `adversarial-review`), and its block prints `backend:` as a job's does.
 
 - Codex: the review runs in the Codex home, as a Codex job does. `/relay:review` is Codex's own reviewer, which takes no effort: `--effort` there is a `note:`. `/relay:adversarial-review` sends the plugin's prompt with the schema as Codex's `outputSchema`.
 - Grok, ZCode and Kimi: the plugin's prompts (`prompts/review.md`, `prompts/adversarial-review.md`) on a fresh read-only session, with the diff inlined. Above two files or 256 KiB the review is refused; narrow it with `--base` or `--scope`, or run it on Codex. The adversarial prompt carries the schema as text and the plugin checks the answer.

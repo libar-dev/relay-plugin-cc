@@ -56,8 +56,10 @@ mode: yolo
 ```
 
 `yolo` is Kimi's Never Ask mode: nothing asks for approval. `read-only` is Kimi's default mode
-with every permission request rejected, and every file write and shell command refused by the
-plugin. Kimi has no workspace sandbox, so `write` is refused. Every launch sets
+with every permission request rejected, and relay refuses the file writes and terminal commands
+Kimi sends through the client. That is not an OS sandbox: the home's hooks, the MCP servers and
+plugins Kimi starts, and its other local operations can still have side effects. Kimi has no
+workspace sandbox, so `write` is refused. Every launch sets
 `KIMI_CODE_NO_AUTO_UPDATE=1` and `KIMI_DISABLE_CRON=1`, and drops inherited `KIMI_MODEL_*`
 variables, which would replace the header's model and effort, and an inherited
 `KIMI_CODE_TRUST_WORKSPACE`, which would trust the working directory and load its MCP servers.

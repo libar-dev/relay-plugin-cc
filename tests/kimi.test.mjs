@@ -295,7 +295,7 @@ test("a worker killed after Kimi recorded the brief is resumed without a second 
   assert.equal(readJob(ctx, id).pendingFirstTurn, false);
 });
 
-test("modes: yolo is Kimi's auto and allows; read-only is default, rejects, and refuses every write and command", async t => {
+test("modes: yolo is Kimi's auto and allows; read-only is default, rejects, and refuses every write and command sent to the client", async t => {
   for (const mode of ["yolo", "read-only"]) {
     const ctx = fixture(t, { permission: true, writes: true });
     const { id } = startJob(ctx, `${HEADER}\nmode: ${mode}`, "[quick] Mode.");

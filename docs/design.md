@@ -642,7 +642,8 @@ binaries and never start a real backend.
 `/relay:review` and `/relay:adversarial-review` run on any backend: `--backend` (Codex unless
 given; nothing stores a default), `--model`, `--effort` and `--grok-home`, beside `--base` and
 `--scope`. The request is built as a job's is, in `read-only` mode, so a combination a job refuses
-is refused the same way. A review runs in the foreground and is recorded as a job of kind `review`
+is refused the same way. A review runs in the foreground, or as a Claude background task with
+`--background`, and is recorded as a job of kind `review`
 or `adversarial-review`, so `status` lists it. A Codex review turns off the job MCP servers.
 
 - **Review.** On Codex, `/relay:review` is Codex's own reviewer (`review/start` on an ephemeral
@@ -651,7 +652,8 @@ or `adversarial-review`, so `status` lists it. A Codex review turns off the job 
 - **Adversarial review** sends `prompts/adversarial-review.md` through the backend's connection,
   the one a job uses, on a fresh read-only session. Codex gets the schema as `outputSchema`; Grok,
   ZCode and Kimi, which have no schema parameter, get it in the prompt. A Grok review always runs
-  under Grok's `read-only` profile, and a Kimi review refuses every write and shell command.
+  under Grok's `read-only` profile, and a Kimi review refuses the file writes and terminal
+  commands Kimi sends through the client, which is not an OS sandbox (Known limits, Kimi).
 - **Inline limits.** A Grok, ZCode or Kimi review reads only the inlined change (read-only ZCode and
   Kimi have no shell to run git), so it sees the whole change or does not start. Untracked files count toward
   the limits and are inlined whole, and a binary file is named and counts as a file. Above two files
@@ -804,16 +806,19 @@ would need `grok agent`.
 **Kimi.**
 
 - A turn Kimi starts on its own (a background command finished, a goal the model set) is not seen
-  over ACP, and its work is not in the job's report; a prompt sent while one runs waits behind it,
-  and a cancel cannot reach that prompt over ACP, which cancels only the turn it drives, so relay
-  ends it by closing Kimi's server. `read-only` refuses the shell, so it starts no background
-  command.
-- `read-only` rests on Kimi sending file writes and shell commands to a client that declares
-  them. `Write` creates missing parent directories locally before its refused write, and Kimi's
-  file adapter keeps binary writes (bytes that are not UTF-8) and exclusive creates on its own
-  filesystem. A tool that
-  writes another way, such as a plugin's stdio MCP server, is not covered; in Kimi's default mode
-  an MCP call asks and is rejected, unless the home's `[[permission.rules]]` allow it.
+  over ACP, and its work is not in the job's report. `read-only` refuses the shell, so it starts
+  no background command.
+- **Completion and background work.** A completed job confirms the terminal record of the turn
+  relay sent, and only that turn. It does not cover background tasks Kimi started: they may still
+  run, or end with Kimi's server. A message queued behind a turn of Kimi's own has no ACP driver,
+  so ACP's cancel cannot reach it; relay cancels it by ending Kimi's server.
+- `read-only` is not an OS sandbox. It rests on Kimi sending file writes and shell commands to a
+  client that declares them; Kimi's hooks, the MCP servers and plugins it starts, and its other
+  local operations can still have side effects. `Write` creates missing parent directories
+  locally before its refused write, and Kimi's file adapter keeps binary writes (bytes that are
+  not UTF-8) and exclusive creates on its own filesystem. A tool that writes another way, such as
+  a plugin's stdio MCP server, is not covered; in Kimi's default mode an MCP call asks and is
+  rejected, unless the home's `[[permission.rules]]` allow it.
 - Kimi runs each shell command in a session of its own. After a server SIGKILL the command
   outlives it, out of reach of recovery, as above.
 - No isolation per job in one home: sessions, MCP servers, plugins and their session-start skills,

@@ -8,8 +8,10 @@
   `~/.kimi-code-<name>`), and `/relay:setup` lists every Kimi home it finds.
 - A running Kimi turn takes no message: a message sent while it runs becomes the next turn.
 - Kimi supports `yolo` (Kimi's Never Ask mode) and `read-only` (Kimi's default mode, with every
-  permission request rejected and every file write and shell command refused by the plugin), and
-  only `web-search: live`.
+  permission request rejected, and the file writes and terminal commands Kimi sends through the
+  client refused by relay), and only `web-search: live`. `read-only` is not an OS sandbox: Kimi's
+  hooks, the MCP servers and plugins it starts, and its other local operations can still have
+  side effects.
 - A Kimi turn's outcome and report come from the session's own record, because Kimi's ACP layer
   answers `end_turn` for a turn that failed.
 - A failed adversarial-review turn says the turn failed and gives the backend's error, on every

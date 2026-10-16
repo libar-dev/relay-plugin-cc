@@ -354,6 +354,10 @@ test("review, adversarial-review, status and result are model-invocable; cancel 
   for (const name of ["review", "adversarial-review"]) {
     const source = read(`commands/${name}.md`);
     assert.match(source, /If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground/, name);
+    // The fixed first line, and that it is the one text the verbatim rule allows.
+    assert.ok(source.includes("begin your reply with exactly this line before the output: `Ran in the foreground: the default when Claude starts a review without --wait or --background.` That line is the only text allowed before the companion's verbatim output, and nothing follows the output."), name);
+    assert.ok(source.includes("- Do not paraphrase, summarize, or add commentary before or after it. The one exception is the foreground line above, first, when you invoked the command yourself."), name);
+    assert.ok(source.includes("relay refuses the file writes and terminal commands Kimi sends through the client. That is not an OS sandbox"), name);
     assert.match(frontmatter(name), /Codex, Grok, ZCode or Kimi|Grok, ZCode or Kimi/, name);
   }
   assert.match(frontmatter("adversarial-review"), /schema-checked JSON/);
