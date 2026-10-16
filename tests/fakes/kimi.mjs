@@ -113,6 +113,12 @@ function startTurn(turn, rpcId) {
     if (clientCaps.terminal) reverse('terminal/create', { command: 'touch', args: ['touched.txt'], cwd: process.cwd() });
   }
   if (options.unsupported) reverse('client/missing', { question: 'unhandled' });
+  // Kimi runs a shell command in a session of its own, as its child.
+  if (options.shellChild && !state.descendants) {
+    const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+    child.unref();
+    state.descendants = [{ appServerPid: process.pid, childPid: child.pid }]; save();
+  }
   // Kimi's ACP layer sends a turn's updates only to the prompt it drives.
   const tracked = value => { if (rpcId !== null) update(value); };
   tracked({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } });

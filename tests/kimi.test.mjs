@@ -8,6 +8,7 @@ import { KimiWire } from "../plugins/relay/scripts/lib/backends/kimi/wire.mjs";
 import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { isWorkerAlive } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
+import { readProcessStartTime } from "../plugins/relay/scripts/lib/util/process.mjs";
 import { companion, finishJob, jobDir, promptFile, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 import { makeTempDir } from "./support/helpers.mjs";
 import { installFakeKimi } from "./fakes/kimi.mjs";
@@ -464,6 +465,44 @@ test("a server killed while a prompt queued behind Kimi's own turn runs: one rec
   assert.ok(events(ctx, id).some(e => e.method === "kimi/wireObserverStopped" && e.params.reason === "Kimi's server ended"), "the first connection's observer stopped");
   // The lease is gone (finishJob), and the worker process ends: nothing is left polling.
   await waitFor(() => !isWorkerAlive(worker), 5000);
+});
+
+test("containment: a shell command Kimi runs in its own session ends with the old server's sweep; one a server SIGKILL orphaned is out of reach, and relay claims no cleanup of it", async t => {
+  const identity = pid => ({ pid, startTime: readProcessStartTime(pid) });
+  const start = async () => {
+    const ctx = fixture(t, { shellChild: true, turnMs: 30000 });
+    const { id } = startJob(ctx, HEADER, "Run a command.");
+    const record = await waitFor(() => ctx.kimi().descendants?.[0]);
+    const job = readJob(ctx, id);
+    const processes = { worker: job.worker, server: identity(record.appServerPid), child: identity(record.childPid) };
+    t.after(() => { for (const proc of Object.values(processes)) if (isWorkerAlive(proc)) process.kill(proc.pid, "SIGKILL"); });
+    return { ctx, id, ...processes };
+  };
+
+  // Only the worker dies. Its Kimi server and the server's command live on, and the next
+  // worker stops the recorded server with every descendant before it starts its own.
+  const swept = await start();
+  process.kill(swept.worker.pid, "SIGKILL");
+  await waitFor(() => !isWorkerAlive(swept.worker));
+  assert.equal(isWorkerAlive(swept.child), true, "the command outlives its worker");
+  assert.equal(companion(swept.ctx, ["resume", swept.id, "--message", "[quick] Finish."]).status, 0);
+  await finishJob(swept.ctx, swept.id);
+  assert.equal(isWorkerAlive(swept.server), false, "the sweep ended the old server");
+  assert.equal(isWorkerAlive(swept.child), false, "and the command it started in a session of its own");
+  assert.ok(readJob(swept.ctx, swept.id).attempts[0].servers[0].endedAt, "the sweep recorded the server's end");
+
+  // Worker and server die by SIGKILL: the command is reparented, no longer a descendant of
+  // anything relay recorded (design.md, Processes). Recovery does not reach it, and no record
+  // claims it was stopped.
+  const orphaned = await start();
+  process.kill(orphaned.server.pid, "SIGKILL");
+  process.kill(orphaned.worker.pid, "SIGKILL");
+  await waitFor(() => companion(orphaned.ctx, ["status", orphaned.id]).stdout.includes("state: dead"));
+  assert.equal(companion(orphaned.ctx, ["resume", orphaned.id, "--message", "[quick] Finish."]).status, 0);
+  await finishJob(orphaned.ctx, orphaned.id);
+  assert.equal(isWorkerAlive(orphaned.child), true, "out of reach, as documented");
+  assert.doesNotMatch(fs.readFileSync(path.join(jobDir(orphaned.ctx, orphaned.id), "job.json"), "utf8"), new RegExp(`"pid":${orphaned.child.pid}\\b`));
+  process.kill(orphaned.child.pid, "SIGKILL");
 });
 
 test("server death mid-turn records the exit; a second death in the attempt fails it", async t => {
