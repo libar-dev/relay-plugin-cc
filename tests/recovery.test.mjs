@@ -647,8 +647,15 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
       const innerId = path.basename(innerDir);
       const before = readJob(inner, innerId);
       const outerBefore = readJob(outer, id);
-      // The intermediate shells must have exited before recovery takes its group snapshot.
-      await waitFor(() => listProcesses().find(row => row.pid === before.worker.pid)?.ppid === 1);
+      // The intermediate shells must have exited before recovery takes its group snapshot. The
+      // orphaned worker's new parent is pid 1, or on Linux the nearest child subreaper (such as
+      // `systemd --user`); either way it is outside the outer worker's group.
+      await waitFor(() => {
+        const rows = listProcesses();
+        const worker = rows.find(row => row.pid === before.worker.pid);
+        const parent = worker && rows.find(row => row.pid === worker.ppid);
+        return worker && (worker.ppid === 1 || !parent || parent.pgid !== outerBefore.worker.pid);
+      });
       const table = listProcesses();
       const identities = [before.worker.pid, before.serverPid].map(pid => table.find(row => row.pid === pid));
       assert.ok(identities.every(row => row && row.pgid === outerBefore.worker.pid));
