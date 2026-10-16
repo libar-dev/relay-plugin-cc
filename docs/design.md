@@ -773,8 +773,10 @@ would need `grok agent`.
 **Kimi.**
 
 - A turn Kimi starts on its own (a background command finished, a goal the model set) is not seen
-  over ACP, and its work is not in the job's report; a prompt sent while one runs waits behind it.
-  `read-only` refuses the shell, so it starts no background command.
+  over ACP, and its work is not in the job's report; a prompt sent while one runs waits behind it,
+  and a cancel cannot reach that prompt over ACP, which cancels only the turn it drives, so it ends
+  through the worker's ten-second kill. `read-only` refuses the shell, so it starts no background
+  command.
 - `read-only` rests on Kimi sending file writes and shell commands to a client that declares
   them. `Write` creates missing parent directories locally before its refused write. A tool that
   writes another way, such as a plugin's stdio MCP server, is not covered; in Kimi's default mode
