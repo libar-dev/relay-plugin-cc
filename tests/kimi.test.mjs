@@ -409,6 +409,27 @@ test("a prompt sent while Kimi runs a turn of its own waits behind it and owns t
   assert.equal(ctx.kimi().queuedBehindOwn, 1, "the prompt was queued behind Kimi's own turn");
   assert.equal(report(ctx, id), "Report for: [quick] Next.\n");
   assert.equal(readJob(ctx, id).state, "completed");
+  // ACP sent nothing for the queued turn: its report and its end came from the record alone.
+  assert.equal(events(ctx, id).filter(e => e.params?.update?.sessionUpdate === "agent_thought_chunk").length, 1);
+});
+
+test("a cancel of a prompt queued behind Kimi's own turn ends the job: ACP cannot reach it, so relay closes Kimi's server", async t => {
+  const ctx = fixture(t, { ownTurnAfterMs: 1, ownTurnMs: 600, turnMs: 400 });
+  ctx.env.RELAY_JOBS_CANCEL_GRACE_MS = "20000";
+  const { id } = startJob(ctx, HEADER, "First.");
+  await waitFor(() => readJob(ctx, id).turnId);
+  postInboxMessage(jobDir(ctx, id), { kind: "steer", text: "[long] Next." });
+  await waitFor(() => ctx.kimi().turns.some(turn => turn.text === "[long] Next."));
+  const started = Date.now();
+  const cancelled = companion(ctx, ["cancel", id]);
+  assert.equal(cancelled.status, 0, cancelled.stderr);
+  assert.match(cancelled.stdout, /^state: cancelled$/m);
+  assert.doesNotMatch(cancelled.stdout, /killed the worker/, "relay ended it before the cancel's kill");
+  assert.ok(Date.now() - started < 10000);
+  await finishJob(ctx, id, 5);
+  assert.equal(ctx.kimi().cancelsUnheard, 1, "session/cancel did not reach the queued turn");
+  assert.ok(!(ctx.kimi().completed ?? []).some(turn => turn.text === "[long] Next."), "the queued turn never ended in Kimi");
+  assert.ok(readJob(ctx, id).attempts.flatMap(attempt => attempt.servers ?? []).every(server => server.endedAt), "Kimi's server ended");
 });
 
 test("a turn of Kimi's own that outlasts the grace, then a pause in the hand-off: the queued prompt still runs and owns the report", async t => {

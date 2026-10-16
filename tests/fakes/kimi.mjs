@@ -7,8 +7,10 @@ import { realHomeGuardSource } from "../support/isolate-env.mjs";
 // `provider list --json`, and `acp`, which answers ACP and keeps each session's record in
 // `$KIMI_CODE_HOME/sessions/<bucket>/<id>/agents/main/wire.jsonl` as Kimi does. Like Kimi, it
 // answers `end_turn` for a turn that failed (the record says `failed`), refuses a second prompt
-// while a turn runs, reads a leading `/word` as a command, forgets the mode on a load, and runs a
-// prompt sent during a turn of its own after that turn, with no ACP events for either.
+// while a turn runs, reads a leading `/word` as a command, forgets the mode on a load, checks the
+// sign-in when a session opens, and runs a prompt sent during a turn of its own after that turn.
+// Such a prompt gets ACP's answer at once and nothing over ACP after it: no updates, and a cancel
+// does not reach it. Only the record shows its turn; permission and file requests still come.
 export function installFakeKimi(bin, options = {}) {
   const statePath = path.join(bin, "fake-kimi-state.json");
   const binary = path.join(bin, "kimi");
@@ -111,11 +113,13 @@ function startTurn(turn, rpcId) {
     if (clientCaps.terminal) reverse('terminal/create', { command: 'touch', args: ['touched.txt'], cwd: process.cwd() });
   }
   if (options.unsupported) reverse('client/missing', { question: 'unhandled' });
-  update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } });
+  // Kimi's ACP layer sends a turn's updates only to the prompt it drives.
+  const tracked = value => { if (rpcId !== null) update(value); };
+  tracked({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } });
   if (options.tools) {
-    update({ sessionUpdate: 'tool_call', toolCallId: turn.turnId + ':tool_1', title: 'Bash', kind: 'execute', status: 'pending' });
-    for (let i = 0; i < 3; i++) update({ sessionUpdate: 'tool_call_update', toolCallId: turn.turnId + ':tool_1', status: 'in_progress' });
-    update({ sessionUpdate: 'tool_call_update', toolCallId: turn.turnId + ':tool_1', status: 'completed' });
+    tracked({ sessionUpdate: 'tool_call', toolCallId: turn.turnId + ':tool_1', title: 'Bash', kind: 'execute', status: 'pending' });
+    for (let i = 0; i < 3; i++) tracked({ sessionUpdate: 'tool_call_update', toolCallId: turn.turnId + ':tool_1', status: 'in_progress' });
+    tracked({ sessionUpdate: 'tool_call_update', toolCallId: turn.turnId + ':tool_1', status: 'completed' });
     record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'assistant', content: [{ type: 'text', text: 'Before the tool. ' }], toolCalls: [] } } });
     record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'assistant', content: [{ type: 'text', text: 'Preamble.' }], toolCalls: [{ id: 'tool_1', name: 'Bash' }] } } });
     record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'tool', content: [{ type: 'text', text: 'ok' }], toolCallId: 'tool_1' } } });
@@ -157,7 +161,14 @@ function ownTurn() {
   record({ type: 'agent.turn.started', kind: 'event', turnId });
   record({ type: 'turn.prompt', agentId: 'main', input, origin: { kind: 'task' }, turnId });
   record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'assistant', content: [{ type: 'text', text: 'The background task finished.' }], toolCalls: [] } } });
-  setTimeout(() => {
+  // It runs ownTurnMs once a prompt has queued behind it, however late the prompt comes, so a
+  // test always has its queued prompt; with none after 10 s, it ends.
+  const startedAt = Date.now();
+  const hold = () => {
+    if (own.queuedAt === undefined && Date.now() - startedAt < 10000) return setTimeout(hold, 10);
+    setTimeout(end, Math.max(0, (own.queuedAt ?? Date.now()) + (options.ownTurnMs || 400) - Date.now()));
+  };
+  const end = () => {
     record({ type: 'turn.ended', agentId: 'main', turnId, reason: 'completed' });
     own = null;
     // The hand-off runs Kimi's prompt hooks before the queued prompt is committed: it can pause.
@@ -168,7 +179,8 @@ function ownTurn() {
       record({ type: 'prompt.completed', agentId: 'main', promptId: next.promptId, reason: 'blocked' });
       state.blocked = (state.blocked || 0) + 1; save();
     } else if (next) setTimeout(() => startTurn(next, null), options.handoffMs || 0);
-  }, options.ownTurnMs || 400);
+  };
+  hold();
 }
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line); state.requests.push(m); save();
@@ -241,11 +253,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       // The process dies after Kimi committed the input, before any turn started for it.
       if (options.dieAfterInput && state.prompts === nth(options.dieAfterInput)) { inputRecord(turn); setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 30); break; }
       // The engine queues a prompt sent during a turn of its own, and ACP answers at once.
-      if (own) { queued.push(turn); state.queuedBehindOwn = (state.queuedBehindOwn || 0) + 1; save(); reply({ stopReason: 'end_turn' }); break; }
+      if (own) { own.queuedAt ??= Date.now(); queued.push(turn); state.queuedBehindOwn = (state.queuedBehindOwn || 0) + 1; save(); reply({ stopReason: 'end_turn' }); break; }
       startTurn(turn, m.id);
       break;
     }
-    case 'session/cancel': if (active) finish('cancelled'); break;
+    // ACP cancels only the prompt it drives: not one it answered early, nor a turn of Kimi's own.
+    case 'session/cancel': if (active && active.rpcId !== null) finish('cancelled'); else { state.cancelsUnheard = (state.cancelsUnheard || 0) + 1; save(); } break;
     default: if (m.id !== undefined && m.method) error(-32601, 'Method not found');
   }
 });
