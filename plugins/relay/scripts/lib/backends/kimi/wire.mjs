@@ -17,13 +17,22 @@ export function wireFile(home, sessionId) {
   return null;
 }
 
+// Kimi puts the text of its UserPromptSubmit hooks in front of a prompt's own parts, each part
+// marked with this source.
+const HOOK_SOURCE = "user prompt submit hook";
+
+/** A prompt's own text: its text parts without the ones Kimi's hooks added. */
 export function promptText(input) {
-  return (Array.isArray(input) ? input : []).filter(part => part?.type === "text").map(part => part.text ?? "").join("");
+  return textParts(input).filter(part => part.meta?.source !== HOOK_SOURCE).map(part => part.text ?? "").join("");
+}
+
+function textParts(input) {
+  return (Array.isArray(input) ? input : []).filter(part => part?.type === "text");
 }
 
 /**
  * @typedef {{ turnId: number, origin: string | null, promptId: string | null, ended: any, report: string, didWork: boolean }} KimiTurn
- * @typedef {{ promptId: string, at: number, text: string | null, turnId: number | null, started: boolean }} KimiPrompt
+ * @typedef {{ promptId: string, at: number, texts: string[], delivered: boolean, turnId: number | null, started: boolean, terminal: any }} KimiPrompt
  */
 
 const NEWLINE = 0x0a;
@@ -32,6 +41,13 @@ const NEWLINE = 0x0a;
 // without its newline, with any UTF-8 character it splits, waits in its bytes for the next read,
 // so a record written across two reads is still read once, whole. Every read updates one state:
 // each turn by Kimi's turn id, each prompt relay sent by Kimi's prompt id, and the turn running.
+//
+// A prompt has three records, each of which may be missing: delivered (Kimi committed the user
+// input, `agent.message.appended`), started (`agent.turn.started` names it, `turn.prompt` runs
+// it) and completed (its turn's `turn.ended`). A prompt Kimi's hook blocked, or one cancelled
+// before it started, ends with `prompt.completed` or `prompt.aborted` and no turn. Every record
+// form of one prompt joins it by Kimi's prompt id, so a prompt counts once however many forms
+// the record holds, and two prompts with the same text stay two.
 export class KimiWire {
   /** @param {() => string | null} locate */
   constructor(locate) {
@@ -46,6 +62,9 @@ export class KimiWire {
     this.prompts = new Map();
     /** @type {number | null} */
     this.running = null;
+    // User messages Kimi kept in its context by id, for a prompt blocked before its input record.
+    /** @type {Map<string, string[]>} */
+    this.userMessages = new Map();
   }
 
   /** The byte offset just past the last whole record read. */
@@ -89,19 +108,15 @@ export class KimiWire {
   // A new server process: a turn the record left open belonged to one that died.
   forgetRunning() { this.running = null; }
 
-  /** The first prompt relay sent with this text, recorded at or after byte `from`. */
+  /**
+   * The first prompt relay sent with this text, first recorded at or after byte `from`. Its own
+   * text matches, or one text part does, as hook text may come without its marker.
+   */
   promptSince(from, text) {
     for (const prompt of this.prompts.values()) {
-      if (prompt.at >= from && prompt.text === text) return prompt;
+      if (prompt.at >= from && prompt.texts.includes(text)) return prompt;
     }
     return null;
-  }
-
-  /** How many prompts relay sent with exactly this text the record holds. */
-  count(text) {
-    let count = 0;
-    for (const prompt of this.prompts.values()) if (prompt.text === text) count += 1;
-    return count;
   }
 
   /** @returns {KimiTurn} */
@@ -118,9 +133,23 @@ export class KimiWire {
   prompt(promptId, at) {
     let prompt = this.prompts.get(promptId);
     if (!prompt) {
-      prompt = { promptId, at, text: null, turnId: null, started: false };
+      prompt = { promptId, at, texts: [], delivered: false, turnId: null, started: false, terminal: null };
       this.prompts.set(promptId, prompt);
     }
+    return prompt;
+  }
+
+  // A prompt's texts, from the first record form that carries its content.
+  inputOf(prompt, content) {
+    if (prompt.texts.length > 0 || !Array.isArray(content)) return;
+    prompt.texts = [...new Set([promptText(content), ...textParts(content).map(part => part.text ?? "")])];
+  }
+
+  started(promptId, turnId, at) {
+    const prompt = this.prompt(promptId, at);
+    prompt.turnId = turnId;
+    prompt.started = true;
+    this.turn(turnId).promptId = promptId;
     return prompt;
   }
 
@@ -129,17 +158,29 @@ export class KimiWire {
       case "agent.turn.started":
         this.turn(record.turnId);
         this.running = record.turnId;
+        if (typeof record.queueItemId === "string" && this.prompts.has(record.queueItemId)) this.started(record.queueItemId, record.turnId, at);
         return;
       case "turn.prompt": {
         const turn = this.turn(record.turnId);
         turn.origin = record.origin?.kind ?? null;
         if (!turn.ended) this.running = record.turnId;
         if (turn.origin !== "user" || typeof record.promptId !== "string") return;
+        this.inputOf(this.started(record.promptId, record.turnId, at), record.input);
+        return;
+      }
+      case "context.append_message": {
+        const message = record.message;
+        if (message?.role === "user" && typeof message.id === "string" && (message.origin?.kind ?? "user") === "user") {
+          this.userMessages.set(message.id, message.content);
+        }
+        return;
+      }
+      case "prompt.completed":
+      case "prompt.aborted": {
+        if (typeof record.promptId !== "string") return;
         const prompt = this.prompt(record.promptId, at);
-        prompt.text ??= promptText(record.input);
-        prompt.turnId = record.turnId;
-        prompt.started = true;
-        turn.promptId = record.promptId;
+        prompt.terminal = record;
+        this.inputOf(prompt, this.userMessages.get(record.promptId));
         return;
       }
       case "turn.ended": {
@@ -149,6 +190,14 @@ export class KimiWire {
       }
       case "agent.message.appended": {
         const message = record.message?.message;
+        const meta = record.message?.meta;
+        // Kimi committed the user input: delivered, before any turn exists for it.
+        if (message?.role === "user" && meta?.source === "input" && meta.origin?.kind === "user" && typeof meta.promptId === "string") {
+          const prompt = this.prompt(meta.promptId, at);
+          prompt.delivered = true;
+          this.inputOf(prompt, message.content);
+          return;
+        }
         const turn = this.running === null ? null : this.turns.get(this.running);
         if (!turn || !message) return;
         if (message.role === "tool") turn.didWork = true;

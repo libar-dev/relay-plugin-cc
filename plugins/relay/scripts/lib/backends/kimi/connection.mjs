@@ -165,12 +165,13 @@ export class KimiConnection {
     return { sessionId, resumed };
   }
 
-  // A message reached the session when its record holds more user prompts with its exact text
-  // than it held before the send, so a brief may repeat a request on purpose.
+  // A message reached the session when the record holds a prompt with its text first recorded
+  // after the offset saved before the send: Kimi committed its input, started it, or blocked
+  // it. An earlier prompt with the same text was recorded before that offset.
   delivered(item) {
     const delivery = this.state.deliveries?.[item.clientId];
     if (!item.recoveryCandidate || !delivery || delivery.sessionId !== this.sessionId) return false;
-    return this.wire.read().count(delivery.text) > delivery.heldBefore;
+    return this.wire.read().promptSince(delivery.offset, delivery.text) !== null;
   }
 
   // Steer and cancel can go while a prompt waits for its answer or its turn's end.
@@ -207,7 +208,7 @@ export class KimiConnection {
     const response = { value: null, error: null };
     try {
       // The record is saved before the prompt leaves, so a later worker can tell whether it arrived.
-      const delivery = { id: options.clientId, kind: options.source, text: prompt, sessionId, offset: from, heldBefore: wire.count(prompt), at: new Date().toISOString() };
+      const delivery = { id: options.clientId, kind: options.source, text: prompt, sessionId, offset: from, at: new Date().toISOString() };
       this.saveState({ deliveries: { ...this.state.deliveries, [delivery.id]: delivery } });
       // A first text block that starts with `/` would run one of Kimi's commands instead.
       const blocks = prompt.startsWith("/") ? [{ type: "text", text: "" }, { type: "text", text: prompt }] : undefined;
@@ -238,6 +239,8 @@ export class KimiConnection {
       }
       const turn = prompt?.turnId == null ? null : wire.turns.get(prompt.turnId);
       if (turn?.ended) return { kind: "ended", turn };
+      // Blocked by a hook, or cancelled, before a turn existed for it.
+      if (prompt?.terminal && !prompt.started) return { kind: "terminal", record: prompt.terminal };
       if (response.error) return { kind: "rejected", error: response.error };
       if (signal.aborted) {
         this.hooks.tap?.({ method: "kimi/wireObserverStopped", params: { reason: signal.reason } });
@@ -276,6 +279,12 @@ export class KimiConnection {
       case "rejected":
         if (this.client.exitSeen || this.client.exitResolved) return { ...base, turnStatus: "failed", error: { message: outcome.error.message } };
         return { ...base, turnStatus: "failed", error: this.promptError(outcome.error) };
+      case "terminal": {
+        const { type, reason } = outcome.record;
+        if (type === "prompt.aborted") return { ...base, turnStatus: "interrupted" };
+        const why = reason === "blocked" ? "a UserPromptSubmit hook blocked it" : `its prompt hooks ended it (${reason})`;
+        return { ...base, turnStatus: "failed", error: { message: `Kimi did not run the message: ${why}. The hooks are the Kimi home's (${this.request.kimiHome}).` } };
+      }
       case "stopped":
         if (outcome.reason === "cancel") return { ...base, turnStatus: "interrupted" };
         return { ...base, turnStatus: "failed", error: { message: `Kimi's turn was still running when ${outcome.reason}.` } };

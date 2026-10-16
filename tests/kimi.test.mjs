@@ -212,6 +212,68 @@ test("a server that dies before Kimi recorded the brief sends it again, once", a
   assert.equal(report(ctx, id), "Report for: Run me.\n");
 });
 
+const sentWith = (ctx, text) => requests(ctx, "session/prompt").filter(r => r.params.prompt.at(-1).text === text).length;
+
+test("a server that dies after Kimi committed the brief's input, before a turn started for it, is resumed once and the brief is not sent again", async t => {
+  const ctx = fixture(t, { dieAfterInput: true, turnMs: 50 });
+  const { id } = startJob(ctx, HEADER, "Run once.");
+  await finishJob(ctx, id);
+  const job = readJob(ctx, id);
+  assert.equal(job.state, "completed");
+  assert.equal(job.automaticResumes.length, 1);
+  assert.equal(sentWith(ctx, "Run once."), 1, "the input record alone says it arrived");
+  assert.match(report(ctx, id), /^Report for: Your session was cut off\./);
+});
+
+test("a prompt Kimi's hooks put text in front of is still the prompt: its turn, its report, and its record after a death", async t => {
+  const ctx = fixture(t, { hookText: "<hook>branch: main</hook>" });
+  const { id } = startJob(ctx, HEADER, "[quick] Hooked.");
+  await finishJob(ctx, id);
+  assert.equal(readJob(ctx, id).state, "completed");
+  assert.equal(report(ctx, id), "Report for: [quick] Hooked.\n");
+  assert.equal(readJob(ctx, id).turnId, ctx.kimi().turns[0].promptId);
+  const dies = fixture(t, { hookText: "<hook>branch: main</hook>", dieAfterInput: true, turnMs: 50 });
+  const job = startJob(dies, HEADER, "Hooked once.");
+  await finishJob(dies, job.id);
+  assert.equal(sentWith(dies, "Hooked once."), 1);
+});
+
+test("two identical messages both run; after a death, each one's own record decides whether it arrived", async t => {
+  // The second copy reached Kimi's record before its server died: it is not sent a third time.
+  const kept = fixture(t, { dieAfterInput: 2, turnMs: 50 });
+  const first = startJob(kept, HEADER, "[quick] Same.");
+  await finishJob(kept, first.id);
+  assert.equal(companion(kept, ["continue", first.id, "--message", "[quick] Same."]).status, 0);
+  await finishJob(kept, first.id);
+  assert.equal(sentWith(kept, "[quick] Same."), 2);
+  assert.equal(readJob(kept, first.id).automaticResumes.length, 1);
+  // The second copy's server died before Kimi recorded it: the first copy does not count for it.
+  const lost = fixture(t, { dieBeforeRecord: 2, turnMs: 50 });
+  const second = startJob(lost, HEADER, "[quick] Same.");
+  await finishJob(lost, second.id);
+  assert.equal(companion(lost, ["continue", second.id, "--message", "[quick] Same."]).status, 0);
+  await finishJob(lost, second.id);
+  assert.equal(sentWith(lost, "[quick] Same."), 3);
+  assert.deepEqual(lost.kimi().turns.map(turn => turn.text).filter(text => text === "[quick] Same."), ["[quick] Same.", "[quick] Same."], "both ran");
+  assert.equal(report(lost, second.id), "Report for: [quick] Same.\n");
+});
+
+test("a queued prompt that a UserPromptSubmit hook blocks fails the job at once with that reason, and is not sent again", async t => {
+  const ctx = fixture(t, { ownTurnAfterMs: 1, ownTurnMs: 600, turnMs: 400, blockQueued: true });
+  ctx.env.RELAY_JOBS_KIMI_SETTLE_MS = "10000";
+  const { id } = startJob(ctx, HEADER, "First.");
+  await waitFor(() => readJob(ctx, id).turnId);
+  postInboxMessage(jobDir(ctx, id), { kind: "steer", text: "[quick] Next." });
+  const started = Date.now();
+  await finishJob(ctx, id, 3);
+  assert.ok(Date.now() - started < 8000, "the record's verdict, not the grace, ended it");
+  const job = readJob(ctx, id);
+  assert.equal(job.state, "failed");
+  assert.match(job.errorMessage, /^Kimi did not run the message: a UserPromptSubmit hook blocked it\. The hooks are the Kimi home's \(.*\.kimi-code\)\.$/);
+  assert.equal(ctx.kimi().blocked, 1);
+  assert.equal(sentWith(ctx, "[quick] Next."), 1);
+});
+
 test("a worker killed after Kimi recorded the brief is resumed without a second copy", async t => {
   const ctx = fixture(t, { turnMs: 6000 });
   ctx.env.RELAY_JOBS_KIMI_POLL_MS = "3000";
@@ -432,8 +494,8 @@ test("the record reader keeps turns and prompts by id, the report after the last
     line({ type: "agent.turn.started", turnId: 1 }), line(prompt("Same", 1, "task"))
   ].join(""));
   const wire = new KimiWire(() => file).read();
-  assert.equal(wire.count("Same"), 1, "a task prompt is not one relay sent");
-  assert.deepEqual(wire.prompts.get("p0"), { promptId: "p0", at: fs.readFileSync(file, "utf8").indexOf('{"type":"turn.prompt"'), text: "Same", turnId: 0, started: true });
+  assert.deepEqual([...wire.prompts.keys()], ["p0"], "a task prompt is not one relay sent");
+  assert.deepEqual(wire.prompts.get("p0"), { promptId: "p0", at: fs.readFileSync(file, "utf8").indexOf('{"type":"turn.prompt"'), texts: ["Same", ""], delivered: false, turnId: 0, started: true, terminal: null });
   assert.equal(wire.turns.get(0).report, "after tool");
   assert.equal(wire.turns.get(0).didWork, true);
   assert.equal(wire.turns.get(1).origin, "task");
@@ -454,4 +516,39 @@ test("the record reader keeps turns and prompts by id, the report after the last
   assert.equal(wire.consumed, fs.statSync(file).size);
   assert.equal(wire.promptSince(0, "Same").promptId, "p0");
   assert.equal(wire.promptSince(wire.consumed, "Same"), null, "nothing relay sent is recorded after the end");
+});
+
+test("the record reader joins a prompt's forms by Kimi's prompt id: input, start and end; hook text set apart; blocked and aborted prompts end without a turn", t => {
+  const dir = makeTempDir("relay-kimi-wire-");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "wire.jsonl");
+  const line = value => `${JSON.stringify(value)}\n`;
+  const hook = { type: "text", text: "<hook>branch: main</hook>", meta: { contentType: "text/xml", source: "user prompt submit hook" } };
+  const input = (promptId, content) => line({ type: "agent.message.appended", message: { message: { role: "user", content }, meta: { source: "input", promptId, origin: { kind: "user" } } } });
+  const started = (promptId, turnId, content) => line({ type: "agent.turn.started", turnId, queueItemId: promptId }) + line({ type: "turn.prompt", input: content, origin: { kind: "user" }, promptId, turnId });
+  const text = value => ({ type: "text", text: value });
+  fs.writeFileSync(file, input("a", [hook, text("Same")]));
+  const wire = new KimiWire(() => file).read();
+  // Delivered: the input is committed, and no turn exists for it yet.
+  assert.deepEqual(wire.prompts.get("a"), { promptId: "a", at: 0, texts: ["Same", "<hook>branch: main</hook>"], delivered: true, turnId: null, started: false, terminal: null });
+  assert.equal(wire.promptSince(0, "Same").promptId, "a", "the hook's text is set apart");
+  const second = fs.statSync(file).size;
+  fs.appendFileSync(file, started("a", 0, [hook, text("Same")]) + line({ type: "turn.ended", turnId: 0, reason: "completed" })
+    + input("b", [text("Same")]) + started("b", 1, [text("Same")]) + line({ type: "turn.ended", turnId: 1, reason: "completed" }));
+  wire.read();
+  assert.deepEqual([...wire.prompts.keys()], ["a", "b"], "each prompt once, however many forms the record holds");
+  assert.equal(wire.prompts.get("a").started, true);
+  assert.equal(wire.turns.get(0).promptId, "a");
+  assert.equal(wire.promptSince(second, "Same").promptId, "b", "the same text sent again is another prompt");
+  // A hook part without its marker still leaves the prompt's own part to match.
+  fs.appendFileSync(file, input("c", [text("<unmarked hook/>"), text("Other")]));
+  assert.equal(wire.read().promptSince(0, "Other").promptId, "c");
+  // Blocked before its input was committed: Kimi keeps the message in its context and completes
+  // the prompt as blocked. Cancelled before it started: prompt.aborted.
+  fs.appendFileSync(file, line({ type: "context.append_message", message: { role: "user", id: "d", content: [text("Blocked")], origin: { kind: "user" } } })
+    + line({ type: "prompt.completed", promptId: "d", reason: "blocked" }) + line({ type: "prompt.aborted", promptId: "e" }));
+  wire.read();
+  assert.equal(wire.promptSince(0, "Blocked").terminal.reason, "blocked");
+  assert.equal(wire.prompts.get("d").started, false);
+  assert.equal(wire.prompts.get("e").terminal.type, "prompt.aborted");
 });

@@ -54,8 +54,9 @@ function wireOf(id) {
   return path.join(dir, 'wire.jsonl');
 }
 const record = value => fs.appendFileSync(wireOf(sessionId), JSON.stringify({ ...value, time: Date.now() }) + '\\n');
+const inputRecord = turn => record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'user', content: turn.input }, meta: { source: 'input', promptId: turn.promptId, origin: { kind: 'user' } } } });
 const promptRecords = (turn, origin) => {
-  if (origin === 'user') record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'user', content: turn.input }, meta: { source: 'input', promptId: turn.promptId, origin: { kind: 'user' } } } });
+  if (origin === 'user') inputRecord(turn);
   record({ type: 'agent.turn.started', kind: 'event', turnId: turn.turnId, queueItemId: turn.promptId });
   record({ type: 'turn.prompt', agentId: 'main', input: turn.input, origin: { kind: origin }, promptId: turn.promptId, turnId: turn.turnId });
 };
@@ -123,7 +124,12 @@ function ownTurn() {
     own = null;
     // The hand-off runs Kimi's prompt hooks before the queued prompt is committed: it can pause.
     const next = queued.shift();
-    if (next) setTimeout(() => startTurn(next, null), options.handoffMs || 0);
+    // A UserPromptSubmit hook that blocks: the message stays in Kimi's context, and no turn runs.
+    if (next && options.blockQueued) {
+      record({ type: 'context.append_message', agentId: 'main', message: { role: 'user', content: next.input, id: next.promptId, toolCalls: [], origin: { kind: 'user' } } });
+      record({ type: 'prompt.completed', agentId: 'main', promptId: next.promptId, reason: 'blocked' });
+      state.blocked = (state.blocked || 0) + 1; save();
+    } else if (next) setTimeout(() => startTurn(next, null), options.handoffMs || 0);
   }, options.ownTurnMs || 400);
 }
 readline.createInterface({ input: process.stdin }).on('line', line => {
@@ -177,10 +183,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
         if (name && !name.includes('/')) { state.commands = [...(state.commands || []), name]; save(); update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Unknown ACP command: /' + name + '. Use /help to see available commands.' } }); reply({ stopReason: 'end_turn' }); break; }
       }
       if (options.noRecord) { reply({ stopReason: 'end_turn' }); break; }
-      // The first process dies before Kimi records the prompt: it never reached the session.
-      if (options.dieBeforeRecord && !state.diedBeforeRecord) { state.diedBeforeRecord = true; save(); setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 30); break; }
+      // Prompts in the order they arrive, over every process; true means the first.
+      state.prompts = (state.prompts || 0) + 1; save();
+      const nth = value => value === true ? 1 : value;
+      // The process dies before Kimi records the prompt: it never reached the session.
+      if (options.dieBeforeRecord && state.prompts === nth(options.dieBeforeRecord)) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 30); break; }
       const text = blocks.filter(part => part.type === 'text').map(part => part.text).join('');
-      const turn = { text, input: blocks, promptId: 'msg_fake' + (state.turns.length + 1), turnId: nextTurnId() };
+      // Kimi puts its UserPromptSubmit hooks' text in front of the prompt's own parts.
+      const input = options.hookText ? [{ type: 'text', text: options.hookText, meta: { contentType: 'text/xml', source: 'user prompt submit hook' } }, ...blocks] : blocks;
+      const turn = { text, input, promptId: 'msg_fake' + state.prompts, turnId: nextTurnId() };
+      // The process dies after Kimi committed the input, before any turn started for it.
+      if (options.dieAfterInput && state.prompts === nth(options.dieAfterInput)) { inputRecord(turn); setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 30); break; }
       // The engine queues a prompt sent during a turn of its own, and ACP answers at once.
       if (own) { queued.push(turn); state.queuedBehindOwn = (state.queuedBehindOwn || 0) + 1; save(); reply({ stopReason: 'end_turn' }); break; }
       startTurn(turn, m.id);

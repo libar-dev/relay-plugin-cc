@@ -209,8 +209,8 @@ method, session id, timestamp and the count of matching copies Grok held before 
 Refusing or giving up an interjection saves `refused` and moves later identical open deliveries
 down one place. The next connection checks this record against session replay and persisted
 history before it resends work. A Kimi delivery holds the message id, kind, exact text, session id,
-timestamp, and how many user prompts with that text the session's `wire.jsonl` held before
-sending; after a death, a larger count there means the message arrived.
+timestamp, and the byte offset of the session's `wire.jsonl` before sending; after a death, a
+prompt with that text first recorded after the offset means the message arrived.
 
 ## Reviews
 

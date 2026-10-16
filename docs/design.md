@@ -586,10 +586,15 @@ binaries and never start a real backend.
   milliseconds. The connection reads that record with one reader of its own, which advances by
   byte offset and keeps a line still being written, with any UTF-8 character it splits, for the
   next read; it tracks each turn by Kimi's turn id and knows which turn runs, Kimi's own or a
-  prompt relay sent. Before a prompt goes, the connection notes the offset; the prompt's turn is
-  the first user `turn.prompt` with its exact text recorded after that offset, and its end that
-  turn's `turn.ended`. `completed` completes, `cancelled` interrupts, `failed` fails with Kimi's
-  `[code] message`. The report is the turn's assistant text after its last tool call, from the
+  prompt relay sent. Before a prompt goes, the connection notes the offset. The prompt is the first
+  one with its exact text first recorded after that offset, joined across its records by Kimi's
+  prompt id: delivered when Kimi commits the user input (`agent.message.appended`), started when
+  `agent.turn.started` names it or `turn.prompt` runs it, completed at its turn's `turn.ended`.
+  Kimi's `UserPromptSubmit` hooks put their text in front of the prompt's own parts, marked as the
+  hook's; matching leaves those parts out. `completed` completes, `cancelled` interrupts, `failed`
+  fails with Kimi's `[code] message`. A prompt a hook blocked ends with `prompt.completed`
+  (`blocked`) and no turn, and fails the job with that reason; one cancelled before it started
+  ends with `prompt.aborted` and interrupts. The report is the turn's assistant text after its last tool call, from the
   record. One observer reads the record for the run; the run, a cancel and the connection's close
   abort it and wait for it to stop.
 - **A prompt queued behind a turn of Kimi's own.** Kimi queues a prompt sent while it runs a turn
@@ -619,9 +624,11 @@ binaries and never start a real backend.
   `KIMI_CODE_NO_AUTO_UPDATE=1` and `KIMI_DISABLE_CRON=1` and drops inherited `KIMI_MODEL_*`
   variables, which would replace the header's model and effort.
 - **Recovery.** Before a prompt leaves, the backend saves a delivery record: message id, exact
-  text, session, and how many user prompts with that text the record held. After a death, a
-  larger count in the record means the message arrived, and it does not run again. Kimi retries
-  model calls itself, so the worker never retries a Kimi turn.
+  text, session, and the record's byte offset. After a death, a prompt with that text first
+  recorded after the offset means the message arrived (its input committed, its turn started, or
+  a hook blocked it), and it does not run again. An earlier copy of the same text, recorded
+  before the offset, does not count. Kimi retries model calls itself, so the worker never retries
+  a Kimi turn.
 
 ## Reviews
 
