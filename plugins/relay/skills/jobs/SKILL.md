@@ -118,7 +118,8 @@ ignored with a `note:`.
   from `kimi provider list --json`, without a model call.
 - A turn Kimi starts on its own (a background command finished) runs unseen: its work is not in
   the report. A completed job confirms the turn relay sent, and only that turn: not the background
-  tasks Kimi started, which may still run or be lost. A message queued behind a turn of Kimi's own
+  tasks Kimi started, which may still run or be lost. A task's notice that arrives during a later
+  turn is handled in that turn, and its answer can end that turn's report. A message queued behind a turn of Kimi's own
   cannot be cancelled over ACP; relay cancels it by ending Kimi's server. Reviews run on Kimi with `--backend kimi` (see Reviews); the stop gate and
   `transfer` remain Codex only.
 

@@ -813,8 +813,10 @@ would need `grok agent`.
   no background command.
 - **Completion and background work.** A completed job confirms the terminal record of the turn
   relay sent, and only that turn. It does not cover background tasks Kimi started: they may still
-  run, or end with Kimi's server. A message queued behind a turn of Kimi's own has no ACP driver,
-  so ACP's cancel cannot reach it; relay cancels it by ending Kimi's server.
+  run, or end with Kimi's server. A background task's notice that arrives while a later prompt
+  turn runs is handled inside that turn, so the turn's report can be Kimi's answer to the notice
+  rather than to the message (seen live, 2026-10-17). A message queued behind a turn of Kimi's own
+  has no ACP driver, so ACP's cancel cannot reach it; relay cancels it by ending Kimi's server.
 - `read-only` is not an OS sandbox. It rests on Kimi sending file writes and shell commands to a
   client that declares them; Kimi's hooks, the MCP servers and plugins it starts, and its other
   local operations can still have side effects. `Write` creates missing parent directories
