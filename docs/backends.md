@@ -179,6 +179,10 @@ evidence and control state.
 - `unjoinedSteers` are steers the backend accepted and lost before a turn took them; they run
   next. `droppedSteers` are steers the backend may still hold; they are reported dropped and
   never sent again.
+- `teardown: true` says the backend took the prompt but cannot show that it started, and may
+  still hold it. The job fails with `error`, the prompt's message is reported dropped (a brief is
+  no longer owed), and the round ends: nothing more goes to that server, which the worker closes.
+  Work still queued stays owed.
 - `reasoningSummary` and `stderr` feed a foreground result. A backend that filters its transport
   diagnostics returns `stderr`; without it, a review uses the server's stderr.
 
@@ -189,7 +193,10 @@ Kimi joins chunks and leaves out command lists and a running tool's progress.
 
 A connection may take a turn's outcome from somewhere other than its protocol's answer. Kimi's
 ACP layer answers `end_turn` for a turn that failed, and sends nothing for a turn Kimi starts on
-its own, so its `run` reads the session's `wire.jsonl` for the turn's end and report. A backend
+its own, so its `run` reads the session's `wire.jsonl` for the turn's end and report. Such a
+connection owns one reader of that record and one observer: `run`, `interrupt` and `close` abort
+the observer and wait for it to stop, because an observer left polling keeps the worker alive. A
+backend
 whose turns take no message mid-turn throws from `steer`, and the worker runs the message as the
 next turn.
 

@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { resolveKimiHome } from "../plugins/relay/scripts/lib/backends/kimi/request.mjs";
 import { kimiEventRecorder } from "../plugins/relay/scripts/lib/backends/kimi/connection.mjs";
-import { WireCursor, countPrompts, promptTurn, openTurn } from "../plugins/relay/scripts/lib/backends/kimi/wire.mjs";
+import { KimiWire } from "../plugins/relay/scripts/lib/backends/kimi/wire.mjs";
 import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { isWorkerAlive } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
@@ -129,11 +129,27 @@ test("a request-rate failure is not retried by the worker: Kimi retries model ca
   assert.deepEqual(readJob(ctx, id).capacityRetries ?? [], []);
 });
 
-test("a prompt Kimi answered but never recorded fails, naming the record", async t => {
+test("a prompt Kimi accepted but never shows starting fails after the idle grace: the server ends, and the prompt is dropped, never sent again", async t => {
   const ctx = fixture(t, { noRecord: true });
   const { id } = startJob(ctx, HEADER, "[quick] Lost.");
   await finishJob(ctx, id, 3);
-  assert.match(readJob(ctx, id).errorMessage, /^Kimi answered end_turn but its session record shows no turn for this prompt \(.*wire\.jsonl\)\.$/);
+  const unconfirmed = /^Kimi accepted the message \(ACP answered end_turn\), but its session record shows no start for it after 0\.4 s with no turn running \(.*wire\.jsonl\)\. Relay ended Kimi's server and does not send the message again\.$/;
+  let job = readJob(ctx, id);
+  assert.equal(job.state, "failed");
+  assert.match(job.errorMessage, unconfirmed);
+  assert.equal(job.pendingFirstTurn, false, "the brief is not owed again");
+  assert.ok(job.backendState.deliveries[`brief-${id}`], "its delivery record is kept");
+  assert.equal(job.automaticResumes ?? undefined, undefined);
+  // A message's outcome says so; it never runs again, and nothing more went to that server.
+  const sent = companion(ctx, ["continue", id, "--message", "[quick] Also lost."]);
+  assert.equal(sent.status, 0, sent.stderr);
+  await finishJob(ctx, id, 3);
+  job = readJob(ctx, id);
+  const message = job.messages.find(entry => entry.action === "dropped");
+  assert.match(message.reason, unconfirmed);
+  assert.deepEqual(requests(ctx, "session/prompt").map(r => r.params.prompt.at(-1).text), ["[quick] Lost.", "[quick] Also lost."]);
+  assert.equal(ctx.kimi().starts.length, 2, "one server per send");
+  assert.match(companion(ctx, ["status", id]).stdout, /dropped/);
 });
 
 test("a steer runs as the next turn: nothing is sent while a turn runs", async t => {
@@ -290,6 +306,18 @@ test("a prompt sent while Kimi runs a turn of its own waits behind it and owns t
   assert.equal(readJob(ctx, id).state, "completed");
 });
 
+test("a turn of Kimi's own that outlasts the grace, then a pause in the hand-off: the queued prompt still runs and owns the report", async t => {
+  // The grace is 400 ms; Kimi's own turn runs 1.2 s, and its hand-off pauses 250 ms.
+  const ctx = fixture(t, { ownTurnAfterMs: 1, ownTurnMs: 1200, handoffMs: 250, turnMs: 400 });
+  const { id } = startJob(ctx, HEADER, "First.");
+  await waitFor(() => readJob(ctx, id).turnId);
+  postInboxMessage(jobDir(ctx, id), { kind: "steer", text: "[quick] Next." });
+  await finishJob(ctx, id);
+  assert.equal(ctx.kimi().queuedBehindOwn, 1, "the prompt was queued behind Kimi's own turn");
+  assert.equal(readJob(ctx, id).state, "completed");
+  assert.equal(report(ctx, id), "Report for: [quick] Next.\n");
+});
+
 test("a server killed while a prompt queued behind Kimi's own turn runs: one recovery, the old observer stops, and the worker exits", async t => {
   const ctx = fixture(t, { ownTurnAfterMs: 1, ownTurnMs: 600, turnMs: 400 });
   const { id } = startJob(ctx, HEADER, "First.");
@@ -390,11 +418,12 @@ test("the event recorder joins chunks, keeps finished tools and drops running up
   ]);
 });
 
-test("the record reader counts exact prompts, finds a turn's end and report, and never reads an unfinished line", t => {
+test("the record reader keeps turns and prompts by id, the report after the last tool call, and a record split across reads, even inside a UTF-8 character", t => {
   const dir = makeTempDir("relay-kimi-wire-");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, "wire.jsonl");
   const line = value => `${JSON.stringify(value)}\n`;
-  const prompt = (text, turnId, origin = "user") => ({ type: "turn.prompt", input: [{ type: "text", text: "" }, { type: "text", text }], origin: { kind: origin }, promptId: `p${turnId}`, turnId });
+  const prompt = (text, turnId, origin = "user") => ({ type: "turn.prompt", input: [{ type: "text", text: "" }, { type: "text", text }], origin: { kind: origin }, ...(origin === "user" ? { promptId: `p${turnId}` } : {}), turnId });
   const assistant = (text, toolCalls = []) => ({ type: "agent.message.appended", message: { message: { role: "assistant", content: [{ type: "think", think: "x" }, { type: "text", text }], toolCalls } } });
   fs.writeFileSync(file, [
     line({ type: "agent.turn.started", turnId: 0 }), line(prompt("Same", 0)), line(assistant("first words ")), line(assistant("before tool", [{ id: "t" }])),
@@ -402,16 +431,27 @@ test("the record reader counts exact prompts, finds a turn's end and report, and
     line(assistant("after ")), line(assistant("tool")), line({ type: "turn.ended", turnId: 0, reason: "completed" }),
     line({ type: "agent.turn.started", turnId: 1 }), line(prompt("Same", 1, "task"))
   ].join(""));
-  const records = new WireCursor(file).read();
-  assert.equal(countPrompts(records, "Same"), 1, "a task prompt is not a user prompt");
-  assert.deepEqual(promptTurn(records, "Same"), { promptId: "p0", turnId: 0, ended: { type: "turn.ended", turnId: 0, reason: "completed" }, report: "after tool", didWork: true });
-  assert.equal(openTurn(records), 1);
-  // A cursor started mid-line skips the fragment; a last line without a newline waits.
-  const size = fs.statSync(file).size;
-  fs.appendFileSync(file, line({ type: "turn.ended", turnId: 1, reason: "completed" }) + JSON.stringify(prompt("Same", 2)).slice(0, 20));
-  const cursor = new WireCursor(file, size - 5);
-  assert.deepEqual(cursor.read().map(r => r.type), ["turn.ended"]);
-  fs.appendFileSync(file, JSON.stringify(prompt("Same", 2)).slice(20) + "\n");
-  assert.deepEqual(cursor.read().map(r => r.type), ["turn.ended", "turn.prompt"]);
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const wire = new KimiWire(() => file).read();
+  assert.equal(wire.count("Same"), 1, "a task prompt is not one relay sent");
+  assert.deepEqual(wire.prompts.get("p0"), { promptId: "p0", at: fs.readFileSync(file, "utf8").indexOf('{"type":"turn.prompt"'), text: "Same", turnId: 0, started: true });
+  assert.equal(wire.turns.get(0).report, "after tool");
+  assert.equal(wire.turns.get(0).didWork, true);
+  assert.equal(wire.turns.get(1).origin, "task");
+  assert.equal(wire.running, 1, "Kimi's own turn runs");
+  // A record cut inside a multibyte character waits whole for the next read.
+  const before = fs.statSync(file).size;
+  const tail = line(assistant("naïve 界 report")) + line({ type: "turn.ended", turnId: 1, reason: "completed" });
+  const bytes = Buffer.from(tail);
+  const cut = bytes.indexOf(Buffer.from("界")) + 1;
+  fs.appendFileSync(file, bytes.subarray(0, cut));
+  wire.read();
+  assert.equal(wire.consumed, before);
+  assert.equal(wire.turns.get(1).report, "");
+  fs.appendFileSync(file, bytes.subarray(cut));
+  wire.read();
+  assert.equal(wire.turns.get(1).report, "naïve 界 report");
+  assert.equal(wire.running, null);
+  assert.equal(wire.consumed, fs.statSync(file).size);
+  assert.equal(wire.promptSince(0, "Same").promptId, "p0");
+  assert.equal(wire.promptSince(wire.consumed, "Same"), null, "nothing relay sent is recorded after the end");
 });

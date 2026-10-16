@@ -583,12 +583,25 @@ binaries and never start a real backend.
 - **The session's record decides.** Kimi's ACP layer answers `end_turn` for a turn that failed,
   and sends nothing for a turn Kimi starts on its own (a background command finished, a goal the
   model set). Kimi appends every turn to the session's `wire.jsonl` with a durable write within
-  milliseconds. So the connection notes the record's size before it sends, and after the answer
-  reads what was appended: the first user `turn.prompt` with the prompt's exact text, then that
+  milliseconds. The connection reads that record with one reader of its own, which advances by
+  byte offset and keeps a line still being written, with any UTF-8 character it splits, for the
+  next read; it tracks each turn by Kimi's turn id and knows which turn runs, Kimi's own or a
+  prompt relay sent. Before a prompt goes, the connection notes the offset; the prompt's turn is
+  the first user `turn.prompt` with its exact text recorded after that offset, and its end that
   turn's `turn.ended`. `completed` completes, `cancelled` interrupts, `failed` fails with Kimi's
   `[code] message`. The report is the turn's assistant text after its last tool call, from the
-  record. A prompt Kimi queued behind a turn of its own is waited for while that turn runs; one
-  Kimi answered but never recorded fails after 10 seconds with no turn running.
+  record. One observer reads the record for the run; the run, a cancel and the connection's close
+  abort it and wait for it to stop.
+- **A prompt queued behind a turn of Kimi's own.** Kimi queues a prompt sent while it runs a turn
+  of its own, and ACP answers `end_turn` at once and never reports that prompt again. The
+  hand-off runs Kimi's prompt hooks before the queued prompt reaches the record, so it can pause.
+  The observer waits while any turn runs. After ACP's answer, a prompt the record does not show
+  has 10 seconds of Kimi idle (1 second after a `cancelled` answer); time Kimi spends busy does
+  not count. When those run out, the job fails: Kimi accepted the message, but its start is not
+  confirmed. The worker reports the message dropped (a brief is no longer owed), sends nothing
+  more to that server and closes it, so the message is never sent twice; its delivery record
+  stays. A cancel of such a prompt cannot go over ACP, which cancels only a prompt it drives, so
+  relay stops waiting and closes Kimi's server.
 - **Commands.** Kimi reads a prompt whose first text block starts with `/word` as one of its
   commands or skills, so a brief or message that starts with `/` goes after an empty text block.
 - **Steer.** A running Kimi turn takes no message: ACP has no steer, and Kimi refuses a second
@@ -778,8 +791,8 @@ would need `grok agent`.
 
 - A turn Kimi starts on its own (a background command finished, a goal the model set) is not seen
   over ACP, and its work is not in the job's report; a prompt sent while one runs waits behind it,
-  and a cancel cannot reach that prompt over ACP, which cancels only the turn it drives, so it ends
-  through the worker's ten-second kill. `read-only` refuses the shell, so it starts no background
+  and a cancel cannot reach that prompt over ACP, which cancels only the turn it drives, so relay
+  ends it by closing Kimi's server. `read-only` refuses the shell, so it starts no background
   command.
 - `read-only` rests on Kimi sending file writes and shell commands to a client that declares
   them. `Write` creates missing parent directories locally before its refused write. A tool that

@@ -121,8 +121,9 @@ function ownTurn() {
   setTimeout(() => {
     record({ type: 'turn.ended', agentId: 'main', turnId, reason: 'completed' });
     own = null;
+    // The hand-off runs Kimi's prompt hooks before the queued prompt is committed: it can pause.
     const next = queued.shift();
-    if (next) startTurn(next, null);
+    if (next) setTimeout(() => startTurn(next, null), options.handoffMs || 0);
   }, options.ownTurnMs || 400);
 }
 readline.createInterface({ input: process.stdin }).on('line', line => {

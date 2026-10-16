@@ -261,6 +261,12 @@ export interface TurnResult {
   unjoinedSteers?: string[];
   /** Steers the backend may still hold: reported dropped, never sent again. */
   droppedSteers?: Array<{ id: string, reason: string }>;
+  /**
+   * The backend took the prompt but cannot show that it started, and may still hold it. The job
+   * fails with `error`, the prompt is reported dropped and never sent again, and the round ends:
+   * nothing more is sent on this server, which the worker then closes.
+   */
+  teardown?: boolean;
   reasoningSummary?: string[] | null;
   /** Stderr for a foreground result, where the backend filters transport diagnostics. */
   stderr?: string;

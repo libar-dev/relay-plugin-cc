@@ -635,6 +635,13 @@ async function runWorkerRound(jobDir, options, held) {
             if (state === "cancelled") {
               break;
             }
+            // The backend may still hold the prompt: it is not sent again, and nothing more goes
+            // to this server. Work still queued stays owed.
+            if (result.teardown) {
+              outcome(current.message, { action: "dropped", reason: errorMessage });
+              if (current.source === "brief") save({ pendingFirstTurn: false });
+              break;
+            }
           }
 
           // Decide, with no await between the last claim and the decision.

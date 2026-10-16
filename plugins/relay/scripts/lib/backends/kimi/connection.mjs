@@ -7,7 +7,7 @@ import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { ACP_INITIALIZE_PARAMS, ACP_CHUNKS, acpInitializeParams, acpUpdate, openSession, setConfigOption, promptSession, cancelSession, answerPermission } from "../transport/acp.mjs";
 import { partialLineNote, SpawnedServerClient } from "../transport/stdio-rpc.mjs";
-import { countPrompts, openTurn, promptTurn, readWire, WireCursor, wireFile, wireSize } from "./wire.mjs";
+import { KimiWire, wireFile } from "./wire.mjs";
 
 // How often a turn's records are read, and how long a prompt Kimi answered may go unrecorded
 // while no other turn runs before it counts as never launched.
@@ -98,7 +98,7 @@ export function kimiEventRecorder(write, touch) {
 }
 
 /** @implements {Connection} */
-class KimiConnection {
+export class KimiConnection {
   /**
    * @param {import("../types").LaunchRequest} request
    * @param {import("../types").ConnectHooks} hooks
@@ -110,12 +110,11 @@ class KimiConnection {
     /** @type {Record<string, any>} */
     this.state = { ...hooks.state };
     this.sessionId = null;
-    this.wire = null;
-    this.openOffset = 0;
-    this.promptPending = false;
+    // The session's record, read by this connection alone.
+    this.wire = new KimiWire(() => wireFile(String(this.request.kimiHome), this.sessionId));
     // The one wire observer: run() starts it, and run(), interrupt() and close() abort it and
     // wait for it to stop. An observer left polling would keep the worker alive after the job.
-    /** @type {{ controller: AbortController, done: Promise<any> } | null} */
+    /** @type {{ controller: AbortController, done: Promise<any>, response: { value: any, error: any } } | null} */
     this.observer = null;
   }
 
@@ -126,10 +125,10 @@ class KimiConnection {
     await this.client.close();
   }
 
-  observe(watch) {
+  observe(response, watch) {
     const controller = new AbortController();
     const done = watch(controller.signal);
-    this.observer = { controller, done };
+    this.observer = { controller, done, response };
     return done;
   }
 
@@ -144,11 +143,6 @@ class KimiConnection {
   saveState(patch) {
     this.hooks.saveState(patch);
     this.state = { ...this.state, ...patch };
-  }
-
-  wireFile() {
-    this.wire ??= wireFile(String(this.request.kimiHome), this.sessionId);
-    return this.wire;
   }
 
   /** @param {import("../types").OpenOptions} options */
@@ -166,9 +160,8 @@ class KimiConnection {
         if (value != null) await setConfigOption(client, sessionId, configId, value);
       }
     } catch (error) { throw new Error(rpcError(error).message); }
-    this.wire = null;
     // Turns started before this process (a killed one) are never running.
-    this.openOffset = wireSize(this.wireFile());
+    this.wire.read().forgetRunning();
     return { sessionId, resumed };
   }
 
@@ -177,11 +170,11 @@ class KimiConnection {
   delivered(item) {
     const delivery = this.state.deliveries?.[item.clientId];
     if (!item.recoveryCandidate || !delivery || delivery.sessionId !== this.sessionId) return false;
-    return countPrompts(readWire(this.wireFile()), delivery.text) > delivery.heldBefore;
+    return this.wire.read().count(delivery.text) > delivery.heldBefore;
   }
 
   // Steer and cancel can go while a prompt waits for its answer or its turn's end.
-  controlsReady(_turnId) { return this.promptPending || this.observer !== null; }
+  controlsReady(_turnId) { return this.observer !== null; }
 
   /** @returns {Promise<import("../types").SteerReceipt>} */
   async steer(_turnId, _message) {
@@ -192,7 +185,7 @@ class KimiConnection {
   // Kimi's own) ends when relay stops waiting for it and closes the server.
   async interrupt(_turnId) {
     cancelSession(this.client, this.sessionId);
-    await this.stopObserver("cancel");
+    if (this.observer?.response.value) await this.stopObserver("cancel");
   }
 
   /** @param {import("../types").TurnInput} options */
@@ -200,100 +193,100 @@ class KimiConnection {
     const client = this.client;
     const sessionId = this.sessionId;
     const prompt = options.prompt;
-    let turnId = null;
-    let didWork = false;
-    const file = this.wireFile();
-    const records = readWire(file);
-    const running = openTurn(readWire(file, this.openOffset));
-    const cursor = new WireCursor(file, wireSize(file));
-    const identify = () => {
-      if (!cursor.file) cursor.file = this.wireFile();
-      const turn = promptTurn(cursor.read(), prompt);
-      if (turn?.promptId && !turnId) {
-        turnId = turn.promptId;
-        options.onTurnId(turnId);
-      }
-      return turn;
-    };
+    const wire = this.wire.read();
+    // Where this prompt's records can start: a record at or after it came after the send.
+    const from = wire.consumed;
+    const run = { turnId: null, didWork: false, from };
     client.setNotificationHandler(notification => {
       if (notification.params?.sessionId !== sessionId) return;
-      if (acpUpdate(notification).didWork) didWork = true;
+      if (acpUpdate(notification).didWork) run.didWork = true;
     });
     const ended = client.exitPromise.then(() => { throw new Error(kimiEndMessage(client.exitInfo)); });
     ended.catch(() => {});
-    let timer = null;
+    /** @type {{ value: any, error: any }} */
+    const response = { value: null, error: null };
     try {
       // The record is saved before the prompt leaves, so a later worker can tell whether it arrived.
-      const delivery = { id: options.clientId, kind: options.source, text: prompt, sessionId, heldBefore: countPrompts(records, prompt), at: new Date().toISOString() };
+      const delivery = { id: options.clientId, kind: options.source, text: prompt, sessionId, offset: from, heldBefore: wire.count(prompt), at: new Date().toISOString() };
       this.saveState({ deliveries: { ...this.state.deliveries, [delivery.id]: delivery } });
       // A first text block that starts with `/` would run one of Kimi's commands instead.
       const blocks = prompt.startsWith("/") ? [{ type: "text", text: "" }, { type: "text", text: prompt }] : undefined;
-      const pending = promptSession(client, sessionId, prompt, blocks);
-      this.promptPending = true;
+      promptSession(client, sessionId, prompt, blocks).then(value => { response.value = value; }, error => { response.error = error; });
+      const outcome = this.observe(response, signal => this.watch(prompt, run, response, options, signal));
       options.onPending?.();
-      timer = setInterval(identify, POLL_MS);
-      let response;
-      try {
-        response = await Promise.race([pending, ended]);
-      } catch (error) {
-        if (client.exitSeen || client.exitResolved) throw error;
-        return { turnId, turnStatus: "failed", finalMessage: "", didWork, retryable: false, error: this.promptError(error) };
-      } finally {
-        this.promptPending = false;
-        clearInterval(timer);
-        timer = null;
-      }
-      // A turn cancelled before it launched leaves no record, so a cancel settles sooner.
-      const settleMs = response.stopReason === "cancelled" ? Math.min(SETTLE_MS, 1000) : SETTLE_MS;
-      const turn = await Promise.race([this.observe(signal => this.turnEnd(cursor, identify, running, settleMs, signal)), ended]);
-      if (turn?.stopped === "cancel") return { turnId, turnStatus: "interrupted", finalMessage: "", didWork, retryable: false };
-      if (turn?.stopped) return { turnId, turnStatus: "failed", finalMessage: "", didWork, retryable: false, error: { message: `Kimi's turn was still running when ${turn.stopped}.` } };
-      if (!turn) {
-        if (response.stopReason === "cancelled") return { turnId, turnStatus: "interrupted", finalMessage: "", didWork, retryable: false };
-        return {
-          turnId, turnStatus: "failed", finalMessage: "", didWork, retryable: false,
-          error: { message: `Kimi answered ${response.stopReason} but its session record shows no turn for this prompt (${cursor.file ?? `no wire.jsonl for session ${sessionId}`}).` }
-        };
-      }
-      const reason = turn.ended.reason;
-      const error = turn.ended.error;
-      return {
-        turnId: turn.promptId ?? turnId,
-        turnStatus: reason === "completed" ? "completed" : reason === "cancelled" ? "interrupted" : "failed",
-        finalMessage: turn.report,
-        didWork: didWork || turn.didWork,
-        // Kimi retries a transient model failure itself (429 and 5xx included).
-        retryable: false,
-        ...(reason === "completed" || reason === "cancelled" ? {} : {
-          error: { message: error ? `[${error.code ?? "error"}] ${error.message ?? ""}`.trim() : `Kimi ended the turn: ${reason}`, data: error ?? null }
-        })
-      };
+      return this.result(await Promise.race([outcome, ended]), run);
     } catch (error) {
-      return { turnId, turnStatus: "failed", finalMessage: "", didWork, retryable: false, error: { message: error.message } };
+      return { turnId: run.turnId, turnStatus: "failed", finalMessage: "", didWork: run.didWork, retryable: false, error: { message: error.message } };
     } finally {
-      if (timer) clearInterval(timer);
       await this.stopObserver(client.exitSeen || client.exitInfo ? "Kimi's server ended" : "the run ended");
-      this.promptPending = false;
       client.setNotificationHandler(null);
     }
   }
 
-  // Waits for the prompt's turn to end in the record. A prompt Kimi queued behind a turn of its
-  // own runs after that turn, so the wait lasts while any turn runs. Aborted, it reads once more
-  // and stops: `{ stopped }` names why, unless the turn had ended.
-  async turnEnd(cursor, identify, runningBefore, settleMs, signal) {
-    const deadline = Date.now() + settleMs;
+  // Reads the record until this prompt's turn ends. ACP answers a prompt Kimi queued behind a
+  // turn of its own at once, so the wait lasts while any turn runs. A prompt the record does not
+  // show yet has a grace that counts only time Kimi is idle after ACP answered: the hand-off to a
+  // queued prompt runs Kimi's prompt hooks first, and busy time must not use the grace up.
+  async watch(text, run, response, options, signal) {
+    let idleSince = null;
     for (;;) {
-      const turn = identify();
-      if (turn?.ended) return turn;
+      const wire = this.wire.read();
+      const prompt = wire.promptSince(run.from, text);
+      if (prompt?.started && !run.turnId) {
+        run.turnId = prompt.promptId;
+        options.onTurnId(prompt.promptId);
+      }
+      const turn = prompt?.turnId == null ? null : wire.turns.get(prompt.turnId);
+      if (turn?.ended) return { kind: "ended", turn };
+      if (response.error) return { kind: "rejected", error: response.error };
       if (signal.aborted) {
         this.hooks.tap?.({ method: "kimi/wireObserverStopped", params: { reason: signal.reason } });
-        return { stopped: signal.reason };
+        return { kind: "stopped", reason: signal.reason };
       }
-      const records = cursor.records;
-      const busy = openTurn(records) !== null || (runningBefore !== null && !records.some(record => record.type === "turn.ended" && record.turnId === runningBefore));
-      if (!turn && !busy && Date.now() > deadline) return null;
+      if (response.value) {
+        if (wire.busy) {
+          idleSince = null;
+        } else {
+          idleSince ??= Date.now();
+          // A turn cancelled before it launched leaves no record, so a cancel settles sooner.
+          const graceMs = response.value.stopReason === "cancelled" ? Math.min(SETTLE_MS, 1000) : SETTLE_MS;
+          if (Date.now() - idleSince >= graceMs) return { kind: "unconfirmed", stopReason: response.value.stopReason, graceMs };
+        }
+      }
       await sleep(POLL_MS, undefined, { signal }).catch(() => {});
+    }
+  }
+
+  result(outcome, run) {
+    const base = { turnId: run.turnId, finalMessage: "", didWork: run.didWork, retryable: false };
+    switch (outcome.kind) {
+      case "ended": {
+        const { reason, error } = outcome.turn.ended;
+        return {
+          ...base,
+          turnStatus: reason === "completed" ? "completed" : reason === "cancelled" ? "interrupted" : "failed",
+          finalMessage: outcome.turn.report,
+          didWork: run.didWork || outcome.turn.didWork,
+          // Kimi retries a transient model failure itself (429 and 5xx included).
+          ...(reason === "completed" || reason === "cancelled" ? {} : {
+            error: { message: error ? `[${error.code ?? "error"}] ${error.message ?? ""}`.trim() : `Kimi ended the turn: ${reason}`, data: error ?? null }
+          })
+        };
+      }
+      case "rejected":
+        if (this.client.exitSeen || this.client.exitResolved) return { ...base, turnStatus: "failed", error: { message: outcome.error.message } };
+        return { ...base, turnStatus: "failed", error: this.promptError(outcome.error) };
+      case "stopped":
+        if (outcome.reason === "cancel") return { ...base, turnStatus: "interrupted" };
+        return { ...base, turnStatus: "failed", error: { message: `Kimi's turn was still running when ${outcome.reason}.` } };
+      default:
+        if (outcome.stopReason === "cancelled") return { ...base, turnStatus: "interrupted" };
+        // Kimi took the prompt, but nothing shows that it started. It may still be in Kimi's
+        // queue, so the server ends and the prompt is never sent again.
+        return {
+          ...base, turnStatus: "failed", teardown: true,
+          error: { message: `Kimi accepted the message (ACP answered ${outcome.stopReason}), but its session record shows no start for it after ${outcome.graceMs / 1000} s with no turn running (${this.wire.file ?? `no wire.jsonl for session ${this.sessionId}`}). Relay ended Kimi's server and does not send the message again.` }
+        };
     }
   }
 
