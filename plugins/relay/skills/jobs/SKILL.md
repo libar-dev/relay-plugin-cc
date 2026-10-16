@@ -176,9 +176,11 @@ A message reaches the job within about two minutes, when the relay's current wai
 - The agent holds its slot for the job's whole run, so size a launch by job length. `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` caps how many run at once.
 - A retried or resumed call takes over its running job. Two calls with the same prompt and label are two jobs. Adoption is not a follow-up: a script cannot send a new turn to a job it names. To continue a finished job from a workflow, give a Claude agent the job id and have it run `C continue <job> --message-file F`.
 - A skipped agent returns null. Stopping the workflow ends the relays, not the jobs: `C status --all` lists them by run id and label; `C cancel <job>` the ones you abandon.
-- A review can be a step: a Claude agent whose prompt says to run `C review --wait` (or `C adversarial-review --wait`, with `--backend` and the other review flags) and return its output. The review runs in the foreground and is recorded as a job.
+- A review can be a step: a Claude agent whose prompt says to run `C review --wait` (or `C adversarial-review --wait`, with `--backend` and the other review flags) and return its output. The review runs in the foreground and is recorded as a job. Outside a workflow you can invoke `/relay:review` and `/relay:adversarial-review` directly instead.
 
 ## Direct use
+
+You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:status`, `/relay:result`, `/relay:setup` and `/relay:rescue` yourself. A review you start never asks the user a question: without `--wait` or `--background` it runs in the foreground. `/relay:cancel` and `/relay:transfer` are the user's: cancel a job by sending its agent the message `cancel`. The `C` commands below are for scripts and Workflow steps.
 
 `C` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs"`. A job lives in `$RELAY_JOBS_HOME` (default `~/.relay-jobs`) under `<repo-slug>/<job-id>/`; any command takes a job id or a unique prefix, or the job's directory inside that home.
 

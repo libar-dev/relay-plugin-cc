@@ -1,7 +1,6 @@
 ---
-description: Show the state block and report of a job (default: the newest finished job of this repository)
+description: Show one relay job's state block and full report (default: the newest finished job of this repository)
 argument-hint: '[job-id]'
-disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
 

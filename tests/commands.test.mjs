@@ -216,12 +216,9 @@ test("transfer, result, and cancel commands are exposed as deterministic runtime
   const cancel = read("commands/cancel.md");
   const resultHandling = read("skills/result-handling/SKILL.md");
 
-  assert.match(transfer, /disable-model-invocation:\s*true/);
   assert.match(transfer, /companion\.mjs" transfer "\$ARGUMENTS"/);
   assert.match(transfer, /codex resume <session-id>/);
-  assert.match(result, /disable-model-invocation:\s*true/);
   assert.match(result, /companion\.mjs" result "\$ARGUMENTS"/);
-  assert.match(cancel, /disable-model-invocation:\s*true/);
   assert.match(cancel, /companion\.mjs" cancel "\$ARGUMENTS"/);
   assert.match(resultHandling, /do not turn a failed or incomplete job run into a Claude-side implementation attempt/i);
   assert.match(resultHandling, /if the job was never successfully invoked, do not generate a substitute answer at all/i);
@@ -342,4 +339,22 @@ test("README carries the first hour, stop gate, Claude Code dependency and devel
   for (const file of ["architecture", "backends", "design"]) {
     assert.ok(readme.includes(`docs/${file}.md`), file);
   }
+});
+
+// Claude may run the reading and review commands itself; cancel and transfer stay the user's:
+// Claude cancels a job by sending its agent `cancel`, and transfer moves the user's own session.
+test("review, adversarial-review, status and result are model-invocable; cancel and transfer are not", () => {
+  const frontmatter = name => /^---\n([\s\S]*?)\n---\n/.exec(read(`commands/${name}.md`))[1];
+  const userOnly = fs.readdirSync(path.join(PLUGIN_ROOT, "commands")).map(file => file.replace(/\.md$/, ""))
+    .filter(name => /^disable-model-invocation:\s*true$/m.test(frontmatter(name))).sort();
+  assert.deepEqual(userOnly, ["cancel", "transfer"]);
+  for (const name of ["review", "adversarial-review", "status", "result"]) {
+    assert.match(frontmatter(name), /^description: .{40,}$/m, name);
+  }
+  for (const name of ["review", "adversarial-review"]) {
+    const source = read(`commands/${name}.md`);
+    assert.match(source, /If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground/, name);
+    assert.match(frontmatter(name), /Codex, Grok, ZCode or Kimi|Grok, ZCode or Kimi/, name);
+  }
+  assert.match(frontmatter("adversarial-review"), /schema-checked JSON/);
 });

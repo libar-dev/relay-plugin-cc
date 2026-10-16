@@ -1,7 +1,6 @@
 ---
-description: Show jobs of this repository, or one job's state block
+description: List the relay jobs of this repository (or of every repository with --all), or show one job's state block
 argument-hint: '[job-id] [--all]'
-disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
 

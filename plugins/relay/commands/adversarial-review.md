@@ -1,7 +1,6 @@
 ---
-description: Run a review on Codex, Grok, ZCode or Kimi that challenges the implementation approach and design choices
+description: Run a read-only review that challenges the local diff's approach and design, on Codex, Grok, ZCode or Kimi; its findings come back as schema-checked JSON
 argument-hint: '[--wait|--background] [--backend codex|grok|zcode|kimi] [--model <m>] [--effort <e>] [--grok-home H] [--kimi-home H] [--base <ref>] [--scope auto|working-tree|branch] [focus ...]'
-disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
@@ -18,9 +17,10 @@ Core constraint:
 - Keep the framing focused on whether the current approach is the right one, what assumptions it depends on, and where the design could fail under real-world conditions.
 
 Execution mode rules:
+- If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground, as with `--wait`, and say so in one line before the output ("Ran in the foreground, the default when Claude runs this review.").
 - If the raw arguments include `--wait`, do not ask. Run in the foreground.
 - If the raw arguments include `--background`, do not ask. Run in a Claude background task.
-- Otherwise, estimate the review size before asking:
+- Otherwise, when the user typed the command, estimate the review size before asking:
   - For working-tree review, start with `git status --short --untracked-files=all`.
   - For working-tree review, also inspect both `git diff --shortstat --cached` and `git diff --shortstat`.
   - For base-branch review, use `git diff --shortstat <base>...HEAD`.

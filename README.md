@@ -182,9 +182,14 @@ message: a message sent while it runs becomes the next turn.
 | `/relay:status [job] [--all]` | this repository's newest 20 jobs, every repository's with `--all`, or one job's state block |
 | `/relay:result [job]` | a job's state block and report; without a job, the newest finished job of this repository |
 | `/relay:cancel [job]` | interrupt the turn; the worker is killed if the job has not ended 10 s later; without a job, the only active job of this repository |
-| `/relay:review` | a review of the working tree or of a branch, on Codex's own reviewer or, with `--backend grok\|zcode`, the plugin's prompt |
+| `/relay:review` | a review of the working tree or of a branch, on Codex's own reviewer or, with `--backend grok\|zcode\|kimi`, the plugin's prompt |
 | `/relay:adversarial-review [focus]` | a review that questions the approach and its assumptions; its answer must be review JSON |
 | `/relay:transfer [--source <jsonl>]` | import the current Claude Code session into a Codex session you resume with `codex resume <id>` |
+
+Claude can run every command but `/relay:cancel` and `/relay:transfer` itself when you ask for one
+in plain words, for example "review my changes on Kimi". Those two run only when you type them;
+Claude cancels a job by sending its agent the message `cancel`. A review Claude starts never stops
+to ask you anything: without `--wait` or `--background` it runs in the foreground.
 
 Every job has its own directory under `$RELAY_JOBS_HOME` (default `~/.relay-jobs`), its own
 worker and its own server process. Jobs belong to no Claude session and survive its end. The skill's
