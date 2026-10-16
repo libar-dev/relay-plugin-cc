@@ -260,7 +260,8 @@ function saveImportLedger(ledger) {
   fs.writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
 }
 
-function emitTurnCompleted(threadId, turnId, item) {
+// With an error, the turn ends failed after its items.
+function emitTurnCompleted(threadId, turnId, item, error = null) {
   const items = Array.isArray(item) ? item : [item];
   send({ method: "turn/started", params: { threadId, turn: buildTurn(turnId) } });
   for (const entry of items) {
@@ -271,7 +272,7 @@ function emitTurnCompleted(threadId, turnId, item) {
       send({ method: "item/completed", params: { threadId, turnId, item: entry.completed } });
     }
   }
-  send({ method: "turn/completed", params: { threadId, turn: buildTurn(turnId, "completed") } });
+  send({ method: "turn/completed", params: { threadId, turn: buildTurn(turnId, error ? "failed" : "completed", error) } });
 }
 
 function emitTurnCompletedLater(threadId, turnId, item, delayMs) {
@@ -912,6 +913,9 @@ rl.on("line", (line) => {
 	          interruptibleTurns.set(turnId, { threadId: thread.id, timer });
 	        } else if (BEHAVIOR === "slow-task") {
 	          emitTurnCompletedLater(thread.id, turnId, items, 400);
+	        } else if (BEHAVIOR === "adversarial-turn-failed") {
+	          // The whole answer arrives, then the turn fails.
+	          emitTurnCompleted(thread.id, turnId, items, { message: "stream disconnected before completion" });
 	        } else {
 	          emitTurnCompleted(thread.id, turnId, items);
 	        }

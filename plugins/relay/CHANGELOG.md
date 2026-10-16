@@ -12,6 +12,10 @@
   only `web-search: live`.
 - A Kimi turn's outcome and report come from the session's own record, because Kimi's ACP layer
   answers `end_turn` for a turn that failed.
+- A failed adversarial-review turn says the turn failed and gives the backend's error, on every
+  backend. It was shown as invalid structured JSON with the turn's error as the parse error, and on
+  Codex a whole answer sent before the failure was shown as findings. `<backend> returned no valid
+  review JSON` stays for an answer that came back and is not review JSON.
 - Claude can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:status` and
   `/relay:result` itself; they were user-only. A review Claude starts never asks a question: without
   `--wait` or `--background` it runs in the foreground. `/relay:cancel` and `/relay:transfer` stay

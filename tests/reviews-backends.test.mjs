@@ -323,6 +323,34 @@ test("invalid review JSON fails the review on every backend and keeps the raw an
     const status = companion(ctx, ["status", job.id]).stdout;
     assert.match(status, /^state: failed$/m);
     assert.ok(status.includes(`${label} returned no valid review JSON`), status);
+    // The turn completed: nothing says it failed.
+    assert.doesNotMatch(result.stdout, /turn failed/, backend);
+    if (backend !== "zcode") assert.ok(result.stdout.includes(`${label} did not return valid structured JSON.\n\n- Parse error: `), result.stdout);
+  }
+});
+
+test("a failed adversarial-review turn says the turn failed with the backend's error on every backend, never that the JSON was invalid", t => {
+  for (const [backend, label, make, error] of [
+    // Codex sends a whole verdict, then fails the turn: the answer stays raw, not findings.
+    ["codex", "Codex", () => codex(t, "adversarial-turn-failed"), "stream disconnected before completion"],
+    ["grok", "Grok", () => grok(t, { stopReason: "max_tokens" }), "the turn ended with stop reason max_tokens"],
+    ["zcode", "ZCode", () => zcode(t, { failTurn: "Model not found: glm-9" }), "Model not found: glm-9\ncode model_not_found"],
+    ["kimi", "Kimi", () => kimi(t, { failTurn: true }), "[provider.connection_error] Connection error."]
+  ]) {
+    const ctx = make();
+    const result = companion(ctx, ["adversarial-review", "--backend", backend]);
+    assert.equal(result.status, 1, `${backend}: ${result.stdout}`);
+    assert.ok(result.stdout.startsWith(`# ${label} Adversarial Review\n\nTarget: working tree diff\n\nThe ${label} turn failed: ${error}\n`), `${backend}: ${result.stdout}`);
+    assert.doesNotMatch(result.stdout, /structured JSON|Parse error|no valid review JSON|unexpected review shape|^Verdict:/m, backend);
+    if (backend === "codex") assert.ok(result.stdout.includes(`Raw final message:\n\n\`\`\`text\n{"verdict":"needs-attention"`), result.stdout);
+    const job = onlyJob(ctx);
+    assert.equal(job.state, "failed", backend);
+    assert.equal(job.errorMessage, error, backend);
+    const status = companion(ctx, ["status", job.id]).stdout;
+    assert.match(status, /^state: failed$/m, backend);
+    assert.doesNotMatch(status, /no valid review JSON/, backend);
+    const json = JSON.parse(companion(ctx, ["adversarial-review", "--backend", backend, "--json"]).stdout);
+    assert.deepEqual([json.turnError, json.result, json.parseError, json.validationError], [error, null, null, null], backend);
   }
 });
 

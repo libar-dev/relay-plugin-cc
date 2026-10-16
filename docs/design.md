@@ -635,7 +635,9 @@ or `adversarial-review`, so `status` lists it. A Codex review turns off the job 
   `schemas/review-output.schema.json`: types, enums, required fields, ranges, array items and no
   extra properties. One JSON code fence around the whole answer is unwrapped. Anything else fails
   the review on every backend with `<backend> returned no valid review JSON`, keeps the raw answer
-  in the report, and exits 1. There is no second try.
+  in the report, and exits 1. There is no second try. A turn that fails is not read as an answer:
+  the review says `The <backend> turn failed: <error>`, `error:` is the backend's error, anything
+  the turn had sent stays raw, and the exit is 1.
 
 ## Setup
 

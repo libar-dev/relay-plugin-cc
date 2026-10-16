@@ -202,15 +202,17 @@ function parseReviewAnswer(text, fallback) {
 }
 
 
-// An answer that does not parse or match the schema fails with its raw text kept in the report.
+// A failed turn fails with the backend's error; its text is never read as an answer. An answer
+// from a completed turn that does not parse or match the schema fails with its raw text kept in
+// the report.
 function adversarialOutcome(run, { backend, reviewName, context }) {
   const label = backend.label;
-  const parsed = parseReviewAnswer(run.finalMessage, {
-    status: run.status,
-    failureMessage: run.error?.message || run.stderr || `${label} did not return a final message.`
-  });
+  const turnError = run.status === 0 ? null : run.error?.message ?? (run.stderr || "The review failed.");
+  const parsed = turnError
+    ? { parsed: null, parseError: null, rawOutput: String(run.finalMessage ?? "") }
+    : parseReviewAnswer(run.finalMessage, { failureMessage: `${label} did not return a final message.` });
   const validationError = parsed.parsed ? reviewSchemaError(parsed.parsed) : null;
-  const invalid = run.status === 0 && (!parsed.parsed || Boolean(validationError));
+  const invalid = !turnError && (!parsed.parsed || Boolean(validationError));
   return {
     exitStatus: invalid ? 1 : run.status,
     sessionId: run.sessionId,
@@ -225,17 +227,17 @@ function adversarialOutcome(run, { backend, reviewName, context }) {
       rawOutput: parsed.rawOutput,
       parseError: parsed.parseError,
       validationError,
+      turnError,
       reasoningSummary: run.reasoningSummary
     },
     rendered: renderReviewResult(parsed, {
       backendLabel: label,
       reviewLabel: reviewName,
       targetLabel: context.target.label,
-      reasoningSummary: run.reasoningSummary
+      reasoningSummary: run.reasoningSummary,
+      turnError
     }),
-    errorMessage: invalid
-      ? `${label} returned no valid review JSON`
-      : run.status === 0 ? null : run.error?.message ?? (run.stderr || parsed.parseError || "The review failed.")
+    errorMessage: invalid ? `${label} returned no valid review JSON` : turnError
   };
 }
 

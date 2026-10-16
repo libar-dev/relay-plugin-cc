@@ -125,6 +125,7 @@ ignored with a `note:`.
 - Codex: the review runs in the Codex home, as a Codex job does. `/relay:review` is Codex's own reviewer, which takes no effort: `--effort` there is a `note:`. `/relay:adversarial-review` sends the plugin's prompt with the schema as Codex's `outputSchema`.
 - Grok, ZCode and Kimi: the plugin's prompts (`prompts/review.md`, `prompts/adversarial-review.md`) on a fresh read-only session, with the diff inlined. Above two files or 256 KiB the review is refused; narrow it with `--base` or `--scope`, or run it on Codex. The adversarial prompt carries the schema as text and the plugin checks the answer.
 - An adversarial answer that is not review JSON fails the review on every backend: `error: <backend> returned no valid review JSON`, the raw answer in the report, a non-zero exit. There is no second try.
+- A review turn that fails is reported as `The <backend> turn failed: <error>`, with the backend's error as `error:` and a non-zero exit. Anything it had sent stays raw and is never read as review JSON.
 
 ## What comes back
 
