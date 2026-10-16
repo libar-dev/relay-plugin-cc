@@ -225,8 +225,47 @@ owns the review's job record and saves `saveState` patches to its `backendState`
 
 ## Adding a backend
 
+A backend that follows the contract can still misread when a turn ends, what a mode allows, or
+what a session holds after a crash. The structure below is the easy part; the probe, the tests
+and the live checks are what make a backend safe to run unattended.
+
+### Probe the harness first
+
+Measure the installed version before designing anything, and read its source or documentation
+for what a run cannot show. Run the probes with trivial prompts (answer one word, sleep, write one
+file) in scratch folders outside every repository, with a home whose state you can afford to
+change, and keep the drivers and their logs with the findings. Establish:
+
+- **The handshake** and the capabilities the server declares.
+- **A session's start and its restore**: open a session, kill the server with SIGKILL during a
+  turn, and restore the session in a new process. Its context must survive.
+- **A terminal status for each turn**: the server must say that the turn completed, failed or was
+  interrupted, tied to that turn. An end inferred from silence, or from a final answer alone, does
+  not count. Make a turn fail on purpose and see what the server reports for it.
+- **Steer**: whether a running turn takes a message, what the server answers, and what proves the
+  message arrived. An acknowledgement is not delivery: a message can be queued and then lost.
+- **Cancel** and the answer that ends the cancelled turn.
+- **Model and effort** per session, and the server's answer to a value it does not know.
+- **Permissions per mode**: what each mode lets a tool do, and which requests reach the client.
+  A permission policy is not a sandbox. A job never gets more access than its header asks for,
+  so a mode the harness cannot enforce is a usage error, never a weaker mode.
+- **Web search**, and whether it can be turned off.
+- **What a session loads**: the home's MCP servers, plugins, hooks, skills, memory and instruction
+  files. An empty MCP server list in a request is not isolation.
+- **Sign-in**: whether it works headless from a detached process with no terminal, and whether
+  two processes, or two homes, can share it without one logging the other out.
+- **Durable history**: what the backend writes per session that proves, after a crash, which
+  messages arrived.
+- **What the harness does on its own**: turns it starts without a prompt, and requests it sends
+  the client.
+
+When headless sign-in, a terminal status for each turn, or a restore after a killed server fails,
+stop: the backend cannot meet the job contract as it stands.
+
+### Build it
+
 1. A folder with `index.mjs` exporting the `Backend` object, and its tests beside the others in
-   `tests/`, driving a fake binary the way `tests/fakes/` does for the three backends here.
+   `tests/`, driving a fake binary the way `tests/fakes/` does for the backends here.
 2. Its name in `BackendName` in `types.d.ts`, and one line in the registry.
 3. A section in the `relay:jobs` skill and a row in the README's backend table.
 
@@ -234,3 +273,30 @@ owns the review's job record and saves `saveState` patches to its `backendState`
 or more than one has them. No runtime code outside `lib/backends/` changes. If one has to, the
 contract is missing a member. Add it to `types.d.ts` for every backend instead of branching on a
 name.
+
+### Test it
+
+- **A fake built from captured protocol.** Copy the shapes the probe recorded: ids, field names,
+  error codes and data, the order of notifications, and the server's quirks. A fake written from
+  documentation alone tests the documentation. The fake records every request, its arguments and
+  its environment.
+- **Exact assertions.** Assert the params of every request, the capabilities the client declares,
+  the environment the server gets and the variables it must not inherit, and the outcome each
+  path records.
+- **Isolated homes.** Every test runs in a scratch home. `tests/support/isolate-env.mjs` strips
+  inherited variables a backend reads, and no test may reach a real backend binary on `PATH`. A
+  fake refuses to write under a real home.
+- **Death around delivery.** Kill the server, and the worker, before and after the backend
+  recorded a message, and check that each message runs exactly once.
+- **Tests that bite.** A test must fail with the behavior it guards removed. Run targeted
+  mutations of the new code; a mutation that survives is a missing test or dead code.
+
+### Check it live, then review it whole
+
+- With the real binary, check the companion run directly and Claude Code end to end separately:
+  start, a steer mid-turn, continue after the end, cancel, recovery after a killed server and a
+  killed worker, both reviews, a foreground `relay:job` agent, a Workflow call adopted after a
+  retry, and a background agent messaged with `SendMessage`. Record the versions, job ids and
+  states.
+- After fixing what the review and the live checks found, review the whole system again, the
+  existing backends included, and compare the versions as well as the diff.

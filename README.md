@@ -88,9 +88,12 @@ backend can do. It makes no model call, and a missing or signed-out backend neve
 When Codex is missing, `/relay:setup` offers to install Codex for you with npm. When it is signed
 out, run `!codex login`.
 
-**Launch a job.** Jobs run in `mode: yolo` by default, with no sandbox and no approvals, because
-jobs need the network and web search. In `yolo` the brief is the only fence, so name where the job
-may write. This first job asks for `mode: write` instead, the Codex workspace sandbox:
+**Launch a job.** Jobs run in `mode: yolo` by default, with no sandbox and no approvals, so that
+existing headers and Workflow scripts keep running as they did. In a check with Codex 0.162.0 and
+Grok Build 1.0.50, `mode: write` with `network: true` covered web search, package installs, git
+commits and child processes, but not `ps` or writes outside the working directory; ZCode has no
+`write` mode. In `yolo` the brief is the only fence, so name where the job may write. This first
+job asks for `mode: write` instead, the Codex workspace sandbox:
 
 ```
 Agent({ subagent_type: "relay:job", description: "fix flaky test", run_in_background: true, prompt: `model: gpt-6-astra
@@ -204,8 +207,10 @@ fails the review with the raw answer in the report.
 `/relay:setup --enable-review-gate` turns on the stop-time review gate for this repository, every
 worktree and session of it; `/relay:setup --disable-review-gate` turns it off. It is off by default
 and runs on Codex only, in the default Codex home at its default model and effort. When the main
-thread stops after a turn, one read-only Codex job reviews that turn's edits and blocks the stop
-only when Codex answers `BLOCK:`. The gate skips, with a note, while a background task, a Workflow
+thread stops after a turn, one read-only Codex job reviews that turn's edits, as Claude's last
+message describes them, against the working tree as it stands, and blocks the stop only when Codex
+answers `BLOCK:`. It gets no diff of the turn, so it cannot tell Claude's edits from changes that
+were already in the working tree. The gate skips, with a note, while a background task, a Workflow
 or a job of this repository runs, while a stop-hook continuation is already in progress, and when
 Codex is unavailable or the review fails. Grok and ZCode do not run it; use `/relay:review` on
 those.
@@ -234,7 +239,10 @@ hooks need `SubagentHandback`, so the floor is Claude Code 2.1.271. A Claude Cod
 it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json`
 must hold the call's key as `relay.journalKey` (once another relay has adopted the job, its
 `relay.json` holds the binding), and the script must get the state block back. Repeat this check
-after a Claude Code update.
+after a Claude Code update. It was last run in full on Claude Code 2.1.296, for the 2.0.0 release: a
+foreground `relay:job` agent's hand-back, a Workflow call's state-block return with its
+`relay.journalKey`, and a background agent steered with `SendMessage`. That check did not restart a
+relay to adopt a job.
 
 The hooks are PreToolUse on `Bash`, `Write`, `SubagentHandback` and `StructuredOutput`,
 SubagentStop on `relay:job`, SessionStart and Stop. Claude Code gives subagents the
@@ -255,7 +263,10 @@ npm run check
 
 `npm test` runs every file in `tests/` with `node --test` and takes about two minutes. Run it
 outside any sandbox. Its process tests use `ps` to find and stop test processes. The tests drive
-fake backend binaries and never start a real backend. `npm run check` type-checks every script with
+fake backend binaries and never start a real backend. A few tests depend on timing (the 50 ms grace
+before a closing server gets SIGTERM, a transport test with a 5-second child) and can fail on a busy
+machine, for example with several suites running at once; each passes alone, so rerun a failure on
+an idle machine before reading it as a regression. `npm run check` type-checks every script with
 TypeScript, without an installed Codex CLI.
 
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,

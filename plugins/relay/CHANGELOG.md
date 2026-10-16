@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- The tests that wait for an orphaned process accept a child subreaper, such as `systemd --user`,
+  as its new parent, so they pass on Linux desktops.
+- The docs say why `yolo` is the default: existing headers and Workflow scripts keep running as
+  they did. A live check found `write` with `network: true` enough for web search, installs,
+  commits and child processes on Codex and Grok, but not for `ps` or writes outside the working
+  directory. The 2.0.0 entry below gave the earlier reason.
+- The docs say what the stop gate can attribute (Claude's last message and the working tree as it
+  stands, no diff of the turn), when `cancel` still signals after the process table becomes
+  unreadable, and how a new backend is probed, tested and checked before it ships.
+
 ## 2.0.0
 
 The first public release. `relay` runs jobs on Codex (GPT), Grok Build and ZCode (GLM) from Claude

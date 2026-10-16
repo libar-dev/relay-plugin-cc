@@ -77,6 +77,8 @@ function findActiveJob(cwd) {
   return active.sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")))[0] ?? null;
 }
 
+// The review gets Claude's last message and reads the working tree as it stands. Nothing here
+// attributes edits to the turn, so changes already in the tree are indistinguishable from it.
 function buildStopReviewPrompt(input = {}) {
   const lastAssistantMessage = String(input.last_assistant_message ?? "").trim();
   const template = loadPromptTemplate(ROOT_DIR, "stop-review-gate");

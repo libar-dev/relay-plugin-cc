@@ -38,7 +38,7 @@ cd: /abs/path/to/repo
 | `add-dir` | no | absolute extra writable root, repeatable; `write` only | none |
 | `brief` | no | absolute path of the brief file; nothing follows the dashes | none |
 
-- `yolo` is the default, because jobs need the network and web search. It ignores `network` and `add-dir` and the state block says so. The brief is then the only fence: name where the job may write.
+- `yolo` is the default, so existing headers keep running as they did. `mode: write` with `network: true` covers web search, installs, commits and child processes on Codex and Grok, but not `ps` or writes outside the working directory. `yolo` ignores `network` and `add-dir` and the state block says so. The brief is then the only fence: name where the job may write.
 
 ## GLM jobs
 
@@ -145,7 +145,7 @@ A message reaches the job within about two minutes, when the relay's current wai
 
 - Give a `relay:job` agent no `schema`. A script cannot read files either: for structured data, ask the brief for the shape, then hand `r.report` to a Claude agent that has the schema: `agent(\`Read ${r.report} and return its findings.\`, { schema: FINDINGS })`.
 - The agent holds its slot for the job's whole run, so size a launch by job length. `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` caps how many run at once.
-- A retried or resumed call takes over its running job. Two calls with the same prompt and label are two jobs.
+- A retried or resumed call takes over its running job. Two calls with the same prompt and label are two jobs. Adoption is not a follow-up: a script cannot send a new turn to a job it names. To continue a finished job from a workflow, give a Claude agent the job id and have it run `C continue <job> --message-file F`.
 - A skipped agent returns null. Stopping the workflow ends the relays, not the jobs: `C status --all` lists them by run id and label; `C cancel <job>` the ones you abandon.
 - A review can be a step: a Claude agent whose prompt says to run `C review --wait` (or `C adversarial-review --wait`, with `--backend` and the other review flags) and return its output. The review runs in the foreground and is recorded as a job.
 

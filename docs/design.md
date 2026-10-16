@@ -54,8 +54,13 @@ The keys are `backend`, `model`, `effort`, `mode`, `network`, `web-search`, `fas
   (openai/codex-plugin-cc#751).
 - **An unknown header key is a usage error** that names the known keys. A typo fails before
   anything runs.
-- **`mode` defaults to `yolo`**: no sandbox and no approvals, because jobs need the network and web
-  search. The brief is then the only fence, so a brief names where the job may write. `network`
+- **`mode` defaults to `yolo`**: no sandbox and no approvals, so that every existing header and
+  Workflow script keeps running as it did. A live check (Codex 0.162.0 and Grok Build 1.0.50, on
+  macOS) found `write` with `network: true` enough for web search, package installs, git commits
+  and child processes, and not enough for `ps` or for writes outside the working directory; with
+  `network` at its default, Codex's `write` had no DNS. ZCode has no `write` mode. A job that runs
+  `ps`, as the plugin's own tests do, or writes outside its working directory needs `yolo`. The
+  brief is then the only fence, so a brief names where the job may write. `network`
   applies to sandboxed modes, and `add-dir` adds writable roots in Codex's `write` mode.
   `yolo` ignores both with a `note:`; `read-only` ignores `add-dir` with a note.
 - **`web-search`** (default `live`) is a tool setting, not the sandbox, so it applies in every mode.
@@ -269,8 +274,11 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   reached it (openai/codex-plugin-cc#786).
 - **Nothing left running.** `cancel` snapshots the worker, the server and every descendant, with
   start times, before it signals anything. At the end it sweeps the snapshot and checks each start
-  time before it signals a process. If the process table cannot be read, `cancel` stops and says
-  so. The process-group fallback has the limits listed under [Known limits](#known-limits).
+  time before it signals a process. If the first read of the process table fails, `cancel`
+  signals nothing and says so. A later read, after the grace period, can fail too: `cancel` then
+  still signals the worker's process group, or the worker's pid when the group kill fails with
+  ESRCH, signals none of the snapshot it can no longer check, and reports the failure. The
+  process-group fallback has the limits listed under [Known limits](#known-limits).
 - **A dead worker.** `cancel` takes the lease as `cancel`, writes `cancelled`, and reports owed
   messages as dropped; a job a worker ended meanwhile keeps that end. If a new worker holds the
   lease (from a resume, a continue or recovery), the cancel goes to it as an inbox message, and if
@@ -456,7 +464,9 @@ binaries and never start a real backend.
 - **Collaborator turns** are the one inference. When collaborator agents drained, the final answer
   arrived and no `turn/completed` came within 250 ms, a `thread/read` of that turn (10 seconds)
   decides. Only an unsupported `thread/read` or a turn that reads `inProgress` completes by
-  inference, with `note: turn completion inferred`; any other read failure fails the turn.
+  inference, with `note: turn completion inferred`; any other read failure fails the turn. The
+  path comes from upstream, and its fake (a collaborator turn whose main-thread `turn/completed`
+  never arrives) has not been checked against a real multi-agent Codex turn.
 - **Server requests** (an approval, a question) are refused with `-32601`, because a job has no one
   to answer them, and recorded in `events.jsonl` as `codex/serverRequestRejected`.
 - **Home and sign-in.** Jobs use the Codex CLI's home, `CODEX_HOME` or `~/.codex`, its
@@ -618,8 +628,10 @@ binary and version, sign-in, default model and effort, the models one can name i
 of it. It is off by default, because each review is a Codex job and costs usage.
 
 - When the main thread stops after a turn, one read-only Codex job, in the Codex home at its default
-  model and effort, reviews that turn's edits against the repository state. Its first line must be
-  `ALLOW:` or `BLOCK:`.
+  model and effort, reviews that turn's edits, as Claude's last message describes them, against the
+  working tree as it stands. Its first line must be `ALLOW:` or `BLOCK:`. The gate has no record of
+  which edits the turn made: it cannot tell them from changes already in the working tree, and
+  skipping while jobs and background tasks run narrows that overlap without removing it.
 - It blocks only on a real `BLOCK:` answer. A timeout, a failed review, invalid JSON or any other
   answer allows the stop with a message naming `/relay:review --wait`, and a missing Codex with one
   naming `/relay:setup`. A gate that blocked on its own failure would trap the session.
@@ -672,6 +684,9 @@ After a Claude Code update:
 
 - `cancel` of a dead job signals the recorded worker pid without checking its start time, and its
   process-group kill can reach a nested job that kept the worker's group.
+- A `cancel` whose read of the process table fails after the grace period signals only the
+  worker's process group, or its bare pid; a descendant outside that group, such as a tool
+  command the server started in a session of its own, keeps running.
 - Recovery treats a process whose start time cannot be read as the same process.
 - A process a dead server left behind that is no longer its descendant is out of reach of recovery
   and of a later cancel. The fake-server tests reproduce this when a child inherits stdout. The plugin does not
@@ -682,7 +697,8 @@ After a Claude Code update:
 **Codex.** The job MCP switch covers servers defined in the home's `config.toml`. It does not
 turn off servers supplied by an installed Codex plugin. A job that hits a usage quota fails; `resume` continues it after the reset.
 Inside Codex's `write` sandbox, `ps` is denied, so the plugin's process tests fail there; run the
-full suite outside it.
+full suite outside it. The inferred completion of a collaborator turn rests on a fake, not on a
+real multi-agent turn: it is no pattern for another backend.
 
 **Grok.** Where Grok refuses its `read-only` profile (a machine whose `/var/run/docker.sock` is a
 symlink), read-only jobs and every Grok review fail with Grok's error. `web-search: disabled` is
@@ -704,9 +720,11 @@ would need `grok agent`.
 - `read-only` trusts ZCode's risk classes for the tools a new session still has; a plugin tool ZCode
   classes as free of side effects can run until a resume applies the allowlist.
 - A ZCode server that is alive but silent holds a request without a deadline, a continue's
-  `session/resume` included. Only the model-list read is bounded.
-- The runtime moves. The plugin uses ZCode's v4 commands and session methods. Check one job after every
-  ZCode update.
+  `session/resume` included. Only the model-list read is bounded, and only on the plugin's side: a
+  read that times out stays pending on the server until it answers or exits.
+- The runtime moves. The plugin uses ZCode's v4 commands and the session methods
+  `session/subscribe` and `session/resume`, which ZCode's source marked for removal when this
+  backend was built (source of 2026-09-24). Check one job after every ZCode update.
 
 **Not measured.** Sustained rate limits and simultaneous jobs on one plan for Grok and ZCode,
 and a crash during a partial answer. Nothing caps how many jobs run at once.

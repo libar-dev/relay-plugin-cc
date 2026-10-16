@@ -39,8 +39,10 @@ is a script names the real binary and `GROK_BINARY`.
 `/relay:setup --enable-review-gate` turns on the stop-time review gate for this repository,
 every worktree and session of it; `--disable-review-gate` turns it off. It is off by default
 and runs on Codex only, in the default Codex home at its default model and effort. When the
-main thread stops after a turn, one read-only Codex job reviews that turn's edits and blocks
-the stop only when Codex answers `BLOCK:`. The gate skips, with a note, while a background
+main thread stops after a turn, one read-only Codex job reviews that turn's edits, as Claude's
+last message describes them, against the working tree as it stands, and blocks the stop only
+when Codex answers `BLOCK:`. It gets no diff of the turn, so it cannot tell Claude's edits from
+changes that were already in the working tree. The gate skips, with a note, while a background
 task, a Workflow or a job of this repository runs, while a stop-hook continuation is already
 in progress, and when Codex is unavailable or the review fails. Grok and ZCode do not run it;
 use `/relay:review` on those.

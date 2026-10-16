@@ -362,6 +362,8 @@ class ZcodeConnection {
           if (client.exitInfo || z.closed !== null) throw error;
           reason = error.data ? protocolMessage(error) : error.message;
         } finally {
+          // A read that timed out is abandoned, not cancelled: ZCode holds it until it answers
+          // or exits.
           clearTimeout(timer);
         }
         if (reason !== null) {

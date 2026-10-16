@@ -156,6 +156,9 @@ export async function handleCancel(argv) {
     view = loadJobView(jobDir);
     const worker = view.job.worker;
     tree = mergeSnapshots(tree, snapshotProcessTree(processRoots(view.job)));
+    // This second read can fail (`tree.cause`). The worker's group is still signalled below, by
+    // pid alone, and the sweep after it signals nothing it cannot check before the failure is
+    // reported: only the first read's failure stops cancel before any signal.
     if (!stopped || view.state === "dead") {
       if (worker?.pid && isWorkerAlive(worker)) {
         const kill = terminateProcessTree(worker.pid);
