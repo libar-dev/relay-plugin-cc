@@ -267,14 +267,16 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       if (options.dieAfterInput && state.prompts === nth(options.dieAfterInput)) { inputRecord(turn); setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 30); break; }
       // The engine queues a prompt sent during a turn of its own, and ACP answers at once.
       if (own) { own.queuedAt ??= Date.now(); queued.push(turn); state.queuedBehindOwn = (state.queuedBehindOwn || 0) + 1; save(); reply({ stopReason: 'end_turn' }); break; }
-      // The prompt is recorded only once the test creates this file; then state.recorded names it.
-      if (options.recordAfter && !fs.existsSync(options.recordAfter)) {
-        const held = setInterval(() => {
-          if (!fs.existsSync(options.recordAfter)) return;
-          clearInterval(held);
+      // The prompt is recorded only once the test has created this file, at once if it already
+      // has, and then state.recorded names it. A slow machine can let the test create the file
+      // between this prompt's request being saved and the first look for it.
+      if (options.recordAfter) {
+        const recordWhenReleased = () => {
+          if (!fs.existsSync(options.recordAfter)) { setTimeout(recordWhenReleased, 10); return; }
           startTurn(turn, m.id);
           state.recorded = turn.promptId; save();
-        }, 10);
+        };
+        recordWhenReleased();
         break;
       }
       startTurn(turn, m.id);
