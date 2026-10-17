@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
-import { run } from "./support/helpers.mjs";
+import { makeTempDir, run } from "./support/helpers.mjs";
 import {
   codexReceived,
   companion,
@@ -282,22 +282,25 @@ test("the hand-back is denied while the job runs and rewritten to the result whe
 });
 
 test("a received message not yet delivered blocks the hand-back, then a follow-up is rewritten the same way", async () => {
-  // The follow-up's turn must outlast the hook's delivery and ack wait (up to seconds under a
-  // loaded full run), or the hand-back check sees it already ended: 200 ms was seen to flake.
-  const ctx = relayContext("job", { turnMs: 2500 });
+  const ctx = relayContext("job", { turnMs: 200 });
+  // The follow-up's turn ends only when the test says so, after the hand-back check, however
+  // long the hook's delivery and ack wait take on a loaded machine.
+  const release = path.join(makeTempDir("relay-release-"), "go");
+  ctx.env.FAKE_CODEX_RELEASE_FILE = release;
   const jobId = await startedRelay(ctx, QUICK);
   assert.equal(waitJob(ctx, jobId).status, 0);
   assert.equal(decision(await pre(ctx, "SubagentHandback", { message: "x" })), "allow");
   // A follow-up after the hand-back resumes the relay; it hands back again at once.
-  ctx.append(ctx.afterHandback("[quick] Follow-up."));
+  ctx.append(ctx.afterHandback("[held] Follow-up."));
   const again = await pre(ctx, "SubagentHandback", { message: "x" });
   assert.equal(decision(again), "deny", "the follow-up was delivered (a continue) and the job runs again");
+  fs.writeFileSync(release, "");
   await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId}` });
   assert.equal(waitJob(ctx, jobId).status, 0);
   const last = await pre(ctx, "SubagentHandback", { message: "x" });
   assert.equal(updated(last).message, resultOf(ctx, jobId));
   assert.match(updated(last).message, /^attempts: 2$/m);
-  assert.match(updated(last).message, /Report for: \[quick\] Follow-up\./);
+  assert.match(updated(last).message, /Report for: \[held\] Follow-up\./);
 });
 
 test("without SubagentHandback, SubagentStop still checks the final text", async () => {

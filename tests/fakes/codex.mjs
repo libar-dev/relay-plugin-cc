@@ -765,8 +765,12 @@ rl.on("line", (line) => {
 	          const entry = { threadId: thread.id, prompt, steers: [], timer: null };
 	          activeTurns.set(turnId, entry);
 	          if (BEHAVIOR !== "job-hang" && BEHAVIOR !== "job-hang-child") {
-	            // "[quick]" ends the turn at once; "[fail]" ends it at once as a failed turn.
-	            entry.timer = setTimeout(() => finishJobTurn(turnId, prompt.includes("[fail]") ? "failed" : "completed"), prompt.includes("[quick]") || prompt.includes("[fail]") ? 50 : TURN_MS);
+	            // "[quick]" ends the turn at once; "[fail]" ends it at once as a failed turn; "[held]"
+	            // ends it once FAKE_CODEX_RELEASE_FILE exists, a barrier the test controls.
+	            if (prompt.includes("[held]")) {
+	              const release = () => { entry.timer = fs.existsSync(process.env.FAKE_CODEX_RELEASE_FILE || "") ? (finishJobTurn(turnId, "completed"), null) : setTimeout(release, 20); };
+	              entry.timer = setTimeout(release, 20);
+	            } else entry.timer = setTimeout(() => finishJobTurn(turnId, prompt.includes("[fail]") ? "failed" : "completed"), prompt.includes("[quick]") || prompt.includes("[fail]") ? 50 : TURN_MS);
 	          }
 	          break;
 	        }

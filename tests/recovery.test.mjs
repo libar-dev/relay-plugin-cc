@@ -493,7 +493,10 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
   // resume starts during it, and its worker holds the lease when the cancel comes to write.
   // The cancel then goes to that worker and says so. "marked cancelled" is printed only
   // when the cancel wrote the state itself.
-  async function cancelDuringResume(t, cancelEnv = {}) {
+  // `holdWorker` stops the resume's worker as soon as it holds the lease, before the cancel
+  // posts its message, and continues it only after the cancel has answered: whatever the
+  // cancel's reads take, that worker cannot end the job first.
+  async function cancelDuringResume(t, cancelEnv = {}, { holdWorker = false } = {}) {
     const ctx = relayContext("job", { turnMs: 30000 });
     const id = await start(ctx);
     const dir = jobDirOf(ctx, id);
@@ -510,7 +513,13 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     const resumed = companionAsync(ctx, ["resume", id, "--message", "Resumed work"]);
     await waitFor(() => { const lease = readLease(dir); return lease?.role === "worker" && isWorkerAlive(lease); }, { intervalMs: 5 });
     const worker = readLease(dir);
-    return { ctx, id, dir, identity, worker, cancelled: await cancelled, resumed };
+    if (holdWorker) {
+      process.kill(worker.pid, "SIGSTOP");
+      t.after(() => { try { process.kill(worker.pid, "SIGCONT"); } catch {} });
+    }
+    const answer = await cancelled;
+    if (holdWorker) process.kill(worker.pid, "SIGCONT");
+    return { ctx, id, dir, identity, worker, cancelled: answer, resumed };
   }
 
   async function settledCancelled(ctx, id, dir) {
@@ -538,7 +547,7 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
   });
 
   test("cancel racing a resume exits nonzero while the new worker has not ended the job", async (t) => {
-    const { ctx, id, dir, worker, cancelled, resumed } = await cancelDuringResume(t, { RELAY_JOBS_CANCEL_GRACE_MS: "1" });
+    const { ctx, id, dir, worker, cancelled, resumed } = await cancelDuringResume(t, { RELAY_JOBS_CANCEL_GRACE_MS: "1" }, { holdWorker: true });
     assert.equal(cancelled.status, 4, cancelled.stdout + cancelled.stderr);
     assert.equal(cancelled.stderr.split("\n")[0], `Job ${id} is still running; the cancel is with its worker (pid ${worker.pid}).`);
     assert.match(cancelled.stdout, new RegExp(`^cancel: the job is still running; the cancel is with its worker \\(pid ${worker.pid}\\)$`, "m"));
