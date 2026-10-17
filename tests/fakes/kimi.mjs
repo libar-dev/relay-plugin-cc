@@ -115,8 +115,10 @@ function configOptions() {
 function startTurn(turn, rpcId) {
   active = { ...turn, rpcId, unanswered: new Set() };
   const current = active;
-  state.turns.push({ text: turn.text, promptId: turn.promptId, turnId: turn.turnId, sessionId, mode }); save();
   promptRecords(turn, 'user');
+  // Saved after the records that start the turn: a test that sees the turn here, then kills or
+  // cancels, can count on Kimi's record of it, which is what relay reads.
+  state.turns.push({ text: turn.text, promptId: turn.promptId, turnId: turn.turnId, sessionId, mode }); save();
   if (options.dieAfterRecord && state.turns.length === 1) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 50); return; }
   if (options.permission) reverse('session/request_permission', { options: [{ optionId: 'approve_once', name: 'Approve once', kind: 'allow_once' }, { optionId: 'approve_always', name: 'Approve for this session', kind: 'allow_always' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }], toolCall: { toolCallId: turn.turnId + ':tool_perm', title: 'Bash' } });
   for (const [index, offered] of (options.permissionOptions || []).entries()) reverse('session/request_permission', { options: offered, toolCall: { toolCallId: turn.turnId + ':tool_' + index, title: 'Bash' } });
