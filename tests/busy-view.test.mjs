@@ -1,9 +1,12 @@
 // A busy job, through every reader that can meet one: a job whose record changes during every
 // pass of a view (support/busy-view.mjs). Busy is no state. A reader retries, or says the job is
 // busy and exits 4; it never shows the job in a state, and never leaves it out.
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HEADER, companion, finishJob, jobDir, setup, startJob } from "./support/job-helpers.mjs";
+import { HEADER, companion, finishJob, jobDir, readJob, setup, startJob } from "./support/job-helpers.mjs";
+import { jobPaths } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 
 const BUSY_VIEW = new URL("./support/busy-view.mjs", import.meta.url).href;
 const busyLine = id => new RegExp(`^Job ${id} is busy: its record changed during each of 8 reads\\. Try again\\.\\n$`);
@@ -76,3 +79,39 @@ test("result and status of a busy job exit 4 with the busy line and no view: by 
     assert.match(read.stderr, busyLine(id));
   }
 });
+
+// Every message ever posted to the job: pending in its inbox, or claimed by a worker.
+function posted(dir) {
+  const { inbox, claimed } = jobPaths(dir);
+  return [inbox, claimed].flatMap(sub => fs.existsSync(sub) ? fs.readdirSync(sub).filter(name => name.endsWith(".json")).map(name => path.join(sub, name)) : []);
+}
+
+test("a message sent to a job busy right after is reported sent, never a read to try again; resume sends nothing while busy", async t => {
+  const ctx = setup(t);
+  const { id } = startJob(ctx, HEADER, "[quick] First.");
+  await finishJob(ctx, id);
+  const dir = jobDir(ctx, id);
+  const env = busy(ctx, dir);
+  const sent = companion(ctx, ["continue", id, "--message", "[quick] Second."], env);
+  assert.equal(sent.status, 0, sent.stderr);
+  assert.equal(sent.stderr, "");
+  assert.match(sent.stdout, new RegExp(`^job: ${id}\\nmessage: continue \\S+\\noutcome: (?!pending)`));
+  assert.match(sent.stdout, new RegExp(`^note: the job is busy, so its state is not shown; status ${id} shows it\\n$`, "m"));
+  assert.doesNotMatch(sent.stdout, /^state:/m);
+  await finishJob(ctx, id);
+  const json = companion(ctx, ["continue", id, "--message", "[quick] Third.", "--json"], env);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).state, null);
+  assert.ok(JSON.parse(json.stdout).outcome?.action, json.stdout);
+  await finishJob(ctx, id);
+  // resume reads the job before it sends: busy there, it sends nothing and says the job is busy.
+  const before = posted(dir).length;
+  const resumed = companion(ctx, ["resume", id], env);
+  assert.equal(resumed.status, 4, resumed.stdout);
+  assert.equal(resumed.stdout, "");
+  assert.match(resumed.stderr, busyLine(id));
+  assert.equal(posted(dir).length, before, "resume posted nothing");
+  const job = readJob(ctx, id);
+  assert.deepEqual(job.attempts.map(attempt => attempt.state), ["completed", "completed", "completed"], "each message ran once");
+});
+

@@ -36,6 +36,8 @@ eight of them the job is busy, which is not a state. `wait` polls again within i
 `status`, `result` and the other readers retry for two seconds, then say the job is busy and
 exit 4; the relay hook refuses a hand-back or stop until it settles. So a view never pairs one
 attempt's state with another's report, nor shows a job completed while owed work is running.
+`steer`, `continue` and `resume` still report a message they have sent, with a note in place of
+the state, so a busy read never gets it sent twice.
 
 ### The prompt
 
