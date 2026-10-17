@@ -341,13 +341,29 @@ import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mj
 
   // Fault injection stops the actual worker at an atomic publication boundary. It never
   // writes job.json or fabricates a delivery receipt. Recovery runs without the armed fault.
+  // A `continue` that started that worker reads a receipt only once the worker has died: it
+  // returns at a receipt a live worker wrote, so a worker slower to reach the boundary than its
+  // next look would leave it nothing to restart.
   function armPublicationFault(ctx, action) {
     const armed = path.join(ctx.root, 'armed.json');
     const marker = path.join(ctx.root, 'killed.json');
     const preload = path.join(ctx.root, 'publication-fault.mjs');
     fs.writeFileSync(preload, `
       import fs from 'node:fs';
+      import { isProcessIdentityAlive } from ${JSON.stringify(new URL('../plugins/relay/scripts/lib/util/process.mjs', import.meta.url).href)};
       const armed = ${JSON.stringify(armed)}, marker = ${JSON.stringify(marker)};
+      const read = fs.readFileSync;
+      fs.readFileSync = function(file) {
+        if (process.argv[2] === 'continue' && String(file).includes('/inbox/outcomes/') && fs.existsSync(file)) {
+          const deadline = Date.now() + 20000;
+          for (;;) {
+            let killed = null; try { killed = JSON.parse(read.call(fs, marker, 'utf8')); } catch {}
+            if ((killed && !isProcessIdentityAlive({ pid: killed.pid })) || Date.now() > deadline) break;
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          }
+        }
+        return read.apply(this, arguments);
+      };
       const rename = fs.renameSync;
       fs.renameSync = function(from, to) {
         if (process.argv.includes('worker') && fs.existsSync(armed)) {
@@ -642,7 +658,7 @@ import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mj
   for (const idKnown of [false, true]) {
     for (const control of ['steer', 'cancel']) {
       test(`newline brief ${control} while id is ${idKnown ? 'known' : 'unknown'}`, async t => {
-        const ctx = fixture(t, { turnMs: control === 'cancel' ? 30000 : 700, ...(idKnown ? {} : { noQueueId: true }) });
+        const ctx = fixture(t, { turnMs: control === 'cancel' ? 30000 : 700, ...(control === 'steer' ? { steered: true } : {}), ...(idKnown ? {} : { noQueueId: true }) });
         const { id } = startJob(ctx, HEADER, 'Newline brief.\n');
         await waitFor(() => ctx.grok().turns.length === 1 && readJob(ctx, id).state === 'running' && (!idKnown || readJob(ctx, id).turnId));
         assert.equal(Boolean(readJob(ctx, id).turnId), idKnown);

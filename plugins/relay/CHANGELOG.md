@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.1.2 (2026-10-17)
+
+- A job's event log keeps the last updates of every turn. A Kimi turn ends on the session record,
+  and a worker descheduled as Kimi ended the turn dropped the message chunks Kimi had sent just
+  before: the worker flushed its events before it closed the connection, which reads the server's
+  last output. It now closes first.
+- A job resumed while its first brief was still owed no longer reads as dead for a moment while
+  the new worker takes it over. The worker closed the redundant default resume before it recorded
+  itself and the brief's attempt, so `wait` could report the job dead, exit 3, as it ran.
+- The test suite passes on a slow, busy runner. Each test waits on the event it depends on: a
+  steer or a cancel the fake's turn waits for, a setup limit counted from a fake that runs, a kill
+  that lands mid-turn. No sleep was added and no time limit changed.
+
 ## 2.1.1 (2026-10-17)
 
 - Every Kimi sign-in line names the region: `kimi login --region global`, or `--region

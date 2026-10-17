@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeExecutable } from "../support/helpers.mjs";
 import { realHomeGuardSource } from "../support/isolate-env.mjs";
+import { READY_SOURCE } from "../support/backend-ready.mjs";
 
 // A fake `kimi` built from the shapes Kimi Code 2.2.0 sent in live probes: `--version`,
 // `provider list --json`, and `acp`, which answers ACP and keeps each session's record in
@@ -24,6 +25,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const options = ${JSON.stringify(options)};
 ${realHomeGuardSource("kimi")}
+${READY_SOURCE}
 const file = ${JSON.stringify(statePath)};
 let state = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { starts: [], requests: [], answers: [], turns: [], sessions: {} };
 const save = () => { const temp = file + '.' + process.pid; fs.writeFileSync(temp, JSON.stringify(state)); fs.renameSync(temp, file); };
@@ -115,8 +117,10 @@ function configOptions() {
 function startTurn(turn, rpcId) {
   active = { ...turn, rpcId, unanswered: new Set() };
   const current = active;
-  state.turns.push({ text: turn.text, promptId: turn.promptId, turnId: turn.turnId, sessionId, mode }); save();
   promptRecords(turn, 'user');
+  // Saved after the records that start the turn: a test that sees the turn here, then kills or
+  // cancels, can count on Kimi's record of it, which is what relay reads.
+  state.turns.push({ text: turn.text, promptId: turn.promptId, turnId: turn.turnId, sessionId, mode }); save();
   if (options.dieAfterRecord && state.turns.length === 1) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 50); return; }
   if (options.permission) reverse('session/request_permission', { options: [{ optionId: 'approve_once', name: 'Approve once', kind: 'allow_once' }, { optionId: 'approve_always', name: 'Approve for this session', kind: 'allow_always' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }], toolCall: { toolCallId: turn.turnId + ':tool_perm', title: 'Bash' } });
   for (const [index, offered] of (options.permissionOptions || []).entries()) reverse('session/request_permission', { options: offered, toolCall: { toolCallId: turn.turnId + ':tool_' + index, title: 'Bash' } });
@@ -127,11 +131,8 @@ function startTurn(turn, rpcId) {
   }
   if (options.unsupported) reverse('client/missing', { question: 'unhandled' });
   // Kimi runs a shell command in a session of its own, as its child.
-  if (options.shellChild && !state.descendants) {
-    const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
-    child.unref();
-    state.descendants = [{ appServerPid: process.pid, childPid: child.pid }]; save();
-  }
+  const shellChild = options.shellChild && !state.descendants ? require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' }) : null;
+  shellChild?.unref();
   // Kimi's ACP layer sends a turn's updates only to the prompt it drives.
   const tracked = value => { if (rpcId !== null) update(value); };
   tracked({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } });
@@ -143,6 +144,10 @@ function startTurn(turn, rpcId) {
     record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'assistant', content: [{ type: 'text', text: 'Preamble.' }], toolCalls: [{ id: 'tool_1', name: 'Bash' }] } } });
     record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'tool', content: [{ type: 'text', text: 'ok' }], toolCallId: 'tool_1' } } });
   }
+  // The command is named only once the turn's updates are sent. The server then writes nothing
+  // until the turn ends, so a test that kills the worker now leaves it running; killed sooner,
+  // the server's next write would meet a closed pipe, and the EPIPE would end it.
+  if (shellChild) { state.descendants = [{ appServerPid: process.pid, childPid: shellChild.pid }]; save(); }
   if (options.die) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 80); return; }
   const ms = turn.text.startsWith('[quick]') ? 30 : turn.text.startsWith('[long]') ? 30000 : options.turnMs || 100;
   const schedule = () => { if (active === current) current.timer = setTimeout(() => endAnswered(current, options.failTurn ? 'failed' : 'completed'), ms); };
@@ -167,6 +172,9 @@ function finish(reason) {
   const turn = active; active = null; clearTimeout(turn.timer);
   // Saved before the records that end the turn: relay reads those, and a test reads this after.
   state.completed = [...(state.completed || []), { text: turn.text, reason }]; save();
+  // The client is descheduled while the turn ends: when it runs again, the record's end and the
+  // updates sent ahead of it are both waiting.
+  if (options.pauseClientAtEnd) { process.kill(process.ppid, 'SIGSTOP'); setTimeout(() => process.kill(process.ppid, 'SIGCONT'), options.pauseClientAtEnd); }
   if (reason === 'completed') {
     const answer = process.env.FAKE_REVIEW_ANSWER ?? options.answer ?? 'Report for: ' + turn.text;
     if (turn.rpcId !== null) for (const text of [answer.slice(0, 3), answer.slice(3)]) if (text) update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });

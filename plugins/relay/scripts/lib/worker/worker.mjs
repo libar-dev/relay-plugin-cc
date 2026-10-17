@@ -228,17 +228,22 @@ async function runWorkerRound(jobDir, options, held) {
   };
 
   // A default resume message ("write the final report now") is only needed when nothing
-  // else will run. Close it as skipped when there is other work.
+  // else will run. Close it as skipped when there is other work, but only once the attempt that
+  // runs that work is on the job, or the job ends (reportSkipped). Closed sooner, the message
+  // would leave nothing owed while the job still names its dead predecessor, and a reader would
+  // take the job for dead as this worker is about to run it.
+  const skipped = [];
   const pruneDefaultResumes = () => {
     const others = queue.filter((item) => !item.isDefault);
     const defaults = queue.filter((item) => item.isDefault);
     const keep = others.length > 0 ? [] : defaults.slice(0, 1);
-    for (const item of defaults) {
-      if (!keep.includes(item)) {
-        outcome(item.message, { action: "skipped", reason: "other queued work ran instead" });
-      }
-    }
+    skipped.push(...defaults.filter((item) => !keep.includes(item)));
     queue.splice(0, queue.length, ...others, ...keep);
+  };
+  const reportSkipped = () => {
+    for (const item of skipped.splice(0)) {
+      outcome(item.message, { action: "skipped", reason: "other queued work ran instead" });
+    }
   };
 
   // The worker records itself in the same write that begins its first attempt (or ends the
@@ -293,6 +298,7 @@ async function runWorkerRound(jobDir, options, held) {
   };
 
   const dropQueued = (reason) => {
+    reportSkipped();
     for (const item of queue.splice(0)) {
       outcome(item.message, { action: "dropped", reason });
     }
@@ -357,6 +363,7 @@ async function runWorkerRound(jobDir, options, held) {
         outcome(queued.message, { action: "queued-next-turn", reason: "an earlier turn runs first" });
       }
     }
+    reportSkipped();
     return item;
   };
 
@@ -737,9 +744,16 @@ async function runWorkerRound(jobDir, options, held) {
     // Messages still queued stay owed: the next worker runs them.
     save({ state: "failed", errorMessage: message, completedAt: nowIso() });
   } finally {
-    eventRecorder?.flush();
     clearInterval(heartbeat);
     clearInterval(poller);
+    // The connection reads the server's output to its end as it closes. A turn can end on the
+    // backend's record before the worker has read the updates the server sent ahead of it, so
+    // the events are flushed only once the connection has closed.
+    if (connection) {
+      await connection.close().catch(() => {});
+      connection = null;
+    }
+    eventRecorder?.flush();
   }
 
   return releaseAndReturn({});

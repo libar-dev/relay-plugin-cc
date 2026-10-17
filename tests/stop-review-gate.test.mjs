@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { buildEnv, installFakeCodex } from "./fakes/codex.mjs";
 import { initGitRepo, makeTempDir, run } from "./support/helpers.mjs";
+import { backendReadyEnv } from "./support/backend-ready.mjs";
 import { findJobDirs, PLUGIN_ROOT, SCRIPT, STOP_HOOK, waitFor, setupEnv } from "./support/runtime-fixture.mjs";
 
 function stopGateRepo(behavior = "review-ok", options = {}) {
@@ -267,6 +268,7 @@ for (const hung of ["--version", "app-server"]) {
     const pids = path.join(binDir, "probe.pids");
     fs.writeFileSync(path.join(binDir, "codex"), `#!/bin/sh
 if [ "$1" = "${hung}" ]; then
+  [ -n "$RELAY_TEST_READY_DIR" ] && : > "$RELAY_TEST_READY_DIR/$$"
   echo $$ >> '${pids}'
   '${process.execPath}' -e 'setInterval(() => {}, 1000)' stop-probe-child &
   echo $! >> '${pids}'
@@ -274,7 +276,9 @@ if [ "$1" = "${hung}" ]; then
 fi
 exec '${real}' "$@"
 `, { mode: 0o755 });
-    const allowed = runStopHookWithin(repo, { ...buildEnv(binDir), RELAY_STOP_PROBE_MS: "500" }, { background_tasks: [] }, 8000);
+    // The limit counts from a probe that runs: the one meant to answer does, however slowly it starts.
+    const env = buildEnv(binDir);
+    const allowed = runStopHookWithin(repo, { ...env, RELAY_STOP_PROBE_MS: "500", ...backendReadyEnv(env) }, { background_tasks: [] }, 8000);
     assert.equal(allowed.status, 0, allowed.stderr);
     const probe = hung === "--version" ? "codex --version" : "codex app-server --help";
     const payload = JSON.parse(allowed.stdout);

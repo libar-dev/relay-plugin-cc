@@ -11,7 +11,8 @@ import { acquireWorkerLease, isWorkerAlive, readLease, releaseWorkerLease } from
 import { createJobDir, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { owedMessages, postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
-import { resumeDeadJobOnce } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
+import { DEFAULT_RESUME_MESSAGE, resumeDeadJobOnce } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
+import { loadJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { ownershipDir } from "../plugins/relay/scripts/lib/util/ownership.mjs";
 import { readProcessStartTime, listProcesses } from "../plugins/relay/scripts/lib/util/process.mjs";
 import { awaitOutcome } from "../plugins/relay/scripts/lib/worker/delivery.mjs";
@@ -41,6 +42,16 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     const job = readJobJson(ctx, id);
     process.kill(job.worker.pid, "SIGKILL");
     return job;
+  }
+
+  // The job's attempt `count` runs its turn, and the worker has recorded it. As the turn starts,
+  // the worker writes the turn id, then the message the attempt runs as delivered (turn-started).
+  // A worker killed between the two leaves that message owed, and the next worker runs it again.
+  function turnRecorded(ctx, id, count) {
+    const job = readJobJson(ctx, id);
+    const messageId = job.attempts[count - 1]?.messageId;
+    return job.attempts.length === count && job.turnId && job.worker &&
+      (!messageId || (job.messages ?? []).some(entry => entry.id === messageId && entry.action === "turn-started"));
   }
 
   async function waitInput(ctx, id) {
@@ -96,10 +107,7 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     const id = await start(ctx);
     const waiting = waitAsync(ctx, await waitInput(ctx, id));
     killWorker(ctx, id);
-    await waitFor(() => {
-      const job = readJobJson(ctx, id);
-      return job.attempts.length === 2 && job.turnId && job.worker;
-    });
+    await waitFor(() => turnRecorded(ctx, id, 2));
     const second = killWorker(ctx, id);
     const result = await waiting;
     assert.equal(result.status, 3, result.stdout + result.stderr);
@@ -119,15 +127,15 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     const id = await start(ctx);
     killWorker(ctx, id);
     const waiting = waitAsync(ctx, await waitInput(ctx, id));
-    await waitFor(() => readJobJson(ctx, id).attempts.length === 2 && readJobJson(ctx, id).turnId);
+    await waitFor(() => turnRecorded(ctx, id, 2));
     killWorker(ctx, id);
     assert.equal((await waiting).status, 3);
     // A user continue starts new work, which earns its own one retry.
     assert.equal(companion(ctx, ["continue", id, "--message", "New user work"]).status, 0);
-    await waitFor(() => readJobJson(ctx, id).attempts.length === 3 && readJobJson(ctx, id).turnId);
+    await waitFor(() => turnRecorded(ctx, id, 3));
     killWorker(ctx, id);
     const waitingAgain = waitAsync(ctx, await waitInput(ctx, id));
-    await waitFor(() => readJobJson(ctx, id).attempts.length === 4 && readJobJson(ctx, id).turnId);
+    await waitFor(() => turnRecorded(ctx, id, 4));
     assert.equal(readJobJson(ctx, id).automaticResumes.length, 2);
     // Delivering a message into the automatic turn earns a fresh retry too.
     assert.equal(companion(ctx, ["steer", id, "--message", "User correction"]).status, 0);
@@ -156,7 +164,7 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     const id = await start(ctx);
     killWorker(ctx, id);
     const waiting = waitAsync(ctx, await waitInput(ctx, id));
-    await waitFor(() => readJobJson(ctx, id).attempts.length === 2 && readJobJson(ctx, id).turnId);
+    await waitFor(() => turnRecorded(ctx, id, 2));
     killWorker(ctx, id);
     assert.equal((await waiting).status, 3);
     ctx.env.FAKE_CODEX_RESUME_DELAY_MS = "30000";
@@ -455,6 +463,40 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     });
   }
 
+  // A default resume that the owed brief makes redundant is closed only once the brief's attempt
+  // is on the job. Closed sooner, it left nothing owed while the job still named its dead worker,
+  // and a reader took the job for dead as the new worker was about to run the brief.
+  test("a default resume skipped for the owed brief is closed only once the brief's attempt is on the job", async (t) => {
+    const binDir = makeTempDir();
+    installFakeCodex(binDir, "job", { turnMs: 50 });
+    const work = makeTempDir("relay-work-skip-");
+    const home = makeTempDir("relay-jobs-skip-");
+    const jobId = `job-skip-${Date.now()}`;
+    const { jobDir } = createJobDir(work, jobId, { RELAY_JOBS_HOME: home });
+    fs.writeFileSync(path.join(jobDir, "brief.md"), "First work.\n");
+    // The brief went out, and its worker died before it saw the brief start.
+    writeJob(jobDir, {
+      id: jobId, kind: "task", state: "running", createdAt: new Date().toISOString(),
+      request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: work }), pendingFirstTurn: true,
+      worker: { pid: 999999, startTime: "gone" }, attempts: [{ attempt: 1, source: "brief", state: "running" }]
+    });
+    const resume = postInboxMessage(jobDir, { kind: "resume", text: DEFAULT_RESUME_MESSAGE, isDefault: true });
+    // The job as a reader sees it right after the resume's outcome is published.
+    let seen = null;
+    const { renameSync } = fs;
+    t.after(() => { fs.renameSync = renameSync; });
+    fs.renameSync = function (from, to, ...rest) {
+      const result = renameSync.call(this, from, to, ...rest);
+      if (!seen && path.basename(String(to)) === `${resume.id}.json` && readOutcome(jobDir, resume.id)) seen = loadJobView(jobDir).state;
+      return result;
+    };
+    const job = await runWorker(jobDir, { env: { ...buildEnv(binDir), RELAY_JOBS_POLL_MS: "50" } });
+    assert.equal(readOutcome(jobDir, resume.id).action, "skipped");
+    assert.equal(seen, "starting");
+    assert.equal(job.state, "completed");
+    assert.deepEqual(job.attempts.map((attempt) => attempt.source), ["brief", "brief"]);
+  });
+
   // A worker records itself and its attempt before it sweeps, so a cancel
   // that arrives during the sweep sees the new attempt, not the job's old completed state.
   test("a cancel during the new worker's sweep stops the follow-up", async (t) => {
@@ -659,7 +701,10 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
         require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(launch)}], { stdio: 'ignore' }).unref();
       }\n`;
       fs.writeFileSync(binary, fs.readFileSync(binary, 'utf8').replace('\n', '\n' + inject));
-      const { id } = startJob(outer, header, 'Outer task');
+      // The outer brief runs until the test kills its server: a turn on a timer could end first
+      // when the nested job starts slowly, and a server killed after its turn needs no recovery.
+      // The resumed turn takes the fake's 3 s.
+      const { id } = startJob(outer, header, '[long] Outer task');
       const innerDir = await waitFor(() => jobDirs(inner).find(dir => JSON.parse(fs.readFileSync(path.join(dir, 'job.json'))).state === 'running'));
       const innerId = path.basename(innerDir);
       const before = readJob(inner, innerId);

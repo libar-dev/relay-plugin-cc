@@ -29,7 +29,10 @@ async function completed(ctx) {
   assert.ok(jobId, started.stdout + started.stderr);
   assert.equal(companion(ctx, ["wait", jobId, "--timeout-seconds", "10"]).status, 0);
   const dir = jobDirOf(ctx, jobId);
-  await waitFor(() => !readLease(dir));
+  // A worker that releases its lease looks at the inbox once more and runs a message it finds
+  // there. The job has no consumer only once that process has ended.
+  const { worker } = readJobJson(ctx, jobId);
+  await waitFor(() => !readLease(dir) && !isWorkerAlive(worker));
   return { jobId, dir };
 }
 
