@@ -36,7 +36,7 @@ Requirements:
 - Node.js 22 or later.
 - macOS or Linux. The process sweep reads the process table with `ps`.
 - At least one backend CLI, signed in: the Codex CLI, Grok Build, ZCode or Kimi Code. This release
-  was checked against Codex 0.162.0, Grok Build 1.0.50, ZCode 3.14.4 and Kimi Code 2.2.0.
+  was checked live with Codex 0.163.0, Grok Build 1.0.60, ZCode 3.15.3 and Kimi Code 2.2.0.
 
 ```bash
 claude plugin marketplace add libar-dev/relay-plugin-cc
