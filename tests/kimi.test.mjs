@@ -511,9 +511,10 @@ test("Kimi's refusals fail the start with its words: an unknown effort, an unkno
   for (const [header, options, expected] of [
     ["backend: kimi\nmodel: kimi-code/k3\neffort: medium", {}, /Unknown thinking value: medium/],
     ["backend: kimi\nmodel: kimi-code/nope\neffort: low", {}, /Internal error: Model "kimi-code\/nope" is not configured in config\.toml\./],
-    // Kimi checks the sign-in at session/new: the advice names the job's own home.
-    [HEADER, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\/\.kimi-code: run `KIMI_CODE_HOME=.*\/\.kimi-code kimi login`\./],
-    [`${HEADER}\nkimi-home: jobs`, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\/\.kimi-code-jobs: run `KIMI_CODE_HOME=.*\/\.kimi-code-jobs kimi login`\./]
+    // Kimi checks the sign-in at session/new: the advice names the job's own home and the region,
+    // since a home with no login and no region marker signs in to kimi.com.
+    [HEADER, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\/\.kimi-code: run `KIMI_CODE_HOME=.*\/\.kimi-code kimi login --region global` \(--region mainland-cn for a kimi\.com account\)\./],
+    [`${HEADER}\nkimi-home: jobs`, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\/\.kimi-code-jobs: run `KIMI_CODE_HOME=.*\/\.kimi-code-jobs kimi login --region global` \(--region mainland-cn for a kimi\.com account\)\./]
   ]) {
     const ctx = fixture(t, options);
     const { id } = startJob(ctx, header, "[quick] Refused.");
@@ -693,7 +694,7 @@ test("setup checks the version and the providers without starting acp; a signed-
     assert.equal(block.home, home);
     assert.equal(block.version, "2.2.0-fake");
     assert.equal(block.signIn.state, signedOut ? "signed-out" : "credentials-present");
-    if (signedOut) assert.match(block.signIn.detail, /no provider is configured \(sign in: KIMI_CODE_HOME=.* kimi login; see kimi-home\.md\)/);
+    if (signedOut) assert.match(block.signIn.detail, /no provider is configured \(sign in: KIMI_CODE_HOME=.* kimi login --region global, or --region mainland-cn for a kimi\.com account; see kimi-home\.md\)/);
     assert.deepEqual(ctx.kimi().invocations.map(call => call.args.join(" ")).sort(), ["--version", "provider list --json"]);
     assert.equal(ctx.kimi().invocations.find(call => call.args[0] === "provider").env.KIMI_CODE_HOME, home);
     assert.ok(ctx.kimi().invocations.every(call => call.env.KIMI_CODE_TRUST_WORKSPACE === undefined));

@@ -1,6 +1,6 @@
 {
   "name": "@libar-dev/relay-plugin-cc",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "type": "module",
   "description": "Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents.",

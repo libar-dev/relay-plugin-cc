@@ -23,7 +23,7 @@ A backend is named by its harness. The model family goes in `model:`.
 | `codex` (default) | Codex CLI app-server | GPT models | `codex login` |
 | `grok` | `grok agent stdio` | Grok models | `grok login` in the selected Grok home |
 | `zcode` | `zcode app-server` | GLM (GLM-5.3, GLM-5.3-Flash), the only route for it | `zcode login` |
-| `kimi` | `kimi acp` | Kimi models (K3, K2.8, K2.7) | `kimi login` in the selected Kimi home |
+| `kimi` | `kimi acp` | Kimi models (K3, K2.8, K2.7) | `kimi login --region global` (or `mainland-cn`) in the selected Kimi home |
 
 `/relay:review` and `/relay:adversarial-review` run on any backend (`--backend`, Codex unless
 chosen). The stop-time review gate and transfer run on Codex.
@@ -273,7 +273,7 @@ runs on command hooks and the transcript.
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.1.0. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.1.1. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
@@ -293,6 +293,11 @@ removes it at exit once no test process runs from it. A directory whose run was 
 is removed by the next run once its recorded owner is gone. `RELAY_TEST_KEEP_TMP=1 npm test` keeps
 the directory of a file that failed; no later run removes it, so delete it yourself. `npm run check`
 type-checks every script with TypeScript, without an installed Codex CLI.
+
+`claude plugin marketplace update` installs a new build only when the plugin's version goes up.
+Every release that changes the plugin bumps it with `node scripts/bump-version.mjs <version>`,
+which sets the manifests, `package.json` and `package-lock.json` (`npm run check-version` checks
+them); the version named above in this section is set by hand.
 
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
 [docs/backends.md](docs/backends.md) for the backend contract,

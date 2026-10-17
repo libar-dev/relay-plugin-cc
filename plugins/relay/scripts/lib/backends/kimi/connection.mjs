@@ -9,6 +9,7 @@ import { ACP_INITIALIZE_PARAMS, ACP_CHUNKS, acpInitializeParams, acpUpdate, open
 import { partialLineNote, SpawnedServerClient } from "../transport/stdio-rpc.mjs";
 import { KimiWire, wireFile } from "./wire.mjs";
 import { KimiFileReads, ReadRefused } from "./files.mjs";
+import { kimiLoginCommand, KIMI_REGION_HINT } from "./request.mjs";
 
 // How often a turn's records are read, and how long a prompt Kimi answered may go unrecorded
 // while no other turn runs before it counts as never launched.
@@ -315,7 +316,7 @@ export class KimiConnection {
   requestError(error) {
     const failure = rpcError(error);
     if (error.data?.code === -32000) {
-      failure.message = `${failure.message}. Kimi needs a sign-in for ${this.request.kimiHome}: run \`KIMI_CODE_HOME=${this.request.kimiHome} kimi login\`.`;
+      failure.message = `${failure.message}. Kimi needs a sign-in for ${this.request.kimiHome}: run \`${kimiLoginCommand(this.request.kimiHome)}\` (${KIMI_REGION_HINT}).`;
     }
     return failure;
   }
