@@ -5,9 +5,9 @@ it runs a Claude agent, and the job does not get lost. This page says how the pl
 why. Read it before you change the plugin.
 
 [architecture.md](architecture.md) has the code layout and the module rules,
-[backends.md](backends.md) the backend contract, the [README](../README.md) installation and the
-commands, and the `relay:jobs` skill ([SKILL.md](../plugins/relay/skills/jobs/SKILL.md)) what the
-main thread is told. Issue references name `openai/codex-plugin-cc`, where this started.
+[backends.md](backends.md) the backend contract, [kimi.md](kimi.md) what the Kimi backend rests on,
+the [README](../README.md) installation and the commands, and the `relay:jobs` skill
+([SKILL.md](../plugins/relay/skills/jobs/SKILL.md)) what the main thread is told. Issue references name `openai/codex-plugin-cc`, where this started.
 
 ## The interface the main thread sees
 
@@ -583,6 +583,10 @@ binaries and never start a real backend.
   because its context is lost.
 
 ### Kimi
+
+[kimi.md](kimi.md) has the Kimi Code 2.2.0 facts this section rests on, how they were probed and
+how to check a new Kimi version, the reason for each choice below, and Kimi's features left for
+later.
 
 - **Protocol.** `kimi acp` speaks ACP. A new job sends `session/new`, continue and recovery
   `session/load`, both with an empty MCP server list, then `session/set_mode`, and

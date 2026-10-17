@@ -295,5 +295,6 @@ the directory of a file that failed; no later run removes it, so delete it yours
 type-checks every script with TypeScript, without an installed Codex CLI.
 
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
-[docs/backends.md](docs/backends.md) for the backend contract, and
-[docs/design.md](docs/design.md) for the behavior and the reasons behind it.
+[docs/backends.md](docs/backends.md) for the backend contract,
+[docs/design.md](docs/design.md) for the behavior and the reasons behind it, and
+[docs/kimi.md](docs/kimi.md) for what the Kimi backend rests on and how to check a new Kimi version.

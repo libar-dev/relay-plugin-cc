@@ -287,7 +287,8 @@ change, and keep the drivers and their logs with the findings. Establish:
   the client.
 
 When headless sign-in, a terminal status for each turn, or a restore after a killed server fails,
-stop: the backend cannot meet the job contract as it stands.
+stop: the backend cannot meet the job contract as it stands. [kimi.md](kimi.md#the-probe) is a
+worked example: the probe of Kimi Code 2.2.0, what it found, and what to check on a new version.
 
 ### Build it
 
