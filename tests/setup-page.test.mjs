@@ -12,6 +12,7 @@ import { installFakeGrok } from "./fakes/grok.mjs";
 import { installFakeZcode } from "./fakes/zcode.mjs";
 import { installFakeKimi, signInFakeKimiHome } from "./fakes/kimi.mjs";
 import { run } from "./support/helpers.mjs";
+import { backendReadyEnv } from "./support/backend-ready.mjs";
 
 const BLOCK_KEYS = ["backend", "home", "homeDefault", "selector", "binary", "binaryIsScript", "realBinary", "version", "signIn",
   "model", "modelNote", "effort", "effortNote", "modelsReason", "models", "can", "warnings", "ready", "error", "elapsedMs"].sort();
@@ -214,7 +215,8 @@ function wrapBinary(ctx, name, { barrier = null, gate = null, parties = 0, versi
     );
   }
   if (versionExit != null) lines.push(`if [ "$1" = "--version" ]; then echo "${name} wrapper failed" >&2; exit ${versionExit}; fi`);
-  lines.push(`'${real}' "$@"`);
+  // exec: the fake keeps the wrapper's pid, by which it says it runs (backend-ready.mjs).
+  lines.push(`exec '${real}' "$@"`);
   fs.writeFileSync(path.join(ctx.bin, name), `${lines.join("\n")}\n`, { mode: 0o755 });
   return () => fs.readFileSync(pids, "utf8").trim().split("\n").filter(Boolean).map(Number);
 }
@@ -239,7 +241,9 @@ test("a check that hangs answers with its time limit while the others finish, an
   const grokPids = wrapBinary(ctx, "grok");
   // A command that fails leaves its child behind too.
   const zcodePids = wrapBinary(ctx, "zcode", { versionExit: 3 });
-  const limits = { FAKE_CODEX_SETUP_HANG: "1", RELAY_SETUP_SERVER_MS: "800", RELAY_SETUP_COMMAND_MS: "600" };
+  // Each limit counts from a process that runs: the checks meant to finish must, however slowly
+  // the fakes start, and only the hanging ones reach their limits.
+  const limits = { FAKE_CODEX_SETUP_HANG: "1", RELAY_SETUP_SERVER_MS: "800", RELAY_SETUP_COMMAND_MS: "600", ...backendReadyEnv(ctx.env) };
   const { status, page: report } = page(ctx, [], limits);
   assert.equal(status, 0);
   for (const codex of report.backends.filter(block => block.backend === "codex")) {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { writeExecutable } from "../support/helpers.mjs";
+import { READY_SOURCE } from "../support/backend-ready.mjs";
 
 // A fake `zcode app-server`: NDJSON `{id, method, params}`, v4 commands, the session
 // subscription's `session/event` notifications, reverse requests, and a command store and
@@ -30,6 +31,9 @@ if (options.stubborn) {
   const kid = require('node:child_process').spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: 'ignore' });
   state.children = [...(state.children || []), kid.pid]; save();
 }
+// The server says it runs once its start is recorded and, if stubborn, its handler and child are in
+// place (tests/support/backend-ready.mjs).
+${READY_SOURCE}
 let sessionId = null, active = null, seq = 0, serverIds = 0, drafts = 0;
 const provider = options.provider ?? 'account:fake-plan';
 const current = { providerId: provider, modelId: 'GLM-5.3', options: { reasoningLevel: 'max' } };

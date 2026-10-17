@@ -4,6 +4,7 @@ import process from "node:process";
 
 import { writeExecutable } from "../support/helpers.mjs";
 import { realHomeGuardSource } from "../support/isolate-env.mjs";
+import { READY_SOURCE } from "../support/backend-ready.mjs";
 
 // Source of `leaveChild(spec)`, shared by the fake servers. Only these fakes let a
 // child inherit the server's stdout or stderr. Real backends capture tool output.
@@ -37,6 +38,7 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 const readline = require("node:readline");
 ${realHomeGuardSource("codex")}
+${READY_SOURCE}
 
 	const STATE_PATH = ${JSON.stringify(statePath)};
 	const BEHAVIOR = ${JSON.stringify(behavior)};

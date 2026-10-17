@@ -3,6 +3,7 @@ import path from "node:path";
 import { writeExecutable } from "../support/helpers.mjs";
 import { realHomeGuardSource } from "../support/isolate-env.mjs";
 import { LEAVE_CHILD_SOURCE } from "./codex.mjs";
+import { READY_SOURCE } from "../support/backend-ready.mjs";
 
 export function installFakeGrok(bin, options = {}) {
   const statePath = path.join(bin, "fake-grok-state.json");
@@ -17,6 +18,7 @@ const path = require('node:path');
 const options = ${JSON.stringify(options)};
 ${LEAVE_CHILD_SOURCE}
 ${realHomeGuardSource("grok")}
+${READY_SOURCE}
 const file = ${JSON.stringify(statePath)};
 let state = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { starts: [], requests: [], turns: [], sessions: {} };
 const save = () => { const temp = file + '.' + process.pid; fs.writeFileSync(temp, JSON.stringify(state)); fs.renameSync(temp, file); };

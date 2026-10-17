@@ -7,6 +7,7 @@ import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/
 import { zcodeEventRecorder } from "../plugins/relay/scripts/lib/backends/zcode/connection.mjs";
 import { companion, finishJob, jobDir, jobDirs, promptFile, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 import { installFakeZcode } from "./fakes/zcode.mjs";
+import { backendReadyEnv } from "./support/backend-ready.mjs";
 
 const HEADER = "backend: zcode\nmodel: glm-5.3\neffort: default";
 const UNATTENDED = ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Agent", "SendMessage", "CronCreate", "CronDelete", "CronList", "CronUpdate", "ReadSessionContext"];
@@ -287,7 +288,7 @@ test("setup's ZCode model list: a server that refuses or does not answer is that
     fs.mkdirSync(path.join(ctx.user, ".zcode", "v2"), { recursive: true });
     fs.writeFileSync(path.join(ctx.user, ".zcode", "v2", "credentials.json"), '{"encrypted":"x"}');
     fs.writeFileSync(path.join(ctx.user, ".zcode", "v2", "provider_config.json"), JSON.stringify({ config: { defaultModelSelection: { providerId: "account:fake-plan", modelId: "GLM-5.3" } } }));
-    const result = companion(ctx, ["setup", "--backend", "zcode", "--json"], env);
+    const result = companion(ctx, ["setup", "--backend", "zcode", "--json"], { ...env, ...backendReadyEnv(ctx.env) });
     assert.equal(result.status, 1, result.stderr);
     const [block] = JSON.parse(result.stdout).backends;
     assert.equal(block.ready, false);
@@ -863,13 +864,13 @@ test("setup's ZCode block: no model list, or an empty one, is not ready; a draft
   ]) {
     const ctx = fixture(t, { closeAnswer });
     signed(ctx);
-    const result = companion(ctx, ["setup", "--backend", "zcode", "--json"], { RELAY_SETUP_SERVER_MS: "400" });
+    const result = companion(ctx, ["setup", "--backend", "zcode", "--json"], { RELAY_SETUP_SERVER_MS: "400", ...backendReadyEnv(ctx.env) });
     assert.equal(result.status, 0, closeAnswer);
     const [block] = JSON.parse(result.stdout).backends;
     const warning = `setup's draft ZCode session draft_1 was not closed: ${why}.`;
     assert.deepEqual([block.ready, block.error, block.warnings], [true, null, [warning]], closeAnswer);
     assert.deepEqual(block.models.map(model => model.id), ["account:fake-plan/GLM-5.3", "account:fake-plan/GLM-5.3-Flash"], closeAnswer);
-    assert.ok(companion(ctx, ["setup", "--backend", "zcode"], { RELAY_SETUP_SERVER_MS: "400" }).stdout.split("\n").includes(`warning: ${warning}`), closeAnswer);
+    assert.ok(companion(ctx, ["setup", "--backend", "zcode"], { RELAY_SETUP_SERVER_MS: "400", ...backendReadyEnv(ctx.env) }).stdout.split("\n").includes(`warning: ${warning}`), closeAnswer);
     for (const { pid } of ctx.zcode().starts) await waitFor(() => { try { process.kill(pid, 0); return false; } catch { return true; } }, 5000);
   }
 });
@@ -880,7 +881,7 @@ test("setup ends a ZCode server that ignores SIGTERM, and the child it left in i
   fs.mkdirSync(path.join(ctx.user, ".zcode", "v2"), { recursive: true });
   fs.writeFileSync(path.join(ctx.user, ".zcode", "v2", "credentials.json"), '{"encrypted":"x"}');
   t.after(() => { for (const pid of ctx.zcode().children ?? []) { try { process.kill(pid, "SIGKILL"); } catch {} } });
-  const result = companion(ctx, ["setup", "--backend", "zcode", "--json"], { RELAY_SETUP_SERVER_MS: "150" });
+  const result = companion(ctx, ["setup", "--backend", "zcode", "--json"], { RELAY_SETUP_SERVER_MS: "150", ...backendReadyEnv(ctx.env) });
   assert.equal(result.status, 1, result.stderr);
   assert.equal(JSON.parse(result.stdout).backends[0].error, "no answer in 0.1 s");
   const state = ctx.zcode();
