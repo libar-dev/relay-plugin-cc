@@ -53,6 +53,8 @@ ${realHomeGuardSource("codex")}
 	// turn-order-steer-*: whether the steer has come, and the thread/read requests held until it does.
 	let steerArrived = false;
 	const readsAwaitingSteer = [];
+	// turn-order-collab-read-race: the thread/read replies held until the steer has come.
+	const repliesAwaitingSteer = [];
 
 	function loadState() {
 	  for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -479,7 +481,9 @@ rl.on("line", (line) => {
         const status = BEHAVIOR.slice("turn-order-collab-".length);
         const turn = buildTurn(state.lastTurnStart.turnId, status === "unknown-status" ? "waiting" : ["failed", "interrupted", "inProgress"].includes(status) ? status : "completed", status === "failed" ? { message: "read found failure" } : null);
         const response = { id: message.id, result: { thread: { ...buildThread(ensureThread(state, message.params.threadId)), turns: [buildTurn("unrelated", "completed"), ...(status === "missing" ? [] : [turn])] } } };
-        if (status === "read-race") setTimeout(() => send(response), 500);
+        // read-race: the reply goes once the steer is answered, so it is in flight while the steer
+        // lands, however slowly the steer comes.
+        if (status === "read-race" && !steerArrived) repliesAwaitingSteer.push(response);
         else send(response);
         break;
       }
@@ -734,7 +738,9 @@ rl.on("line", (line) => {
             // The turn ends once its steer is answered (turn/steer), however late the steer comes.
           } else if (!BEHAVIOR.startsWith("turn-order-collab-") || BEHAVIOR === "turn-order-collab-read-race") {
             const end = () => finishJobTurn(turnId, BEHAVIOR === "turn-order-final-failed" ? "failed" : "completed");
-            entry.timer = setTimeout(() => { if (entry.awaitingAnswer) entry.whenAnswered = end; else end(); }, 900);
+            // read-race: the turn ends once the steer is answered, too, however late it comes.
+            const held = () => entry.awaitingAnswer || (BEHAVIOR === "turn-order-collab-read-race" && !steerArrived);
+            entry.timer = setTimeout(() => { if (held()) entry.whenAnswered = end; else end(); }, 900);
           }
           break;
         }
@@ -997,6 +1003,13 @@ rl.on("line", (line) => {
         } else {
 	          send({ id: message.id, result: { turnId: message.params.expectedTurnId } });
           if (BEHAVIOR === "turn-order-steer-accepted") finishJobTurn(message.params.expectedTurnId, "completed");
+          if (BEHAVIOR === "turn-order-collab-read-race") {
+            steerArrived = true;
+            for (const response of repliesAwaitingSteer.splice(0)) send(response);
+            const end = turn.whenAnswered;
+            turn.whenAnswered = null;
+            end?.();
+          }
         }
 	        break;
 	      }
