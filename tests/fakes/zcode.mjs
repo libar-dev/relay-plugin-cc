@@ -73,7 +73,7 @@ function startTurn(input) {
   // steered: the test steers this turn. The turn ends only once the guide is in (drained, held, or
   // queued for the next turn), however late it comes, so a slow steer never meets an idle server.
   if (options.steered && !input.text.startsWith('[quick]')) asked.push(new Promise(resolve => { turn.guided = resolve; }));
-  turn.timer = setTimeout(() => Promise.all(asked).then(() => { if (active === turn) finish(options.resultType ?? 'success'); }), input.text.startsWith('[quick]') ? 30 : options.turnMs ?? 100);
+  turn.timer = setTimeout(() => Promise.all(asked).then(() => { if (active === turn) finish(options.resultType ?? 'success'); }), input.text.startsWith('[quick]') ? 30 : input.text.startsWith('[long]') ? 30000 : options.turnMs ?? 100);
 }
 function finish(resultType) {
   const turn = active;

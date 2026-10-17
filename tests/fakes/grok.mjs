@@ -155,7 +155,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       // steered: the test steers this turn, which ends only once the interjection is answered,
       // however late it comes, so a slow steer never meets an idle server.
       if (options.steered && !text.startsWith('[quick]')) turn.unanswered.add('steer');
-      turn.timer = setTimeout(() => endAnswered(turn, options.stopReason), text.startsWith('[quick]') ? 30 : options.turnMs || 100);
+      turn.timer = setTimeout(() => endAnswered(turn, options.stopReason), text.startsWith('[quick]') ? 30 : text.startsWith('[long]') ? 30000 : options.turnMs || 100);
       break;
     }
     case '_x.ai/interject': {

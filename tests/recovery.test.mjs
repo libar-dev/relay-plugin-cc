@@ -701,7 +701,10 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
         require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(launch)}], { stdio: 'ignore' }).unref();
       }\n`;
       fs.writeFileSync(binary, fs.readFileSync(binary, 'utf8').replace('\n', '\n' + inject));
-      const { id } = startJob(outer, header, 'Outer task');
+      // The outer brief runs until the test kills its server: a turn on a timer could end first
+      // when the nested job starts slowly, and a server killed after its turn needs no recovery.
+      // The resumed turn takes the fake's 3 s.
+      const { id } = startJob(outer, header, '[long] Outer task');
       const innerDir = await waitFor(() => jobDirs(inner).find(dir => JSON.parse(fs.readFileSync(path.join(dir, 'job.json'))).state === 'running'));
       const innerId = path.basename(innerDir);
       const before = readJob(inner, innerId);
