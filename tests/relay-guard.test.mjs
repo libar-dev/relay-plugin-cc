@@ -34,7 +34,8 @@ import {
   workflowEntry
 } from "./support/relay-fixture.mjs";
 import { handleRelayHook, parseCompanionCommand } from "../plugins/relay/scripts/hooks/relay-guard.mjs";
-import { findRelayJob, parseRelayTranscript, promptSha256, readRelayPointer, relayAgentTypes, RELAY_BLOCK_BUDGET, stripRetrySuffix, transcriptCandidates } from "../plugins/relay/scripts/lib/harness/relay.mjs";
+import { findRelayJob, parseRelayTranscript, promptSha256, readRelayPointer, relayAgentTypes, RELAY_BLOCK_BUDGET, stripRetrySuffix, transcriptCandidates, writeGuardState } from "../plugins/relay/scripts/lib/harness/relay.mjs";
+import { busyViews } from "./support/busy-view.mjs";
 import { parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { classifyHarnessEntry, SCHEMA_SENTENCE } from "../plugins/relay/scripts/lib/harness/workflow.mjs";
 
@@ -301,6 +302,36 @@ test("a received message not yet delivered blocks the hand-back, then a follow-u
   assert.equal(updated(last).message, resultOf(ctx, jobId));
   assert.match(updated(last).message, /^attempts: 2$/m);
   assert.match(updated(last).message, /Report for: \[held\] Follow-up\./);
+});
+
+// A busy job (its record changing during every view) is at work, as a running one is.
+test("while the job is busy, the hand-back and the stop are refused, and the block budget lets no result go; once it holds, the hand-back is rewritten", async () => {
+  const ctx = relayContext("job", { turnMs: 200 });
+  const jobId = await startedRelay(ctx, QUICK);
+  assert.equal(waitJob(ctx, jobId).status, 0);
+  const dir = jobDirOf(ctx, jobId);
+  const busy = `Job ${jobId} is busy: its record changed during each of 8 reads. Try again.`;
+  const wait = `${RELAY_CMD} wait ${jobId} --timeout-seconds 120`;
+  const restore = busyViews(dir);
+  try {
+    const handback = await pre(ctx, "SubagentHandback", { message: "x" });
+    assert.equal(decision(handback), "deny");
+    assert.equal(reason(handback), `${busy} Do not hand back yet. Run: ${wait}`);
+    const stopped = await stop(ctx, resultOf(ctx, jobId));
+    assert.equal(stopped?.decision, "block");
+    assert.equal(stopped.reason, `${busy} Do not stop. Run: ${wait}`);
+    // At the budget the relay is let go, but never with a result the job does not have.
+    writeGuardState(ctx.env, ctx.agentId, dir, { consecutiveBlocks: RELAY_BLOCK_BUDGET });
+    const released = await pre(ctx, "SubagentHandback", { message: "x" });
+    assert.equal(decision(released), "deny");
+    assert.equal(reason(released), `${busy} Run: ${wait}`);
+  } finally {
+    restore();
+  }
+  assert.match(resultOf(ctx, jobId), new RegExp(`^relay-violation: handback-blocked: the relay was let go after 8 blocks: Job ${jobId} is busy`, "m"));
+  const last = await pre(ctx, "SubagentHandback", { message: "x" });
+  assert.equal(decision(last), "allow");
+  assert.equal(updated(last).message, resultOf(ctx, jobId));
 });
 
 test("without SubagentHandback, SubagentStop still checks the final text", async () => {

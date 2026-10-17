@@ -5,8 +5,9 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HEADER, companion, finishJob, jobDir, readJob, setup, startJob } from "./support/job-helpers.mjs";
+import { HEADER, companion, finishJob, jobDir, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 import { jobPaths } from "../plugins/relay/scripts/lib/jobs/store.mjs";
+import { isWorkerAlive, isWorkerLease, readLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 
 const BUSY_VIEW = new URL("./support/busy-view.mjs", import.meta.url).href;
 const busyLine = id => new RegExp(`^Job ${id} is busy: its record changed during each of 8 reads\\. Try again\\.\\n$`);
@@ -17,7 +18,7 @@ function busy(ctx, dir, options = {}) {
     NODE_OPTIONS: `${ctx.env.NODE_OPTIONS ?? ""} --import=${BUSY_VIEW}`.trim(),
     RELAY_TEST_BUSY_JOB: dir,
     ...(options.reads ? { RELAY_TEST_BUSY_READS: String(options.reads) } : {}),
-    ...(options.until ? { RELAY_TEST_BUSY_UNTIL: options.until } : {})
+    ...(options.within ? { RELAY_TEST_BUSY_WITHIN: options.within } : {})
   };
 }
 
@@ -115,3 +116,43 @@ test("a message sent to a job busy right after is reported sent, never a read to
   assert.deepEqual(job.attempts.map(attempt => attempt.state), ["completed", "completed", "completed"], "each message ran once");
 });
 
+// A job running a long turn under its worker.
+async function runningJob(ctx) {
+  const { id } = startJob(ctx, HEADER, "Long work.");
+  const dir = jobDir(ctx, id);
+  await waitFor(() => readJob(ctx, id).state === "running" && isWorkerLease(readLease(dir)));
+  return { id, dir };
+}
+
+test("cancel of a busy job says it is busy and exits 4, and leaves the job running; once its views hold, cancel ends it", async t => {
+  const ctx = setup(t, { turnMs: 30000 });
+  const { id, dir } = await runningJob(ctx);
+  const { worker } = readJob(ctx, id);
+  const before = posted(dir).length;
+  for (const args of [["cancel", id], ["cancel"]]) {
+    const refused = companion(ctx, args, busy(ctx, dir));
+    assert.equal(refused.status, 4, `${args.join(" ")}: ${refused.stdout}`);
+    assert.equal(refused.stdout, "", args.join(" "));
+    assert.match(refused.stderr, busyLine(id));
+  }
+  assert.equal(posted(dir).length, before, "no cancel was posted");
+  assert.equal(readJob(ctx, id).state, "running");
+  assert.equal(isWorkerAlive(worker), true, "the worker was not stopped");
+  const cancelled = companion(ctx, ["cancel", id]);
+  assert.equal(cancelled.status, 0, cancelled.stderr);
+  assert.match(cancelled.stdout, /^state: cancelled$/m);
+});
+
+// Busy only where cancel waits for the job to end (stateNow): its other reads hold.
+test("cancel's waits take a busy job for one that has not ended: it waits out its grace, then ends the job", async t => {
+  const ctx = setup(t, { turnMs: 30000 });
+  const { id, dir } = await runningJob(ctx);
+  const graceMs = 1000;
+  const startedAt = Date.now();
+  const cancelled = companion(ctx, ["cancel", id], { ...busy(ctx, dir, { within: "stateNow" }), RELAY_JOBS_CANCEL_GRACE_MS: String(graceMs) });
+  const tookMs = Date.now() - startedAt;
+  assert.equal(cancelled.status, 0, cancelled.stderr);
+  assert.match(cancelled.stdout, /^state: cancelled$/m);
+  assert.ok(tookMs >= graceMs, `cancel returned after ${tookMs} ms: it took a busy job for an ended one`);
+  assert.equal(readJob(ctx, id).state, "cancelled");
+});
