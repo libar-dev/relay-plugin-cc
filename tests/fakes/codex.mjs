@@ -407,6 +407,18 @@ if (BEHAVIOR === "home-probe") {
 }
 
 const rl = readline.createInterface({ input: process.stdin });
+// The client closes the server by ending its stdin, and sends SIGTERM 50 ms later if it still
+// runs, which a loaded machine can cause. An idle server, with no turn or timer pending, exits 0
+// either way, through process.exit: a natural exit drops the SIGTERM handler before it ends. A
+// server with work pending keeps running when stdin ends, and SIGTERM kills it, as before.
+const idle = () => !process.getActiveResourcesInfo().some((type) => type === "Timeout" || type === "Immediate");
+process.stdin.on("end", () => { if (idle()) process.exit(0); });
+const onTerm = () => {
+  if (idle()) process.exit(0);
+  process.off("SIGTERM", onTerm);
+  process.kill(process.pid, "SIGTERM");
+};
+process.on("SIGTERM", onTerm);
 rl.on("line", (line) => {
   if (!line.trim()) {
     return;
