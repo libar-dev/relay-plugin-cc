@@ -47,6 +47,9 @@ ${realHomeGuardSource("codex")}
 	const interruptibleTurns = new Map();
 	// Turns of the job behaviors that are still running: turnId -> { threadId, prompt, steers, timer }.
 	const activeTurns = new Map();
+	// turn-order-steer-*: whether the steer has come, and the thread/read requests held until it does.
+	let steerArrived = false;
+	const readsAwaitingSteer = [];
 
 	function loadState() {
 	  for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -443,6 +446,12 @@ rl.on("line", (line) => {
       case "thread/read": {
         record("threadReads", message.params);
         if (BEHAVIOR === "turn-order-collab-silent") break;
+        // turn-order-steer-*: the reply waits for the steer, so relay cannot infer the turn
+        // complete before the steer arrives, however slowly the steer comes.
+        if (BEHAVIOR.startsWith("turn-order-steer-") && !steerArrived) {
+          readsAwaitingSteer.push(message.id);
+          break;
+        }
         if (!BEHAVIOR.startsWith("turn-order-collab-") || BEHAVIOR === "turn-order-collab-unsupported") {
           send({ id: message.id, error: { code: -32601, message: "Unsupported method: thread/read" } });
           break;
@@ -712,6 +721,8 @@ rl.on("line", (line) => {
           }
           if (BEHAVIOR === "turn-order-final-exit" || BEHAVIOR === "turn-order-collab-exit") {
             setTimeout(() => process.exit(0), BEHAVIOR === "turn-order-collab-exit" ? 300 : 800);
+          } else if (BEHAVIOR.startsWith("turn-order-steer-")) {
+            // The turn ends once its steer is answered (turn/steer), however late the steer comes.
           } else if (!BEHAVIOR.startsWith("turn-order-collab-") || BEHAVIOR === "turn-order-collab-read-race") {
             entry.timer = setTimeout(() => finishJobTurn(turnId, BEHAVIOR === "turn-order-final-failed" ? "failed" : "completed"), 900);
           }
@@ -964,10 +975,18 @@ rl.on("line", (line) => {
 	          break;
 	        }
 	        turn.steers.push(text);
+        if (BEHAVIOR.startsWith("turn-order-steer-")) {
+          steerArrived = true;
+          for (const id of readsAwaitingSteer.splice(0)) send({ id, error: { code: -32601, message: "Unsupported method: thread/read" } });
+        }
         if (BEHAVIOR === "turn-order-steer-pending") {
-          setTimeout(() => send({ id: message.id, result: { turnId: message.params.expectedTurnId } }), 400);
+          setTimeout(() => {
+            send({ id: message.id, result: { turnId: message.params.expectedTurnId } });
+            finishJobTurn(message.params.expectedTurnId, "completed");
+          }, 400);
         } else {
 	          send({ id: message.id, result: { turnId: message.params.expectedTurnId } });
+          if (BEHAVIOR === "turn-order-steer-accepted") finishJobTurn(message.params.expectedTurnId, "completed");
         }
 	        break;
 	      }
