@@ -351,14 +351,25 @@ test("a queued prompt that a UserPromptSubmit hook blocks fails the job at once 
 });
 
 test("a worker killed after Kimi recorded the brief is resumed without a second copy", async t => {
-  const ctx = fixture(t, { turnMs: 6000 });
-  ctx.env.RELAY_JOBS_KIMI_POLL_MS = "3000";
+  // Kimi records the brief only once the test creates `release`, and the worker is stopped
+  // before that: it cannot read the record, however often it polls.
+  const release = path.join(makeTempDir("relay-kimi-record-"), "release");
+  const ctx = fixture(t, { turnMs: 6000, recordAfter: release });
   const { id } = startJob(ctx, HEADER, "Keep going.");
-  // Kimi has recorded the brief; the worker, reading slowly, has not seen it yet.
-  await waitFor(() => ctx.kimi().turns.length === 1 && readJob(ctx, id).serverPid);
-  assert.equal(readJob(ctx, id).pendingFirstTurn, true);
-  process.kill(readJob(ctx, id).serverPid, "SIGKILL");
-  process.kill(readJob(ctx, id).worker.pid, "SIGKILL");
+  await waitFor(() => requests(ctx, "session/prompt").length === 1 && readJob(ctx, id).serverPid);
+  const { serverPid, worker } = readJob(ctx, id);
+  process.kill(worker.pid, "SIGSTOP");
+  let pending;
+  try {
+    fs.writeFileSync(release, "");
+    await waitFor(() => ctx.kimi().recorded);
+    pending = readJob(ctx, id).pendingFirstTurn;
+  } finally {
+    process.kill(serverPid, "SIGKILL");
+    process.kill(worker.pid, "SIGKILL");
+  }
+  // Kimi has recorded the brief; the worker has not seen it.
+  assert.equal(pending, true);
   await waitFor(() => companion(ctx, ["status", id]).stdout.includes("state: dead"));
   assert.equal(companion(ctx, ["resume", id]).status, 0);
   await finishJob(ctx, id);

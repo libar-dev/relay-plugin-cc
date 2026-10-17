@@ -267,6 +267,16 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       if (options.dieAfterInput && state.prompts === nth(options.dieAfterInput)) { inputRecord(turn); setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 30); break; }
       // The engine queues a prompt sent during a turn of its own, and ACP answers at once.
       if (own) { own.queuedAt ??= Date.now(); queued.push(turn); state.queuedBehindOwn = (state.queuedBehindOwn || 0) + 1; save(); reply({ stopReason: 'end_turn' }); break; }
+      // The prompt is recorded only once the test creates this file; then state.recorded names it.
+      if (options.recordAfter && !fs.existsSync(options.recordAfter)) {
+        const held = setInterval(() => {
+          if (!fs.existsSync(options.recordAfter)) return;
+          clearInterval(held);
+          startTurn(turn, m.id);
+          state.recorded = turn.promptId; save();
+        }, 10);
+        break;
+      }
       startTurn(turn, m.id);
       break;
     }
