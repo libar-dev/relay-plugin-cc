@@ -100,7 +100,7 @@ test("a turn completes with its report; every request carries the job's settings
 
 test("a running steer is a guide drained into the turn by either id field; an idle steer runs the next turn", async t => {
   for (const drainIds of ["drained", "pending"]) {
-    const ctx = fixture(t, { turnMs: 700, drainIds });
+    const ctx = fixture(t, { turnMs: 700, drainIds, steered: true });
     const { id } = startJob(ctx, HEADER, "First.");
     await waitFor(() => readJob(ctx, id).turnId);
     assert.equal(companion(ctx, ["steer", id, "--message", "Mid-turn."]).status, 0);
@@ -122,7 +122,7 @@ test("a running steer is a guide drained into the turn by either id field; an id
 });
 
 test("a guide that misses its turn runs as ZCode's next turn, and that turn owns the report", async t => {
-  const ctx = fixture(t, { turnMs: 500, guideMiss: true });
+  const ctx = fixture(t, { turnMs: 500, guideMiss: true, steered: true });
   const { id } = startJob(ctx, HEADER, "First.");
   await waitFor(() => readJob(ctx, id).turnId);
   assert.equal(companion(ctx, ["steer", id, "--message", "[quick] Missed."]).status, 0);
@@ -391,7 +391,7 @@ test("a capacity failure fails the turn: ZCode retries its model calls itself, s
 });
 
 test("a steer ZCode accepted but held is reported dropped, never sent twice; a cancel drops it too", async t => {
-  const ctx = fixture(t, { turnMs: 400, guideHold: true });
+  const ctx = fixture(t, { turnMs: 400, guideHold: true, steered: true });
   const { id } = startJob(ctx, HEADER, "First.");
   await waitFor(() => readJob(ctx, id).turnId);
   assert.equal(companion(ctx, ["steer", id, "--message", "[quick] Held."]).status, 0);
@@ -665,7 +665,7 @@ test("an established session that ZCode lost fails continue with lost context, n
 });
 
 test("a read-only steer carries the job's model, build mode and read-only tool lists", async t => {
-  const ctx = fixture(t, { turnMs: 700 });
+  const ctx = fixture(t, { turnMs: 700, steered: true });
   const { id } = startJob(ctx, `${HEADER}\nmode: read-only`, "First.");
   await waitFor(() => readJob(ctx, id).turnId);
   assert.equal(companion(ctx, ["steer", id, "--message", "Mid-turn."]).status, 0);

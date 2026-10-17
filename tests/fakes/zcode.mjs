@@ -66,6 +66,9 @@ function startTurn(input) {
   if (options.mcpAuth) asked.push(requestClient('interaction/requestOfficialMcpAuthHeaders', { mcpKey: 'web_reader', requestId: 'official-mcp-auth:1', targetOrigin: 'https://example.invalid', workspace: {} }).then(reply => { state.replies.push({ method: 'interaction/requestOfficialMcpAuthHeaders', reply }); save(); }));
   if (options.unsupported) asked.push(requestClient('client/missing', { sessionId }).then(reply => { state.replies.push({ method: 'client/missing', reply }); save(); }));
   if (options.browser) asked.push(requestClient('interaction/browserList', { sessionId }).then(reply => { state.replies.push({ method: 'interaction/browserList', reply }); save(); }));
+  // steered: the test steers this turn. The turn ends only once the guide is in (drained, held, or
+  // queued for the next turn), however late it comes, so a slow steer never meets an idle server.
+  if (options.steered && !input.text.startsWith('[quick]')) asked.push(new Promise(resolve => { turn.guided = resolve; }));
   turn.timer = setTimeout(() => Promise.all(asked).then(() => { if (active === turn) finish(options.resultType ?? 'success'); }), input.text.startsWith('[quick]') ? 30 : options.turnMs ?? 100);
 }
 function finish(resultType) {
@@ -95,7 +98,7 @@ function sendText(m, envelope) {
   if (options.dieBeforeFirstSend && !state.diedBeforeSend) { state.diedBeforeSend = true; save(); console.error('fake zcode died before admission'); process.exit(17); }
   if (options.dieAfterAdmit && !state.diedAfterAdmit) { state.diedAfterAdmit = true; admit(); console.error('fake zcode died after admission'); process.exit(17); }
   if (!active) { ack('startNow'); startTurn(input); return; }
-  if (payload.requestedDelivery === 'guide' && options.guideHold) { ack('queue'); state.held = [...(state.held || []), input.commandId]; save(); return; }
+  if (payload.requestedDelivery === 'guide' && options.guideHold) { ack('queue'); state.held = [...(state.held || []), input.commandId]; save(); active.guided?.(); return; }
   if (payload.requestedDelivery === 'guide' && !options.guideMiss) {
     ack('queue');
     event('turn.steerQueued', active.turnId, { pendingInputId: 'queue_' + input.commandId, inputId: input.commandId, input: input.text, inputPreview: input.text, inputSize: input.text.length, delivery: 'guide', targetTurnId: active.turnId, queueLength: 1 });
@@ -105,12 +108,14 @@ function sendText(m, envelope) {
       turn.steers.push(input.text); history().push({ commandId: input.commandId, text: input.text }); save();
       const source = options.drainIds ?? 'both';
       event('turn.steerDrained', turn.turnId, { pendingInputIds: source === 'drained' ? [] : ['queue_' + input.commandId], targetTurnId: turn.turnId, injectedMessageIds: ['msg-steer'], ...(source === 'pending' ? {} : { drainedInputs: [{ pendingInputId: 'queue_' + input.commandId, messageId: 'msg-steer', text: input.text, delivery: 'guide', intent: { sourceCommandId: input.commandId } }] }) });
+      turn.guided?.();
     }, 10);
     return;
   }
   if (payload.requestedDelivery === 'startNow') { finish('cancelled'); clearTimeout(active?.timer); ack('startNow'); setTimeout(() => startTurn(input), 5); return; }
   ack('queue');
   queue.push(input);
+  active.guided?.();
 }
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line);
