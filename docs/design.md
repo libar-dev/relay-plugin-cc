@@ -28,8 +28,11 @@ act. A dead or failed job continues on a message, or on `companion resume <job>`
 message is "Your session was cut off. Continue the task from where you stopped, then write the
 final report." Each queued turn starts a new attempt. A steer inside a running turn and automatic server
 recovery stay in that attempt. The previous attempt's report moves to `attempts/`. A reader reads
-the report once, with the job record it already holds: when the next attempt has just moved it,
-the reader takes it from `attempts/`, so its state and its report come from the same attempt.
+one version of the job: the job record, then the report, the lease and the message account, then
+the record again, and all of it again (up to eight times) when a worker began or ended an
+attempt in between. It renders the report text from the pass that held, and takes a report a
+new attempt has just moved from `attempts/`. So a view never pairs one attempt's state with
+another's report, nor shows a job completed while work owed before the read is running.
 
 ### The prompt
 

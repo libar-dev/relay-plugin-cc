@@ -18,40 +18,61 @@ export const EXIT = {
   cancelled: 5
 };
 
-export function loadJobView(jobDir, options = {}) {
-  let job = readJob(jobDir);
-  if (!job) {
-    throw new Error(`No job.json in ${jobDir}.`);
-  }
-  let view = computeJobView(job, options);
-  if (view.state === "dead") {
-    // The worker may have published its terminal state and exited while the liveness
-    // check ran. Read that publication before reporting a death from an older snapshot.
-    job = readJob(jobDir) ?? job;
-    view = computeJobView(job, options);
-  }
-  const paths = jobPaths(jobDir);
-  const read = readReport(paths, job);
-  const hasReport = Boolean(read?.text.trim());
-  // Owed work is running under a live worker, or undelivered without one.
-  const lease = readLease(jobDir);
-  const workerLive = isWorkerLease(lease);
-  const account = messageAccount(jobDir);
-  if (workerLive && account.undelivered.length > 0) {
-    view = { ...view, state: "running", deadReason: null };
-  }
-  const undelivered = workerLive ? [] : account.undelivered;
-  const relayViolations = readRelayViolations(jobDir);
-  return {
-    job, jobDir, paths, ...view, hasReport, report: hasReport ? read.text : null, reportPath: hasReport ? read.path : null,
-    undelivered, dropped: account.dropped, relayViolations
-  };
+// How many times a view reads the job and its parts before it settles for the last read.
+const VIEW_READS = 8;
+
+// What a worker changes when it begins or ends an attempt: the job's state, how many attempts
+// it has, and which attempt is the last and how it stands.
+function jobVersion(job) {
+  const attempts = Array.isArray(job?.attempts) ? job.attempts : [];
+  const last = attempts.at(-1);
+  return JSON.stringify([job?.state ?? null, attempts.length, last?.attempt ?? null, last?.startedAt ?? null, last?.state ?? null]);
 }
 
-// The report of the attempt the job snapshot names, read once; readers render this copy and
+// A validated read. The view reads the job, then its report, lease and message account, then
+// the job again. When the job changed in between (a worker began an attempt for owed work, or a
+// newer attempt wrote its report), those parts may belong to another version, so the view reads
+// them all again. It renders from the report text it read in the pass that held.
+export function loadJobView(jobDir, options = {}) {
+  for (let pass = 1; ; pass += 1) {
+    let job = readJob(jobDir);
+    if (!job) {
+      throw new Error(`No job.json in ${jobDir}.`);
+    }
+    let view = computeJobView(job, options);
+    if (view.state === "dead") {
+      // The worker may have published its terminal state and exited while the liveness
+      // check ran. Read that publication before reporting a death from an older snapshot.
+      job = readJob(jobDir) ?? job;
+      view = computeJobView(job, options);
+    }
+    const paths = jobPaths(jobDir);
+    const read = readReport(paths, job);
+    const lease = readLease(jobDir);
+    const account = messageAccount(jobDir);
+    const relayViolations = readRelayViolations(jobDir);
+    const again = readJob(jobDir);
+    if (pass < VIEW_READS && (!again || jobVersion(again) !== jobVersion(job))) continue;
+    const hasReport = Boolean(read?.text.trim());
+    // Owed work is running under a live worker, or undelivered without one.
+    const workerLive = isWorkerLease(lease);
+    if (workerLive && account.undelivered.length > 0) {
+      view = { ...view, state: "running", deadReason: null };
+    }
+    const undelivered = workerLive ? [] : account.undelivered;
+    return {
+      job, jobDir, paths, ...view, hasReport, report: hasReport ? read.text : null, reportPath: hasReport ? read.path : null,
+      undelivered, dropped: account.dropped, relayViolations
+    };
+  }
+}
+
+// The report for the attempts the job snapshot names, read once; readers render this copy and
 // never read the file again. A new attempt moves report.md to attempts/<n>-report.md before it
-// records itself, so a snapshot taken before that move finds its report there: the state and the
-// report always come from the same attempt.
+// records itself, so a snapshot taken before that move finds its report there. That alone cannot
+// tell a newer attempt's report.md from its own: loadJobView reads the job again after this read
+// and reads everything again when the attempt changed, which is what keeps state and report
+// together.
 function readReport(paths, job) {
   const attempts = Array.isArray(job.attempts) ? job.attempts.length : 0;
   for (const file of [paths.report, ...(attempts > 0 ? [path.join(paths.attempts, `${attempts}-report.md`)] : [])]) {
