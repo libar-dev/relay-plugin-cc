@@ -233,9 +233,12 @@ The worker records each server it starts (pid and start time) before initializat
 server that dies during initialization leaves an identity, and records its end: exit code or
 signal, an unfinished last line, the last 4096 bytes of stderr. `server.stderr.log` keeps at most
 1 MiB. JSONL lines have no size cap, so multi-megabyte results reach `events.jsonl` intact, and an
-unfinished last line is never parsed. When the server exits while a child of it holds a pipe, the
-client reads for 200 ms more, then closes the pipes, so the end is recorded and every pending
-request settles; a request to a server that has exited fails at once.
+unfinished last line is never parsed. A server that relay closes gets its stdin ended, then
+SIGTERM 50 ms later if it still runs, so a closed server's end record can show SIGTERM; that is
+relay's own close, not a crash, and the job's state was settled before it. When the server exits
+while a child of it holds a pipe, the client reads for 200 ms more, then closes the pipes, so the
+end is recorded and every pending request settles; a request to a server that has exited fails at
+once.
 
 A new worker records itself and its attempt before any await, so a cancel or a reader sees it at
 once. Before it starts a server, it stops every recorded server that has no end record and still

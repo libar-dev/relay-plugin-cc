@@ -294,6 +294,11 @@ is removed by the next run once its recorded owner is gone. `RELAY_TEST_KEEP_TMP
 the directory of a file that failed; no later run removes it, so delete it yourself. `npm run check`
 type-checks every script with TypeScript, without an installed Codex CLI.
 
+`claude plugin marketplace update` installs a new build only when the plugin's version goes up.
+Every release that changes the plugin bumps it with `node scripts/bump-version.mjs <version>`,
+which sets the manifests, `package.json` and `package-lock.json` (`npm run check-version` checks
+them); the version named above in this section is set by hand.
+
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
 [docs/backends.md](docs/backends.md) for the backend contract,
 [docs/design.md](docs/design.md) for the behavior and the reasons behind it, and
