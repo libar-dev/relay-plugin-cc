@@ -287,8 +287,11 @@ outside any sandbox. Its process tests use `ps` to find and stop test processes.
 fake backend binaries and never start a real backend. A few tests depend on timing (the 50 ms grace
 before a closing server gets SIGTERM, a transport test with a 5-second child) and can fail on a busy
 machine, for example with several suites running at once; each passes alone, so rerun a failure on
-an idle machine before reading it as a regression. `npm run check` type-checks every script with
-TypeScript, without an installed Codex CLI.
+an idle machine before reading it as a regression. Each test file's process keeps its temporary
+files under one `relay-test-run-*` directory in the temp directory, which `TMPDIR` points at, and
+removes it at exit once no test process runs from it; `RELAY_TEST_KEEP_TMP=1 npm test` keeps the
+directory of a file that failed. `npm run check` type-checks every script with TypeScript, without
+an installed Codex CLI.
 
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
 [docs/backends.md](docs/backends.md) for the backend contract, and

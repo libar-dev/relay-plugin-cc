@@ -2,7 +2,55 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { spawnSync } from "node:child_process";
 import { after } from "node:test";
+
+// One temporary root per test process. TMPDIR points at it, so every temporary directory this
+// process makes and every process it starts lands under it. At exit the root goes, once no
+// process runs from it any more: one still running keeps it, and its path and the pids are
+// printed. RELAY_TEST_KEEP_TMP=1 keeps the root of a run that failed.
+if (!process.env.RELAY_TEST_ROOT) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-test-run-"));
+  process.env.RELAY_TEST_ROOT = root;
+  process.env.TMPDIR = root;
+  process.on("exit", code => removeTestRoot(root, code));
+}
+
+// Processes other than this one whose working directory or command line is under `root`.
+function processesUnder(root) {
+  const inside = text => text === root || text.startsWith(root + path.sep) || text.includes(root + path.sep);
+  if (process.platform === "linux") {
+    const pids = [];
+    for (const name of fs.readdirSync("/proc")) {
+      if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
+      try {
+        if (inside(fs.readlinkSync(`/proc/${name}/cwd`)) || inside(fs.readFileSync(`/proc/${name}/cmdline`, "utf8").replaceAll("\0", " "))) pids.push(Number(name));
+      } catch { /* gone, or a zombie */ }
+    }
+    return pids;
+  }
+  const listed = spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" });
+  return String(listed.stdout ?? "").split("\n").map(line => /^\s*(\d+)\s(.*)$/.exec(line)).filter(match => match && Number(match[1]) !== process.pid && inside(match[2])).map(match => Number(match[1]));
+}
+
+function removeTestRoot(root, code) {
+  if (code !== 0 && process.env.RELAY_TEST_KEEP_TMP === "1") {
+    process.stderr.write(`note: kept the test root of a failed run: ${root}\n`);
+    return;
+  }
+  // The exit handler is synchronous: wait for stragglers up to 5 s.
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  let running = processesUnder(root);
+  for (let waited = 0; running.length > 0 && waited < 5000; waited += 100) {
+    Atomics.wait(pause, 0, 0, 100);
+    running = processesUnder(root);
+  }
+  if (running.length > 0) {
+    process.stderr.write(`note: kept the test root ${root}: processes still run from it: ${running.join(", ")}\n`);
+    return;
+  }
+  try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* the next run's leftovers check names it */ }
+}
 
 // Tests run inside Claude Code sessions where hooks of an installed relay plugin export
 // variables that change where state goes and which jobs a command can see. Strip them so
