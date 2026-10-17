@@ -14,6 +14,9 @@ import { realHomeGuardSource } from "../support/isolate-env.mjs";
 export function installFakeKimi(bin, options = {}) {
   const statePath = path.join(bin, "fake-kimi-state.json");
   const binary = path.join(bin, "kimi");
+  // The fake's source is the template literal below, built here: a backtick or ${ in it must be
+  // escaped (\` and \${), or it ends the string or interpolates this process's values. The
+  // ${...} already in it are deliberate.
   writeExecutable(binary, `#!/usr/bin/env node
 const fs = require('node:fs');
 const readline = require('node:readline');
@@ -47,7 +50,16 @@ let sessionId, active = null, own = null, mode = 'default', model = 'kimi-code/k
 const pendingReverse = new Map();
 const queued = [];
 const update = value => send({ method: 'session/update', params: { sessionId, update: value } });
-const reverse = (method, params) => { const id = reverseId++; pendingReverse.set(id, method); send({ id, method, params: { sessionId, ...params } }); return id; };
+// Kimi's tools wait for the client's answer to each request they send. A request belongs to the
+// turn that sent it, and the turn ends only once every answer is in and recorded.
+const askedBy = new Map();
+const reverse = (method, params) => {
+  const id = reverseId++;
+  pendingReverse.set(id, method);
+  if (active) { active.unanswered.add(id); askedBy.set(id, active); }
+  send({ id, method, params: { sessionId, ...params } });
+  return id;
+};
 const calls = new Map();
 const call = (method, params) => new Promise((resolve, reject) => calls.set(reverse(method, params), { resolve, reject }));
 // Kimi's AcpHostFileSystem: text reads and writes go to a client that declares them, and append,
@@ -101,7 +113,8 @@ function configOptions() {
   ];
 }
 function startTurn(turn, rpcId) {
-  active = { ...turn, rpcId };
+  active = { ...turn, rpcId, unanswered: new Set() };
+  const current = active;
   state.turns.push({ text: turn.text, promptId: turn.promptId, turnId: turn.turnId, sessionId, mode }); save();
   promptRecords(turn, 'user');
   if (options.dieAfterRecord && state.turns.length === 1) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 50); return; }
@@ -132,7 +145,7 @@ function startTurn(turn, rpcId) {
   }
   if (options.die) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 80); return; }
   const ms = turn.text.startsWith('[quick]') ? 30 : turn.text.startsWith('[long]') ? 30000 : options.turnMs || 100;
-  const schedule = () => { if (active?.turnId === turn.turnId) active.timer = setTimeout(() => finish(options.failTurn ? 'failed' : 'completed'), ms); };
+  const schedule = () => { if (active === current) current.timer = setTimeout(() => endAnswered(current, options.failTurn ? 'failed' : 'completed'), ms); };
   // The file operations run in the first turn that reaches them, not again after a recovery.
   if (!options.fileOps || state.fileOpsRan) return schedule();
   state.fileOpsRan = true; save();
@@ -143,9 +156,17 @@ function startTurn(turn, rpcId) {
     schedule();
   })();
 }
+// The turn ends when its time is up and every request it sent has its answer.
+function endAnswered(turn, reason) {
+  if (active !== turn) return;
+  if (turn.unanswered.size > 0) { turn.whenAnswered = () => endAnswered(turn, reason); return; }
+  finish(reason);
+}
 function finish(reason) {
   if (!active) return;
   const turn = active; active = null; clearTimeout(turn.timer);
+  // Saved before the records that end the turn: relay reads those, and a test reads this after.
+  state.completed = [...(state.completed || []), { text: turn.text, reason }]; save();
   if (reason === 'completed') {
     const answer = process.env.FAKE_REVIEW_ANSWER ?? options.answer ?? 'Report for: ' + turn.text;
     if (turn.rpcId !== null) for (const text of [answer.slice(0, 3), answer.slice(3)]) if (text) update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
@@ -156,7 +177,6 @@ function finish(reason) {
   record({ type: 'agent.turn.ended', kind: 'event', turnId: turn.turnId, outcome: reason === 'completed' ? 'done' : reason });
   record({ type: 'turn.ended', agentId: 'main', turnId: turn.turnId, reason, ...(error ? { error } : {}) });
   if (reason !== 'cancelled') record({ type: 'prompt.completed', agentId: 'main', promptId: turn.promptId, reason });
-  state.completed = [...(state.completed || []), { text: turn.text, reason }]; save();
   // Kimi starts a turn of its own as it goes idle, before ACP's answer reaches the client.
   if (options.ownTurnAfterMs && !state.ownTurnRan) { state.ownTurnRan = true; save(); if (options.ownTurnAfterMs <= 1) ownTurn(); else setTimeout(ownTurn, options.ownTurnAfterMs); }
   // Kimi's ACP layer answers end_turn for a failed turn.
@@ -187,17 +207,30 @@ function ownTurn() {
     const next = queued.shift();
     // A UserPromptSubmit hook that blocks: the message stays in Kimi's context, and no turn runs.
     if (next && options.blockQueued) {
+      state.blocked = (state.blocked || 0) + 1; save();
       record({ type: 'context.append_message', agentId: 'main', message: { role: 'user', content: next.input, id: next.promptId, toolCalls: [], origin: { kind: 'user' } } });
       record({ type: 'prompt.completed', agentId: 'main', promptId: next.promptId, reason: 'blocked' });
-      state.blocked = (state.blocked || 0) + 1; save();
     } else if (next) setTimeout(() => startTurn(next, null), options.handoffMs || 0);
   };
   hold();
 }
+// The client ends the server's stdin, then sends SIGTERM if it still runs. Kimi reads what it was
+// sent before it goes, so on SIGTERM the fake reads stdin to its end, recording every message,
+// then exits. Stdin that has not ended a second later: SIGTERM kills it, as it did before.
+let inputEnded = false, terminating = false;
+process.stdin.on('end', () => { inputEnded = true; if (terminating) process.exit(0); });
+process.on('SIGTERM', () => {
+  if (inputEnded) process.exit(0);
+  terminating = true;
+  setTimeout(() => { process.removeAllListeners('SIGTERM'); process.kill(process.pid, 'SIGTERM'); }, 1000).unref();
+});
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line); state.requests.push(m); save();
   if (m.id !== undefined && !m.method) {
     state.answers.push({ id: m.id, method: pendingReverse.get(m.id), result: m.result, error: m.error }); save();
+    const asker = askedBy.get(m.id);
+    askedBy.delete(m.id);
+    if (asker) { asker.unanswered.delete(m.id); if (asker.unanswered.size === 0) asker.whenAnswered?.(); }
     const waiting = calls.get(m.id);
     calls.delete(m.id);
     if (waiting) m.error ? waiting.reject(Object.assign(new Error(m.error.message), { code: m.error.code })) : waiting.resolve(m.result);

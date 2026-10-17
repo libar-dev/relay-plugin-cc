@@ -10,6 +10,9 @@ import { writeExecutable } from "../support/helpers.mjs";
 export function installFakeZcode(bin, options = {}) {
   const statePath = path.join(bin, "fake-zcode-state.json");
   const binary = path.join(bin, "zcode");
+  // The fake's source is the template literal below, built here: a backtick or ${ in it must be
+  // escaped (\` and \${), or it ends the string or interpolates this process's values. The
+  // ${...} already in it are deliberate.
   writeExecutable(binary, `#!/usr/bin/env node
 const fs = require('node:fs');
 const readline = require('node:readline');
@@ -51,16 +54,19 @@ function startTurn(input) {
   event('tool.updated', turnId, { toolCallId: 'tool-1', toolName: 'Bash', kind: 'started' });
   event('tool.updated', turnId, { toolCallId: 'tool-1', toolName: 'Bash', kind: 'progress', elapsedMs: 1 });
   if (options.die && state.turns.length <= (options.dieTurns ?? 1)) { setTimeout(() => { console.error('fake zcode death'); process.exit(17); }, 60); return; }
+  // ZCode's tools wait for the client's reply to each request they send: the turn ends only once
+  // every reply is in and recorded.
+  const asked = [];
   for (const toolName of options.permissions ?? []) {
-    requestClient('interaction/requestPermission', { requestId: 'perm-' + toolName, sessionId, turnId, toolCallId: 'call-' + toolName, toolName, reason: 'side effects', riskLevel: 'high', input: {},
+    asked.push(requestClient('interaction/requestPermission', { requestId: 'perm-' + toolName, sessionId, turnId, toolCallId: 'call-' + toolName, toolName, reason: 'side effects', riskLevel: 'high', input: {},
       options: [{ optionId: 'allow_once', kind: 'allow_once', name: 'Allow once', response: { decision: 'allow', reason: 'Approved once' } }, { optionId: 'deny', kind: 'deny', name: 'Deny', response: { decision: 'deny' } }] })
-      .then(reply => { state.replies.push({ method: 'interaction/requestPermission', toolName, reply }); save(); });
+      .then(reply => { state.replies.push({ method: 'interaction/requestPermission', toolName, reply }); save(); }));
   }
-  if (options.userInput) requestClient('interaction/requestUserInput', { requestId: 'question-1', sessionId, prompt: 'Which?' }).then(reply => { state.replies.push({ method: 'interaction/requestUserInput', reply }); save(); });
-  if (options.mcpAuth) requestClient('interaction/requestOfficialMcpAuthHeaders', { mcpKey: 'web_reader', requestId: 'official-mcp-auth:1', targetOrigin: 'https://example.invalid', workspace: {} }).then(reply => { state.replies.push({ method: 'interaction/requestOfficialMcpAuthHeaders', reply }); save(); });
-  if (options.unsupported) requestClient('client/missing', { sessionId }).then(reply => { state.replies.push({ method: 'client/missing', reply }); save(); });
-  if (options.browser) requestClient('interaction/browserList', { sessionId }).then(reply => { state.replies.push({ method: 'interaction/browserList', reply }); save(); });
-  turn.timer = setTimeout(() => finish(options.resultType ?? 'success'), input.text.startsWith('[quick]') ? 30 : options.turnMs ?? 100);
+  if (options.userInput) asked.push(requestClient('interaction/requestUserInput', { requestId: 'question-1', sessionId, prompt: 'Which?' }).then(reply => { state.replies.push({ method: 'interaction/requestUserInput', reply }); save(); }));
+  if (options.mcpAuth) asked.push(requestClient('interaction/requestOfficialMcpAuthHeaders', { mcpKey: 'web_reader', requestId: 'official-mcp-auth:1', targetOrigin: 'https://example.invalid', workspace: {} }).then(reply => { state.replies.push({ method: 'interaction/requestOfficialMcpAuthHeaders', reply }); save(); }));
+  if (options.unsupported) asked.push(requestClient('client/missing', { sessionId }).then(reply => { state.replies.push({ method: 'client/missing', reply }); save(); }));
+  if (options.browser) asked.push(requestClient('interaction/browserList', { sessionId }).then(reply => { state.replies.push({ method: 'interaction/browserList', reply }); save(); }));
+  turn.timer = setTimeout(() => Promise.all(asked).then(() => { if (active === turn) finish(options.resultType ?? 'success'); }), input.text.startsWith('[quick]') ? 30 : options.turnMs ?? 100);
 }
 function finish(resultType) {
   const turn = active;

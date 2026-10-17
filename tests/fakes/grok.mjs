@@ -7,6 +7,9 @@ import { LEAVE_CHILD_SOURCE } from "./codex.mjs";
 export function installFakeGrok(bin, options = {}) {
   const statePath = path.join(bin, "fake-grok-state.json");
   const binary = path.join(bin, "grok");
+  // The fake's source is the template literal below, built here: a backtick or ${ in it must be
+  // escaped (\` and \${), or it ends the string or interpolates this process's values. The
+  // ${...} already in it are deliberate.
   writeExecutable(binary, `#!/usr/bin/env node
 const fs = require('node:fs');
 const readline = require('node:readline');
@@ -21,6 +24,19 @@ const send = message => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ..
 let sessionId, active;
 const note = (method, params) => send({ method, params: { sessionId, ...params } });
 const update = value => note('session/update', { update: value });
+// Grok's tools wait for the client's answer to each request they send. A request belongs to the
+// turn that sent it, and the turn ends only once every answer is in and recorded.
+const askedBy = new Map();
+const ask = (id, method, params) => {
+  if (active?.unanswered) { active.unanswered.add(id); askedBy.set(id, active); }
+  send({ id, method, params: { sessionId, ...params } });
+};
+// The turn ends when its time is up and every request it sent has its answer.
+function endAnswered(turn, reason) {
+  if (active !== turn) return;
+  if (turn.unanswered.size > 0) { turn.whenAnswered = () => endAnswered(turn, reason); return; }
+  finish(reason);
+}
 // One line per invocation, appended: setup runs --version and models at once, and a shared
 // read-modify-write of the state file would drop one of them.
 fs.appendFileSync(file + '.invocations', JSON.stringify({ args: process.argv.slice(2), env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('GROK_'))) }) + '\\n');
@@ -76,6 +92,12 @@ function finish(reason = 'end_turn') {
 }
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line); state.requests.push(m); save();
+  if (m.id !== undefined && !m.method) {
+    const asker = askedBy.get(m.id);
+    askedBy.delete(m.id);
+    if (asker) { asker.unanswered.delete(m.id); if (asker.unanswered.size === 0) asker.whenAnswered?.(); }
+    return;
+  }
   const reply = result => send({ id: m.id, result });
   const error = (message, data) => send({ id: m.id, error: { code: -32602, message, data } });
   switch (m.method) {
@@ -116,7 +138,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
         }
         break;
       }
-      const turn = { id: 'prompt-' + (state.turns.length + 1), text, steers: [], rpcId: m.id };
+      const turn = { id: 'prompt-' + (state.turns.length + 1), text, steers: [], rpcId: m.id, unanswered: new Set() };
       state.turns.push({ id: turn.id, text }); state.sessions[sessionId].push({ id: turn.id, text, steers: [] }); save();
       persist({ type: 'user', content: [{ type: 'text', text: '<user_query>\\n' + text + '\\n</user_query>' }], prompt_index: state.turns.length - 1 });
       active = turn;
@@ -124,11 +146,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       const identify = () => { if (active === turn) note('_x.ai/queue/changed', { entries: [], runningPromptId: turn.id, runningKind: 'prompt', runningText: text.trim() }); };
       if (!options.noQueueId) { if (options.queueDelayMs) setTimeout(identify, options.queueDelayMs); else identify(); }
       if (options.earlyResponse) { reply({ stopReason: 'end_turn', _meta: { promptId: turn.id } }); turn.rpcId = null; }
-      if (options.unsupported) send({ id: 'unknown', method: 'client/missing', params: { sessionId, question: 'unhandled' } });
-      if (options.permission) send({ id: 'permission', method: 'session/request_permission', params: { sessionId, options: [{ kind: 'allow_once', optionId: 'allow' }, { kind: 'reject_once', optionId: 'deny' }] } });
-      for (const [index, offered] of (options.permissionOptions || []).entries()) send({ id: 'permission-' + index, method: 'session/request_permission', params: { sessionId, options: offered } });
+      if (options.unsupported) ask('unknown', 'client/missing', { question: 'unhandled' });
+      if (options.permission) ask('permission', 'session/request_permission', { options: [{ kind: 'allow_once', optionId: 'allow' }, { kind: 'reject_once', optionId: 'deny' }] });
+      for (const [index, offered] of (options.permissionOptions || []).entries()) ask('permission-' + index, 'session/request_permission', { options: offered });
       if (options.die) { setTimeout(() => { console.error('fake server death'); process.exit(17); }, 80); break; }
-      turn.timer = setTimeout(() => finish(options.stopReason), text.startsWith('[quick]') ? 30 : options.turnMs || 100);
+      turn.timer = setTimeout(() => endAnswered(turn, options.stopReason), text.startsWith('[quick]') ? 30 : options.turnMs || 100);
       break;
     }
     case '_x.ai/interject':
