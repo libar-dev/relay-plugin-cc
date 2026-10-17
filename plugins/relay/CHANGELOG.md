@@ -24,7 +24,8 @@
   missing while the next attempt archives it, and a job with owed work never shows as finished; it
   could return the previous report with exit 0 while that work ran. A job still changing after
   eight reads is busy, a retryable read and not a state: `wait` polls again, and the other readers
-  retry, then say the job is busy and exit 4. A view never mixes two versions of a job.
+  retry, then say the job is busy and exit 4; `steer`, `continue` and `resume` still report a
+  message they have sent. A view never mixes two versions of a job.
 - Claude can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:status` and
   `/relay:result` itself; they were user-only. A review Claude starts never asks a question: without
   `--wait` or `--background` it runs in the foreground. `/relay:cancel` and `/relay:transfer` stay
