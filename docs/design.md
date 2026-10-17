@@ -622,7 +622,10 @@ binaries and never start a real backend.
   a `read-only` client also declares file writes and terminals, and refuses each
   `fs/write_text_file` and `terminal/create` Kimi then sends it. It declares and serves file
   reads (`fs/read_text_file`) too: ACP has no append, and Kimi emulates one as a read and a write
-  only when the client serves both, appending to the file itself otherwise. `write` is a usage error: Kimi
+  only when the client serves both, appending to the file itself otherwise. A read opens without
+  blocking and serves only a regular file of up to 8 MiB, judged on the opened file, so a FIFO, a
+  device or a symlink to one is refused at once; at most eight reads run at once, and the
+  connection's close aborts them and waits. There is no allowlist: read-only is not a sandbox. `write` is a usage error: Kimi
   has no workspace sandbox. `web-search: live` only: ACP cannot remove Kimi's web tools.
 - **Homes and sign-in.** `kimi-home: default` is `~/.kimi-code`, a name is `~/.kimi-code-<name>`,
   a path is taken as given; the resolved `KIMI_CODE_HOME` is stored at launch. Each home signs in

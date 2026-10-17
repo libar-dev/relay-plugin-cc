@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { resolveKimiHome } from "../plugins/relay/scripts/lib/backends/kimi/request.mjs";
 import { kimiEventRecorder, resolveKimiBinary } from "../plugins/relay/scripts/lib/backends/kimi/connection.mjs";
 import { KimiWire } from "../plugins/relay/scripts/lib/backends/kimi/wire.mjs";
+import { KimiFileReads } from "../plugins/relay/scripts/lib/backends/kimi/files.mjs";
+import { spawnSync } from "node:child_process";
 import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { isWorkerAlive } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
@@ -349,6 +351,60 @@ test("read-only serves Kimi's file reads and refuses its writes: an append, an o
     assert.deepEqual(answer(ctx, "fs/write_text_file").map(a => a.error?.message), Array(4).fill("This job is read-only: file writes are refused."));
     assert.deepEqual(ctx.kimi().fileOps.map(op => op.error ?? op.content ?? "ok"), Array(1).fill("This job is read-only: file writes are refused.").concat(["second\n"], Array(3).fill("This job is read-only: file writes are refused.")));
   }
+});
+
+const readAnswers = ctx => answer(ctx, "fs/read_text_file").map(a => a.result?.content ?? `${a.error.code} ${a.error.message}`);
+
+test("a read-only append to a FIFO is refused at once: after a server death and recovery the job completes and the worker exits", async t => {
+  const ctx = fixture(t, { fileOps: [["append", "pipe", "x"]] });
+  assert.equal(spawnSync("mkfifo", [path.join(ctx.work, "pipe")]).status, 0);
+  const { id } = startJob(ctx, `${HEADER}\nmode: read-only`, "[long] Append to the pipe.");
+  const worker = await waitFor(() => readJob(ctx, id).worker);
+  t.after(() => { if (isWorkerAlive(worker)) process.kill(worker.pid, "SIGKILL"); });
+  await waitFor(() => answer(ctx, "fs/read_text_file").length === 1);
+  assert.match(readAnswers(ctx)[0], /^-32000 This job is read-only: relay serves only regular files, and .*\/pipe is a FIFO\.$/);
+  process.kill(readJob(ctx, id).serverPid, "SIGKILL");
+  await finishJob(ctx, id);
+  assert.equal(readJob(ctx, id).state, "completed");
+  assert.equal(readJob(ctx, id).automaticResumes.length, 1);
+  await waitFor(() => !isWorkerAlive(worker), 5000);
+  assert.ok(events(ctx, id).some(e => e.method === "kimi/readOnlyRefused" && e.params.method === "fs/read_text_file"));
+});
+
+test("read-only reads are judged on the opened file: a symlink to a FIFO and an oversized file are refused, and line and limit are checked", async t => {
+  const ctx = fixture(t, { fileOps: [["read", "link"], ["read", "big.txt"], ["read", "notes.txt", { line: 0 }], ["read", "notes.txt", { limit: 1.5 }], ["read", "notes.txt", { line: 2, limit: 1 }]] });
+  ctx.env.RELAY_JOBS_KIMI_READ_MAX_BYTES = "1024";
+  assert.equal(spawnSync("mkfifo", [path.join(ctx.work, "pipe")]).status, 0);
+  fs.symlinkSync(path.join(ctx.work, "pipe"), path.join(ctx.work, "link"));
+  fs.writeFileSync(path.join(ctx.work, "big.txt"), "x".repeat(4096));
+  fs.writeFileSync(path.join(ctx.work, "notes.txt"), "one\ntwo\nthree\n");
+  const { id } = startJob(ctx, `${HEADER}\nmode: read-only`, "[quick] Read.");
+  await finishJob(ctx, id);
+  const answers = readAnswers(ctx);
+  assert.match(answers[0], /^-32000 This job is read-only: relay serves only regular files, and .*\/link is a FIFO\.$/);
+  assert.match(answers[1], /^-32000 This job is read-only: relay serves files up to 1024 bytes, and .*\/big\.txt has 4096\.$/);
+  assert.deepEqual(answers.slice(2), ["-32602 Invalid params: line and limit must be positive integers.", "-32602 Invalid params: line and limit must be positive integers.", "two\n"]);
+});
+
+test("file reads in flight are bounded, and close aborts them and waits; a read after close is refused", async () => {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const opened = [];
+  const handle = { stat: async () => ({ isFile: () => true, size: 3 }), read: async () => { await held; return { bytesRead: 0 }; }, close: async () => { opened.pop(); } };
+  const reads = new KimiFileReads({ open: async () => { opened.push(1); return handle; }, maxInFlight: 2 });
+  const first = reads.serve({ path: "/a" });
+  const second = reads.serve({ path: "/b" });
+  await assert.rejects(reads.serve({ path: "/c" }), /at most 2 file reads at once/);
+  const closing = reads.close();
+  let closed = false;
+  closing.then(() => { closed = true; });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(closed, false, "close waits for the reads in flight");
+  release();
+  await closing;
+  assert.equal(opened.length, 0, "every opened file was closed");
+  assert.deepEqual(await Promise.allSettled([first, second]).then(all => all.map(r => r.status)), ["fulfilled", "fulfilled"]);
+  await assert.rejects(reads.serve({ path: "/d" }), /The connection is closing/);
 });
 
 test("permission answers take fallback options, and no matching option answers cancelled; other requests are refused and recorded", async t => {

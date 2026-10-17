@@ -8,6 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { ACP_INITIALIZE_PARAMS, ACP_CHUNKS, acpInitializeParams, acpUpdate, openSession, setConfigOption, promptSession, cancelSession, answerPermission } from "../transport/acp.mjs";
 import { partialLineNote, SpawnedServerClient } from "../transport/stdio-rpc.mjs";
 import { KimiWire, wireFile } from "./wire.mjs";
+import { KimiFileReads, ReadRefused } from "./files.mjs";
 
 // How often a turn's records are read, and how long a prompt Kimi answered may go unrecorded
 // while no other turn runs before it counts as never launched.
@@ -70,22 +71,6 @@ const READ_ONLY_REFUSALS = {
   "terminal/create": "This job is read-only: shell commands are refused."
 };
 
-// ACP `fs/read_text_file`: an absolute path, and an optional 1-based `line` and `limit`.
-/** @param {{ path?: string, line?: number, limit?: number }} [params] */
-async function readTextFile({ path: file, line, limit } = {}) {
-  if (typeof file !== "string" || !path.isAbsolute(file)) throw Object.assign(new Error(`Invalid params: path must be absolute: ${file}`), { rpcCode: -32602 });
-  const content = await fs.promises.readFile(file, "utf8");
-  if (line == null && limit == null) return content;
-  const lines = content.split(/(?<=\n)/);
-  const start = Math.max(0, (line ?? 1) - 1);
-  return lines.slice(start, limit == null ? undefined : start + limit).join("");
-}
-
-function readError(error, file) {
-  if (error.code === "ENOENT") return { code: -32002, message: `Resource not found: ${file}` };
-  return { code: error.rpcCode ?? -32603, message: error.message };
-}
-
 // Kimi modes: `auto` never asks; `default` asks before writes and shell commands.
 const KIMI_MODES = { yolo: "auto", "read-only": "default" };
 
@@ -125,9 +110,11 @@ export class KimiConnection {
   /**
    * @param {import("../types").LaunchRequest} request
    * @param {import("../types").ConnectHooks} hooks
+   * @param {KimiFileReads | null} [reads] the read-only job's file reads, which close() ends
    */
-  constructor(client, request, hooks) {
+  constructor(client, request, hooks, reads = null) {
     this.client = client;
+    this.reads = reads;
     this.request = request;
     this.hooks = hooks;
     /** @type {Record<string, any>} */
@@ -145,6 +132,7 @@ export class KimiConnection {
 
   async close() {
     await this.stopObserver("the connection closed");
+    await this.reads?.close();
     await this.client.close();
   }
 
@@ -342,6 +330,7 @@ export async function connect(request, hooks) {
   const binary = resolveKimiBinary(hooks.env);
   hooks.saveState({ binary });
   const readOnly = request.mode !== "yolo";
+  const reads = readOnly ? new KimiFileReads() : null;
   const client = new SpawnedServerClient(request.cwd, {
     onSpawn: hooks.onSpawn, onStderr: hooks.onStderr, onEnd: hooks.onEnd,
     notificationTap: hooks.tap, backendName: "kimi", binary, args: ["acp"],
@@ -349,9 +338,13 @@ export async function connect(request, hooks) {
     initializeParams: acpInitializeParams(readOnly ? READ_ONLY_CAPABILITIES : ACP_INITIALIZE_PARAMS.clientCapabilities),
     onServerRequest(message, transport) {
       if (answerPermission(request.mode, message, transport)) return;
-      if (readOnly && message.method === "fs/read_text_file") {
+      if (reads && message.method === "fs/read_text_file") {
         const answer = reply => { try { transport.sendMessage({ id: message.id, ...reply }); } catch {} };
-        readTextFile(message.params).then(content => answer({ result: { content } }), error => answer({ error: readError(error, message.params?.path) }));
+        reads.serve(message.params).then(content => answer({ result: { content } }), error => {
+          const code = error instanceof ReadRefused ? error.rpcCode : -32603;
+          if (code === -32000) transport.tap({ method: "kimi/readOnlyRefused", params: { id: message.id, method: message.method, path: message.params?.path, reason: error.message } });
+          answer({ error: { code, message: error.message } });
+        });
         return;
       }
       const refusal = readOnly ? READ_ONLY_REFUSALS[message.method] : undefined;
@@ -367,6 +360,6 @@ export async function connect(request, hooks) {
     }
   });
   try { await client.initialize(); }
-  catch (error) { await client.close(); throw new Error(client.exitInfo ? kimiEndMessage(client.exitInfo) : error.message); }
-  return new KimiConnection(client, request, { ...hooks, state: { ...hooks.state, binary } });
+  catch (error) { await reads?.close(); await client.close(); throw new Error(client.exitInfo ? kimiEndMessage(client.exitInfo) : error.message); }
+  return new KimiConnection(client, request, { ...hooks, state: { ...hooks.state, binary } }, reads);
 }

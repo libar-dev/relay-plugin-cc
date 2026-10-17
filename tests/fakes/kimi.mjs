@@ -133,7 +133,9 @@ function startTurn(turn, rpcId) {
   if (options.die) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 80); return; }
   const ms = turn.text.startsWith('[quick]') ? 30 : turn.text.startsWith('[long]') ? 30000 : options.turnMs || 100;
   const schedule = () => { if (active?.turnId === turn.turnId) active.timer = setTimeout(() => finish(options.failTurn ? 'failed' : 'completed'), ms); };
-  if (!options.fileOps) return schedule();
+  // The file operations run in the first turn that reaches them, not again after a recovery.
+  if (!options.fileOps || state.fileOpsRan) return schedule();
+  state.fileOpsRan = true; save();
   (async () => {
     const results = [];
     for (const op of options.fileOps) results.push(await fileOp(op));
