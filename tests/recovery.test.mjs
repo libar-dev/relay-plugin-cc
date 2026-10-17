@@ -11,7 +11,8 @@ import { acquireWorkerLease, isWorkerAlive, readLease, releaseWorkerLease } from
 import { createJobDir, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { owedMessages, postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
-import { resumeDeadJobOnce } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
+import { DEFAULT_RESUME_MESSAGE, resumeDeadJobOnce } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
+import { loadJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { ownershipDir } from "../plugins/relay/scripts/lib/util/ownership.mjs";
 import { readProcessStartTime, listProcesses } from "../plugins/relay/scripts/lib/util/process.mjs";
 import { awaitOutcome } from "../plugins/relay/scripts/lib/worker/delivery.mjs";
@@ -461,6 +462,40 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
       assert.deepEqual(links, moment === "final-state" ? ["owner", "release"] : ["owner", "release", "owner", "release"]);
     });
   }
+
+  // A default resume that the owed brief makes redundant is closed only once the brief's attempt
+  // is on the job. Closed sooner, it left nothing owed while the job still named its dead worker,
+  // and a reader took the job for dead as the new worker was about to run the brief.
+  test("a default resume skipped for the owed brief is closed only once the brief's attempt is on the job", async (t) => {
+    const binDir = makeTempDir();
+    installFakeCodex(binDir, "job", { turnMs: 50 });
+    const work = makeTempDir("relay-work-skip-");
+    const home = makeTempDir("relay-jobs-skip-");
+    const jobId = `job-skip-${Date.now()}`;
+    const { jobDir } = createJobDir(work, jobId, { RELAY_JOBS_HOME: home });
+    fs.writeFileSync(path.join(jobDir, "brief.md"), "First work.\n");
+    // The brief went out, and its worker died before it saw the brief start.
+    writeJob(jobDir, {
+      id: jobId, kind: "task", state: "running", createdAt: new Date().toISOString(),
+      request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: work }), pendingFirstTurn: true,
+      worker: { pid: 999999, startTime: "gone" }, attempts: [{ attempt: 1, source: "brief", state: "running" }]
+    });
+    const resume = postInboxMessage(jobDir, { kind: "resume", text: DEFAULT_RESUME_MESSAGE, isDefault: true });
+    // The job as a reader sees it right after the resume's outcome is published.
+    let seen = null;
+    const { renameSync } = fs;
+    t.after(() => { fs.renameSync = renameSync; });
+    fs.renameSync = function (from, to, ...rest) {
+      const result = renameSync.call(this, from, to, ...rest);
+      if (!seen && path.basename(String(to)) === `${resume.id}.json` && readOutcome(jobDir, resume.id)) seen = loadJobView(jobDir).state;
+      return result;
+    };
+    const job = await runWorker(jobDir, { env: { ...buildEnv(binDir), RELAY_JOBS_POLL_MS: "50" } });
+    assert.equal(readOutcome(jobDir, resume.id).action, "skipped");
+    assert.equal(seen, "starting");
+    assert.equal(job.state, "completed");
+    assert.deepEqual(job.attempts.map((attempt) => attempt.source), ["brief", "brief"]);
+  });
 
   // A worker records itself and its attempt before it sweeps, so a cancel
   // that arrives during the sweep sees the new attempt, not the job's old completed state.
