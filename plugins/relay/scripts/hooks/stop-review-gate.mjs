@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { backendWith } from "../lib/backends/index.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "../lib/review/prompts.mjs";
 import { absoluteJobsHomeEnv, listJobDirs, readJob, repoSlugFor, TERMINAL_STATES } from "../lib/jobs/store.mjs";
-import { computeJobView } from "../lib/jobs/view.mjs";
+import { computeJobView, EXIT } from "../lib/jobs/view.mjs";
 import { readRepoConfig } from "../lib/jobs/config.mjs";
 
 // Below the hook's own 900 s limit, so Claude Code never kills the hook with a review job
@@ -170,7 +170,8 @@ export function runStopReview(cwd, input = {}, { limits = stopGateLimits(), runC
   if (!ended) {
     // Past its limit, dead, or unreadable: nothing of the review may outlive the hook.
     runCompanion(["cancel", jobId, "--json"], { cwd, timeoutMs: STOP_COMMAND_TIMEOUT_MS });
-    if (!view && !waited.error) {
+    // Exit 4 without a view: the job was still busy at the limit, at work as a running one is.
+    if (!view && !waited.error && waited.status !== EXIT.running) {
       return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review returned invalid JSON. ${MANUAL_REVIEW}` };
     }
     if (view?.state === "dead") {
