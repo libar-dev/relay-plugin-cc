@@ -433,6 +433,10 @@ rl.on("line", (line) => {
   }
   const state = loadState();
   if (message.id === "input-request-1" && message.error) record("serverRequestRejections", message);
+  // The turn that sent this request ends only once its answer is recorded (just above).
+  if (message.id === "input-request-1" && !message.method) {
+    for (const turn of activeTurns.values()) if (turn.awaitingAnswer) { turn.awaitingAnswer = false; turn.whenAnswered?.(); }
+  }
 
   try {
     switch (message.method) {
@@ -712,6 +716,8 @@ rl.on("line", (line) => {
             setTimeout(() => send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn("unrelated", "failed") } }), 200);
           }
           if (BEHAVIOR === "turn-order-server-request") {
+            // Codex waits for the client's answer to its request before the turn goes on.
+            entry.awaitingAnswer = true;
             send({ id: "input-request-1", method: "item/tool/requestUserInput", params: { threadId: thread.id, turnId } });
           }
           if (BEHAVIOR.startsWith("turn-order-activity-")) {
@@ -724,7 +730,8 @@ rl.on("line", (line) => {
           } else if (BEHAVIOR.startsWith("turn-order-steer-")) {
             // The turn ends once its steer is answered (turn/steer), however late the steer comes.
           } else if (!BEHAVIOR.startsWith("turn-order-collab-") || BEHAVIOR === "turn-order-collab-read-race") {
-            entry.timer = setTimeout(() => finishJobTurn(turnId, BEHAVIOR === "turn-order-final-failed" ? "failed" : "completed"), 900);
+            const end = () => finishJobTurn(turnId, BEHAVIOR === "turn-order-final-failed" ? "failed" : "completed");
+            entry.timer = setTimeout(() => { if (entry.awaitingAnswer) entry.whenAnswered = end; else end(); }, 900);
           }
           break;
         }
