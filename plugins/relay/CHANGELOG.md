@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.1.1 (2026-10-17)
+
+- Every Kimi sign-in line names the region: `kimi login --region global`, or `--region
+  mainland-cn` for a kimi.com account. That covers the sign-in error a job gives, `/relay:setup`
+  and the jobs skill's `kimi-home.md`. A new home has no stored login and no region marker, so
+  `kimi login` without `--region` signed a kimi.ai account in to kimi.com.
+- The Kimi probe drivers are in `scripts/kimi-probe/`, so the facts in `docs/kimi.md` can be
+  checked again on a new Kimi version.
+- The test fakes end each turn only after relay's answers to their requests are recorded, as the
+  real backends do. GitHub's runner had failed tests that read those answers too early.
+
 ## 2.1.0 (2026-10-17)
 
 - A fourth backend, `backend: kimi`, runs Moonshot AI's Kimi Code through `kimi acp`. Jobs, the
