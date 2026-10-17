@@ -41,6 +41,28 @@ test("status lists no jobs while one is busy: it exits 4 and names it, by reposi
   assert.deepEqual(JSON.parse(listed.stdout).jobs.map(job => job.id).sort(), [active, quiet].sort());
 });
 
+test("status lists this repository's newest 20 jobs while an older one is busy; with --all, which lists it, it exits 4", async t => {
+  const ctx = setup(t);
+  const old = startJob(ctx, HEADER, "[quick] Old job.").id;
+  await finishJob(ctx, old);
+  const dir = jobDir(ctx, old);
+  const job = readJob(ctx, old);
+  // Twenty newer ended jobs, copies of it.
+  const newer = Array.from({ length: 20 }, (_, index) => {
+    const id = `${old}-newer-${String(index).padStart(2, "0")}`;
+    fs.cpSync(dir, path.join(path.dirname(dir), id), { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(dir), id, "job.json"), JSON.stringify({ ...job, id, createdAt: new Date(Date.parse(job.createdAt) + (index + 1) * 1000).toISOString() }));
+    return id;
+  });
+  const env = busy(ctx, dir);
+  const listed = companion(ctx, ["status", "--json"], env);
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.deepEqual(JSON.parse(listed.stdout).jobs.map(view => view.id), [...newer].reverse());
+  const all = companion(ctx, ["status", "--all", "--json"], env);
+  assert.equal(all.status, 4, all.stdout);
+  assert.match(all.stderr, busyLine(old));
+});
+
 test("wait polls a busy job again within its deadline, and shows it once its views hold", async t => {
   const ctx = setup(t);
   const { id } = startJob(ctx, HEADER, "[quick] Settles.");

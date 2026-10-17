@@ -1,6 +1,6 @@
 import { parseCommandInput, resolveJobReference, outputResult, resolveCommandCwd } from "./shared.mjs";
 import { default as process } from "node:process";
-import { findJobDir, listJobDirs, repoSlugFor, resolveJobsHome } from "../lib/jobs/store.mjs";
+import { findJobDir, listJobDirs, readJob, repoSlugFor, resolveJobsHome } from "../lib/jobs/store.mjs";
 import { readRepoConfig, readUserConfig } from "../lib/jobs/config.mjs";
 import { exitCodeFor, JobViewBusy, jobViewJson, loadJobViewSettled as loadJobView, renderJobBlock, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
 
@@ -33,8 +33,15 @@ export function handleStatus(argv) {
   }
   const cwd = resolveCommandCwd(options);
   const slug = options.all ? null : repoSlugFor(cwd);
+  let dirs = listJobDirs({ slug });
+  if (!options.all) {
+    // The newest, by each job's record, before any is viewed: only a job the listing shows can
+    // make it busy.
+    const created = new Map(dirs.map((dir) => [dir, String(readJob(dir)?.createdAt ?? "")]));
+    dirs = dirs.sort((a, b) => created.get(b).localeCompare(created.get(a))).slice(0, STATUS_LIST_LIMIT);
+  }
   let views = [];
-  for (const dir of listJobDirs({ slug })) {
+  for (const dir of dirs) {
     try {
       views.push(loadJobView(dir));
     } catch (error) {
@@ -44,9 +51,6 @@ export function handleStatus(argv) {
     }
   }
   views = sortViewsNewestFirst(views);
-  if (!options.all) {
-    views = views.slice(0, STATUS_LIST_LIMIT);
-  }
   if (options.json) {
     outputResult({ jobsHome: resolveJobsHome(), repoSlug: slug, jobs: views.map(jobViewJson) }, true);
     return;
