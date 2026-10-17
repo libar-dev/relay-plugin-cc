@@ -211,6 +211,16 @@ function ownTurn() {
   };
   hold();
 }
+// The client ends the server's stdin, then sends SIGTERM if it still runs. Kimi reads what it was
+// sent before it goes, so on SIGTERM the fake reads stdin to its end, recording every message,
+// then exits. Stdin that has not ended a second later: SIGTERM kills it, as it did before.
+let inputEnded = false, terminating = false;
+process.stdin.on('end', () => { inputEnded = true; if (terminating) process.exit(0); });
+process.on('SIGTERM', () => {
+  if (inputEnded) process.exit(0);
+  terminating = true;
+  setTimeout(() => { process.removeAllListeners('SIGTERM'); process.kill(process.pid, 'SIGTERM'); }, 1000).unref();
+});
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line); state.requests.push(m); save();
   if (m.id !== undefined && !m.method) {
