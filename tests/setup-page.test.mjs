@@ -349,7 +349,7 @@ test("--backend checks one home, keeps exit codes, and refuses mixed flags", t =
   assert.equal(kimiJobs.status, 1);
   assert.equal(kimiJobs.page.backends[0].home, path.join(ctx.user, ".kimi-code-jobs"));
   assert.equal(kimiJobs.page.backends[0].signIn.state, "signed-out");
-  assert.ok(kimiJobs.page.nextSteps.some(step => step.includes(`KIMI_CODE_HOME=${path.join(ctx.user, ".kimi-code-jobs")} kimi login`)), kimiJobs.page.nextSteps.join("\n"));
+  assert.ok(kimiJobs.page.nextSteps.some(step => step.includes(`KIMI_CODE_HOME=${path.join(ctx.user, ".kimi-code-jobs")} kimi login --region global`) && step.includes("--region mainland-cn for a kimi.com account")), kimiJobs.page.nextSteps.join("\n"));
 
   const configPath = path.join(ctx.jobs, "config.json");
   for (const [args, message] of [

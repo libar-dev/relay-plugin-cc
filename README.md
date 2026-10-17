@@ -23,7 +23,7 @@ A backend is named by its harness. The model family goes in `model:`.
 | `codex` (default) | Codex CLI app-server | GPT models | `codex login` |
 | `grok` | `grok agent stdio` | Grok models | `grok login` in the selected Grok home |
 | `zcode` | `zcode app-server` | GLM (GLM-5.3, GLM-5.3-Flash), the only route for it | `zcode login` |
-| `kimi` | `kimi acp` | Kimi models (K3, K2.8, K2.7) | `kimi login` in the selected Kimi home |
+| `kimi` | `kimi acp` | Kimi models (K3, K2.8, K2.7) | `kimi login --region global` (or `mainland-cn`) in the selected Kimi home |
 
 `/relay:review` and `/relay:adversarial-review` run on any backend (`--backend`, Codex unless
 chosen). The stop-time review gate and transfer run on Codex.

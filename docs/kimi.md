@@ -49,7 +49,7 @@ still finds its place in another copy of the bundle.
 ### Sign-in
 
 - A home is chosen with `KIMI_CODE_HOME`. A fresh home starts signed out and signs in with
-  `KIMI_CODE_HOME=<home> kimi login`, a device-code flow. [docs, live]
+  `KIMI_CODE_HOME=<home> kimi login --region <global|mainland-cn>`, a device-code flow. [docs, live]
 - The managed provider keeps its OAuth token in `<home>/credentials/<name>.json`. A refresh runs
   under a lock across processes (`proper-lockfile` on `<home>/oauth/<provider>`, 120 retries,
   stale after 5 s) and fails if it cannot take the lock, so jobs in one home never race the
@@ -61,7 +61,10 @@ still finds its place in another copy of the bundle.
 - Sign-in works headless: a process started with `setsid`, stdin `/dev/null` and no terminal ran
   turns on the stored token. [live]
 - The region comes from OAuth environment overrides, then the stored login, then `<home>/region`,
-  then the mainland default. [source]
+  then the mainland default. The marker counts only before the first login. A new home has
+  neither, so `kimi login` without `--region` signs it in to mainland China (kimi.com), and an
+  account on kimi.ai needs `--region global`. Every login line relay prints names the region.
+  [source]
 
 ### Sessions and the record
 
@@ -327,9 +330,10 @@ context.
   `KIMI_CODE_TRUST_WORKSPACE`, which would load the repository's MCP servers and instructions.
 - **The home is the user's.** An empty `mcpServers` adds nothing, and the home's MCP servers,
   plugins, hooks, skills and instructions stay. For jobs, the advice is a home without MCP
-  servers or plugins, signed in with its own `kimi login`, never a copied credentials file.
+  servers or plugins, signed in with its own `kimi login --region`, never a copied credentials
+  file.
 - **Sign-in advice at open.** Kimi checks the sign-in at `session/new` and `session/load`, so the
-  `kimi login` line for the job's own home goes there, not only on a prompt.
+  `kimi login` line for the job's own home, with its region, goes there, not only on a prompt.
 - **A leading empty text block.** It keeps a brief or message that starts with `/` from being read
   as a command, and the model reads the text unchanged.
 - **No retries by the worker.** Kimi retries model calls itself, 429 and 5xx included.

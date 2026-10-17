@@ -23,8 +23,11 @@ Skills under `~/.agents/skills/`, `~/.agents/AGENTS.md`, and the working directo
 ## Sign in once
 
 ```bash
-KIMI_CODE_HOME=~/.kimi-code-jobs ~/.kimi-code/bin/kimi login
+KIMI_CODE_HOME=~/.kimi-code-jobs ~/.kimi-code/bin/kimi login --region global
 ```
+
+Name your account's region: `global` for kimi.ai, `mainland-cn` for kimi.com. A new home has no
+stored login and no region marker, so without `--region` Kimi signs it in to kimi.com.
 
 The device-code flow creates the home with its own `config.toml` and credentials. Use a separate
 sign-in, never a copied credentials file: Kimi locks a token refresh per home, so two homes

@@ -8,6 +8,11 @@ function kimiHomeSelection(value, env = process.env) {
   return { path: resolveKimiHomePath(text, env), isDefault: text === "default" };
 }
 export function resolveKimiHome(value, env = process.env) { return kimiHomeSelection(value, env).path; }
+
+// The sign-in a home needs. Without --region, Kimi signs a home with no stored login and no
+// region marker in to mainland China (kimi.com), so the command names the region.
+export function kimiLoginCommand(home) { return `KIMI_CODE_HOME=${home} kimi login --region global`; }
+export const KIMI_REGION_HINT = "--region mainland-cn for a kimi.com account";
 function resolveKimiHomePath(text, env) {
   const userDir = env.HOME || env.USERPROFILE || os.homedir();
   if (text === "default") return path.join(userDir, ".kimi-code");

@@ -451,7 +451,7 @@ binaries and never start a real backend.
 | Web search | `live`, `cached`, `disabled` | `live` | `live`, `disabled` | `live` |
 | `fast` | priority tier, when allowed | ignored, with a note | ignored, with a note | ignored, with a note |
 | Home | `CODEX_HOME`, else `~/.codex` | `grok-home:` | `~/.zcode` | `kimi-home:` |
-| Sign-in | the Codex CLI's | `grok login`, per home | `zcode login`, shared | `kimi login`, per home |
+| Sign-in | the Codex CLI's | `grok login`, per home | `zcode login`, shared | `kimi login --region`, per home |
 | Steer, cancel | `turn/steer`, `turn/interrupt` | `_x.ai/interject`, `session/cancel` | `sendText` with `guide`, `stop` | the next turn, `session/cancel` |
 | Capacity retry | yes | yes | no | no |
 
@@ -645,14 +645,15 @@ later.
   has no workspace sandbox. `web-search: live` only: ACP cannot remove Kimi's web tools.
 - **Homes and sign-in.** `kimi-home: default` is `~/.kimi-code`, a name is `~/.kimi-code-<name>`,
   a path is taken as given; the resolved `KIMI_CODE_HOME` is stored at launch. Each home signs in
-  with its own `kimi login`. Kimi locks a token refresh per home, so jobs share one home safely;
+  with its own `kimi login --region global` (or `mainland-cn`): without `--region`, Kimi signs a
+  new home in to kimi.com. Kimi locks a token refresh per home, so jobs share one home safely;
   a copied credentials file in a second home would not be. Every launch sets
   `KIMI_CODE_NO_AUTO_UPDATE=1` and `KIMI_DISABLE_CRON=1` and drops inherited `KIMI_MODEL_*`
   variables, which would replace the header's model and effort, and an inherited
   `KIMI_CODE_TRUST_WORKSPACE`, which would trust the working directory and load that repository's
   MCP servers, config directories, skills and instructions. Kimi checks the sign-in at
   `session/new` and `session/load`; a signed-out home fails the job there, with the
-  `kimi login` line for the job's own home.
+  `kimi login` line, region included, for the job's own home.
 - **Recovery.** Before a prompt leaves, the backend saves a delivery record: message id, exact
   text, session, and the record's byte offset. After a death, a prompt with that text first
   recorded after the offset means the message arrived (its input committed, its turn started, or

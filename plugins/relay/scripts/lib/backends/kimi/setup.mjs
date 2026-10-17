@@ -3,7 +3,7 @@ import path from "node:path";
 import { runLimited } from "../../util/process.mjs";
 import { kimiBackend } from "./index.mjs";
 import { kimiEnvironment, resolveKimiBinary } from "./connection.mjs";
-import { resolveKimiHome } from "./request.mjs";
+import { kimiLoginCommand, KIMI_REGION_HINT, resolveKimiHome } from "./request.mjs";
 import { emptyBlock, notInstalled, isScript, firstLine, userDir, isDirectory, commandFailure, versionOf, tryResolve } from "../setup.mjs";
 
 function kimiConfigDefaults(kimiHome) {
@@ -75,7 +75,7 @@ async function checkKimiHome(cwd, home, env, shared, limits) {
     return block;
   }
   const parsed = parseKimiProviders(listing.stdout);
-  const login = `KIMI_CODE_HOME=${home.home} kimi login`;
+  const login = `${kimiLoginCommand(home.home)}, or ${KIMI_REGION_HINT}`;
   if (!parsed || parsed.providers.length === 0) {
     const said = parsed ? "no provider is configured" : firstLine(listing.stdout) || "kimi provider list printed nothing";
     block.signIn = { state: "signed-out", method: null, detail: `${said} (sign in: ${login}; see kimi-home.md)` };
@@ -129,7 +129,7 @@ export const setupProbe = {
   signInText(block) { return block.signIn.state === "signed-out" ? `signed out: ${block.signIn.detail}` : null; },
   nextSteps(block) {
     return block.signIn.state === "signed-out"
-      ? [`Sign in to Kimi in ${block.home} once: \`KIMI_CODE_HOME=${block.home} kimi login\` (see the jobs skill's kimi-home.md).`]
+      ? [`Sign in to Kimi in ${block.home} once: \`${kimiLoginCommand(block.home)}\` (${KIMI_REGION_HINT}; see the jobs skill's kimi-home.md).`]
       : [];
   }
 };
