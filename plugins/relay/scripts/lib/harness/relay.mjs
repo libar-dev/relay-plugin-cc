@@ -23,7 +23,7 @@ import process from "node:process";
 import { awaitOutcome, hasLiveWorker, COMPANION_SCRIPT } from "../worker/delivery.mjs";
 import { appendRelayViolation, messageExists, messageAccount, newMessageId, postInboxMessage } from "../jobs/messages.mjs";
 import { absoluteJobsHomeEnv, listJobDirs, nowIso, readJob, jobPaths, readJsonOrNull, resolveJobsHome, TERMINAL_STATES, writeJsonAtomic } from "../jobs/store.mjs";
-import { isTerminalView, loadJobView } from "../jobs/view.mjs";
+import { isTerminalView, JobViewBusy, loadJobView } from "../jobs/view.mjs";
 import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
 import { classifyHarnessEntry, unframeComputedTask, WORKFLOW_SYSTEM_NOTES } from "./workflow.mjs";
 
@@ -417,8 +417,10 @@ export function findAdoptableRelayJob(env, { agentId, workflowRunId, journalKey,
     let state;
     try {
       state = loadJobView(dir).state;
-    } catch {
-      continue;
+    } catch (error) {
+      // A busy job is at work: it stays a candidate. A directory without job.json does not.
+      if (!(error instanceof JobViewBusy)) continue;
+      state = null;
     }
     if (state === "failed" || state === "cancelled") {
       continue;
@@ -635,8 +637,11 @@ async function deliverRelayMessagesUnderLock(jobDir, messages, options) {
       }
       let record = ledger;
       if (!record?.messageId) {
-        const view = loadJobView(jobDir);
-        const kind = isTerminalView(view) ? "continue" : "steer";
+        // A busy job is at work, so the message goes as a steer.
+        let terminal = false;
+        try { terminal = isTerminalView(loadJobView(jobDir)); }
+        catch (error) { if (!(error instanceof JobViewBusy)) throw error; }
+        const kind = terminal ? "continue" : "steer";
         record = { kind, messageId: orderedMessageId(), status: "posting", at: nowIso() };
         writeLedger(jobDir, message.uuid, record);
       }

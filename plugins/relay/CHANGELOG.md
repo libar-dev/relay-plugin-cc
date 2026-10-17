@@ -1,5 +1,49 @@
 # Changelog
 
+## 2.1.0 (2026-10-17)
+
+- A fourth backend, `backend: kimi`, runs Moonshot AI's Kimi Code through `kimi acp`. Jobs, the
+  relay, cancel, continue, recovery, Workflow adoption, both reviews and setup work as on the other
+  backends. `kimi-home:` selects the Kimi home (`default` is `~/.kimi-code`, a name is
+  `~/.kimi-code-<name>`), and `/relay:setup` lists every Kimi home it finds.
+- A running Kimi turn takes no message: a message sent while it runs becomes the next turn.
+- Kimi supports `yolo` (Kimi's Never Ask mode) and `read-only` (Kimi's default mode, with every
+  permission request rejected, and the file writes and terminal commands Kimi sends through the
+  client refused by relay), and only `web-search: live`. `read-only` is not an OS sandbox: Kimi's
+  hooks, the MCP servers and plugins it starts, and its other local operations can still have
+  side effects.
+- A Kimi turn's outcome and report come from the session's own record, because Kimi's ACP layer
+  answers `end_turn` for a turn that failed.
+- A failed adversarial-review turn says the turn failed and gives the backend's error, on every
+  backend. It was shown as invalid structured JSON with the turn's error as the parse error, and on
+  Codex a whole answer sent before the failure was shown as findings. `<backend> returned no valid
+  review JSON` stays for an answer that came back and is not review JSON.
+- `wait`, `result` and `status` read one validated version of a job, on every backend: the job,
+  then its report, lease and owed messages, then the job again, all of it read again when a worker
+  began or ended an attempt in between. A report is never paired with another attempt's state, nor
+  missing while the next attempt archives it, and a job with owed work never shows as finished; it
+  could return the previous report with exit 0 while that work ran. A job still changing after
+  eight reads is busy, a retryable read and not a state: `wait` polls again, and the other readers
+  retry, then say the job is busy and exit 4; `steer`, `continue` and `resume` still report a
+  message they have sent. A view never mixes two versions of a job.
+- Claude can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:status` and
+  `/relay:result` itself; they were user-only. A review Claude starts never asks a question: without
+  `--wait` or `--background` it runs in the foreground. `/relay:cancel` and `/relay:transfer` stay
+  user-only. The README gives the allow rules that run the four without Claude Code's prompt.
+- The tests that wait for an orphaned process accept a child subreaper, such as `systemd --user`,
+  as its new parent, so they pass on Linux desktops.
+- The test suite cleans up its temporary directories; `RELAY_TEST_KEEP_TMP=1` keeps a failed run's.
+- The docs say why `yolo` is the default: existing headers and Workflow scripts keep running as
+  they did. A live check found `write` with `network: true` enough for web search, installs,
+  commits and child processes on Codex and Grok, but not for `ps` or writes outside the working
+  directory. The 2.0.0 entry below gave the earlier reason.
+- The docs say what the stop gate can attribute (Claude's last message and the working tree as it
+  stands, no diff of the turn), when `cancel` still signals after the process table becomes
+  unreadable, and how a new backend is probed, tested and checked before it ships.
+- The docs name the Linux case where Grok refuses its `read-only` profile, so read-only Grok jobs
+  and Grok reviews fail: a runtime socket it denies, such as `/run/podman/podman.sock` under a
+  root-only `/run/podman`. `write` still runs.
+
 ## 2.0.0
 
 The first public release. `relay` runs jobs on Codex (GPT), Grok Build and ZCode (GLM) from Claude

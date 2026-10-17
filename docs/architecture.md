@@ -17,7 +17,7 @@ scripts/lib/worker/                          the detached worker that runs a job
 scripts/lib/review/                          review targets, prompts, rendering
 scripts/lib/setup/                           the setup page
 scripts/lib/jobs/                            the job store: records, inbox, lease, settings, views
-scripts/lib/backends/                        Codex, Grok and ZCode behind one contract
+scripts/lib/backends/                        Codex, Grok, ZCode and Kimi behind one contract
 scripts/lib/util/                            process, file, argument and text helpers
 ```
 
@@ -82,5 +82,5 @@ pointer to its job).
 Fields of `job.json` that tools outside the plugin read, and that keep their names: `id`,
 `kind`, `state`, `createdAt`, `startedAt`, `completedAt`, `sessionId`, `request.cwd`,
 `request.model`, `request.backend`, `launchedBy`, `relay` and `attempts`. A backend keeps its own
-record under `backendState`: Grok keeps `binary`, `promptIds` and `deliveries` there, ZCode keeps
-`binary`, and Codex keeps nothing. Only that backend reads it.
+record under `backendState`: Grok keeps `binary`, `promptIds` and `deliveries` there, Kimi keeps
+`binary` and `deliveries`, ZCode keeps `binary`, and Codex keeps nothing. Only that backend reads it.

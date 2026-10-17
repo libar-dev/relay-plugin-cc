@@ -19,6 +19,7 @@ import { CodexAppServerClient } from "../plugins/relay/scripts/lib/backends/code
 import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 import { readProcessStartTime } from "../plugins/relay/scripts/lib/util/process.mjs";
 import { deliverRelayMessages, readLedger, RELAY_BLOCK_BUDGET } from "../plugins/relay/scripts/lib/harness/relay.mjs";
+import { busyViews } from "./support/busy-view.mjs";
 
 const QUICK = "model: gpt-test\neffort: low\n---\n[quick] Initial task.";
 
@@ -212,6 +213,25 @@ test("an acknowledgement timeout retries the original post exactly once and in o
   assert.equal(runs(ctx, messages[1].text), 1);
   const received = codexReceived(ctx);
   assert.deepEqual([...received.turns, ...received.steers].filter((text) => messages.some((message) => message.text === text)), messages.map((message) => message.text));
+});
+
+// A busy job (its record changing during every view) is at work, so a message for it goes as a
+// steer. This job had in fact ended: the steer finds no turn and runs as the next one, once.
+test("a message for a busy job goes as a steer; on a job that had ended, it runs as the next turn, once", async () => {
+  const ctx = relayContext("job", { turnMs: 100 });
+  const { jobId, dir } = await completed(ctx);
+  const text = "[quick] Follow-up to a busy job";
+  const entry = ctx.queued(text);
+  const restore = busyViews(dir);
+  try {
+    await deliverRelayMessages(dir, [{ uuid: entry.uuid, text }], { env: ctx.env });
+  } finally {
+    restore();
+  }
+  assert.equal(readLedger(dir, entry.uuid).kind, "steer");
+  assert.equal(readLedger(dir, entry.uuid).status, "done");
+  await assertRunOnce(ctx, jobId, text);
+  assert.equal(readJobJson(ctx, jobId).attempts.length, 2);
 });
 
 test("a hook killed after posting leaves a retry that runs the message once", async () => {

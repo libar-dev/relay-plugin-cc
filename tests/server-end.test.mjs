@@ -8,6 +8,7 @@ import { SpawnedServerClient } from "../plugins/relay/scripts/lib/backends/trans
 import { runTurnOnThread } from "../plugins/relay/scripts/lib/backends/codex/turn.mjs";
 import { grokEndMessage } from "../plugins/relay/scripts/lib/backends/grok/connection.mjs";
 import { zcodeEndMessage } from "../plugins/relay/scripts/lib/backends/zcode/connection.mjs";
+import { kimiEndMessage } from "../plugins/relay/scripts/lib/backends/kimi/connection.mjs";
 import { installFakeCodex } from "./fakes/codex.mjs";
 import { installFakeGrok } from "./fakes/grok.mjs";
 import { finishJob, HEADER, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
@@ -116,14 +117,15 @@ import { companion, jobDirOf, readJobJson, relayContext, waitFor as waitForForAp
     }
   }
 
-  test("Codex, Grok and ZCode end messages keep the partial-line byte count", () => {
+  test("Codex, Grok, ZCode and Kimi end messages keep the partial-line byte count", () => {
     const end = { code: 17, pid: 42, partialStdoutBytes: 123 };
-    for (const [name, message] of [["codex", serverEndMessage], ["grok", grokEndMessage], ["zcode", zcodeEndMessage]]) {
+    for (const [name, message] of [["codex", serverEndMessage], ["grok", grokEndMessage], ["zcode", zcodeEndMessage], ["kimi", kimiEndMessage]]) {
       assert.match(message(end), /output ended mid-line after 123 bytes/, name);
       assert.doesNotMatch(message({ ...end, partialStdoutBytes: 0 }), /mid-line/, name);
     }
     assert.match(grokEndMessage({ ...end, stderrTail: "tail\n" }), /after 123 bytes\.\ntail$/);
     assert.match(zcodeEndMessage({ ...end, stderrTail: "tail\n" }), /after 123 bytes\.\ntail$/);
+    assert.match(kimiEndMessage({ ...end, stderrTail: "tail\n" }), /after 123 bytes\.\ntail$/);
   });
 }
 

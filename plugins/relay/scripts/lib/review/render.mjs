@@ -153,9 +153,28 @@ function appendReasoningSection(lines, reasoningSummary) {
   }
 }
 
-// The heading uses `meta.backendLabel` or the default backend's label.
+// The heading uses `meta.backendLabel` or the default backend's label. With `meta.turnError` the
+// turn failed: the backend's error is shown, and any answer it had sent stays raw.
 export function renderReviewResult(parsedResult, meta) {
   const backend = meta.backendLabel ?? DEFAULT_BACKEND.label;
+  if (meta.turnError) {
+    const lines = [
+      `# ${backend} ${meta.reviewLabel}`,
+      "",
+      `Target: ${meta.targetLabel}`,
+      "",
+      `The ${backend} turn failed: ${meta.turnError}`
+    ];
+
+    if (parsedResult.rawOutput) {
+      lines.push("", "Raw final message:", "", "```text", parsedResult.rawOutput, "```");
+    }
+
+    appendReasoningSection(lines, meta.reasoningSummary ?? parsedResult.reasoningSummary);
+
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
   if (!parsedResult.parsed) {
     const lines = [
       `# ${backend} ${meta.reviewLabel}`,

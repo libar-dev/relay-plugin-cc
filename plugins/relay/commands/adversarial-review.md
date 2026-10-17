@@ -1,11 +1,10 @@
 ---
-description: Run a review on Codex, Grok or ZCode that challenges the implementation approach and design choices
-argument-hint: '[--wait|--background] [--backend codex|grok|zcode] [--model <m>] [--effort <e>] [--grok-home H] [--base <ref>] [--scope auto|working-tree|branch] [focus ...]'
-disable-model-invocation: true
+description: Run a read-only review that challenges the local diff's approach and design, on Codex, Grok, ZCode or Kimi (pick one with --backend); its findings come back as schema-checked JSON
+argument-hint: '[--wait|--background] [--backend codex|grok|zcode|kimi] [--model <m>] [--effort <e>] [--grok-home H] [--kimi-home H] [--base <ref>] [--scope auto|working-tree|branch] [focus ...]'
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
-Run an adversarial review through the shared plugin runtime, on Codex, Grok or ZCode.
+Run an adversarial review through the shared plugin runtime, on Codex, Grok, ZCode or Kimi.
 Position it as a challenge review that questions the chosen implementation, design choices, tradeoffs, and assumptions.
 
 Raw slash-command arguments:
@@ -18,9 +17,10 @@ Core constraint:
 - Keep the framing focused on whether the current approach is the right one, what assumptions it depends on, and where the design could fail under real-world conditions.
 
 Execution mode rules:
+- If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground, as with `--wait`, and begin your reply with exactly this line before the output: `Ran in the foreground: the default when Claude starts a review without --wait or --background.` That line is the only text allowed before the companion's verbatim output, and nothing follows the output.
 - If the raw arguments include `--wait`, do not ask. Run in the foreground.
 - If the raw arguments include `--background`, do not ask. Run in a Claude background task.
-- Otherwise, estimate the review size before asking:
+- Otherwise, when the user typed the command, estimate the review size before asking:
   - For working-tree review, start with `git status --short --untracked-files=all`.
   - For working-tree review, also inspect both `git diff --shortstat --cached` and `git diff --shortstat`.
   - For base-branch review, use `git diff --shortstat <base>...HEAD`.
@@ -34,13 +34,13 @@ Execution mode rules:
   - `Run in background`
 
 Backend selection (the flags mirror a job header's keys):
-- `--backend codex|grok|zcode` picks the backend; without it, Codex. Nothing stores a default.
-- `--model <model>` and `--effort <effort>` are passed as given. Without `--model` and `--effort`, Codex and Grok use their configured defaults, and ZCode uses its selected default model at effort `high`, the plugin's default (ZCode's own is `max`), as a job header does.
-- A Codex review runs in the Codex home (`~/.codex`, or `CODEX_HOME`); `--grok-home <name|path>` runs a Grok review in that Grok home.
-- A combination a job would refuse (`--grok-home` without Grok) is refused the same way, before anything runs.
-- Every review is read-only and recorded as a job: `/relay:status` lists it, with `backend:` on Grok and ZCode as for a job.
+- `--backend codex|grok|zcode|kimi` picks the backend; without it, Codex. Nothing stores a default.
+- `--model <model>` and `--effort <effort>` are passed as given. Without `--model` and `--effort`, Codex, Grok and Kimi use their configured defaults, and ZCode uses its selected default model at effort `high`, the plugin's default (ZCode's own is `max`), as a job header does.
+- A Codex review runs in the Codex home (`~/.codex`, or `CODEX_HOME`); `--grok-home <name|path>` runs a Grok review in that Grok home, and `--kimi-home <name|path>` a Kimi review in that Kimi home.
+- A combination a job would refuse (`--grok-home` without Grok, `--kimi-home` without Kimi) is refused the same way, before anything runs.
+- Every review is read-only and recorded as a job: `/relay:status` lists it, with `backend:` on Grok, ZCode and Kimi as for a job.
 
-The answer is review JSON. Codex is held to the schema by its own `outputSchema`; Grok and ZCode get the schema in the prompt and the plugin checks the answer. An answer that is not review JSON fails the review (`<backend> returned no valid review JSON`), keeps the raw answer in the report and exits non-zero; there is no second try. Grok and ZCode read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. A Grok review always runs under Grok's `read-only` profile; on a Mac where Grok refuses that profile, the review fails with Grok's error.
+The answer is review JSON. Codex is held to the schema by its own `outputSchema`; Grok, ZCode and Kimi get the schema in the prompt and the plugin checks the answer. An answer that is not review JSON fails the review (`<backend> returned no valid review JSON`), keeps the raw answer in the report and exits non-zero; there is no second try. A turn that fails is not an answer: the review says `The <backend> turn failed: <error>` with the backend's error and exits non-zero. Grok, ZCode and Kimi read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. A Grok review always runs under Grok's `read-only` profile; where Grok refuses that profile (on a Mac whose `/var/run/docker.sock` is a symlink, or on Linux where it cannot reach a runtime socket such as `/run/podman/podman.sock`), the review fails with Grok's error. A Kimi review runs in Kimi's `default` mode: every permission request is rejected, and relay refuses the file writes and terminal commands Kimi sends through the client. That is not an OS sandbox: Kimi's hooks, the MCP servers and plugins it starts, and its other local operations can still have side effects.
 
 Argument handling:
 - Preserve the user's arguments exactly.
@@ -58,7 +58,7 @@ Foreground flow:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" adversarial-review "$ARGUMENTS"
 ```
 - Return the command stdout verbatim, exactly as-is.
-- Do not paraphrase, summarize, or add commentary before or after it.
+- Do not paraphrase, summarize, or add commentary before or after it. The one exception is the foreground line above, first, when you invoked the command yourself.
 - Do not fix any issues mentioned in the review output.
 
 Background flow:

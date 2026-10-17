@@ -10,14 +10,15 @@ import { spawnSync } from "node:child_process";
 import { companion, makeHome, setup, waitFor, ROOT } from "./support/job-helpers.mjs";
 import { installFakeGrok } from "./fakes/grok.mjs";
 import { installFakeZcode } from "./fakes/zcode.mjs";
+import { installFakeKimi, signInFakeKimiHome } from "./fakes/kimi.mjs";
 import { run } from "./support/helpers.mjs";
 
 const BLOCK_KEYS = ["backend", "home", "homeDefault", "selector", "binary", "binaryIsScript", "realBinary", "version", "signIn",
   "model", "modelNote", "effort", "effortNote", "modelsReason", "models", "can", "warnings", "ready", "error", "elapsedMs"].sort();
 
 // Every backend installed and signed in: Codex in ~/.codex, Grok in ~/.grok and ~/.grok-jobs,
-// ZCode with credentials and a default model. A custom Codex home is used only
-// when CODEX_HOME selects it.
+// ZCode with credentials and a default model, Kimi in ~/.kimi-code. A custom Codex home is
+// used only when CODEX_HOME selects it.
 function everyBackend(t, codexBehavior = "job", grokOptions = {}) {
   const ctx = setup(t, { behavior: codexBehavior });
   if (codexBehavior === "home-probe") makeHome(ctx, ".codex", 'model = "gpt-default"\nmodel_reasoning_effort = "high"\n');
@@ -29,6 +30,8 @@ function everyBackend(t, codexBehavior = "job", grokOptions = {}) {
   fs.mkdirSync(zcodeDir, { recursive: true });
   fs.writeFileSync(path.join(zcodeDir, "credentials.json"), '{"encrypted":"x"}');
   fs.writeFileSync(path.join(zcodeDir, "provider_config.json"), JSON.stringify({ config: { defaultModelSelection: { providerId: "account:fake-plan", modelId: "GLM-5.3" } } }));
+  ctx.kimi = installFakeKimi(ctx.bin).state;
+  signInFakeKimiHome(path.join(ctx.user, ".kimi-code"));
   return ctx;
 }
 
@@ -46,14 +49,14 @@ test("the overview shows every backend home in one shape, ready, with no thread,
   assert.equal(report.jobsHome, ctx.jobs);
   assert.equal(report.ready, true);
   assert.deepEqual(report.backends.map(block => [block.backend, block.selector, block.ready]), [
-    ["codex", null, true], ["grok", null, true], ["grok", "jobs", true], ["zcode", null, true]
+    ["codex", null, true], ["grok", null, true], ["grok", "jobs", true], ["zcode", null, true], ["kimi", null, true]
   ]);
   for (const block of report.backends) {
     assert.deepEqual(Object.keys(block).sort(), BLOCK_KEYS, block.backend);
     assert.deepEqual(Object.keys(block.signIn).sort(), ["detail", "method", "state"]);
     assert.deepEqual(Object.keys(block.can).sort(), ["adversarialReview", "modes", "resume", "review", "steer", "stopGate", "transfer", "webSearchOff"]);
   }
-  const [codex, grok, grokJobs, zcode] = report.backends;
+  const [codex, grok, grokJobs, zcode, kimi] = report.backends;
   assert.equal(codex.home, path.join(ctx.user, ".codex"));
   assert.equal(codex.version, "codex-cli test");
   assert.deepEqual(codex.signIn, { state: "signed-in", method: "chatgpt", detail: "ChatGPT login active for test@example.com" });
@@ -62,8 +65,8 @@ test("the overview shows every backend home in one shape, ready, with no thread,
   assert.equal(codex.effort, "high");
   assert.deepEqual(codex.models, [{ id: "gpt-fake-sol", efforts: ["low", "medium", "high"], defaultEffort: "low" }, { id: "gpt-fake-luna", efforts: ["low", "medium"], defaultEffort: "medium" }]);
   assert.equal(codex.can.stopGate, true);
-  // Reviews run on Grok and ZCode; the stop gate and transfer require Codex.
-  assert.deepEqual([grok, zcode].map(block => [block.can.review, block.can.adversarialReview, block.can.stopGate, block.can.transfer]), [[true, true, false, false], [true, true, false, false]]);
+  // Reviews run on Grok, ZCode and Kimi; the stop gate and transfer require Codex.
+  assert.deepEqual([grok, zcode, kimi].map(block => [block.can.review, block.can.adversarialReview, block.can.stopGate, block.can.transfer]), [[true, true, false, false], [true, true, false, false], [true, true, false, false]]);
   assert.equal(grok.home, path.join(ctx.user, ".grok"));
   assert.equal(grokJobs.home, path.join(ctx.user, ".grok-jobs"));
   assert.deepEqual(grok.signIn.state, "signed-in");
@@ -78,6 +81,16 @@ test("the overview shows every backend home in one shape, ready, with no thread,
   assert.deepEqual(zcode.models.map(model => model.id), ["account:fake-plan/GLM-5.3", "account:fake-plan/GLM-5.3-Flash"]);
   assert.equal(zcode.modelsReason, null);
   assert.deepEqual(zcode.can.modes, ["yolo", "read-only"]);
+  // Kimi: the providers and models `kimi provider list --json` prints, the credentials file's
+  // presence, and the defaults in config.toml. Its API key field is never read.
+  assert.equal(kimi.home, path.join(ctx.user, ".kimi-code"));
+  assert.equal(kimi.version, "2.2.0-fake");
+  assert.deepEqual(kimi.signIn, { state: "credentials-present", method: "kimi login", detail: path.join(ctx.user, ".kimi-code", "credentials", "kimi-code-env-fake.json") });
+  assert.equal(kimi.model, "kimi-code/k3");
+  assert.equal(kimi.effort, "high");
+  assert.deepEqual(kimi.models, [{ id: "kimi-code/k3", efforts: ["low", "high", "max"], defaultEffort: "max" }, { id: "kimi-code/kimi-for-coding-highspeed", efforts: null, defaultEffort: null }]);
+  assert.deepEqual(kimi.can, { modes: ["yolo", "read-only"], steer: false, resume: true, webSearchOff: false, review: true, adversarialReview: true, stopGate: false, transfer: false });
+  assert.doesNotMatch(JSON.stringify(report), /FAKE-SECRET-KEY/);
 
   // Sources only: account/read, config/read, model/list; no thread, no Grok agent; for ZCode,
   // one server and one draft session, closed, with no message.
@@ -91,6 +104,9 @@ test("the overview shows every backend home in one shape, ready, with no thread,
   assert.deepEqual(ctx.zcode().requests.filter(r => r.method).map(r => r.method), ["runtime/capabilities", "session/create", "session/close"]);
   assert.deepEqual(Object.values(ctx.zcode().drafts).map(draft => [draft.persistence, draft.open]), [["deferred", false]]);
   assert.equal(ctx.zcode().turns.length, 0);
+  assert.deepEqual(ctx.kimi().invocations.map(call => call.args.join(" ")).sort(), ["--version", "provider list --json"]);
+  assert.equal(ctx.kimi().invocations.find(call => call.args[0] === "provider").env.KIMI_CODE_HOME, path.join(ctx.user, ".kimi-code"));
+  assert.equal(ctx.kimi().starts.length, 0);
 
   const text = companion(ctx, ["setup"]);
   assert.equal(text.status, 0, text.stderr);
@@ -112,6 +128,10 @@ test("the overview shows every backend home in one shape, ready, with no thread,
     "model: account:fake-plan/GLM-5.3  effort: high (plugin default; ZCode's own is max)",
     "models: account:fake-plan/GLM-5.3, account:fake-plan/GLM-5.3-Flash",
     "can: yolo, read-only (write refused) · steer · resume · web search off (tool filter) · review · adversarial review · stop gate, transfer: Codex only",
+    "## kimi  ~/.kimi-code  ready",
+    "model: kimi-code/k3  effort: high",
+    "models: kimi-code/k3, kimi-code/kimi-for-coding-highspeed",
+    "can: yolo, read-only (write refused) · resume · review · adversarial review · stop gate, transfer: Codex only",
     "Setup made no changes.",
     "Optional: `/relay:setup --enable-review-gate` has Codex review each turn's edits before the main thread stops (Codex only, off by default; skips while agents or jobs run)."
   ]) assert.ok(text.stdout.split("\n").includes(line), `${line}\n---\n${text.stdout}`);
@@ -131,6 +151,7 @@ test("a backend that is not installed prints its reason and never fails the over
   const text = companion(ctx, ["setup"]).stdout;
   assert.match(text, /^## grok {2}~\/\.grok {2}not installed\ngrok: not installed \(GROK_BINARY or PATH; see grok-home\.md\)$/m);
   assert.match(text, /^## zcode {2}~\/\.zcode {2}not installed\nzcode: not installed \(ZCODE_BINARY or PATH\)$/m);
+  assert.match(text, /^## kimi {2}~\/\.kimi-code {2}not installed\nkimi: not installed \(KIMI_BINARY, PATH or ~\/\.kimi-code\/bin; see kimi-home\.md\)$/m);
   assert.equal(companion(ctx, ["setup", "--backend", "grok"]).status, 1);
 
   // Codex missing: the install offer is the next step only when npm is on PATH.
@@ -255,7 +276,7 @@ test("every home's check runs at once with the others, and setup ends what each 
   assert.equal(status, 0);
   assert.equal(fs.readdirSync(barrier).length, 3);
   assert.deepEqual(report.backends.map(block => [block.backend, block.selector, block.ready, block.error]), [
-    ["codex", null, true, null], ["grok", null, true, null], ["grok", "jobs", true, null], ["zcode", null, true, null]
+    ["codex", null, true, null], ["grok", null, true, null], ["grok", "jobs", true, null], ["zcode", null, true, null], ["kimi", null, true, null]
   ]);
   await assertAllGone([...codexPids(), ...grokPids()], "every wrapper and its child end when their checks complete");
 });
@@ -270,12 +291,12 @@ test("a malformed Codex catalog entry is skipped and the overview still prints e
   const { status, page: report } = page(ctx);
   assert.equal(status, 0);
   assert.deepEqual(report.backends.map(block => [block.backend, block.selector, block.ready]), [
-    ["codex", null, true], ["grok", null, true], ["grok", "jobs", true], ["zcode", null, true]
+    ["codex", null, true], ["grok", null, true], ["grok", "jobs", true], ["zcode", null, true], ["kimi", null, true]
   ]);
   assert.deepEqual(report.backends[0].models.map(model => model.id), ["gpt-fake-sol", "gpt-fake-luna"]);
   const text = companion(ctx, ["setup"]);
   assert.equal(text.status, 0, text.stderr);
-  assert.equal(text.stdout.match(/^## /gm).length, 4);
+  assert.equal(text.stdout.match(/^## /gm).length, 5);
 });
 
 // Capability facts have one declaration; the text and the JSON agree.
@@ -323,10 +344,17 @@ test("--backend checks one home, keeps exit codes, and refuses mixed flags", t =
   assert.equal(zcode.page.backends[0].signIn.state, "signed-out");
   // The overview still exits 0 with ZCode signed out.
   assert.equal(page(ctx).status, 0);
+  // A Kimi home without its own sign-in is signed out, whatever the providers say.
+  const kimiJobs = page(ctx, ["--backend", "kimi", "--kimi-home", "jobs"]);
+  assert.equal(kimiJobs.status, 1);
+  assert.equal(kimiJobs.page.backends[0].home, path.join(ctx.user, ".kimi-code-jobs"));
+  assert.equal(kimiJobs.page.backends[0].signIn.state, "signed-out");
+  assert.ok(kimiJobs.page.nextSteps.some(step => step.includes(`KIMI_CODE_HOME=${path.join(ctx.user, ".kimi-code-jobs")} kimi login`)), kimiJobs.page.nextSteps.join("\n"));
 
   const configPath = path.join(ctx.jobs, "config.json");
   for (const [args, message] of [
-    [["--backend", "kimi"], '--backend must be codex, grok or zcode, not "kimi".'],
+    [["--backend", "other"], '--backend must be codex, grok, zcode or kimi, not "other".'],
+    [["--kimi-home", "jobs"], "--kimi-home requires --backend kimi."],
     [["--grok-home", "jobs"], "--grok-home requires --backend grok."],
     [["--backend", "codex", "--fast-tier", "off"], "Use setup --backend on its own, without --fast-tier."],
     [["--backend", "codex", "--job-mcp-off", "node_repl"], "Use setup --backend on its own, without --job-mcp-off."],

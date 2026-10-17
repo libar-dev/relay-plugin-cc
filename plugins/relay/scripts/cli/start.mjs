@@ -8,7 +8,7 @@ import { appendRelayViolation } from "../lib/jobs/messages.mjs";
 import { nowIso, readJob } from "../lib/jobs/store.mjs";
 import { buildLaunchRequest, parseHeaderPrompt, UsageError } from "../lib/jobs/request.mjs";
 import { SCHEMA_SENTENCE } from "../lib/harness/workflow.mjs";
-import { backendJson, backendLines, backendSettingLines, EXIT, loadJobView, relayAdoptionLines } from "../lib/jobs/view.mjs";
+import { backendJson, backendLines, backendSettingLines, EXIT, loadJobViewSettled as loadJobView, relayAdoptionLines } from "../lib/jobs/view.mjs";
 import { adoptRelayJob, deliverRelayMessages, findAdoptableRelayJob, promptSha256, readJournalKey, readRelayPointer, readRelayTranscript, writeRelayPointer } from "../lib/harness/relay.mjs";
 
 

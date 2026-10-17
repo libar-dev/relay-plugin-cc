@@ -3,14 +3,21 @@ import { default as process } from "node:process";
 import { deliverMessage } from "../lib/worker/delivery.mjs";
 import { findJobDir } from "../lib/jobs/store.mjs";
 import { UsageError } from "../lib/jobs/request.mjs";
-import { EXIT, isTerminalView, loadJobView } from "../lib/jobs/view.mjs";
+import { EXIT, isTerminalView, JobViewBusy, loadJobViewSettled as loadJobView } from "../lib/jobs/view.mjs";
 import { DEFAULT_RESUME_MESSAGE } from "../lib/worker/recovery.mjs";
 
 
-function renderDelivery(jobDir, kind, delivery) {
-  const view = loadJobView(jobDir);
+// The job's state once the message is in its inbox, or null while the job is busy. A busy read
+// here is no failed send: the command still reports the delivery, so it is never sent twice.
+function stateAfterDelivery(jobDir) {
+  try { return loadJobView(jobDir).state; }
+  catch (error) { if (error instanceof JobViewBusy) return null; throw error; }
+}
+
+
+function renderDelivery(job, kind, delivery, state) {
   const lines = [
-    `job: ${view.job.id}`,
+    `job: ${job.id}`,
     `message: ${kind} ${delivery.message.id}`,
     `outcome: ${delivery.outcome?.action ?? "pending (no worker has taken it yet)"}`
   ];
@@ -23,7 +30,7 @@ function renderDelivery(jobDir, kind, delivery) {
   if (delivery.outcome?.reason) {
     lines.push(`reason: ${String(delivery.outcome.reason).replace(/\s+/g, " ")}`);
   }
-  lines.push(`state: ${view.state}`);
+  lines.push(state ? `state: ${state}` : `note: the job is busy, so its state is not shown; status ${job.id} shows it`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -37,13 +44,14 @@ export async function handleSteerOrContinue(kind, argv) {
     booleanOptions: ["json"]
   });
   const jobDir = findJobDir(positionals[0]);
-  requireTaskJob(jobDir);
+  const job = requireTaskJob(jobDir);
   const text = readMessageText(options);
   if (!text.trim()) {
     throw new UsageError("The message is empty.");
   }
   const delivery = await deliverMessage(jobDir, kind, text);
-  outputResult(options.json ? { ...delivery, state: loadJobView(jobDir).state } : renderDelivery(jobDir, kind, delivery), options.json);
+  const state = stateAfterDelivery(jobDir);
+  outputResult(options.json ? { ...delivery, state } : renderDelivery(job, kind, delivery, state), options.json);
   if (!delivery.outcome) {
     process.exitCode = EXIT.running;
   }
@@ -56,14 +64,16 @@ export async function handleResume(argv) {
     booleanOptions: ["json"]
   });
   const jobDir = findJobDir(positionals[0]);
-  requireTaskJob(jobDir);
+  const job = requireTaskJob(jobDir);
+  // Busy here, nothing is sent yet: the companion says the job is busy, and exits 4.
   const view = loadJobView(jobDir);
   if (!isTerminalView(view)) {
     throw new UsageError(`Job ${view.job.id} is ${view.state} with a live worker. Use steer or continue.`);
   }
   const text = readMessageText(options, { required: false, fallback: null });
   const delivery = await deliverMessage(jobDir, "resume", text ?? DEFAULT_RESUME_MESSAGE, { isDefault: text == null });
-  outputResult(options.json ? { ...delivery, state: loadJobView(jobDir).state } : renderDelivery(jobDir, "resume", delivery), options.json);
+  const state = stateAfterDelivery(jobDir);
+  outputResult(options.json ? { ...delivery, state } : renderDelivery(job, "resume", delivery, state), options.json);
   if (!delivery.outcome) {
     process.exitCode = EXIT.running;
   }

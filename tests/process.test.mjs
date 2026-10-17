@@ -6,7 +6,7 @@ import { makeTempDir, writeExecutable } from "./support/helpers.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { isProcessAlive, readProcessStartTime, terminateProcessTree, listProcesses, liveSnapshotMembers, stopProcessSnapshot } from "../plugins/relay/scripts/lib/util/process.mjs";
+import { isProcessAlive, isProcessIdentityAlive, readProcessStartTime, terminateProcessTree, listProcesses, liveSnapshotMembers, stopProcessSnapshot } from "../plugins/relay/scripts/lib/util/process.mjs";
 
 test("terminateProcessTree signals the pid when the group kill fails with ESRCH", () => {
   const calls = [];
@@ -78,4 +78,32 @@ exec /bin/ps "$@"
   const cancelled = companion(ctx, ['cancel', id], { PATH: `${bin}:${ctx.env.PATH}`, RELAY_JOBS_CANCEL_GRACE_MS: '0' });
   assert.equal(cancelled.status, 1, cancelled.stdout + cancelled.stderr);
   assert.match(cancelled.stderr, /process table could not be read/);
+});
+
+test("a cancel whose later process-table read fails still signals the worker's group, then reports the failure", async t => {
+  const { setup, startJob, readJob, waitFor, companion } = await import('./support/job-helpers.mjs');
+  const ctx = setup(t, { turnMs: 30000 });
+  // The worker reads its inbox slowly, so a cancel with no grace takes the kill path.
+  ctx.env.RELAY_JOBS_POLL_MS = '5000';
+  const { id } = startJob(ctx, undefined, "Long running task");
+  await waitFor(() => readJob(ctx, id).turnId && readJob(ctx, id).server?.pid);
+  const { worker, server } = readJob(ctx, id);
+  assert.ok(isProcessIdentityAlive(worker) && isProcessIdentityAlive(server));
+  const bin = makeTempDir('relay-cancel-ps-');
+  const counter = path.join(bin, 'read');
+  // The first read of the whole table works; every later one fails.
+  writeExecutable(path.join(bin, 'ps'), `#!/bin/sh
+if [ "$1" = "-A" ]; then
+  if [ -e '${counter}' ]; then exit 1; fi
+  touch '${counter}'
+fi
+exec /bin/ps "$@"
+`);
+  const cancelled = companion(ctx, ['cancel', id], { PATH: `${bin}:${ctx.env.PATH}`, RELAY_JOBS_CANCEL_GRACE_MS: '0' });
+  assert.equal(cancelled.status, 1, cancelled.stdout + cancelled.stderr);
+  assert.match(cancelled.stderr, /process table could not be read/);
+  // The signals still went: the worker and the server in its group are gone, and the job, never
+  // marked cancelled, reads dead.
+  await waitFor(() => !isProcessIdentityAlive(worker) && !isProcessIdentityAlive(server), 5000);
+  assert.match(companion(ctx, ['status', id]).stdout, /^state: dead$/m);
 });

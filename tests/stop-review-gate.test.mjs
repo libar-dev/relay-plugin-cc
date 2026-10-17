@@ -306,3 +306,20 @@ test("stop gate allows with the manual-review message when the companion's revie
     assert.deepEqual(calls, broken === "task" ? ["task"] : ["task", "wait", "cancel"], broken);
   }
 });
+
+// A review job still busy at the gate's limit (its record changing during every view): wait exits
+// 4 with the busy line and no view. The job is at work, as a running one is, so the review timed
+// out; its answer was never invalid JSON.
+test("stop gate: a review still busy at its limit timed out, and is cancelled", async () => {
+  const { runStopReview, stopGateLimits } = await import(STOP_HOOK);
+  const calls = [];
+  const runCompanion = (args) => {
+    calls.push(args[0]);
+    if (args[0] === "task") return { status: 0, stdout: JSON.stringify({ jobId: "task-x", state: "starting" }), stderr: "", error: null };
+    if (args[0] === "wait") return { status: 4, stdout: "", stderr: "Job task-x is busy: its record changed during each of 8 reads. Try again.\n", error: null };
+    return { status: 0, stdout: "{}", stderr: "", error: null };
+  };
+  const review = runStopReview(process.cwd(), { last_assistant_message: "done" }, { limits: stopGateLimits({ RELAY_STOP_REVIEW_MS: "1500" }), runCompanion });
+  assert.deepEqual(review, { ok: true, failure: "the stop-time Codex review timed out after 1.5 s. Run /relay:review --wait to review by hand." });
+  assert.deepEqual(calls, ["task", "wait", "cancel"]);
+});

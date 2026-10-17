@@ -1,6 +1,6 @@
 ---
-description: Check every backend the relay can run (Codex, Grok, ZCode): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier or job MCP servers
-argument-hint: '[--backend codex|grok|zcode] [--grok-home H] [--enable-review-gate|--disable-review-gate] [--fast-tier allowed|off] [--job-mcp-off names|none]'
+description: Check every backend the relay can run (Codex, Grok, ZCode, Kimi): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier or job MCP servers
+argument-hint: '[--backend codex|grok|zcode|kimi] [--grok-home H|--kimi-home H] [--enable-review-gate|--disable-review-gate] [--fast-tier allowed|off] [--job-mcp-off names|none]'
 allowed-tools: Bash(node:*), Bash(npm:*), AskUserQuestion
 ---
 
@@ -11,8 +11,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json $ARGUMENTS
 ```
 
 With no `--backend`, setup checks every backend home it finds and exits 0 whatever it finds: the
-Codex home (`~/.codex` or `CODEX_HOME`), `~/.grok` and every `~/.grok-<name>`, and ZCode.
-`--backend codex|grok|zcode` checks one, `--grok-home H` selects a Grok home, and the command
+Codex home (`~/.codex` or `CODEX_HOME`), `~/.grok` and every `~/.grok-<name>`, ZCode, and
+`~/.kimi-code` and every `~/.kimi-code-<name>`. `--backend codex|grok|zcode|kimi` checks one,
+`--grok-home H` selects a Grok home and `--kimi-home H` a Kimi home, and the command
 exits non-zero when that backend is not ready. Setup makes no
 model call: Codex answers `account/read`, `config/read` and `model/list` on an app-server it stops
 afterwards, Grok answers `--version` and `grok models`, and for ZCode setup reads `--version`,
@@ -21,7 +22,11 @@ is never opened) and the default model, then asks one `zcode app-server` for eve
 sign-in serves: it creates a draft session, reads its model list (what ZCode's model picker
 shows) and closes the draft unsaved, with no message. A snapshot without a model list, or an
 empty one, leaves the ZCode block not ready; a draft ZCode does not confirm closed is a warning
-that names it. Whether the ZCode sign-in works is checked by the first turn. Every check has a time limit (10 s for a command, 20 s for an app-server).
+that names it. Whether the ZCode sign-in works is checked by the first turn. For Kimi, setup reads
+`--version` and `kimi provider list --json` under the home (only its model fields), whether each
+file-stored sign-in's credentials file is a regular file of more than two bytes (never opened),
+and the default model and effort in `config.toml`; whether the Kimi sign-in works is checked by
+the first turn. Every check has a time limit (10 s for a command, 20 s for an app-server).
 
 Render one table, one row per block, in the command's order: backend, home, version, sign-in,
 model and effort, models, ready. Put `can` as one short line under the table only where a backend
@@ -34,16 +39,18 @@ is a script names the real binary and `GROK_BINARY`.
 `--job-mcp-off <name,name...>` stores a user-level list. A Codex job passes
 `mcp_servers.<name>.enabled=false` for each name the Codex home's `config.toml` defines as
 `[mcp_servers.<name>]`; it skips an undefined name with a note and never passes it. Use
-`none` to clear the list. Grok and ZCode ignore it.
+`none` to clear the list. Grok, ZCode and Kimi ignore it.
 
 `/relay:setup --enable-review-gate` turns on the stop-time review gate for this repository,
 every worktree and session of it; `--disable-review-gate` turns it off. It is off by default
 and runs on Codex only, in the default Codex home at its default model and effort. When the
-main thread stops after a turn, one read-only Codex job reviews that turn's edits and blocks
-the stop only when Codex answers `BLOCK:`. The gate skips, with a note, while a background
+main thread stops after a turn, one read-only Codex job reviews that turn's edits, as Claude's
+last message describes them, against the working tree as it stands, and blocks the stop only
+when Codex answers `BLOCK:`. It gets no diff of the turn, so it cannot tell Claude's edits from
+changes that were already in the working tree. The gate skips, with a note, while a background
 task, a Workflow or a job of this repository runs, while a stop-hook continuation is already
-in progress, and when Codex is unavailable or the review fails. Grok and ZCode do not run it;
-use `/relay:review` on those.
+in progress, and when Codex is unavailable or the review fails. Grok, ZCode and Kimi do not run
+it; use `/relay:review` on those.
 
 The switches (`--enable-review-gate`, `--disable-review-gate`, `--fast-tier`, `--job-mcp-off`)
 work with the overview, which applies them first; with `--backend` they are a usage error.

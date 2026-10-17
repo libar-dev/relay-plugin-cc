@@ -3,6 +3,7 @@ import { backendFor, DEFAULT_BACKEND } from "../backends/index.mjs";
 // one, a line of three dashes and the report exactly as the backend wrote it.
 
 import fs from "node:fs";
+import path from "node:path";
 
 import { isWorkerAlive } from "./lease.mjs";
 import { isWorkerLease, readLease } from "./lease.mjs";
@@ -17,30 +18,97 @@ export const EXIT = {
   cancelled: 5
 };
 
+// How many times a view reads the job and its parts before it gives up on this call.
+const VIEW_READS = 8;
+
+/**
+ * A job whose record changed during every pass of a view: a worker is busy with it. Not a state:
+ * the reader retries (`loadJobViewSettled`, `wait`), or says the job is busy and to try again.
+ */
+export class JobViewBusy extends Error {
+  constructor(jobDir, job) {
+    super(`Job ${job?.id ?? path.basename(jobDir)} is busy: its record changed during each of ${VIEW_READS} reads. Try again.`);
+    this.name = "JobViewBusy";
+  }
+}
+
+// What a worker changes when it begins or ends an attempt: the job's state, how many attempts
+// it has, and which attempt is the last and how it stands.
+function jobVersion(job) {
+  const attempts = Array.isArray(job?.attempts) ? job.attempts : [];
+  const last = attempts.at(-1);
+  return JSON.stringify([job?.state ?? null, attempts.length, last?.attempt ?? null, last?.startedAt ?? null, last?.state ?? null]);
+}
+
+// A validated read. The view reads the job, then its report, lease and message account, then
+// the job again. When the job changed in between (a worker began an attempt for owed work, or a
+// newer attempt wrote its report), those parts may belong to another version, so the view reads
+// them all again. It renders from the report text it read in the pass that held. A pass that did
+// not hold is never returned: after VIEW_READS of them it throws JobViewBusy.
 export function loadJobView(jobDir, options = {}) {
-  let job = readJob(jobDir);
-  if (!job) {
-    throw new Error(`No job.json in ${jobDir}.`);
+  for (let pass = 1; ; pass += 1) {
+    let job = readJob(jobDir);
+    if (!job) {
+      throw new Error(`No job.json in ${jobDir}.`);
+    }
+    let view = computeJobView(job, options);
+    if (view.state === "dead") {
+      // The worker may have published its terminal state and exited while the liveness
+      // check ran. Read that publication before reporting a death from an older snapshot.
+      job = readJob(jobDir) ?? job;
+      view = computeJobView(job, options);
+    }
+    const paths = jobPaths(jobDir);
+    const read = readReport(paths, job);
+    const lease = readLease(jobDir);
+    const account = messageAccount(jobDir);
+    const relayViolations = readRelayViolations(jobDir);
+    const again = readJob(jobDir);
+    if (!again || jobVersion(again) !== jobVersion(job)) {
+      if (pass < VIEW_READS) continue;
+      throw new JobViewBusy(jobDir, again ?? job);
+    }
+    const hasReport = Boolean(read?.text.trim());
+    // Owed work is running under a live worker, or undelivered without one.
+    const workerLive = isWorkerLease(lease);
+    if (workerLive && account.undelivered.length > 0) {
+      view = { ...view, state: "running", deadReason: null };
+    }
+    const undelivered = workerLive ? [] : account.undelivered;
+    return {
+      job, jobDir, paths, ...view, hasReport, report: hasReport ? read.text : null, reportPath: hasReport ? read.path : null,
+      undelivered, dropped: account.dropped, relayViolations
+    };
   }
-  let view = computeJobView(job, options);
-  if (view.state === "dead") {
-    // The worker may have published its terminal state and exited while the liveness
-    // check ran. Read that publication before reporting a death from an older snapshot.
-    job = readJob(jobDir) ?? job;
-    view = computeJobView(job, options);
+}
+
+// loadJobView, retried for up to `waitMs` while the job is busy; then JobViewBusy goes to the
+// caller. For readers that answer once: status, result, a hook.
+export function loadJobViewSettled(jobDir, options = {}, waitMs = 2000) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      return loadJobView(jobDir, options);
+    } catch (error) {
+      if (!(error instanceof JobViewBusy) || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
   }
-  const paths = jobPaths(jobDir);
-  const hasReport = fs.existsSync(paths.report) && fs.readFileSync(paths.report, "utf8").trim().length > 0;
-  // Owed work is running under a live worker, or undelivered without one.
-  const lease = readLease(jobDir);
-  const workerLive = isWorkerLease(lease);
-  const account = messageAccount(jobDir);
-  if (workerLive && account.undelivered.length > 0) {
-    view = { ...view, state: "running", deadReason: null };
+}
+
+// The report for the attempts the job snapshot names, read once; readers render this copy and
+// never read the file again. A new attempt moves report.md to attempts/<n>-report.md before it
+// records itself, so a snapshot taken before that move finds its report there. That alone cannot
+// tell a newer attempt's report.md from its own: loadJobView reads the job again after this read
+// and reads everything again when the attempt changed, which is what keeps state and report
+// together.
+function readReport(paths, job) {
+  const attempts = Array.isArray(job.attempts) ? job.attempts.length : 0;
+  for (const file of [paths.report, ...(attempts > 0 ? [path.join(paths.attempts, `${attempts}-report.md`)] : [])]) {
+    try { return { path: file, text: fs.readFileSync(file, "utf8") }; }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
   }
-  const undelivered = workerLive ? [] : account.undelivered;
-  const relayViolations = readRelayViolations(jobDir);
-  return { job, jobDir, paths, ...view, hasReport, undelivered, dropped: account.dropped, relayViolations };
+  return null;
 }
 
 export function isTerminalView(view) {
@@ -140,7 +208,7 @@ export function renderJobBlock(view) {
     ...backendLines(request),
     `duration: ${formatDuration(job.createdAt, end) ?? "unknown"}`,
     `attempts: ${Array.isArray(job.attempts) ? job.attempts.length : 0}`,
-    `report: ${view.hasReport ? view.paths.report : "none"}`,
+    `report: ${view.hasReport ? view.reportPath : "none"}`,
     `dir: ${view.jobDir}`
   ];
   if (job.kind && job.kind !== "task") {
@@ -201,8 +269,7 @@ export function renderJobBlock(view) {
 export function renderResultText(view) {
   let text = renderJobBlock(view);
   if (view.hasReport) {
-    const report = fs.readFileSync(view.paths.report, "utf8");
-    text += `---\n${report}${report.endsWith("\n") ? "" : "\n"}`;
+    text += `---\n${view.report}${view.report.endsWith("\n") ? "" : "\n"}`;
   }
   return text;
 }
@@ -210,8 +277,7 @@ export function renderResultText(view) {
 export function renderJobWithReport(view) {
   let text = renderJobBlock(view);
   if (view.hasReport && isTerminalView(view)) {
-    const report = fs.readFileSync(view.paths.report, "utf8");
-    text += `---\n${report}${report.endsWith("\n") ? "" : "\n"}`;
+    text += `---\n${view.report}${view.report.endsWith("\n") ? "" : "\n"}`;
   }
   return text;
 }
@@ -281,7 +347,7 @@ export function jobViewJson(view) {
     createdAt: view.job.createdAt ?? null,
     completedAt: view.job.completedAt ?? null,
     jobDir: view.jobDir,
-    reportPath: view.hasReport ? view.paths.report : null,
+    reportPath: view.hasReport ? view.reportPath : null,
     summary: summarizeJob(view),
     relay: view.job.relay ?? null,
     relayViolations: view.relayViolations ?? [],

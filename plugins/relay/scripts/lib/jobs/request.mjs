@@ -11,7 +11,8 @@ import { BACKENDS, DEFAULT_BACKEND, backendNamed, BACKEND_HEADER_KEYS } from "..
 import { UsageError } from "../util/errors.mjs";
 export { UsageError } from "../util/errors.mjs";
 
-// Jobs need the network and web search; the brief defines the fence.
+// Existing headers and scripts rely on yolo, and the brief defines the fence. `write` with
+// network covers most work, but not `ps` or writes outside the working directory.
 const DEFAULT_MODE = "yolo";
 const WEB_SEARCH_MODES = new Set(["live", "cached", "indexed", "disabled"]);
 const DEFAULT_WEB_SEARCH = "live";

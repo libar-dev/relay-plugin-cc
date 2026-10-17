@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
-import { run } from "./support/helpers.mjs";
+import { makeTempDir, run } from "./support/helpers.mjs";
 import {
   codexReceived,
   companion,
@@ -34,7 +34,8 @@ import {
   workflowEntry
 } from "./support/relay-fixture.mjs";
 import { handleRelayHook, parseCompanionCommand } from "../plugins/relay/scripts/hooks/relay-guard.mjs";
-import { findRelayJob, parseRelayTranscript, promptSha256, readRelayPointer, relayAgentTypes, RELAY_BLOCK_BUDGET, stripRetrySuffix, transcriptCandidates } from "../plugins/relay/scripts/lib/harness/relay.mjs";
+import { findRelayJob, parseRelayTranscript, promptSha256, readRelayPointer, relayAgentTypes, RELAY_BLOCK_BUDGET, stripRetrySuffix, transcriptCandidates, writeGuardState } from "../plugins/relay/scripts/lib/harness/relay.mjs";
+import { busyViews } from "./support/busy-view.mjs";
 import { parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { classifyHarnessEntry, SCHEMA_SENTENCE } from "../plugins/relay/scripts/lib/harness/workflow.mjs";
 
@@ -282,22 +283,55 @@ test("the hand-back is denied while the job runs and rewritten to the result whe
 });
 
 test("a received message not yet delivered blocks the hand-back, then a follow-up is rewritten the same way", async () => {
-  // The follow-up's turn must outlast the hook's delivery and ack wait (up to seconds under a
-  // loaded full run), or the hand-back check sees it already ended: 200 ms was seen to flake.
-  const ctx = relayContext("job", { turnMs: 2500 });
+  const ctx = relayContext("job", { turnMs: 200 });
+  // The follow-up's turn ends only when the test says so, after the hand-back check, however
+  // long the hook's delivery and ack wait take on a loaded machine.
+  const release = path.join(makeTempDir("relay-release-"), "go");
+  ctx.env.FAKE_CODEX_RELEASE_FILE = release;
   const jobId = await startedRelay(ctx, QUICK);
   assert.equal(waitJob(ctx, jobId).status, 0);
   assert.equal(decision(await pre(ctx, "SubagentHandback", { message: "x" })), "allow");
   // A follow-up after the hand-back resumes the relay; it hands back again at once.
-  ctx.append(ctx.afterHandback("[quick] Follow-up."));
+  ctx.append(ctx.afterHandback("[held] Follow-up."));
   const again = await pre(ctx, "SubagentHandback", { message: "x" });
   assert.equal(decision(again), "deny", "the follow-up was delivered (a continue) and the job runs again");
+  fs.writeFileSync(release, "");
   await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId}` });
   assert.equal(waitJob(ctx, jobId).status, 0);
   const last = await pre(ctx, "SubagentHandback", { message: "x" });
   assert.equal(updated(last).message, resultOf(ctx, jobId));
   assert.match(updated(last).message, /^attempts: 2$/m);
-  assert.match(updated(last).message, /Report for: \[quick\] Follow-up\./);
+  assert.match(updated(last).message, /Report for: \[held\] Follow-up\./);
+});
+
+// A busy job (its record changing during every view) is at work, as a running one is.
+test("while the job is busy, the hand-back and the stop are refused, and the block budget lets no result go; once it holds, the hand-back is rewritten", async () => {
+  const ctx = relayContext("job", { turnMs: 200 });
+  const jobId = await startedRelay(ctx, QUICK);
+  assert.equal(waitJob(ctx, jobId).status, 0);
+  const dir = jobDirOf(ctx, jobId);
+  const busy = `Job ${jobId} is busy: its record changed during each of 8 reads. Try again.`;
+  const wait = `${RELAY_CMD} wait ${jobId} --timeout-seconds 120`;
+  const restore = busyViews(dir);
+  try {
+    const handback = await pre(ctx, "SubagentHandback", { message: "x" });
+    assert.equal(decision(handback), "deny");
+    assert.equal(reason(handback), `${busy} Do not hand back yet. Run: ${wait}`);
+    const stopped = await stop(ctx, resultOf(ctx, jobId));
+    assert.equal(stopped?.decision, "block");
+    assert.equal(stopped.reason, `${busy} Do not stop. Run: ${wait}`);
+    // At the budget the relay is let go, but never with a result the job does not have.
+    writeGuardState(ctx.env, ctx.agentId, dir, { consecutiveBlocks: RELAY_BLOCK_BUDGET });
+    const released = await pre(ctx, "SubagentHandback", { message: "x" });
+    assert.equal(decision(released), "deny");
+    assert.equal(reason(released), `${busy} Run: ${wait}`);
+  } finally {
+    restore();
+  }
+  assert.match(resultOf(ctx, jobId), new RegExp(`^relay-violation: handback-blocked: the relay was let go after 8 blocks: Job ${jobId} is busy`, "m"));
+  const last = await pre(ctx, "SubagentHandback", { message: "x" });
+  assert.equal(decision(last), "allow");
+  assert.equal(updated(last).message, resultOf(ctx, jobId));
 });
 
 test("without SubagentHandback, SubagentStop still checks the final text", async () => {
@@ -983,6 +1017,22 @@ test("a relay started over in the same run with the call's key takes over the ru
   assert.equal(json.relay.promptSha256, promptSha256(workflowPromptIn(first)));
   assert.equal(json.relay.journalKey, KEY);
   assert.doesNotMatch(resultOf(retry, jobId), /relay-violation/);
+});
+
+// A busy job (its record changing during every view) is at work, so it stays adoptable: busy
+// only where the new relay's start looks for its predecessor's job, it takes that job over.
+test("a relay started over takes over its predecessor's job while that job is busy, and starts no other", async () => {
+  const first = relayContext("job", { workflow: WORKFLOW, turnMs: 4000, journalKey: KEY });
+  const { jobId } = await startedInWorkflow(first);
+  await untilRunning(first, jobId);
+  const busy = { NODE_OPTIONS: `--import=${new URL("./support/busy-view.mjs", import.meta.url).href}`, RELAY_TEST_BUSY_JOB: jobDirOf(first, jobId), RELAY_TEST_BUSY_WITHIN: "findAdoptableRelayJob" };
+  const retry = respawned(first, { label: "relay-test", journalKey: KEY, env: busy });
+  const second = await relayStart(retry);
+  assert.equal(second.started.status, 0, second.started.stdout + second.started.stderr);
+  assert.equal(second.jobId, jobId, second.started.stdout);
+  assert.match(second.started.stdout, new RegExp(`^relay-adopted: ${retry.agentId} took over from ${first.agentId} at \\S+ as "relay-test"$`, "m"));
+  assert.deepEqual(jobDirsUnder(first.home), [jobId], "one job directory");
+  assert.equal(companion(first, ["cancel", jobId]).status, 0);
 });
 
 test("a retry after the job finished returns that job's block at once; a third relay adopts from the second", async () => {

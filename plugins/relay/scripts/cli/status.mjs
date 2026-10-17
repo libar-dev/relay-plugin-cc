@@ -1,9 +1,8 @@
 import { parseCommandInput, resolveJobReference, outputResult, resolveCommandCwd } from "./shared.mjs";
-import { default as fs } from "node:fs";
 import { default as process } from "node:process";
-import { findJobDir, listJobDirs, repoSlugFor, resolveJobsHome } from "../lib/jobs/store.mjs";
+import { findJobDir, listJobDirs, readJob, repoSlugFor, resolveJobsHome } from "../lib/jobs/store.mjs";
 import { readRepoConfig, readUserConfig } from "../lib/jobs/config.mjs";
-import { exitCodeFor, jobViewJson, loadJobView, renderJobBlock, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
+import { exitCodeFor, JobViewBusy, jobViewJson, loadJobViewSettled as loadJobView, renderJobBlock, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
 
 const STATUS_LIST_LIMIT = 20;
 
@@ -14,7 +13,7 @@ export function handleResult(argv) {
   const { options, positionals } = parseCommandInput(argv, { booleanOptions: ["json", "state-only"] });
   const view = loadJobView(resolveJobReference(positionals[0], "result"));
   if (options.json) {
-    outputResult({ ...jobViewJson(view), report: view.hasReport && !options["state-only"] ? fs.readFileSync(view.paths.report, "utf8") : null }, true);
+    outputResult({ ...jobViewJson(view), report: view.hasReport && !options["state-only"] ? view.report : null }, true);
   } else {
     process.stdout.write(options["state-only"] ? renderJobBlock(view) : renderResultText(view));
   }
@@ -34,18 +33,24 @@ export function handleStatus(argv) {
   }
   const cwd = resolveCommandCwd(options);
   const slug = options.all ? null : repoSlugFor(cwd);
+  let dirs = listJobDirs({ slug });
+  if (!options.all) {
+    // The newest, by each job's record, before any is viewed: only a job the listing shows can
+    // make it busy.
+    const created = new Map(dirs.map((dir) => [dir, String(readJob(dir)?.createdAt ?? "")]));
+    dirs = dirs.sort((a, b) => created.get(b).localeCompare(created.get(a))).slice(0, STATUS_LIST_LIMIT);
+  }
   let views = [];
-  for (const dir of listJobDirs({ slug })) {
+  for (const dir of dirs) {
     try {
       views.push(loadJobView(dir));
-    } catch {
-      // A job directory being created right now has no job.json yet.
+    } catch (error) {
+      // A busy job is never left out: the listing is busy too, and says so (exit 4). A job
+      // directory being created right now has no job.json yet.
+      if (error instanceof JobViewBusy) throw error;
     }
   }
   views = sortViewsNewestFirst(views);
-  if (!options.all) {
-    views = views.slice(0, STATUS_LIST_LIMIT);
-  }
   if (options.json) {
     outputResult({ jobsHome: resolveJobsHome(), repoSlug: slug, jobs: views.map(jobViewJson) }, true);
     return;

@@ -13,7 +13,7 @@ import { default as process } from "node:process";
 import { handlePrune } from "./cli/prune.mjs";
 import { UsageError } from "./lib/util/errors.mjs";
 import { BACKENDS } from "./lib/backends/index.mjs";
-import { EXIT } from "./lib/jobs/view.mjs";
+import { EXIT, JobViewBusy } from "./lib/jobs/view.mjs";
 
 
 function printUsage() {
@@ -113,5 +113,6 @@ async function main() {
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`${message}\n`);
-  process.exitCode = EXIT.usage;
+  // A job whose record kept changing is at work: not a usage error, and not a state.
+  process.exitCode = error instanceof JobViewBusy ? EXIT.running : EXIT.usage;
 });

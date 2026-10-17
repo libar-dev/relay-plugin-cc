@@ -19,6 +19,7 @@ import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 import { COMPANION, RELAY_CMD, companion, decision, jobDirOf, pre, readJobJson, relayContext, relayStart, updated, waitFor } from "./support/relay-fixture.mjs";
 import { installFakeGrok } from "./fakes/grok.mjs";
 import { installFakeZcode } from "./fakes/zcode.mjs";
+import { installFakeKimi } from "./fakes/kimi.mjs";
 import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finishJob } from "./support/job-helpers.mjs";
 
 // Worker recovery and cancellation
@@ -233,9 +234,11 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
 
   // A live process standing in for an old app-server. `ignoreTerm` makes it ignore SIGTERM
   // (and write `marker` when it gets one); `descendant` makes it start a detached child of
-  // its own, whose identity it publishes.
+  // its own, whose identity it publishes. It is returned only once its handlers are in place:
+  // a sweep that signals it sooner would meet the default SIGTERM action, not the stand-in.
   async function oldServer(t, { ignoreTerm = false, marker = null, descendant = false } = {}) {
     const pidFile = path.join(makeTempDir("relay-old-server-"), "child");
+    const ready = `${pidFile}.ready`;
     const script = `
       const fs = require("fs");
       process.on("SIGTERM", () => { if (${JSON.stringify(marker)}) fs.writeFileSync(${JSON.stringify(marker)}, ""); if (!${ignoreTerm}) process.exit(0); });
@@ -244,10 +247,11 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
         fs.writeFileSync(${JSON.stringify(pidFile)} + ".tmp", String(child.pid));
         fs.renameSync(${JSON.stringify(pidFile)} + ".tmp", ${JSON.stringify(pidFile)});
       }
+      fs.writeFileSync(${JSON.stringify(ready)}, "");
       setInterval(() => {}, 1000);`;
     const server = spawn(process.execPath, ["-e", script], { stdio: "ignore" });
     const closed = once(server, "close");
-    await waitFor(() => readProcessStartTime(server.pid) && (!descendant || fs.existsSync(pidFile)));
+    await waitFor(() => readProcessStartTime(server.pid) && fs.existsSync(ready) && (!descendant || fs.existsSync(pidFile)));
     const identity = { pid: server.pid, startTime: readProcessStartTime(server.pid), startedAt: new Date().toISOString() };
     const childPid = descendant ? Number(fs.readFileSync(pidFile, "utf8")) : null;
     const child = childPid ? { pid: childPid, startTime: readProcessStartTime(childPid) } : null;
@@ -489,7 +493,10 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
   // resume starts during it, and its worker holds the lease when the cancel comes to write.
   // The cancel then goes to that worker and says so. "marked cancelled" is printed only
   // when the cancel wrote the state itself.
-  async function cancelDuringResume(t, cancelEnv = {}) {
+  // `holdWorker` stops the resume's worker as soon as it holds the lease, before the cancel
+  // posts its message, and continues it only after the cancel has answered: whatever the
+  // cancel's reads take, that worker cannot end the job first.
+  async function cancelDuringResume(t, cancelEnv = {}, { holdWorker = false } = {}) {
     const ctx = relayContext("job", { turnMs: 30000 });
     const id = await start(ctx);
     const dir = jobDirOf(ctx, id);
@@ -506,7 +513,13 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     const resumed = companionAsync(ctx, ["resume", id, "--message", "Resumed work"]);
     await waitFor(() => { const lease = readLease(dir); return lease?.role === "worker" && isWorkerAlive(lease); }, { intervalMs: 5 });
     const worker = readLease(dir);
-    return { ctx, id, dir, identity, worker, cancelled: await cancelled, resumed };
+    if (holdWorker) {
+      process.kill(worker.pid, "SIGSTOP");
+      t.after(() => { try { process.kill(worker.pid, "SIGCONT"); } catch {} });
+    }
+    const answer = await cancelled;
+    if (holdWorker) process.kill(worker.pid, "SIGCONT");
+    return { ctx, id, dir, identity, worker, cancelled: answer, resumed };
   }
 
   async function settledCancelled(ctx, id, dir) {
@@ -534,7 +547,7 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
   });
 
   test("cancel racing a resume exits nonzero while the new worker has not ended the job", async (t) => {
-    const { ctx, id, dir, worker, cancelled, resumed } = await cancelDuringResume(t, { RELAY_JOBS_CANCEL_GRACE_MS: "1" });
+    const { ctx, id, dir, worker, cancelled, resumed } = await cancelDuringResume(t, { RELAY_JOBS_CANCEL_GRACE_MS: "1" }, { holdWorker: true });
     assert.equal(cancelled.status, 4, cancelled.stdout + cancelled.stderr);
     assert.equal(cancelled.stderr.split("\n")[0], `Job ${id} is still running; the cancel is with its worker (pid ${worker.pid}).`);
     assert.match(cancelled.stdout, new RegExp(`^cancel: the job is still running; the cancel is with its worker \\(pid ${worker.pid}\\)$`, "m"));
@@ -614,7 +627,7 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
 {
   const waitFor = waitForJob;
 
-  for (const backend of ['codex', 'grok', 'zcode']) {
+  for (const backend of ['codex', 'grok', 'zcode', 'kimi']) {
     test(`${backend}: recovery preserves a nested companion job sharing its process group`, async t => {
       const outer = setup(t, { turnMs: 3000 });
       const inner = setup(t, { turnMs: 6000 });
@@ -628,6 +641,10 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
         binary = installFakeZcode(outer.bin, { turnMs: 3000 }).binary;
         outer.env.ZCODE_BINARY = binary;
         header = 'backend: zcode\nmodel: default\neffort: default';
+      } else if (backend === 'kimi') {
+        binary = installFakeKimi(outer.bin, { turnMs: 3000 }).binary;
+        outer.env.KIMI_BINARY = binary;
+        header = 'backend: kimi\nmodel: default\neffort: default';
       }
       const script = new URL('../plugins/relay/scripts/companion.mjs', import.meta.url).pathname;
       const marker = path.join(outer.root, 'nested-started');
@@ -647,8 +664,15 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
       const innerId = path.basename(innerDir);
       const before = readJob(inner, innerId);
       const outerBefore = readJob(outer, id);
-      // The intermediate shells must have exited before recovery takes its group snapshot.
-      await waitFor(() => listProcesses().find(row => row.pid === before.worker.pid)?.ppid === 1);
+      // The intermediate shells must have exited before recovery takes its group snapshot. The
+      // orphaned worker's new parent is pid 1, or on Linux the nearest child subreaper (such as
+      // `systemd --user`); either way it is outside the outer worker's group.
+      await waitFor(() => {
+        const rows = listProcesses();
+        const worker = rows.find(row => row.pid === before.worker.pid);
+        const parent = worker && rows.find(row => row.pid === worker.ppid);
+        return worker && (worker.ppid === 1 || !parent || parent.pgid !== outerBefore.worker.pid);
+      });
       const table = listProcesses();
       const identities = [before.worker.pid, before.serverPid].map(pid => table.find(row => row.pid === pid));
       assert.ok(identities.every(row => row && row.pgid === outerBefore.worker.pid));

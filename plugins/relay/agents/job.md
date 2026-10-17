@@ -1,6 +1,6 @@
 ---
 name: job
-description: Run jobs on Codex, Grok Build and ZCode from Claude Code like Claude agents. Run one job in the background and return its report verbatim. The prompt is a header, a line of three dashes, then the brief; `model:` and `effort:` are required, `backend: zcode` runs GLM, and the skill relay:jobs lists every key. While it runs, SendMessage steers it; after it ends, SendMessage continues the same session; the message `cancel` cancels it. A message reaches the job within about two minutes.
+description: Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents. Run one job in the background and return its report verbatim. The prompt is a header, a line of three dashes, then the brief; `model:` and `effort:` are required, `backend: zcode` runs GLM, and the skill relay:jobs lists every key. While it runs, SendMessage steers it; after it ends, SendMessage continues the same session; the message `cancel` cancels it. A message reaches the job within about two minutes.
 model: haiku
 tools: Bash
 ---

@@ -1,6 +1,6 @@
 ---
 description: Hand an investigation or a fix to a job through the relay:job agent
-argument-hint: "[--background|--wait] [--backend codex|grok|zcode] [--model <model>] [--effort <effort>] [--grok-home <name|path>] [--read-only|--write] [what the job should investigate or fix]"
+argument-hint: "[--background|--wait] [--backend codex|grok|zcode|kimi] [--model <model>] [--effort <effort>] [--grok-home <name|path>] [--kimi-home <name|path>] [--read-only|--write] [what the job should investigate or fix]"
 allowed-tools: Agent, AskUserQuestion
 ---
 
@@ -15,10 +15,11 @@ Build the agent's prompt from the request:
 
 1. Take these flags out of the request. They are controls, not task text:
    - `--background`: run the agent in the background (`run_in_background: true`). `--wait`: run it in the foreground. Neither: foreground.
-   - `--backend <backend>`: the `backend:` header value, passed as given (`codex`, `grok` or `zcode`). Without it, leave `backend` out (Codex).
+   - `--backend <backend>`: the `backend:` header value, passed as given (`codex`, `grok`, `zcode` or `kimi`). Without it, leave `backend` out (Codex).
    - `--model <model>`: the `model:` header value. Without it, use `default` (the backend's config decides).
    - `--effort <effort>`: the `effort:` header value, passed as given. Without it, use `default`.
    - `--grok-home <value>`: the `grok-home:` header value, passed as given. Without it, leave `grok-home` out. A name selects `~/.grok-<name>`; an absolute or `~/` path selects that home.
+   - `--kimi-home <value>`: the `kimi-home:` header value, passed as given. Without it, leave `kimi-home` out. A name selects `~/.kimi-code-<name>`; an absolute or `~/` path selects that home.
    - `--read-only`: `mode: read-only`. `--write`: `mode: write`. Neither: leave `mode` out (the default, yolo, applies).
 2. Refuse any other flag with a usage error that names it. Do not launch the agent. What is left after the known flags is the brief. Keep it exactly as the user wrote it. If it is empty, ask the user what the job should investigate or fix, and stop.
 3. The prompt is the header lines, then a line `---`, then the brief:
@@ -28,6 +29,7 @@ backend: <only when --backend was given>
 model: <model or default>
 effort: <effort or default>
 grok-home: <only when --grok-home was given>
+kimi-home: <only when --kimi-home was given>
 mode: <only when --read-only or --write was given>
 ---
 <the brief, unchanged>

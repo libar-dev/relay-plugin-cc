@@ -260,7 +260,8 @@ function saveImportLedger(ledger) {
   fs.writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
 }
 
-function emitTurnCompleted(threadId, turnId, item) {
+// With an error, the turn ends failed after its items.
+function emitTurnCompleted(threadId, turnId, item, error = null) {
   const items = Array.isArray(item) ? item : [item];
   send({ method: "turn/started", params: { threadId, turn: buildTurn(turnId) } });
   for (const entry of items) {
@@ -271,7 +272,7 @@ function emitTurnCompleted(threadId, turnId, item) {
       send({ method: "item/completed", params: { threadId, turnId, item: entry.completed } });
     }
   }
-  send({ method: "turn/completed", params: { threadId, turn: buildTurn(turnId, "completed") } });
+  send({ method: "turn/completed", params: { threadId, turn: buildTurn(turnId, error ? "failed" : "completed", error) } });
 }
 
 function emitTurnCompletedLater(threadId, turnId, item, delayMs) {
@@ -406,6 +407,18 @@ if (BEHAVIOR === "home-probe") {
 }
 
 const rl = readline.createInterface({ input: process.stdin });
+// The client closes the server by ending its stdin, and sends SIGTERM 50 ms later if it still
+// runs, which a loaded machine can cause. An idle server, with no turn or timer pending, exits 0
+// either way, through process.exit: a natural exit drops the SIGTERM handler before it ends. A
+// server with work pending keeps running when stdin ends, and SIGTERM kills it, as before.
+const idle = () => !process.getActiveResourcesInfo().some((type) => type === "Timeout" || type === "Immediate");
+process.stdin.on("end", () => { if (idle()) process.exit(0); });
+const onTerm = () => {
+  if (idle()) process.exit(0);
+  process.off("SIGTERM", onTerm);
+  process.kill(process.pid, "SIGTERM");
+};
+process.on("SIGTERM", onTerm);
 rl.on("line", (line) => {
   if (!line.trim()) {
     return;
@@ -743,7 +756,14 @@ rl.on("line", (line) => {
             setTimeout(() => {
               const end = () => {
                 if (deathKind === "kill") process.kill(process.pid, "SIGKILL");
-                else if (deathKind === "partial") process.stdout.write('{"method":"item/completed","text":"' + "界".repeat(1000), () => process.stdout.end());
+                else if (deathKind === "partial") {
+                  // With stdout ended, the client closes stdin and sends SIGTERM 50 ms later if this
+                  // process still runs, which a loaded machine can cause. It exits 0 either way,
+                  // through process.exit: a natural exit drops the SIGTERM handler before it ends.
+                  process.on("SIGTERM", () => process.exit(0));
+                  process.stdin.on("end", () => process.exit(0));
+                  process.stdout.write('{"method":"item/completed","text":"' + "界".repeat(1000), () => process.stdout.end());
+                }
                 else process.exit(0);
               };
               process.stderr.write("s".repeat(Number(process.env.FAKE_CODEX_STDERR_BYTES || 0)) + "stderr-tail-" + process.pid + "\\n", end);
@@ -757,8 +777,12 @@ rl.on("line", (line) => {
 	          const entry = { threadId: thread.id, prompt, steers: [], timer: null };
 	          activeTurns.set(turnId, entry);
 	          if (BEHAVIOR !== "job-hang" && BEHAVIOR !== "job-hang-child") {
-	            // "[quick]" ends the turn at once; "[fail]" ends it at once as a failed turn.
-	            entry.timer = setTimeout(() => finishJobTurn(turnId, prompt.includes("[fail]") ? "failed" : "completed"), prompt.includes("[quick]") || prompt.includes("[fail]") ? 50 : TURN_MS);
+	            // "[quick]" ends the turn at once; "[fail]" ends it at once as a failed turn; "[held]"
+	            // ends it once FAKE_CODEX_RELEASE_FILE exists, a barrier the test controls.
+	            if (prompt.includes("[held]")) {
+	              const release = () => { entry.timer = fs.existsSync(process.env.FAKE_CODEX_RELEASE_FILE || "") ? (finishJobTurn(turnId, "completed"), null) : setTimeout(release, 20); };
+	              entry.timer = setTimeout(release, 20);
+	            } else entry.timer = setTimeout(() => finishJobTurn(turnId, prompt.includes("[fail]") ? "failed" : "completed"), prompt.includes("[quick]") || prompt.includes("[fail]") ? 50 : TURN_MS);
 	          }
 	          break;
 	        }
@@ -912,6 +936,9 @@ rl.on("line", (line) => {
 	          interruptibleTurns.set(turnId, { threadId: thread.id, timer });
 	        } else if (BEHAVIOR === "slow-task") {
 	          emitTurnCompletedLater(thread.id, turnId, items, 400);
+	        } else if (BEHAVIOR === "adversarial-turn-failed") {
+	          // The whole answer arrives, then the turn fails.
+	          emitTurnCompleted(thread.id, turnId, items, { message: "stream disconnected before completion" });
 	        } else {
 	          emitTurnCompleted(thread.id, turnId, items);
 	        }

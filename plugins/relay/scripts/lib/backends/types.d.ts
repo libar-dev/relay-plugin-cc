@@ -4,7 +4,7 @@
 
 import type { ChildProcess } from "node:child_process";
 
-export type BackendName = "codex" | "grok" | "zcode";
+export type BackendName = "codex" | "grok" | "zcode" | "kimi";
 export type Mode = "yolo" | "write" | "read-only";
 export type WebSearch = "live" | "cached" | "indexed" | "disabled";
 
@@ -14,7 +14,7 @@ export type WebSearch = "live" | "cached" | "indexed" | "disabled";
 export interface Backend {
   /** The header's `backend:` value. */
   name: BackendName;
-  /** The name in text a person reads: "Codex", "Grok", "ZCode". */
+  /** The name in text a person reads: "Codex", "Grok", "ZCode", "Kimi". */
   label: string;
   /** What the backend can do. The one declaration of each fact. */
   capabilities: Capabilities;
@@ -261,6 +261,12 @@ export interface TurnResult {
   unjoinedSteers?: string[];
   /** Steers the backend may still hold: reported dropped, never sent again. */
   droppedSteers?: Array<{ id: string, reason: string }>;
+  /**
+   * The backend took the prompt but cannot show that it started, and may still hold it. The job
+   * fails with `error`, the prompt is reported dropped and never sent again, and the round ends:
+   * nothing more is sent on this server, which the worker then closes.
+   */
+  teardown?: boolean;
   reasoningSummary?: string[] | null;
   /** Stderr for a foreground result, where the backend filters transport diagnostics. */
   stderr?: string;

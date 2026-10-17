@@ -1,9 +1,9 @@
 {
   "name": "@libar-dev/relay-plugin-cc",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
-  "description": "Run jobs on Codex, Grok Build and ZCode from Claude Code like Claude agents.",
+  "description": "Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents.",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22"

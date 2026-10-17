@@ -74,7 +74,7 @@ test("status shows the fast tier off by default; setup --fast-tier writes the us
   const ctx = relayContext("job", { turnMs: 100 });
   assert.match(companion(ctx, ["status"]).stdout, /^review-gate: (enabled|disabled)\nfast-tier: off$/m);
   // Setup checks every backend home: give it a scratch HOME and no real Grok or ZCode.
-  const scratch = { ...ctx, env: { ...ctx.env, HOME: makeTempDir("relay-setup-home-"), GROK_BINARY: path.join(ctx.binDir, "grok"), ZCODE_BINARY: path.join(ctx.binDir, "zcode") } };
+  const scratch = { ...ctx, env: { ...ctx.env, HOME: makeTempDir("relay-setup-home-"), GROK_BINARY: path.join(ctx.binDir, "grok"), ZCODE_BINARY: path.join(ctx.binDir, "zcode"), KIMI_BINARY: path.join(ctx.binDir, "kimi") } };
   const shown = companion(scratch, ["setup", "--json"]);
   assert.equal(shown.status, 0, shown.stderr);
   assert.equal(JSON.parse(shown.stdout).settings.fastTier, "off");
