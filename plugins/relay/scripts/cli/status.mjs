@@ -2,7 +2,7 @@ import { parseCommandInput, resolveJobReference, outputResult, resolveCommandCwd
 import { default as process } from "node:process";
 import { findJobDir, listJobDirs, repoSlugFor, resolveJobsHome } from "../lib/jobs/store.mjs";
 import { readRepoConfig, readUserConfig } from "../lib/jobs/config.mjs";
-import { exitCodeFor, jobViewJson, loadJobViewSettled as loadJobView, renderJobBlock, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
+import { exitCodeFor, JobViewBusy, jobViewJson, loadJobViewSettled as loadJobView, renderJobBlock, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
 
 const STATUS_LIST_LIMIT = 20;
 
@@ -37,8 +37,10 @@ export function handleStatus(argv) {
   for (const dir of listJobDirs({ slug })) {
     try {
       views.push(loadJobView(dir));
-    } catch {
-      // A job directory being created right now has no job.json yet.
+    } catch (error) {
+      // A busy job is never left out: the listing is busy too, and says so (exit 4). A job
+      // directory being created right now has no job.json yet.
+      if (error instanceof JobViewBusy) throw error;
     }
   }
   views = sortViewsNewestFirst(views);
