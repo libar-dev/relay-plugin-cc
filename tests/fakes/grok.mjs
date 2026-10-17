@@ -7,6 +7,9 @@ import { LEAVE_CHILD_SOURCE } from "./codex.mjs";
 export function installFakeGrok(bin, options = {}) {
   const statePath = path.join(bin, "fake-grok-state.json");
   const binary = path.join(bin, "grok");
+  // The fake's source is the template literal below, built here: a backtick or ${ in it must be
+  // escaped (\` and \${), or it ends the string or interpolates this process's values. The
+  // ${...} already in it are deliberate.
   writeExecutable(binary, `#!/usr/bin/env node
 const fs = require('node:fs');
 const readline = require('node:readline');

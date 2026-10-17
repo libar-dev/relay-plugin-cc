@@ -28,6 +28,9 @@ export function installFakeCodex(binDir, behavior = "review-ok", options = {}) {
   // Where the capacity-work items appear: item/started, item/completed, the failed turn's items.
   const capacityWorkVia = options.capacityWorkVia ?? ["started", "completed"];
   const scriptPath = path.join(binDir, "codex");
+  // The fake's source is the template literal below, built here: a backtick or ${ in it must be
+  // escaped (\` and \${), or it ends the string or interpolates this process's values. The
+  // ${...} already in it are deliberate.
   const source = `#!/usr/bin/env node
 const fs = require("node:fs");
 const crypto = require("node:crypto");

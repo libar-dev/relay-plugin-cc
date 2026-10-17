@@ -10,6 +10,9 @@ import { writeExecutable } from "../support/helpers.mjs";
 export function installFakeZcode(bin, options = {}) {
   const statePath = path.join(bin, "fake-zcode-state.json");
   const binary = path.join(bin, "zcode");
+  // The fake's source is the template literal below, built here: a backtick or ${ in it must be
+  // escaped (\` and \${), or it ends the string or interpolates this process's values. The
+  // ${...} already in it are deliberate.
   writeExecutable(binary, `#!/usr/bin/env node
 const fs = require('node:fs');
 const readline = require('node:readline');

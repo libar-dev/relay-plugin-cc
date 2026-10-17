@@ -14,6 +14,9 @@ import { realHomeGuardSource } from "../support/isolate-env.mjs";
 export function installFakeKimi(bin, options = {}) {
   const statePath = path.join(bin, "fake-kimi-state.json");
   const binary = path.join(bin, "kimi");
+  // The fake's source is the template literal below, built here: a backtick or ${ in it must be
+  // escaped (\` and \${), or it ends the string or interpolates this process's values. The
+  // ${...} already in it are deliberate.
   writeExecutable(binary, `#!/usr/bin/env node
 const fs = require('node:fs');
 const readline = require('node:readline');
