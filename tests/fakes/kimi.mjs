@@ -167,6 +167,9 @@ function finish(reason) {
   const turn = active; active = null; clearTimeout(turn.timer);
   // Saved before the records that end the turn: relay reads those, and a test reads this after.
   state.completed = [...(state.completed || []), { text: turn.text, reason }]; save();
+  // The client is descheduled while the turn ends: when it runs again, the record's end and the
+  // updates sent ahead of it are both waiting.
+  if (options.pauseClientAtEnd) { process.kill(process.ppid, 'SIGSTOP'); setTimeout(() => process.kill(process.ppid, 'SIGCONT'), options.pauseClientAtEnd); }
   if (reason === 'completed') {
     const answer = process.env.FAKE_REVIEW_ANSWER ?? options.answer ?? 'Report for: ' + turn.text;
     if (turn.rpcId !== null) for (const text of [answer.slice(0, 3), answer.slice(3)]) if (text) update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });

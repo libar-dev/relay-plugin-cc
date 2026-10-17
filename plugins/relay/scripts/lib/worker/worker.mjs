@@ -737,9 +737,16 @@ async function runWorkerRound(jobDir, options, held) {
     // Messages still queued stay owed: the next worker runs them.
     save({ state: "failed", errorMessage: message, completedAt: nowIso() });
   } finally {
-    eventRecorder?.flush();
     clearInterval(heartbeat);
     clearInterval(poller);
+    // The connection reads the server's output to its end as it closes. A turn can end on the
+    // backend's record before the worker has read the updates the server sent ahead of it, so
+    // the events are flushed only once the connection has closed.
+    if (connection) {
+      await connection.close().catch(() => {});
+      connection = null;
+    }
+    eventRecorder?.flush();
   }
 
   return releaseAndReturn({});

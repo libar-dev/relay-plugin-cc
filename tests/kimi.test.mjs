@@ -112,6 +112,16 @@ test("a turn's report and outcome come from the session record; the server start
   assert.ok(fs.existsSync(path.join(home, "sessions")));
 });
 
+test("a turn's last updates reach the events, though the worker reads the record's end first", async t => {
+  // Kimi sends the report's chunks, then records the end. A worker descheduled meanwhile finds
+  // both waiting, and its poll of the record ends the turn before it has read the chunks.
+  const ctx = fixture(t, { pauseClientAtEnd: 200 });
+  const { id } = startJob(ctx, HEADER, "[quick] Paused.");
+  await finishJob(ctx, id);
+  assert.equal(report(ctx, id), "Report for: [quick] Paused.\n");
+  assert.deepEqual(events(ctx, id).filter(e => e.params?.update?.sessionUpdate === "agent_message_chunk").map(e => e.params.update.content.text), ["Report for: [quick] Paused."]);
+});
+
 test("a failed turn fails the job with Kimi's error, though ACP answered end_turn", async t => {
   const ctx = fixture(t, { failTurn: true });
   const { id } = startJob(ctx, HEADER, "[quick] Fail.");
