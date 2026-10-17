@@ -127,11 +127,8 @@ function startTurn(turn, rpcId) {
   }
   if (options.unsupported) reverse('client/missing', { question: 'unhandled' });
   // Kimi runs a shell command in a session of its own, as its child.
-  if (options.shellChild && !state.descendants) {
-    const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
-    child.unref();
-    state.descendants = [{ appServerPid: process.pid, childPid: child.pid }]; save();
-  }
+  const shellChild = options.shellChild && !state.descendants ? require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' }) : null;
+  shellChild?.unref();
   // Kimi's ACP layer sends a turn's updates only to the prompt it drives.
   const tracked = value => { if (rpcId !== null) update(value); };
   tracked({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } });
@@ -143,6 +140,10 @@ function startTurn(turn, rpcId) {
     record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'assistant', content: [{ type: 'text', text: 'Preamble.' }], toolCalls: [{ id: 'tool_1', name: 'Bash' }] } } });
     record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'tool', content: [{ type: 'text', text: 'ok' }], toolCallId: 'tool_1' } } });
   }
+  // The command is named only once the turn's updates are sent. The server then writes nothing
+  // until the turn ends, so a test that kills the worker now leaves it running; killed sooner,
+  // the server's next write would meet a closed pipe, and the EPIPE would end it.
+  if (shellChild) { state.descendants = [{ appServerPid: process.pid, childPid: shellChild.pid }]; save(); }
   if (options.die) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 80); return; }
   const ms = turn.text.startsWith('[quick]') ? 30 : turn.text.startsWith('[long]') ? 30000 : options.turnMs || 100;
   const schedule = () => { if (active === current) current.timer = setTimeout(() => endAnswered(current, options.failTurn ? 'failed' : 'completed'), ms); };
