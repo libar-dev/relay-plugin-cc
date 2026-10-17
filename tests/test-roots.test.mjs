@@ -37,18 +37,25 @@ test("a root whose owner a signal killed is swept by the next run; a live owner'
   assert.equal(fs.existsSync(live.root), true, "a live owner keeps its root");
 });
 
-test("outside Linux, a process whose working directory alone is in the root keeps it", { skip: spawnSync("lsof", ["-v"]).error ? "no lsof" : false }, t => {
-  const tmp = makeTempDir("relay-roots-");
-  // As on macOS, where ps shows no working directory: the check must find it with lsof.
-  const source = `Object.defineProperty(process, "platform", { value: "darwin" });
-    await import(${JSON.stringify(ISO)});
-    const sleeper = (await import("node:child_process")).spawn("sleep", ["30"], { cwd: process.env.RELAY_TEST_ROOT, detached: true, stdio: "ignore" });
-    sleeper.unref();
-    console.log(sleeper.pid);`;
-  const result = spawnSync(process.execPath, ["--input-type=module", "-e", source], { env: { ...childEnv(tmp), RELAY_TEST_ROOT_WAIT_MS: "300" }, encoding: "utf8" });
-  // The first line; the test runner's summary follows it.
-  const pid = Number(result.stdout.trim().split("\n")[0]);
-  t.after(() => { try { process.kill(pid, "SIGKILL"); } catch {} });
-  assert.match(result.stderr, new RegExp(`note: kept the test root ${tmp}/relay-test-run-\\w+: processes still run from it: ${pid}\\n`));
-  assert.equal(fs.readdirSync(tmp).filter(name => name.startsWith("relay-test-run-")).length, 1);
-});
+// The temporary directory is reached through a symlink, as macOS's /var/folders is through
+// /private/var: lsof and /proc name a working directory by its real path.
+for (const platform of ["linux", "darwin"]) {
+  test(`${platform}: a process whose working directory alone is in the root keeps it, though the root's path goes through a symlink`, { skip: platform === "darwin" && spawnSync("lsof", ["-v"]).error ? "no lsof" : process.platform !== "linux" && platform === "linux" ? "linux only" : false }, t => {
+    const real = makeTempDir("relay-roots-");
+    const alias = `${real}-alias`;
+    fs.symlinkSync(real, alias);
+    t.after(() => fs.rmSync(alias, { force: true }));
+    // On macOS, ps shows no working directory, so the check must find it with lsof.
+    const source = `${platform === "darwin" ? 'Object.defineProperty(process, "platform", { value: "darwin" });' : ""}
+      await import(${JSON.stringify(ISO)});
+      const sleeper = (await import("node:child_process")).spawn("sleep", ["30"], { cwd: process.env.RELAY_TEST_ROOT, detached: true, stdio: "ignore" });
+      sleeper.unref();
+      console.log(sleeper.pid);`;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", source], { env: { ...childEnv(alias), RELAY_TEST_ROOT_WAIT_MS: "300" }, encoding: "utf8" });
+    // The first line; the test runner's summary follows it.
+    const pid = Number(result.stdout.trim().split("\n")[0]);
+    t.after(() => { try { process.kill(pid, "SIGKILL"); } catch {} });
+    assert.match(result.stderr, new RegExp(`note: kept the test root ${alias}/relay-test-run-\\w+: processes still run from it: ${pid}\\n`));
+    assert.equal(fs.readdirSync(real).filter(name => name.startsWith("relay-test-run-")).length, 1);
+  });
+}

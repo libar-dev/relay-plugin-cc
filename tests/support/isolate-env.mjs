@@ -20,9 +20,14 @@ if (!process.env.RELAY_TEST_ROOT) {
   process.on("exit", code => removeTestRoot(root, code));
 }
 
-// Processes other than this one whose working directory or command line is under `root`.
+// Processes other than this one whose working directory or command line is under `root`. The
+// root is also matched by its real path: /proc and lsof name a working directory that way, and a
+// temporary directory can be reached through a symlink (macOS's /var/folders is
+// /private/var/folders).
 function processesUnder(root) {
-  const inside = text => text === root || text.startsWith(root + path.sep) || text.includes(root + path.sep);
+  let real = root;
+  try { real = fs.realpathSync(root); } catch { /* gone */ }
+  const inside = text => [root, real].some(dir => text === dir || text.startsWith(dir + path.sep) || text.includes(dir + path.sep));
   if (process.platform === "linux") {
     const pids = [];
     for (const name of fs.readdirSync("/proc")) {
