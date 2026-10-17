@@ -47,7 +47,16 @@ let sessionId, active = null, own = null, mode = 'default', model = 'kimi-code/k
 const pendingReverse = new Map();
 const queued = [];
 const update = value => send({ method: 'session/update', params: { sessionId, update: value } });
-const reverse = (method, params) => { const id = reverseId++; pendingReverse.set(id, method); send({ id, method, params: { sessionId, ...params } }); return id; };
+// Kimi's tools wait for the client's answer to each request they send. A request belongs to the
+// turn that sent it, and the turn ends only once every answer is in and recorded.
+const askedBy = new Map();
+const reverse = (method, params) => {
+  const id = reverseId++;
+  pendingReverse.set(id, method);
+  if (active) { active.unanswered.add(id); askedBy.set(id, active); }
+  send({ id, method, params: { sessionId, ...params } });
+  return id;
+};
 const calls = new Map();
 const call = (method, params) => new Promise((resolve, reject) => calls.set(reverse(method, params), { resolve, reject }));
 // Kimi's AcpHostFileSystem: text reads and writes go to a client that declares them, and append,
@@ -101,7 +110,8 @@ function configOptions() {
   ];
 }
 function startTurn(turn, rpcId) {
-  active = { ...turn, rpcId };
+  active = { ...turn, rpcId, unanswered: new Set() };
+  const current = active;
   state.turns.push({ text: turn.text, promptId: turn.promptId, turnId: turn.turnId, sessionId, mode }); save();
   promptRecords(turn, 'user');
   if (options.dieAfterRecord && state.turns.length === 1) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 50); return; }
@@ -132,7 +142,7 @@ function startTurn(turn, rpcId) {
   }
   if (options.die) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 80); return; }
   const ms = turn.text.startsWith('[quick]') ? 30 : turn.text.startsWith('[long]') ? 30000 : options.turnMs || 100;
-  const schedule = () => { if (active?.turnId === turn.turnId) active.timer = setTimeout(() => finish(options.failTurn ? 'failed' : 'completed'), ms); };
+  const schedule = () => { if (active === current) current.timer = setTimeout(() => endAnswered(current, options.failTurn ? 'failed' : 'completed'), ms); };
   // The file operations run in the first turn that reaches them, not again after a recovery.
   if (!options.fileOps || state.fileOpsRan) return schedule();
   state.fileOpsRan = true; save();
@@ -142,6 +152,12 @@ function startTurn(turn, rpcId) {
     state.fileOps = [...(state.fileOps || []), ...results]; save();
     schedule();
   })();
+}
+// The turn ends when its time is up and every request it sent has its answer.
+function endAnswered(turn, reason) {
+  if (active !== turn) return;
+  if (turn.unanswered.size > 0) { turn.whenAnswered = () => endAnswered(turn, reason); return; }
+  finish(reason);
 }
 function finish(reason) {
   if (!active) return;
@@ -198,6 +214,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line); state.requests.push(m); save();
   if (m.id !== undefined && !m.method) {
     state.answers.push({ id: m.id, method: pendingReverse.get(m.id), result: m.result, error: m.error }); save();
+    const asker = askedBy.get(m.id);
+    askedBy.delete(m.id);
+    if (asker) { asker.unanswered.delete(m.id); if (asker.unanswered.size === 0) asker.whenAnswered?.(); }
     const waiting = calls.get(m.id);
     calls.delete(m.id);
     if (waiting) m.error ? waiting.reject(Object.assign(new Error(m.error.message), { code: m.error.code })) : waiting.resolve(m.result);
