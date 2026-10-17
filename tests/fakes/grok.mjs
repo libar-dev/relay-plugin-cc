@@ -150,11 +150,15 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       if (options.permission) ask('permission', 'session/request_permission', { options: [{ kind: 'allow_once', optionId: 'allow' }, { kind: 'reject_once', optionId: 'deny' }] });
       for (const [index, offered] of (options.permissionOptions || []).entries()) ask('permission-' + index, 'session/request_permission', { options: offered });
       if (options.die) { setTimeout(() => { console.error('fake server death'); process.exit(17); }, 80); break; }
+      // steered: the test steers this turn, which ends only once the interjection is answered,
+      // however late it comes, so a slow steer never meets an idle server.
+      if (options.steered && !text.startsWith('[quick]')) turn.unanswered.add('steer');
       turn.timer = setTimeout(() => endAnswered(turn, options.stopReason), text.startsWith('[quick]') ? 30 : options.turnMs || 100);
       break;
     }
-    case '_x.ai/interject':
-      if (!active || options.steerError) { error('no turn running'); break; }
+    case '_x.ai/interject': {
+      const steered = () => { if (active?.unanswered?.delete('steer') && active.unanswered.size === 0) active.whenAnswered?.(); };
+      if (!active || options.steerError) { error('no turn running'); steered(); break; }
       const hold = (turn, text) => {
         turn.steers.push(text);
         state.sessions[sessionId].find(entry => entry.id === turn.id).steers.push(text); save();
@@ -171,7 +175,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       else if (!options.interjectNotHeld && kept) hold(active, m.params.text);
       if (options.interjectDelayMs) setTimeout(() => reply({ result: { status: 'queued' } }), options.interjectDelayMs);
       else reply({ result: { status: 'queued' } });
+      steered();
       break;
+    }
     case 'session/cancel': finish('cancelled'); break;
     default: if (m.id !== undefined && m.method) error('unknown method');
   }

@@ -642,7 +642,7 @@ import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mj
   for (const idKnown of [false, true]) {
     for (const control of ['steer', 'cancel']) {
       test(`newline brief ${control} while id is ${idKnown ? 'known' : 'unknown'}`, async t => {
-        const ctx = fixture(t, { turnMs: control === 'cancel' ? 30000 : 700, ...(idKnown ? {} : { noQueueId: true }) });
+        const ctx = fixture(t, { turnMs: control === 'cancel' ? 30000 : 700, ...(control === 'steer' ? { steered: true } : {}), ...(idKnown ? {} : { noQueueId: true }) });
         const { id } = startJob(ctx, HEADER, 'Newline brief.\n');
         await waitFor(() => ctx.grok().turns.length === 1 && readJob(ctx, id).state === 'running' && (!idKnown || readJob(ctx, id).turnId));
         assert.equal(Boolean(readJob(ctx, id).turnId), idKnown);

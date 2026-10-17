@@ -64,7 +64,7 @@ test('report is text after the last tool, events coalesce, home and backend surv
 
 test('running steer interjects; idle steer and rejected interjection run the next turn', async t => {
   for (const steerError of [false, true]) {
-    const ctx = fixture(t, { turnMs: 650, steerError });
+    const ctx = fixture(t, { turnMs: 650, steerError, steered: true });
     const { id } = startJob(ctx, HEADER, 'First.');
     await waitFor(() => readJob(ctx, id).turnId);
     assert.equal(companion(ctx, ['steer', id, '--message', '[quick] Mid-turn.']).status, 0);
