@@ -10,7 +10,8 @@ import { jobPaths, readJob, writeJob } from "../plugins/relay/scripts/lib/jobs/s
 import { claimInboxMessages, postInboxMessage, writeOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { acquireWorkerLease, releaseWorkerLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 import { readProcessStartTime } from "../plugins/relay/scripts/lib/util/process.mjs";
-import { exitCodeFor, jobViewJson, loadJobView, renderJobWithReport, renderResultText } from "../plugins/relay/scripts/lib/jobs/view.mjs";
+import { exitCodeFor, JobViewBusy, jobViewJson, loadJobView, loadJobViewSettled, renderJobWithReport, renderResultText } from "../plugins/relay/scripts/lib/jobs/view.mjs";
+import { HEADER, companion, finishJob, jobDir as jobDirOf, readJob as readJobOf, setup, startJob } from "./support/job-helpers.mjs";
 
 const me = () => ({ pid: process.pid, startTime: readProcessStartTime(process.pid) });
 
@@ -104,3 +105,57 @@ test("with nothing changing, the view reads report.md once, and an attempt with 
   fs.rmSync(jobPaths(dir).report);
   assert.equal(loadJobView(dir).hasReport, false, "no archive of attempt 1 exists: no report");
 });
+
+// Astra's reproducer (third re-review), with real workers on the fake Codex: a follow-up runs at
+// every one of the view's eight report reads. Ending running, or ending completed, the view must
+// never return the pass it has just shown to be invalid: no attempt 8 completed while attempt 9
+// runs, and no attempt 8 with attempt 9's report. It says the job is busy.
+for (const finalState of ["running", "completed"]) {
+  test(`a job that changes during each of the view's eight reads, ending ${finalState}, is busy: no pass that failed is returned`, async t => {
+    const ctx = setup(t, { turnMs: 30000 });
+    const { id } = startJob(ctx, HEADER, "[quick] Initial");
+    await finishJob(ctx, id);
+    const dir = jobDirOf(ctx, id);
+    const report = jobPaths(dir).report;
+    const original = fs.readFileSync;
+    let changes = 0;
+    fs.readFileSync = function readFileSync(file, ...args) {
+      if (String(file) === report && changes < 8) {
+        changes += 1;
+        const last = changes === 8;
+        const sent = companion(ctx, ["continue", id, "--message", last && finalState === "running" ? "Long final work" : `[quick] Follow-up ${changes}`]);
+        assert.equal(sent.status, 0, sent.stdout + sent.stderr);
+        if (last && finalState === "running") {
+          const deadline = Date.now() + 10000;
+          while (!(readJobOf(ctx, id).messages ?? []).some(m => m.action === "turn-started" && m.attempt === 9)) {
+            if (Date.now() > deadline) throw new Error("the worker did not start attempt 9");
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          }
+        } else {
+          const ended = companion(ctx, ["wait", id, "--timeout-seconds", "15"]);
+          assert.equal(ended.status, 0, ended.stdout + ended.stderr);
+        }
+      }
+      return original.call(this, file, ...args);
+    };
+    try {
+      assert.throws(() => loadJobView(dir), error => error instanceof JobViewBusy && /^Job .* is busy: its record changed during each of 8 reads\. Try again\.$/.test(error.message));
+    } finally {
+      fs.readFileSync = original;
+    }
+    assert.equal(changes, 8);
+    // Once it stops changing, a settled read is that version: attempt 9 with its own report.
+    const view = loadJobViewSettled(dir);
+    const actual = readJobOf(ctx, id);
+    assert.equal(view.job.attempts.length, 9);
+    assert.equal(view.job.attempts.length, actual.attempts.length);
+    if (finalState === "running") {
+      assert.equal(isTerminal(view), false);
+      assert.notEqual(exitCodeFor(view), 0);
+    } else {
+      assert.equal(view.state, "completed");
+      assert.equal(view.report, "Report for: [quick] Follow-up 8\n");
+    }
+  });
+}
+const isTerminal = view => ["completed", "failed", "cancelled", "dead"].includes(view.state);

@@ -4,7 +4,7 @@ import { default as process } from "node:process";
 import { parseArgs, splitRawArgumentString } from "../lib/util/args.mjs";
 import { createJobDir, findJobDir, generateJobId, jobPaths, listJobDirs, nowIso, readJob, repoSlugFor, writeFileAtomic, writeJob } from "../lib/jobs/store.mjs";
 import { UsageError } from "../lib/jobs/request.mjs";
-import { isTerminalView, loadJobView, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
+import { isTerminalView, JobViewBusy, loadJobViewSettled, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
 
 
 export function envNumber(name, fallback) {
@@ -92,9 +92,10 @@ export function resolveJobReference(reference, purpose) {
   const views = [];
   for (const dir of listJobDirs({ slug: repoSlugFor(process.cwd()) })) {
     try {
-      views.push(loadJobView(dir));
-    } catch {
-      // skip a job directory without job.json
+      views.push(loadJobViewSettled(dir));
+    } catch (error) {
+      // A busy job is never skipped: it may be the active one. Skip a directory without job.json.
+      if (error instanceof JobViewBusy) throw error;
     }
   }
   const sorted = sortViewsNewestFirst(views);

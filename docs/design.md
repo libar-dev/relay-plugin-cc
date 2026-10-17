@@ -31,8 +31,11 @@ recovery stay in that attempt. The previous attempt's report moves to `attempts/
 one version of the job: the job record, then the report, the lease and the message account, then
 the record again, and all of it again (up to eight times) when a worker began or ended an
 attempt in between. It renders the report text from the pass that held, and takes a report a
-new attempt has just moved from `attempts/`. So a view never pairs one attempt's state with
-another's report, nor shows a job completed while work owed before the read is running.
+new attempt has just moved from `attempts/`. A pass that did not hold is never shown: after
+eight of them the job is busy, which is not a state. `wait` polls again within its deadline;
+`status`, `result` and the other readers retry for two seconds, then say the job is busy and
+exit 4; the relay hook refuses a hand-back or stop until it settles. So a view never pairs one
+attempt's state with another's report, nor shows a job completed while owed work is running.
 
 ### The prompt
 

@@ -3,7 +3,7 @@ import { default as process } from "node:process";
 import { deliverMessage } from "../lib/worker/delivery.mjs";
 import { findJobDir } from "../lib/jobs/store.mjs";
 import { UsageError } from "../lib/jobs/request.mjs";
-import { EXIT, isTerminalView, loadJobView } from "../lib/jobs/view.mjs";
+import { EXIT, isTerminalView, loadJobViewSettled as loadJobView } from "../lib/jobs/view.mjs";
 import { DEFAULT_RESUME_MESSAGE } from "../lib/worker/recovery.mjs";
 
 

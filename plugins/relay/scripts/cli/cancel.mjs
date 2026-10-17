@@ -6,7 +6,13 @@ import { releaseLeaseToConsumer } from "../lib/worker/delivery.mjs";
 import { acquireWorkerLease, isWorkerAlive, readLease } from "../lib/jobs/lease.mjs";
 import { claimInboxMessages, owedMessages, writeOutcome, postInboxMessage, recordReceipt } from "../lib/jobs/messages.mjs";
 import { nowIso, readJob, TERMINAL_STATES, writeJob } from "../lib/jobs/store.mjs";
-import { EXIT, isTerminalView, jobViewJson, loadJobView, renderJobBlock } from "../lib/jobs/view.mjs";
+import { EXIT, isTerminalView, JobViewBusy, jobViewJson, loadJobView as readView, loadJobViewSettled as loadJobView, renderJobBlock } from "../lib/jobs/view.mjs";
+
+// The state now, or null while the job is busy (its record changing): a busy job has not ended.
+function stateNow(jobDir) {
+  try { return readView(jobDir).state; }
+  catch (error) { if (error instanceof JobViewBusy) return null; throw error; }
+}
 
 
 async function waitUntil(predicate, timeoutMs, pollMs = 200) {
@@ -35,10 +41,10 @@ function markCancelledAfterKill(jobDir, reason) {
     const holder = readLease(jobDir);
     postInboxMessage(jobDir, { kind: "cancel", text: "" });
     const deadline = Date.now() + envNumber("RELAY_JOBS_CANCEL_GRACE_MS", 10000);
-    let state = loadJobView(jobDir).state;
+    let state = stateNow(jobDir);
     while (!TERMINAL_STATES.has(state) && Date.now() < deadline) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, Math.min(100, deadline - Date.now())));
-      state = loadJobView(jobDir).state;
+      state = stateNow(jobDir);
     }
     return { delegated: true, pid: holder?.pid ?? "unknown", role: holder?.role ?? "worker", ended: TERMINAL_STATES.has(state) ? state : null };
   }
@@ -152,7 +158,7 @@ export async function handleCancel(argv) {
       postInboxMessage(jobDir, { kind: "cancel", text: "" });
       actions.push("asked the worker to interrupt the turn");
     }
-    const stopped = await waitUntil(() => isTerminalView(loadJobView(jobDir)), graceMs);
+    const stopped = await waitUntil(() => { const state = stateNow(jobDir); return state !== null && isTerminalView({ state }); }, graceMs);
     view = loadJobView(jobDir);
     const worker = view.job.worker;
     tree = mergeSnapshots(tree, snapshotProcessTree(processRoots(view.job)));

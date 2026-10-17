@@ -2,7 +2,7 @@ import { parseCommandInput, resolveJobReference, outputResult, resolveCommandCwd
 import { default as process } from "node:process";
 import { findJobDir, listJobDirs, repoSlugFor, resolveJobsHome } from "../lib/jobs/store.mjs";
 import { readRepoConfig, readUserConfig } from "../lib/jobs/config.mjs";
-import { exitCodeFor, jobViewJson, loadJobView, renderJobBlock, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
+import { exitCodeFor, jobViewJson, loadJobViewSettled as loadJobView, renderJobBlock, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
 
 const STATUS_LIST_LIMIT = 20;
 

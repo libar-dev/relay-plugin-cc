@@ -34,7 +34,15 @@ import { fileURLToPath } from "node:url";
 
 import { appendRelayViolation } from "../lib/jobs/messages.mjs";
 import { absoluteJobsHomeEnv, JOBS_HOME_ENV, readJob } from "../lib/jobs/store.mjs";
-import { isTerminalView, loadJobView, renderJobBlock, renderResultText } from "../lib/jobs/view.mjs";
+import { isTerminalView, JobViewBusy, loadJobViewSettled, renderJobBlock, renderResultText } from "../lib/jobs/view.mjs";
+
+// A view of the job, or, while its record keeps changing, a marker that it is busy: not a state,
+// and never terminal, so the relay waits.
+/** @returns {any} a job view, or { busy, state: null, undelivered: [] } */
+function jobViewOrBusy(jobDir) {
+  try { return loadJobViewSettled(jobDir); }
+  catch (error) { if (error instanceof JobViewBusy) return { busy: error.message, state: null, undelivered: [] }; throw error; }
+}
 import {
   findRelayJob,
   isRelayInput,
@@ -263,8 +271,10 @@ function handleHandback(input, env, jobDir, pointer, sync) {
   } else if (sync?.undelivered?.length > 0) {
     problems.push(`${sync.undelivered.length} message(s) are owed to the job: received but not delivered.`);
   }
-  const view = loadJobView(jobDir);
-  if (!isTerminalView(view)) {
+  const view = jobViewOrBusy(jobDir);
+  if (view.busy) {
+    problems.push(view.busy);
+  } else if (!isTerminalView(view)) {
     problems.push(`Job ${jobId} is still ${view.state}.`);
   }
   if (view.undelivered.length > 0) {
@@ -276,7 +286,11 @@ function handleHandback(input, env, jobDir, pointer, sync) {
       return deny(reason);
     }
   }
-  return rewrite(renderResultText(loadJobView(jobDir)), "relay:job relay hand-back, rewritten to the job's result.");
+  // Read again: a release above recorded its relay-violation, which the result shows. A busy job
+  // is never released with a result it does not have.
+  const result = jobViewOrBusy(jobDir);
+  if (result.busy) return deny(`${result.busy} Run: ${waitCommandShown(jobId)}`);
+  return rewrite(renderResultText(result), "relay:job relay hand-back, rewritten to the job's result.");
 }
 
 async function handlePreToolUse(input, env = process.env) {
@@ -312,7 +326,7 @@ async function handleSubagentStop(input, env = process.env) {
   const sync = jobDir ? await syncRelayMessages(input, jobDir, { env, wait: true }) : null;
   const guard = readGuardState(env, agentId, jobDir);
   const lastToolAt = guard.raw.lastToolAt ?? "";
-  const current = jobDir ? loadJobView(jobDir) : null;
+  const current = jobDir ? jobViewOrBusy(jobDir) : null;
   if (guard.handback && lastToolAt <= guard.handback.at &&
       !sync?.busy && !sync?.undelivered?.length &&
       (!current || (isTerminalView(current) && current.undelivered.length === 0))) {
@@ -331,16 +345,19 @@ async function handleSubagentStop(input, env = process.env) {
     }
   } else {
     const jobId = readJobId(jobDir);
-    const view = loadJobView(jobDir);
-    if (!isTerminalView(view)) {
+    const view = current;
+    if (view.busy) {
+      problems.push({ kind: "running", reason: `${view.busy} Do not stop. Run: ${waitCommandShown(jobId)}` });
+    } else if (!isTerminalView(view)) {
       problems.push({ kind: "running", reason: `Job ${jobId} is still ${view.state}. Do not stop. Run: ${waitCommandShown(jobId)}` });
     }
     if (sync?.busy || sync?.undelivered?.length > 0 || view.undelivered.length > 0) {
       problems.push({ kind: "undelivered", reason: `Messages are owed to the job: received but not delivered, or delivered but not run. Do not stop, even on a completed job. Run: ${waitCommandShown(jobId)}` });
     }
     if (problems.length === 0) {
-      const done = loadJobView(jobDir);
-      expected = isStringReturn(jobDir) ? renderJobBlock(done) : renderResultText(done);
+      const done = jobViewOrBusy(jobDir);
+      if (done.busy) problems.push({ kind: "running", reason: `${done.busy} Do not stop. Run: ${waitCommandShown(jobId)}` });
+      else expected = isStringReturn(jobDir) ? renderJobBlock(done) : renderResultText(done);
     }
   }
   if (expected != null && trimEnd(input.last_assistant_message) !== trimEnd(expected)) {

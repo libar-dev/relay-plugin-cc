@@ -18,8 +18,19 @@ export const EXIT = {
   cancelled: 5
 };
 
-// How many times a view reads the job and its parts before it settles for the last read.
+// How many times a view reads the job and its parts before it gives up on this call.
 const VIEW_READS = 8;
+
+/**
+ * A job whose record changed during every pass of a view: a worker is busy with it. Not a state:
+ * the reader retries (`loadJobViewSettled`, `wait`), or says the job is busy and to try again.
+ */
+export class JobViewBusy extends Error {
+  constructor(jobDir, job) {
+    super(`Job ${job?.id ?? path.basename(jobDir)} is busy: its record changed during each of ${VIEW_READS} reads. Try again.`);
+    this.name = "JobViewBusy";
+  }
+}
 
 // What a worker changes when it begins or ends an attempt: the job's state, how many attempts
 // it has, and which attempt is the last and how it stands.
@@ -32,7 +43,8 @@ function jobVersion(job) {
 // A validated read. The view reads the job, then its report, lease and message account, then
 // the job again. When the job changed in between (a worker began an attempt for owed work, or a
 // newer attempt wrote its report), those parts may belong to another version, so the view reads
-// them all again. It renders from the report text it read in the pass that held.
+// them all again. It renders from the report text it read in the pass that held. A pass that did
+// not hold is never returned: after VIEW_READS of them it throws JobViewBusy.
 export function loadJobView(jobDir, options = {}) {
   for (let pass = 1; ; pass += 1) {
     let job = readJob(jobDir);
@@ -52,7 +64,10 @@ export function loadJobView(jobDir, options = {}) {
     const account = messageAccount(jobDir);
     const relayViolations = readRelayViolations(jobDir);
     const again = readJob(jobDir);
-    if (pass < VIEW_READS && (!again || jobVersion(again) !== jobVersion(job))) continue;
+    if (!again || jobVersion(again) !== jobVersion(job)) {
+      if (pass < VIEW_READS) continue;
+      throw new JobViewBusy(jobDir, again ?? job);
+    }
     const hasReport = Boolean(read?.text.trim());
     // Owed work is running under a live worker, or undelivered without one.
     const workerLive = isWorkerLease(lease);
@@ -64,6 +79,20 @@ export function loadJobView(jobDir, options = {}) {
       job, jobDir, paths, ...view, hasReport, report: hasReport ? read.text : null, reportPath: hasReport ? read.path : null,
       undelivered, dropped: account.dropped, relayViolations
     };
+  }
+}
+
+// loadJobView, retried for up to `waitMs` while the job is busy; then JobViewBusy goes to the
+// caller. For readers that answer once: status, result, a hook.
+export function loadJobViewSettled(jobDir, options = {}, waitMs = 2000) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      return loadJobView(jobDir, options);
+    } catch (error) {
+      if (!(error instanceof JobViewBusy) || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
   }
 }
 

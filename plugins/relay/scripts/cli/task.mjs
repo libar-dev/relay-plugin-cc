@@ -7,7 +7,7 @@ import { readStdinIfPiped } from "../lib/util/fs.mjs";
 import { spawnWorker } from "../lib/worker/delivery.mjs";
 import { requireJobDirInHome, jobPaths, readJob } from "../lib/jobs/store.mjs";
 import { buildLaunchRequest, UsageError } from "../lib/jobs/request.mjs";
-import { loadJobView, renderJobWithReport } from "../lib/jobs/view.mjs";
+import { loadJobViewSettled as loadJobView, renderJobWithReport } from "../lib/jobs/view.mjs";
 import { runWorker } from "../lib/worker/worker.mjs";
 
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
