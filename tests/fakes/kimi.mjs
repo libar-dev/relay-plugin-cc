@@ -162,6 +162,8 @@ function endAnswered(turn, reason) {
 function finish(reason) {
   if (!active) return;
   const turn = active; active = null; clearTimeout(turn.timer);
+  // Saved before the records that end the turn: relay reads those, and a test reads this after.
+  state.completed = [...(state.completed || []), { text: turn.text, reason }]; save();
   if (reason === 'completed') {
     const answer = process.env.FAKE_REVIEW_ANSWER ?? options.answer ?? 'Report for: ' + turn.text;
     if (turn.rpcId !== null) for (const text of [answer.slice(0, 3), answer.slice(3)]) if (text) update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
@@ -172,7 +174,6 @@ function finish(reason) {
   record({ type: 'agent.turn.ended', kind: 'event', turnId: turn.turnId, outcome: reason === 'completed' ? 'done' : reason });
   record({ type: 'turn.ended', agentId: 'main', turnId: turn.turnId, reason, ...(error ? { error } : {}) });
   if (reason !== 'cancelled') record({ type: 'prompt.completed', agentId: 'main', promptId: turn.promptId, reason });
-  state.completed = [...(state.completed || []), { text: turn.text, reason }]; save();
   // Kimi starts a turn of its own as it goes idle, before ACP's answer reaches the client.
   if (options.ownTurnAfterMs && !state.ownTurnRan) { state.ownTurnRan = true; save(); if (options.ownTurnAfterMs <= 1) ownTurn(); else setTimeout(ownTurn, options.ownTurnAfterMs); }
   // Kimi's ACP layer answers end_turn for a failed turn.
@@ -203,9 +204,9 @@ function ownTurn() {
     const next = queued.shift();
     // A UserPromptSubmit hook that blocks: the message stays in Kimi's context, and no turn runs.
     if (next && options.blockQueued) {
+      state.blocked = (state.blocked || 0) + 1; save();
       record({ type: 'context.append_message', agentId: 'main', message: { role: 'user', content: next.input, id: next.promptId, toolCalls: [], origin: { kind: 'user' } } });
       record({ type: 'prompt.completed', agentId: 'main', promptId: next.promptId, reason: 'blocked' });
-      state.blocked = (state.blocked || 0) + 1; save();
     } else if (next) setTimeout(() => startTurn(next, null), options.handoffMs || 0);
   };
   hold();
