@@ -36,3 +36,43 @@ test("status lists no jobs while one is busy: it exits 4 and names it, by reposi
   assert.equal(listed.status, 0, listed.stderr);
   assert.deepEqual(JSON.parse(listed.stdout).jobs.map(job => job.id).sort(), [active, quiet].sort());
 });
+
+test("wait polls a busy job again within its deadline, and shows it once its views hold", async t => {
+  const ctx = setup(t);
+  const { id } = startJob(ctx, HEADER, "[quick] Settles.");
+  await finishJob(ctx, id);
+  // Busy for its first 48 reads: more than one view's eight passes.
+  const waited = companion(ctx, ["wait", id, "--timeout-seconds", "15"], busy(ctx, jobDir(ctx, id), { reads: 48 }));
+  assert.equal(waited.status, 0, waited.stderr);
+  assert.equal(waited.stderr, "");
+  assert.match(waited.stdout, /^state: completed$/m);
+  assert.ok(waited.stdout.endsWith("---\nReport for: [quick] Settles.\n"), waited.stdout);
+});
+
+test("a job busy through wait's deadline: exit 4 and the busy line; the relay's wait exits 0 on its still-running line", async t => {
+  const ctx = setup(t);
+  const { id } = startJob(ctx, HEADER, "[quick] Never settles.");
+  await finishJob(ctx, id);
+  const env = busy(ctx, jobDir(ctx, id));
+  const waited = companion(ctx, ["wait", id, "--timeout-seconds", "1", "--json"], env);
+  assert.equal(waited.status, 4, waited.stdout);
+  assert.equal(waited.stdout, "", "no view of a busy job");
+  assert.match(waited.stderr, busyLine(id));
+  const relay = companion(ctx, ["wait", id, "--timeout-seconds", "1", "--exit-zero-while-running", "--state-only"], env);
+  assert.equal(relay.status, 0, relay.stderr);
+  assert.equal(relay.stdout, "still running: not an error. Run the same wait again.\n");
+  assert.match(relay.stderr, busyLine(id));
+});
+
+test("result and status of a busy job exit 4 with the busy line and no view: by id, and as the repository's newest", async t => {
+  const ctx = setup(t);
+  const { id } = startJob(ctx, HEADER, "[quick] Busy job.");
+  await finishJob(ctx, id);
+  const env = busy(ctx, jobDir(ctx, id));
+  for (const args of [["result", id], ["result"], ["status", id, "--json"]]) {
+    const read = companion(ctx, args, env);
+    assert.equal(read.status, 4, `${args.join(" ")}: ${read.stdout}`);
+    assert.equal(read.stdout, "", args.join(" "));
+    assert.match(read.stderr, busyLine(id));
+  }
+});
