@@ -106,10 +106,10 @@ test("with nothing changing, the view reads report.md once, and an attempt with 
   assert.equal(loadJobView(dir).hasReport, false, "no archive of attempt 1 exists: no report");
 });
 
-// Astra's reproducer (third re-review), with real workers on the fake Codex: a follow-up runs at
-// every one of the view's eight report reads. Ending running, or ending completed, the view must
-// never return the pass it has just shown to be invalid: no attempt 8 completed while attempt 9
-// runs, and no attempt 8 with attempt 9's report. It says the job is busy.
+// With real workers on the fake Codex, a follow-up runs at every one of the view's eight report
+// reads. Ending running, or ending completed, the view must never return the pass it has just
+// shown to be invalid: no attempt 8 completed while attempt 9 runs, and no attempt 8 with attempt
+// 9's report. It says the job is busy.
 for (const finalState of ["running", "completed"]) {
   test(`a job that changes during each of the view's eight reads, ending ${finalState}, is busy: no pass that failed is returned`, async t => {
     const ctx = setup(t, { turnMs: 30000 });
