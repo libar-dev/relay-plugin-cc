@@ -291,8 +291,8 @@ an idle machine before reading it as a regression. Each test file's process keep
 files under one `relay-test-run-*` directory in the temp directory, which `TMPDIR` points at, and
 removes it at exit once no test process runs from it. A directory whose run was killed by a signal
 is removed by the next run once its recorded owner is gone. `RELAY_TEST_KEEP_TMP=1 npm test` keeps
-the directory of a file that failed. `npm run check` type-checks every script with TypeScript, without
-an installed Codex CLI.
+the directory of a file that failed; no later run removes it, so delete it yourself. `npm run check`
+type-checks every script with TypeScript, without an installed Codex CLI.
 
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
 [docs/backends.md](docs/backends.md) for the backend contract, and

@@ -9,8 +9,9 @@ import { isProcessIdentityAlive, readProcessStartTime } from "../../plugins/rela
 // One temporary root per test process. TMPDIR points at it, so every temporary directory this
 // process makes and every process it starts lands under it. At exit the root goes, once no
 // process runs from it any more: one still running keeps it, and its path and the pids are
-// printed. RELAY_TEST_KEEP_TMP=1 keeps the root of a run that failed. A signal skips the exit
-// handler, so each root records its owner, and a new run sweeps the roots of owners now gone.
+// printed. RELAY_TEST_KEEP_TMP=1 keeps the root of a run that failed and marks it kept, so no
+// later run sweeps it; remove it yourself. A signal skips the exit handler, so each root records
+// its owner, and a new run sweeps the roots of owners now gone.
 if (!process.env.RELAY_TEST_ROOT) {
   sweepStaleTestRoots(os.tmpdir());
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-test-run-"));
@@ -23,7 +24,10 @@ if (!process.env.RELAY_TEST_ROOT) {
 // Processes other than this one whose working directory or command line is under `root`. The
 // root is also matched by its real path: /proc and lsof name a working directory that way, and a
 // temporary directory can be reached through a symlink (macOS's /var/folders is
-// /private/var/folders).
+// /private/var/folders). The limit: a detached process that uses the root only through
+// RELAY_TEST_ROOT or TMPDIR, its working directory and command line elsewhere, is not found, so
+// its owner's exit, or a sweep after the owner died, removes the root under it. Finding it would
+// take tracking each child by pid and start time, which the suite does not do.
 function processesUnder(root) {
   let real = root;
   try { real = fs.realpathSync(root); } catch { /* gone */ }
@@ -50,13 +54,14 @@ function processesUnder(root) {
   return [...pids];
 }
 
-// A root whose recorded owner is gone (by pid and start time) and that no process runs from.
+// A root whose recorded owner is gone (by pid and start time), that no process runs from, and
+// that was not kept on purpose.
 function sweepStaleTestRoots(tmp) {
   for (const name of fs.readdirSync(tmp).filter(entry => entry.startsWith("relay-test-run-"))) {
     const root = path.join(tmp, name);
     try {
       const stat = fs.lstatSync(root);
-      if (!stat.isDirectory() || stat.uid !== process.getuid?.()) continue;
+      if (!stat.isDirectory() || stat.uid !== process.getuid?.() || fs.existsSync(path.join(root, ".kept"))) continue;
       const owner = JSON.parse(fs.readFileSync(path.join(root, ".owner"), "utf8"));
       if (isProcessIdentityAlive(owner) || processesUnder(root).length > 0) continue;
       fs.rmSync(root, { recursive: true, force: true });
@@ -66,6 +71,7 @@ function sweepStaleTestRoots(tmp) {
 
 function removeTestRoot(root, code) {
   if (code !== 0 && process.env.RELAY_TEST_KEEP_TMP === "1") {
+    try { fs.writeFileSync(path.join(root, ".kept"), ""); } catch { /* gone */ }
     process.stderr.write(`note: kept the test root of a failed run: ${root}\n`);
     return;
   }

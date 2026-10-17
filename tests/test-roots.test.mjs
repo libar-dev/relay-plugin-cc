@@ -37,6 +37,16 @@ test("a root whose owner a signal killed is swept by the next run; a live owner'
   assert.equal(fs.existsSync(live.root), true, "a live owner keeps its root");
 });
 
+test("a root RELAY_TEST_KEEP_TMP=1 kept from a failed run is left by the next run's sweep", () => {
+  const tmp = makeTempDir("relay-roots-");
+  const failed = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(ISO)}); console.log(process.env.RELAY_TEST_ROOT); process.exitCode = 1;`], { env: { ...childEnv(tmp), RELAY_TEST_KEEP_TMP: "1" }, encoding: "utf8" });
+  const root = failed.stdout.trim().split("\n")[0];
+  assert.equal(failed.status, 1, failed.stderr);
+  assert.ok(failed.stderr.includes(`note: kept the test root of a failed run: ${root}\n`), failed.stderr);
+  assert.equal(run(tmp).status, 0);
+  assert.equal(fs.existsSync(root), true, "the next run swept a root kept on purpose");
+});
+
 // The temporary directory is reached through a symlink, as macOS's /var/folders is through
 // /private/var: lsof and /proc name a working directory by its real path.
 for (const platform of ["linux", "darwin"]) {
