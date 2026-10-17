@@ -43,6 +43,16 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     return job;
   }
 
+  // The job's attempt `count` runs its turn, and the worker has recorded it. As the turn starts,
+  // the worker writes the turn id, then the message the attempt runs as delivered (turn-started).
+  // A worker killed between the two leaves that message owed, and the next worker runs it again.
+  function turnRecorded(ctx, id, count) {
+    const job = readJobJson(ctx, id);
+    const messageId = job.attempts[count - 1]?.messageId;
+    return job.attempts.length === count && job.turnId && job.worker &&
+      (!messageId || (job.messages ?? []).some(entry => entry.id === messageId && entry.action === "turn-started"));
+  }
+
   async function waitInput(ctx, id) {
     const input = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${id} --timeout-seconds 120` }));
     // Keep mutation runs bounded when a broken retry loops forever.
@@ -96,10 +106,7 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     const id = await start(ctx);
     const waiting = waitAsync(ctx, await waitInput(ctx, id));
     killWorker(ctx, id);
-    await waitFor(() => {
-      const job = readJobJson(ctx, id);
-      return job.attempts.length === 2 && job.turnId && job.worker;
-    });
+    await waitFor(() => turnRecorded(ctx, id, 2));
     const second = killWorker(ctx, id);
     const result = await waiting;
     assert.equal(result.status, 3, result.stdout + result.stderr);
@@ -119,15 +126,15 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     const id = await start(ctx);
     killWorker(ctx, id);
     const waiting = waitAsync(ctx, await waitInput(ctx, id));
-    await waitFor(() => readJobJson(ctx, id).attempts.length === 2 && readJobJson(ctx, id).turnId);
+    await waitFor(() => turnRecorded(ctx, id, 2));
     killWorker(ctx, id);
     assert.equal((await waiting).status, 3);
     // A user continue starts new work, which earns its own one retry.
     assert.equal(companion(ctx, ["continue", id, "--message", "New user work"]).status, 0);
-    await waitFor(() => readJobJson(ctx, id).attempts.length === 3 && readJobJson(ctx, id).turnId);
+    await waitFor(() => turnRecorded(ctx, id, 3));
     killWorker(ctx, id);
     const waitingAgain = waitAsync(ctx, await waitInput(ctx, id));
-    await waitFor(() => readJobJson(ctx, id).attempts.length === 4 && readJobJson(ctx, id).turnId);
+    await waitFor(() => turnRecorded(ctx, id, 4));
     assert.equal(readJobJson(ctx, id).automaticResumes.length, 2);
     // Delivering a message into the automatic turn earns a fresh retry too.
     assert.equal(companion(ctx, ["steer", id, "--message", "User correction"]).status, 0);
@@ -156,7 +163,7 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     const id = await start(ctx);
     killWorker(ctx, id);
     const waiting = waitAsync(ctx, await waitInput(ctx, id));
-    await waitFor(() => readJobJson(ctx, id).attempts.length === 2 && readJobJson(ctx, id).turnId);
+    await waitFor(() => turnRecorded(ctx, id, 2));
     killWorker(ctx, id);
     assert.equal((await waiting).status, 3);
     ctx.env.FAKE_CODEX_RESUME_DELAY_MS = "30000";
