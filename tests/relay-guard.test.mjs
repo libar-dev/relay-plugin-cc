@@ -1019,6 +1019,22 @@ test("a relay started over in the same run with the call's key takes over the ru
   assert.doesNotMatch(resultOf(retry, jobId), /relay-violation/);
 });
 
+// A busy job (its record changing during every view) is at work, so it stays adoptable: busy
+// only where the new relay's start looks for its predecessor's job, it takes that job over.
+test("a relay started over takes over its predecessor's job while that job is busy, and starts no other", async () => {
+  const first = relayContext("job", { workflow: WORKFLOW, turnMs: 4000, journalKey: KEY });
+  const { jobId } = await startedInWorkflow(first);
+  await untilRunning(first, jobId);
+  const busy = { NODE_OPTIONS: `--import=${new URL("./support/busy-view.mjs", import.meta.url).href}`, RELAY_TEST_BUSY_JOB: jobDirOf(first, jobId), RELAY_TEST_BUSY_WITHIN: "findAdoptableRelayJob" };
+  const retry = respawned(first, { label: "relay-test", journalKey: KEY, env: busy });
+  const second = await relayStart(retry);
+  assert.equal(second.started.status, 0, second.started.stdout + second.started.stderr);
+  assert.equal(second.jobId, jobId, second.started.stdout);
+  assert.match(second.started.stdout, new RegExp(`^relay-adopted: ${retry.agentId} took over from ${first.agentId} at \\S+ as "relay-test"$`, "m"));
+  assert.deepEqual(jobDirsUnder(first.home), [jobId], "one job directory");
+  assert.equal(companion(first, ["cancel", jobId]).status, 0);
+});
+
 test("a retry after the job finished returns that job's block at once; a third relay adopts from the second", async () => {
   const first = relayContext("job", { workflow: WORKFLOW, turnMs: 100, journalKey: KEY });
   const { jobId } = await startedInWorkflow(first);
