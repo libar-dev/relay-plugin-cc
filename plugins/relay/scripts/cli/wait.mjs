@@ -1,5 +1,4 @@
 import { parseCommandInput, envNumber, sleep, outputResult } from "./shared.mjs";
-import { default as fs } from "node:fs";
 import { default as process } from "node:process";
 import { resumeDeadJobOnce } from "../lib/worker/recovery.mjs";
 import { findJobDir } from "../lib/jobs/store.mjs";
@@ -48,7 +47,7 @@ export async function handleWait(argv) {
   }
   const stillRunning = Boolean(options["exit-zero-while-running"]) && !isTerminalView(view);
   if (options.json) {
-    outputResult({ ...jobViewJson(view), report: view.hasReport && !options["state-only"] ? fs.readFileSync(view.paths.report, "utf8") : null }, true);
+    outputResult({ ...jobViewJson(view), report: view.hasReport && !options["state-only"] ? view.report : null }, true);
   } else {
     process.stdout.write(`${stillRunning ? `${STILL_RUNNING_LINE}\n` : ""}${options["state-only"] ? renderJobBlock(view) : renderJobWithReport(view)}`);
   }

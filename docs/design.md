@@ -27,7 +27,9 @@ Jobs outlive the agent and the Claude session on purpose, so stopping one is alw
 act. A dead or failed job continues on a message, or on `companion resume <job>`, whose default
 message is "Your session was cut off. Continue the task from where you stopped, then write the
 final report." Each queued turn starts a new attempt. A steer inside a running turn and automatic server
-recovery stay in that attempt. The previous attempt's report moves to `attempts/`.
+recovery stay in that attempt. The previous attempt's report moves to `attempts/`. A reader reads
+the report once, with the job record it already holds: when the next attempt has just moved it,
+the reader takes it from `attempts/`, so its state and its report come from the same attempt.
 
 ### The prompt
 

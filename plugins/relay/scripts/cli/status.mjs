@@ -1,5 +1,4 @@
 import { parseCommandInput, resolveJobReference, outputResult, resolveCommandCwd } from "./shared.mjs";
-import { default as fs } from "node:fs";
 import { default as process } from "node:process";
 import { findJobDir, listJobDirs, repoSlugFor, resolveJobsHome } from "../lib/jobs/store.mjs";
 import { readRepoConfig, readUserConfig } from "../lib/jobs/config.mjs";
@@ -14,7 +13,7 @@ export function handleResult(argv) {
   const { options, positionals } = parseCommandInput(argv, { booleanOptions: ["json", "state-only"] });
   const view = loadJobView(resolveJobReference(positionals[0], "result"));
   if (options.json) {
-    outputResult({ ...jobViewJson(view), report: view.hasReport && !options["state-only"] ? fs.readFileSync(view.paths.report, "utf8") : null }, true);
+    outputResult({ ...jobViewJson(view), report: view.hasReport && !options["state-only"] ? view.report : null }, true);
   } else {
     process.stdout.write(options["state-only"] ? renderJobBlock(view) : renderResultText(view));
   }

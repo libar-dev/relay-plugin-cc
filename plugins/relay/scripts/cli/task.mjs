@@ -57,7 +57,7 @@ export async function handleTask(argv) {
   }
   await runWorker(jobDir);
   const view = loadJobView(jobDir);
-  const rawOutput = view.hasReport ? fs.readFileSync(view.paths.report, "utf8") : "";
+  const rawOutput = view.hasReport ? view.report : "";
   if (options.json) {
     outputResult(
       {

@@ -3,6 +3,7 @@ import { backendFor, DEFAULT_BACKEND } from "../backends/index.mjs";
 // one, a line of three dashes and the report exactly as the backend wrote it.
 
 import fs from "node:fs";
+import path from "node:path";
 
 import { isWorkerAlive } from "./lease.mjs";
 import { isWorkerLease, readLease } from "./lease.mjs";
@@ -30,7 +31,8 @@ export function loadJobView(jobDir, options = {}) {
     view = computeJobView(job, options);
   }
   const paths = jobPaths(jobDir);
-  const hasReport = fs.existsSync(paths.report) && fs.readFileSync(paths.report, "utf8").trim().length > 0;
+  const read = readReport(paths, job);
+  const hasReport = Boolean(read?.text.trim());
   // Owed work is running under a live worker, or undelivered without one.
   const lease = readLease(jobDir);
   const workerLive = isWorkerLease(lease);
@@ -40,7 +42,23 @@ export function loadJobView(jobDir, options = {}) {
   }
   const undelivered = workerLive ? [] : account.undelivered;
   const relayViolations = readRelayViolations(jobDir);
-  return { job, jobDir, paths, ...view, hasReport, undelivered, dropped: account.dropped, relayViolations };
+  return {
+    job, jobDir, paths, ...view, hasReport, report: hasReport ? read.text : null, reportPath: hasReport ? read.path : null,
+    undelivered, dropped: account.dropped, relayViolations
+  };
+}
+
+// The report of the attempt the job snapshot names, read once; readers render this copy and
+// never read the file again. A new attempt moves report.md to attempts/<n>-report.md before it
+// records itself, so a snapshot taken before that move finds its report there: the state and the
+// report always come from the same attempt.
+function readReport(paths, job) {
+  const attempts = Array.isArray(job.attempts) ? job.attempts.length : 0;
+  for (const file of [paths.report, ...(attempts > 0 ? [path.join(paths.attempts, `${attempts}-report.md`)] : [])]) {
+    try { return { path: file, text: fs.readFileSync(file, "utf8") }; }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+  return null;
 }
 
 export function isTerminalView(view) {
@@ -140,7 +158,7 @@ export function renderJobBlock(view) {
     ...backendLines(request),
     `duration: ${formatDuration(job.createdAt, end) ?? "unknown"}`,
     `attempts: ${Array.isArray(job.attempts) ? job.attempts.length : 0}`,
-    `report: ${view.hasReport ? view.paths.report : "none"}`,
+    `report: ${view.hasReport ? view.reportPath : "none"}`,
     `dir: ${view.jobDir}`
   ];
   if (job.kind && job.kind !== "task") {
@@ -201,8 +219,7 @@ export function renderJobBlock(view) {
 export function renderResultText(view) {
   let text = renderJobBlock(view);
   if (view.hasReport) {
-    const report = fs.readFileSync(view.paths.report, "utf8");
-    text += `---\n${report}${report.endsWith("\n") ? "" : "\n"}`;
+    text += `---\n${view.report}${view.report.endsWith("\n") ? "" : "\n"}`;
   }
   return text;
 }
@@ -210,8 +227,7 @@ export function renderResultText(view) {
 export function renderJobWithReport(view) {
   let text = renderJobBlock(view);
   if (view.hasReport && isTerminalView(view)) {
-    const report = fs.readFileSync(view.paths.report, "utf8");
-    text += `---\n${report}${report.endsWith("\n") ? "" : "\n"}`;
+    text += `---\n${view.report}${view.report.endsWith("\n") ? "" : "\n"}`;
   }
   return text;
 }
@@ -281,7 +297,7 @@ export function jobViewJson(view) {
     createdAt: view.job.createdAt ?? null,
     completedAt: view.job.completedAt ?? null,
     jobDir: view.jobDir,
-    reportPath: view.hasReport ? view.paths.report : null,
+    reportPath: view.hasReport ? view.reportPath : null,
     summary: summarizeJob(view),
     relay: view.job.relay ?? null,
     relayViolations: view.relayViolations ?? [],
