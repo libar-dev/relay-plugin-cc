@@ -245,6 +245,27 @@ async function runWorkerRound(jobDir, options, held) {
   // job), so no reader ever sees a live new worker beside the previous terminal state.
   const me_record = { worker: me, workers: sameProcess(job.workers?.at(-1), me) ? job.workers : [...(job.workers ?? []), me] };
 
+  // A teardown an attempt recorded is final, across a crash too: its message is reported
+  // dropped and a brief is not owed, before anything owed is worked out. The backend's delivery
+  // evidence stays as it is.
+  const honourTeardowns = () => {
+    for (const attempt of job.attempts ?? []) {
+      const teardown = attempt?.teardown;
+      if (!teardown) continue;
+      if (teardown.messageId) {
+        const reason = attempt.errorMessage ?? "The backend could not confirm the message started.";
+        const message = { id: teardown.messageId, kind: teardown.source };
+        const action = readOutcome(jobDir, teardown.messageId)?.action;
+        if (!CLOSED_ACTIONS.has(action)) outcome(message, { action: "dropped", reason });
+        else if (action === "dropped" && !(job.messages ?? []).some(entry => entry.id === teardown.messageId && entry.action === "dropped")) {
+          save({ messages: [...(job.messages ?? []), { id: message.id, kind: message.kind, at: nowIso(), action: "dropped", reason }] });
+        }
+      }
+      if (teardown.source === "brief" && job.pendingFirstTurn) save({ pendingFirstTurn: false });
+    }
+  };
+  honourTeardowns();
+
   // Work: the first brief if it never started, then messages a dead worker claimed but
   // never delivered, then new inbox messages.
   if (job.pendingFirstTurn) {
@@ -622,24 +643,30 @@ async function runWorkerRound(jobDir, options, held) {
             if (hasReport) {
               writeFileAtomic(paths.report, finalMessage.endsWith("\n") ? finalMessage : `${finalMessage}\n`);
             }
-            updateAttempt({
+            // A teardown is decided in the same write that fails the attempt: the attempt names the
+            // delivery it gives up, and a brief stops being owed, so a crash after this write can
+            // never send it again (honourTeardowns rebuilds the rest).
+            const teardown = result.teardown ? { clientId: dispatch.clientId, messageId: current.message?.id ?? null, source: current.source } : null;
+            const attempts = [...job.attempts];
+            attempts[attempts.length - 1] = {
+              ...attempts.at(-1),
               turnId: result.turnId ?? activeTurnId,
               ...(result.completionInference ? { completionInference: result.completionInference } : {}),
               endedAt: nowIso(),
               state,
               ...(errorMessage ? { errorMessage } : {}),
-              hasReport
-            });
-            save({ errorMessage, turnId: result.turnId ?? activeTurnId });
+              hasReport,
+              ...(teardown ? { teardown } : {})
+            };
+            save({ attempts, errorMessage, turnId: result.turnId ?? activeTurnId, ...(teardown?.source === "brief" ? { pendingFirstTurn: false } : {}) });
             activeTurnId = null;
             if (state === "cancelled") {
               break;
             }
             // The backend may still hold the prompt: it is not sent again, and nothing more goes
             // to this server. Work still queued stays owed.
-            if (result.teardown) {
-              outcome(current.message, { action: "dropped", reason: errorMessage });
-              if (current.source === "brief") save({ pendingFirstTurn: false });
+            if (teardown) {
+              honourTeardowns();
               break;
             }
           }

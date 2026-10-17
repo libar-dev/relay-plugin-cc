@@ -252,10 +252,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
         const name = first.text.slice(1).trim().split(' ')[0];
         if (name && !name.includes('/')) { state.commands = [...(state.commands || []), name]; save(); update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Unknown ACP command: /' + name + '. Use /help to see available commands.' } }); reply({ stopReason: 'end_turn' }); break; }
       }
-      if (options.noRecord) { reply({ stopReason: 'end_turn' }); break; }
       // Prompts in the order they arrive, over every process; true means the first.
       state.prompts = (state.prompts || 0) + 1; save();
       const nth = value => value === true ? 1 : value;
+      // Kimi answers and never records it: every prompt for true, or only the one numbered.
+      if (options.noRecord === true || (options.noRecord && state.prompts === options.noRecord)) { reply({ stopReason: 'end_turn' }); break; }
       // The process dies before Kimi records the prompt: it never reached the session.
       if (options.dieBeforeRecord && state.prompts === nth(options.dieBeforeRecord)) { setTimeout(() => { console.error('fake kimi death'); process.exit(17); }, 30); break; }
       const text = blocks.filter(part => part.type === 'text').map(part => part.text).join('');

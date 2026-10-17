@@ -9,7 +9,7 @@ import { KimiFileReads } from "../plugins/relay/scripts/lib/backends/kimi/files.
 import { spawnSync } from "node:child_process";
 import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
-import { isWorkerAlive } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
+import { isWorkerAlive, readLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 import { readProcessStartTime } from "../plugins/relay/scripts/lib/util/process.mjs";
 import { companion, finishJob, jobDir, promptFile, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 import { makeTempDir } from "./support/helpers.mjs";
@@ -157,6 +157,65 @@ test("a prompt Kimi accepted but never shows starting fails after the idle grace
   assert.equal(ctx.kimi().starts.length, 2, "one server per send");
   assert.match(companion(ctx, ["status", id]).stdout, /dropped/);
 });
+
+const STOP_AFTER_TEARDOWN = new URL("./support/stop-after-teardown.cjs", import.meta.url).pathname;
+
+// The worker gives up on a prompt Kimi never shows starting; it dies right after one of the
+// writes that record that, and a resume follows. Whichever write it reached, the prompt is
+// never sent again, and the job's accounting says why.
+for (const source of ["brief", "continue"]) {
+  test(`a teardown survives a worker killed after any of its writes (${source}): dropped, not owed, its delivery record kept, sent once`, async t => {
+    const text = "[quick] Never resend this.";
+    const killed = [];
+    for (const after of [0, 1, 2, 3]) {
+      const ctx = fixture(t, { noRecord: source === "brief" ? 1 : 2 });
+      const marker = path.join(ctx.root, `stopped-${after}`);
+      const stop = { NODE_OPTIONS: `--require=${STOP_AFTER_TEARDOWN}`, RELAY_TEST_STOP_FILE: marker, RELAY_TEST_STOP_AFTER: String(after), RELAY_TEST_STOP_WHEN: "Kimi accepted the message" };
+      let id;
+      if (source === "brief") {
+        Object.assign(ctx.env, stop);
+        ({ id } = startJob(ctx, HEADER, text));
+      } else {
+        ({ id } = startJob(ctx, HEADER, "[quick] First."));
+        await finishJob(ctx, id);
+        Object.assign(ctx.env, stop);
+        assert.equal(companion(ctx, ["continue", id, "--message", text]).status, 0);
+      }
+      // Stopped right after that write, or, where fewer writes follow, ended on its own.
+      await waitFor(() => fs.existsSync(marker) || (readJob(ctx, id).state === "failed" && !readLease(jobDir(ctx, id))));
+      if (fs.existsSync(marker)) {
+        killed.push(after);
+        const { pid } = JSON.parse(fs.readFileSync(marker, "utf8"));
+        process.kill(pid, "SIGKILL");
+        await waitFor(() => { try { process.kill(pid, 0); return false; } catch { return true; } });
+      }
+      for (const name of Object.keys(stop)) delete ctx.env[name];
+      assert.equal(companion(ctx, ["resume", id, "--message", "[quick] Resume."]).status, 0);
+      await finishJob(ctx, id);
+      const what = `${source}, killed after write ${after}`;
+      assert.equal(sentWith(ctx, text), 1, `${what}: sent once`);
+      const job = readJob(ctx, id);
+      assert.equal(job.state, "completed", what);
+      assert.equal(report(ctx, id), "Report for: [quick] Resume.\n", what);
+      const failed = job.attempts.filter(attempt => attempt.teardown);
+      assert.equal(failed.length, 1, what);
+      assert.equal(failed[0].state, "failed", what);
+      assert.match(failed[0].errorMessage, /^Kimi accepted the message/, what);
+      assert.equal(failed[0].teardown.source, source, what);
+      assert.equal(job.backendState.deliveries[failed[0].teardown.clientId].text, text, `${what}: the delivery record stays`);
+      if (source === "brief") {
+        assert.equal(failed[0].teardown.clientId, `brief-${id}`, what);
+        assert.equal(job.pendingFirstTurn, false, what);
+      } else {
+        const messageId = failed[0].teardown.messageId;
+        assert.equal(readOutcome(jobDir(ctx, id), messageId).action, "dropped", what);
+        assert.equal(job.messages.filter(entry => entry.id === messageId && entry.action === "dropped").length, 1, what);
+      }
+    }
+    // The failed attempt's write, and each write after it up to the round's end, was a kill point.
+    assert.deepEqual(killed, [0, 1, 2, 3]);
+  });
+}
 
 test("a steer runs as the next turn: nothing is sent while a turn runs", async t => {
   const ctx = fixture(t, { turnMs: 600 });

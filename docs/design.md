@@ -610,7 +610,9 @@ binaries and never start a real backend.
   not count. When those run out, the job fails: Kimi accepted the message, but its start is not
   confirmed. The worker reports the message dropped (a brief is no longer owed), sends nothing
   more to that server and closes it, so the message is never sent twice; its delivery record
-  stays. A cancel of such a prompt cannot go over ACP, which cancels only a prompt it drives, so
+  stays. The failed attempt records that decision in the same write that fails it, and the next
+  round honours it before anything owed is worked out, so a worker death in between changes
+  nothing. A cancel of such a prompt cannot go over ACP, which cancels only a prompt it drives, so
   relay stops waiting and closes Kimi's server.
 - **Commands.** Kimi reads a prompt whose first text block starts with `/word` as one of its
   commands or skills, so a brief or message that starts with `/` goes after an empty text block.

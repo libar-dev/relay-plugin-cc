@@ -182,7 +182,11 @@ evidence and control state.
 - `teardown: true` says the backend took the prompt but cannot show that it started, and may
   still hold it. The job fails with `error`, the prompt's message is reported dropped (a brief is
   no longer owed), and the round ends: nothing more goes to that server, which the worker closes.
-  Work still queued stays owed.
+  Work still queued stays owed. The decision is durable: the write that fails the attempt also
+  records `teardown` on it (the delivery's `clientId`, the message id, the source) and clears a
+  brief's `pendingFirstTurn`. Every round rebuilds a missing `dropped` outcome from it before it
+  works out what is owed, so a worker killed after any later write never sends the prompt again.
+  The backend's delivery evidence stays.
 - `reasoningSummary` and `stderr` feed a foreground result. A backend that filters its transport
   diagnostics returns `stderr`; without it, a review uses the server's stderr.
 
