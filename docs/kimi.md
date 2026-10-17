@@ -232,7 +232,11 @@ still finds its place in another copy of the bundle.
 The facts marked [live] come from a probe run before any of the backend was written. Repeat it on
 every new Kimi version before you trust the backend on it.
 
-**The client.** A small Node ACP client: it spawns `kimi acp` in the work folder, writes
+**The client.** It is in [`scripts/kimi-probe/`](../scripts/kimi-probe/). `probe.mjs <scenario>
+<outdir>` runs one scenario in the signed-in home `KIMI_CODE_HOME` names (an unknown scenario
+lists them), and `p0-signed-out.mjs <outdir>` makes a fresh home under `<outdir>`; both run the
+binary `KIMI_BINARY` names. They start the real Kimi, so they are not part of `npm test`.
+`acp-lib.mjs` is a small Node ACP client: it spawns `kimi acp` in the work folder, writes
 newline-delimited JSON-RPC, and logs every message in both directions, stderr and the exit to a
 JSONL file with timestamps. It answers `session/request_permission` by a policy chosen per
 scenario (an `allow_once` option, a `reject_once` option, or `cancelled`) and answers any other
