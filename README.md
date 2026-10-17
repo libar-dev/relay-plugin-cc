@@ -289,8 +289,9 @@ before a closing server gets SIGTERM, a transport test with a 5-second child) an
 machine, for example with several suites running at once; each passes alone, so rerun a failure on
 an idle machine before reading it as a regression. Each test file's process keeps its temporary
 files under one `relay-test-run-*` directory in the temp directory, which `TMPDIR` points at, and
-removes it at exit once no test process runs from it; `RELAY_TEST_KEEP_TMP=1 npm test` keeps the
-directory of a file that failed. `npm run check` type-checks every script with TypeScript, without
+removes it at exit once no test process runs from it. A directory whose run was killed by a signal
+is removed by the next run once its recorded owner is gone. `RELAY_TEST_KEEP_TMP=1 npm test` keeps
+the directory of a file that failed. `npm run check` type-checks every script with TypeScript, without
 an installed Codex CLI.
 
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
