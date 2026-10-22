@@ -492,7 +492,7 @@ the worker answers `no-op` to one for another attempt (the window between `cance
 the message), and `cancel` checks again before it kills after the grace and under the lease for a dead worker. A
 starting job's first attempt counts as 1. A refusal signals and writes nothing and is `attempt-changed`. After
 `cancel` has killed the attempt it was asked to, it checks no more: a relay's `wait --auto-resume` can see the
-killed worker's job as dead and start a recovery, and the review of the first version found that a check there
+killed worker's job as dead and start a recovery, and the lead's reading of the first version found that a check there
 would leave that recovery running, the job uncancelled. Without `--attempt` nothing changes; `/relay:cancel` and the
 TaskStop hook pass none.
 
