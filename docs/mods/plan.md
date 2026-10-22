@@ -448,9 +448,9 @@ The later work, in this light:
   records the view, and `prompt.change {clear}` waking the viewed relay; measure stale views, rapid switches and
   several surfaces first), and, if the owner chooses it, the stop notice or the stop's cancel (a `turn.complete`
   hook that skips agents a TaskStop named; measured: `$.ui.log` and `$.ui.toast` draw it in the terminal).
-- **The release.** `suite.mjs run all` gains `typed`, terminal only: about 15 minutes for the four backends in one
-  run (each A job is sized by its backend's place). It drives the agent view with keys, so run it on an unloaded
-  machine; it waits for each key's effect but fails on a step that does not settle within its bound. The real-API
+- **The release.** `suite.mjs run all` gains `typed`, terminal only: about 35 minutes for the four backends in one
+  run (each A job is sized by its backend's place, so the slowest visit still finds the next A running). It drives the agent view with keys, so run it under the machine's
+  heavy-job lock, with the load low; it waits for each key's effect but fails on a step that does not settle within its bound. The real-API
   suite and the manual test script can type into a relay's view, interrupt it with Esc and redirect it; the
   guide should give the latency, Esc and `x to stop`. The docs that promise "within seconds" now say it for
   `SendMessage`, and give the typed line's latency.
