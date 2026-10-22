@@ -12,7 +12,7 @@ It complements T3 Code rather than competing with it. For a plain fan-out, T3's 
 fit. Relay is for dynamic workloads inside Claude Code: Workflow scripts and Claude orchestrators whose agents
 need another harness. A Workflow script can't call T3's tools.
 
-We're adding a Claude Code Mod to relay. In T3, its hooks and commands already work. What a Mod draws doesn't
+We're adding a Claude Code Mod to relay. Its hooks and commands work in Agent SDK hosts, so they should work in T3 too; we haven't tested that live yet. What a Mod draws doesn't
 show: `system/ui_status`, `ui_toast` and `ui_log` arrive in the stream with no handler, and module commands
 don't reach the picker. None of that is relay-specific; it affects every Mod.
 

@@ -32,8 +32,8 @@ Relay is adding a Claude Code Mod ([the plan](plan.md)). Its parts don't all wor
 
 | Part | Terminal and Desktop | T3 Code today |
 |---|---|---|
-| A `session.send` hook that wakes a relay when it is sent a message, so a steer arrives in about two seconds | works | works: event hooks run in Agent SDK hosts |
-| `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` answered by the module, with no model turn | works | works when typed: T3 shows the answer as an assistant message |
+| A `session.send` hook that wakes a relay when it is sent a message, so a steer arrives in about two seconds | works | expected: event hooks ran in Agent SDK tests; not yet tested in T3 |
+| `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` answered by the module, with no model turn | works | expected when typed: the SDK returns the answer as an assistant message, which T3's adapter displays (from reading its code); not yet tested in T3 |
 | A status line ("2 running · 1 owed") with `$.ui.status` | drawn | not shown: arrives as `system/ui_status`, with no handler |
 | Notices with `$.ui.toast` and `$.ui.log` | drawn | not shown: `system/ui_toast` and `system/ui_log`, with no handler |
 | A job board pane with `$.ui.open` | drawn | not placed: the SDK host attaches no surface (`no-surface`) |
@@ -42,9 +42,11 @@ Relay is adding a Claude Code Mod ([the plan](plan.md)). Its parts don't all wor
 
 ## What would help, smallest change first
 
-1. **Render `system/ui_status` and `system/ui_toast`** from the Claude stream. For example, show the status as a
-   chip on the thread and the toast as a transient notice. Relay's status line would then work in T3 with no
-   relay change.
+1. **Render `system/ui_status` and `system/ui_toast`** from the Claude stream, and attach a surface that says
+   so. For example, show the status as a chip on the thread and the toast as a transient notice. Rendering alone
+   isn't enough: a Mod checks `$.session.surfaces()` before it refreshes anything, and that list is empty in T3
+   today. With both changes, relay's status line would work in T3 with no relay change. What a surface
+   declaring status-only rendering would look like is a question for T3 and the Claude Code SDK.
 2. **Render `system/ui_log`** as a muted row in the thread. Claude Code documents these lines as visible to the
    person and not to the model.
 3. **List module commands in the picker.** Read them from the session's `commands_changed` message, or run the

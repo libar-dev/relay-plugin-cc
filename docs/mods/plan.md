@@ -17,7 +17,7 @@ or in Desktop.
 
 1. **Terminal and Desktop come first, and T3 Code is supported where it can be.** Most relay users don't run it
    inside T3 Code. Everything the module draws targets the terminal and Desktop. What runs without drawing
-   (event hooks, commands) also works in T3 and other Agent SDK hosts.
+   (event hooks, commands) also works in Agent SDK hosts, and is expected to work in T3.
 2. **Relay agents should behave like Claude agents.** A main thread or an orchestrator should steer, continue,
    stop and spawn a `relay:job` agent with the same calls and the same results as a Claude subagent.
 3. **Everyone runs a current Claude Code.** The floor becomes the build the module is verified on, 2.1.307. No
@@ -94,7 +94,7 @@ guard delivers the message on the same path as before. This is the most complete
 
 - One trigger covers every sender: the main thread, an orchestrator subagent, a teammate, and the board's buttons,
   which use `$.session.send`.
-- It works on every surface, T3 included, because nothing is drawn.
+- It draws nothing, so it works in Agent SDK hosts too (tested). Phase 1's live suite confirms it in T3.
 - Delivery keeps one path, the guard's ledger. Nothing else posts a message, so nothing can deliver it twice.
 
 The plans' alternatives were weaker. Sol and Astra planned separate direct steer commands with their own
@@ -116,8 +116,11 @@ means: Kimi runs it as the next turn, and the board and the docs say so.
 - `cli/wake.mjs` (new): finds the relay pointer for the agent (`readRelayPointer`, `lib/harness/relay.mjs:292`;
   `findRelayJob`, `:312`) and writes `<jobDir>/relay-wake.json` when the job is not terminal. Otherwise it exits 0
   and writes nothing.
-- `cli/wait.mjs:41-68`: under `--exit-zero-while-running`, leaves with the "still running" line when the marker is
-  newer than the wait's start. `lib/jobs/store.mjs:93` `jobPaths` gets the marker path.
+- A wake stays pending until a guard check covers it. The guard records the time it read the transcript
+  (`<jobDir>/relay-wake-checked.json`) before it delivers. `cli/wait.mjs:41-68`, under `--exit-zero-while-running`,
+  leaves with the "still running" line while a marker is newer than the last check. The wait's own start time
+  plays no part. A message sent between the guard's read and the next `wait` keeps its marker pending, and that
+  wait returns at once instead of running out its bound. `lib/jobs/store.mjs:93` `jobPaths` gets both paths.
 - Floor: README, CHANGELOG and design.md move to Claude Code 2.1.307. Design.md's "The relay needs no Claude Code
   mod" is replaced by what the module does.
 - **On the branch only:** the 120-second wait. The PR's last commit raises it to 540 seconds (the guard sets the
@@ -125,8 +128,10 @@ means: Kimi runs it as the next turn, and the board and the docs say so.
 
 Acceptance, all on the Fedora machine:
 - Unit: `wake` writes the marker for a running job's relay, and writes nothing for an unknown agent, a terminal
-  job or a missing jobs home. `wait` returns within 2 s of a newer marker, ignores an older one, and ignores
-  markers without the flag.
+  job or a missing jobs home. `wait` returns within 2 s of a marker newer than the last guard check, waits on
+  through one the guard has covered, and ignores markers without the flag. A marker written after the guard's
+  read but before the next `wait` starts makes that wait return at once. This test must pass before the wait
+  grows to 540 seconds.
 - Mod test kit: the hook calls `next` once and returns its result unchanged. It resolves a name through
   `$.agent.list()`. A thrown `process.run` doesn't change the send's result.
 - Live suite, in the terminal and in T3: for each backend, a steer of a running job reaches `inbox/relay/` within
@@ -135,8 +140,13 @@ Acceptance, all on the Fedora machine:
 
 ## Phase 2: commands that answer without a model turn (one PR)
 
-`/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` answer in under a second, cost no tokens
-and show the companion's output exactly. Today `status.md` and `result.md` ask a model to render or repeat that
+`/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` start no model turn, cost no tokens and
+show the companion's output exactly. How long a command takes is the companion's time, not a turn's.
+`status` and `result` take under a second. `cancel` can take more than 10 seconds: it waits
+`RELAY_JOBS_CANCEL_GRACE_MS` (10 s) before it kills the worker. `transfer` waits up to two minutes for Codex's
+import (`lib/backends/codex/transfer.mjs:11`). Each handler's `$.process.run` timeout is set above its command's
+own deadline, at 60 s for `cancel` and 180 s for `transfer`, so the module never cuts off a cancel or a transfer
+that would have succeeded. Today `status.md` and `result.md` ask a model to render or repeat that
 output, and all four cost a turn. (`transfer` wasn't in the delegates' plans; it follows the same pattern of
 running the companion and showing its output.)
 
@@ -297,8 +307,10 @@ The funding principles ([funding.md](funding.md)) add no product feature. Four p
 
 ## T3 Code
 
-T3 runs the module's hooks and commands, so Phases 1 to 3 work there. Phase 4's drawing needs T3 to render the
-`ui_*` messages. [t3-code.md](t3-code.md) explains what relay would need from T3 and why relay complements T3's
+In Agent SDK runs, the module's hooks and commands work, so Phases 1 to 3 are expected to work in T3 as well.
+Phase 1's and Phase 2's live suites confirm that in T3 itself; no plan tested it there. Phase 4 needs two things
+from T3: it has to render the `ui_*` messages, and it has to attach a surface. The module refreshes the status
+line only while `$.session.surfaces()` is non-empty. [t3-code.md](t3-code.md) explains what relay would need from T3 and why relay complements T3's
 own delegates. It is the article to link from a post to the T3 community.
 
 ## Open questions
