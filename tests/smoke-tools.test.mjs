@@ -833,7 +833,8 @@ test('pane pid prints the pane process id on a private tmux socket', async t => 
 
 test('pane start runs in its folder after the folder a tmux server started from is deleted', async t => {
   const dir = fs.realpathSync(fs.mkdtempSync('/tmp/relay-pane-cwd-test-'));
-  const env = { ...process.env, XDG_RUNTIME_DIR: dir };
+  // pane.sh starts the first server with no -f; a private HOME keeps the user's tmux configuration out of it.
+  const env = { ...process.env, XDG_RUNTIME_DIR: dir, HOME: dir, XDG_CONFIG_HOME: dir };
   const socket = path.join(dir, 'claude-tmux/tmux.sock');
   t.after(() => {
     spawnSync('tmux', ['-S', socket, 'kill-server']);
@@ -842,27 +843,33 @@ test('pane start runs in its folder after the folder a tmux server started from 
   const pane = (cwd, ...args) => spawnSync('bash', [path.join(root, 'scripts/smoke/pane.sh'), ...args], { env, cwd, encoding: 'utf8' });
   const target = path.join(dir, 'target'), caller = path.join(dir, 'caller'), script = path.join(dir, 'record.cjs');
   fs.mkdirSync(target);
-  fs.writeFileSync(script, 'require("node:fs").writeFileSync(process.argv[2], process.cwd()); setInterval(() => {}, 1000);');
+  fs.writeFileSync(script, 'const fs = require("node:fs"); fs.writeFileSync(process.argv[2] + ".tmp", ' +
+    'JSON.stringify({ cwd: process.cwd(), pid: process.pid })); fs.renameSync(process.argv[2] + ".tmp", process.argv[2]); ' +
+    'setInterval(() => {}, 1000);');
   const recorded = async name => {
     const file = path.join(dir, name), deadline = Date.now() + 5000;
     while (!fs.existsSync(file) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
-    return fs.readFileSync(file, 'utf8');
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
   };
   // pane.sh starts the server from its socket's folder, so deleting the caller's folder strands nothing.
   fs.mkdirSync(caller);
   const first = pane(caller, 'start', 'first', target, '--', process.execPath, script, path.join(dir, 'first'));
   assert.equal(first.status, 0, first.stderr);
-  assert.equal(await recorded('first'), target);
+  const firstRecord = await recorded('first');
+  assert.equal(firstRecord.cwd, target);
+  assert.equal(pane(dir, 'pid', 'first').stdout.trim(), String(firstRecord.pid));
   fs.rmSync(caller, { recursive: true });
   const direct = spawnSync('tmux', ['-S', socket, 'new-session', '-d', '-s', 'direct', '-c', target, '--',
     process.execPath, script, path.join(dir, 'direct')], { env, encoding: 'utf8' });
   assert.equal(direct.status, 0, direct.stderr);
-  assert.equal(await recorded('direct'), target);
+  assert.equal((await recorded('direct')).cwd, target);
   // A server another caller started from a folder since deleted: the pane's command enters its folder itself.
-  spawnSync('tmux', ['-S', socket, 'kill-server']);
-  for (const deadline = Date.now() + 5000; fs.existsSync(socket) && Date.now() < deadline;) {
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
+  const server = Number(spawnSync('tmux', ['-S', socket, 'display-message', '-p', '#{pid}'], { env, encoding: 'utf8' }).stdout);
+  assert.ok(server > 0);
+  assert.equal(spawnSync('tmux', ['-S', socket, 'kill-server'], { env }).status, 0);
+  const alive = () => { try { process.kill(server, 0); return true; } catch { return false; } };
+  for (const deadline = Date.now() + 5000; alive() && Date.now() < deadline;) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(alive(), false);
   fs.mkdirSync(caller);
   const stranded = spawnSync('tmux', ['-S', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'stranded', '--',
     process.execPath, '-e', 'setInterval(() => {}, 1000)'], { env, cwd: caller, encoding: 'utf8' });
@@ -870,5 +877,7 @@ test('pane start runs in its folder after the folder a tmux server started from 
   fs.rmSync(caller, { recursive: true });
   const second = pane(dir, 'start', 'second', target, '--', process.execPath, script, path.join(dir, 'second'));
   assert.equal(second.status, 0, second.stderr);
-  assert.equal(await recorded('second'), target);
+  const secondRecord = await recorded('second');
+  assert.equal(secondRecord.cwd, target);
+  assert.equal(pane(dir, 'pid', 'second').stdout.trim(), String(secondRecord.pid));
 });
