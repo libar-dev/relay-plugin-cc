@@ -8,8 +8,7 @@ independent plans in this directory:
 - [gpt-6-astra.md](gpt-6-astra.md) (GPT-6 Astra, xhigh)
 
 All three followed the same brief, [BRIEF.md](BRIEF.md), and checked the preliminary research
-(`libar-infra/docs/kontrapunkt-sample-inputs/relay-product-ideation-claude-mods.md`) against the code and the
-2.1.307 declarations. The evidence they cite under `/tmp/relay-mods-*` is local scratch and is not committed.
+([summary](preliminary-research.md)) against the code and the 2.1.307 declarations. The evidence they cite under `/tmp/relay-mods-*` is local scratch and is not committed.
 Parts of it hold local job data. The brief framed the work around one user's T3 Code setup. The product
 decisions below replace that framing: relay is open source, and most of its users run Claude Code in a terminal
 or in Desktop.
@@ -31,6 +30,11 @@ or in Desktop.
    the wrong place for the guard and the right place for `session.send`, which no command hook sees.
 6. **One test machine.** All development and live testing run on the Fedora ThinkPad, which does nothing else
    meanwhile.
+7. **Every PR reviews the rest of the plan.** A phase's PR ends with a review of every later phase, in light of
+   what the PR learned: what the live suite showed, what the declarations or the code turned out to be, what was
+   harder or easier than planned. The review records which assumptions held, which phases change and why, and which
+   questions are new. Its last commit updates this file to match, so the plan on `main` is always the current one.
+   The PR body summarises the review.
 
 ## What the investigation established
 
@@ -205,7 +209,7 @@ a Mac before release (open question 2).
 Every acceptance step marked "live suite" above is a script, not a manual check. It runs on the Fedora machine
 against real backends and writes one record per check, naming the backend, model, relay version, Claude Code
 version, surface, result and timing. The suite grows with each phase. Its records are the evidence for a public
-capability table per backend, which the [funding notes](#impact-of-the-funding-notes) call for. The table shows
+capability table per backend, which the [funding principles](#impact-of-the-funding-notes) call for. The table shows
 only what the suite has passed.
 
 ## Phase 6: messages from a job (investigation, no code yet)
@@ -273,23 +277,19 @@ the kit owns history. They corrected these points:
 
 ## Impact of the funding notes
 
-`relay-funding-ideation.md` and its follow-up are about funding, and none of it adds a product feature. Four
-points affect this plan:
+The funding principles ([funding.md](funding.md)) add no product feature. Four points affect this plan:
 
 - **A capability matrix proved by tests** ("compatibility is earned by tests"). Phase 5 makes the live acceptance
   checks a scripted suite whose records back such a table. Its rows line up with this plan: steering during
   execution (Phase 1), continue (unchanged), stop (Phase 3), dynamic Workflow joining (Phase 3's spawn check),
   and agent-to-parent and agent-to-agent messages (Phase 6, unsupported until proven).
-- **A 60-to-90-second demo** of steering a running job while a second agent joins. It needs Phase 1's
+- **A short demo** of steering a running job while a second agent joins. It needs Phase 1's
   two-second steer to be watchable, and the board to be visible. That is one more reason the terminal board is in
   scope.
-- **Exact backend semantics** (the follow-up's point about Kimi). Kimi takes no mid-turn steer, and read-only
+- **Exact backend semantics.** Kimi takes no mid-turn steer, and read-only
   modes are not an OS sandbox. The board labels Kimi's message as "Queue next turn", and the matrix states the
   limit instead of marking it supported.
 - **No paid tier or paid UI.** The module and the board ship in the same open-source plugin.
-
-The NLnet CodeSupply idea (conformance and provenance metadata, deadline 3 November 2026) would extend Phase 5's
-records. It is a separate decision and not part of this plan.
 
 ## T3 Code
 
