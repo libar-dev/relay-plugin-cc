@@ -118,6 +118,12 @@ Phase 6, an investigation (the plugin does not change):
   Kimi allow for a job that sends a message to the agent that started it, or to a peer, and how such a message
   and its reply would travel. Messages from a job are not part of 3.0.
 
+Docs:
+
+- [docs/desktop.md](../../docs/desktop.md): relay in the Code tab of the Claude desktop app. It covers what runs
+  there, installing with the CLI (the app loads what the CLI installs), the permission modes, a check that it works,
+  and how to try a build in one folder. Checked on a Mac in Claude for Mac 3.6556.1 with relay 3.0.0-dev.4.
+
 ## 2.2.0 (2026-10-22)
 
 From a survey of every T3 Code thread on three machines, about 360 relay jobs from 17 to 22 October,
