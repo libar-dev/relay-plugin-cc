@@ -18,7 +18,8 @@ Entries are never edited after the fact. A reversed decision gets a new entry th
 
 ## Open for the owner
 
-None.
+- **What confirms the release candidate before the owner's manual testing** (D60, part 11). Read for now as the
+  automated checks passing on the release candidate; to confirm with the owner at that step.
 
 ## Entries
 
@@ -451,3 +452,57 @@ Phase 4's to decide, with a live check of both cases from the lead's session, ju
 attempts. `C steer` and `C continue` already reach a job without its relay. The same fork carries the message
 `cancel` to a Workflow relay, which the Phase 3 branch's D42 and D44 rely on. Phase 3's checks should measure it
 (the Phase 3 thread was told); if none does, the release does.
+
+### D60. How relay 3.0 is reviewed, proved and released (owner, 22 October 2026)
+
+The owner's decisions after PR #12, in parts. What they touch:
+
+- **D3 and D54.** D54's route, the M3 through Cua Driver, now takes the CLI's screenshots as well as Desktop's.
+  D3's manual Desktop pass of the board stands there, with screenshots of every user-facing feature beside it,
+  the board's included (part 4).
+- **The steering demo.** The release gate "a recording of the steering demo the funding notes ask for" is dropped
+  (part 3).
+
+release-3.0.md's "Sequence" and "What the release PR must pass" follow these parts.
+
+The parts:
+
+1. **Phase PRs.** Each merges into `release/3.0` once its gates pass, with a merge commit.
+2. **The release PR** is its own PR, `release/3.0` into `main`, with the whole procedure: 3.0.0 everywhere
+   `scripts/bump-version.mjs` sets it, the marketplace included; a dated CHANGELOG; a git tag and a GitHub release.
+   It merges only on the owner's word. There is no npm release: `package.json` is private, and users install relay
+   from the marketplace in this repository (`claude plugin marketplace add libar-dev/relay-plugin-cc`), which
+   serves `main`.
+3. **No demo recording for 3.0.** Feature screenshots and a user guide replace it.
+4. **Screenshots of every user-facing feature**, in the Claude Code CLI and in the Claude desktop app, as proofs
+   for the reviews. They are taken on the M3 with Cua Driver, since window screenshots fail on the ThinkPad, and
+   they stay local, since they show the account and session names. The status line and the board are captured
+   once they are built: the CLI in a narrow and a wide terminal, and Desktop.
+5. **A holistic review of the whole `release/3.0` branch** once Phase 4 is merged, before the release PR: GPT-6
+   Astra at `xhigh`, as a T3 Code delegate, not a relay job.
+6. **A UX and UI review by Opus 5.5** of the user-facing surfaces, with the screenshots: the commands' output, the
+   status line, the board (a narrow and a wide terminal, and Desktop), the README, `docs/desktop.md` and the user
+   guide.
+7. **A review of every skill the plugin ships by GPT-6 Astra**, and of the skills it is missing:
+   `plugins/relay/skills/` (jobs with `internals.md`, `grok-home.md` and `kimi-home.md`; codex-prompting with its references;
+   result-handling), `agents/job.md` and `commands/`. Opus 5.5 makes the skill updates.
+8. **A test-coverage review by Kimi K3 at max effort**, as a T3 Code delegate.
+9. **A real-API end-to-end suite gates the release.** The unit tests mock the backends; this suite runs the real
+   ones.
+   - It is run by hand, locally only, not in CI.
+   - It lives in the private smoke kit repository, `libar-dev/relay-plugin-cc-smoke`, which keeps its two research
+     tools, the Apify CLI and the Firecrawl CLI.
+   - It covers a dynamic Workflow, a plain fan-out with the Agent tool, tool calls from jobs, steering and
+     continue, cancel and TaskStop, a refused header, the commands the module answers, the status line and the
+     board once built, and every backend.
+   - It runs on the release head, on Fedora and on a Mac through cmux. Its last run was on 3.0.0-dev.1, and parts
+     of it are stale: `hi-refused` is now refused at the spawn.
+10. **T3 Code screenshots for the post to the T3 community** ([t3-code.md](t3-code.md),
+    [t3-code-discord-post.md](t3-code-discord-post.md)): relay in a T3 thread on the M3 (a command's output, a
+    steered job, a Workflow relay), beside what T3 does not draw (the status line and the board).
+11. **A manual test script for the owner.** Once the release candidate is confirmed, the owner tests it by hand on
+    one Mac and on Fedora at the same time, and the M1 stays on the released relay as a fallback. One feature
+    walkthrough feeds both the script, each step with its expected result, and the user guide, with screenshots
+    that explain the features.
+12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
+    owner decides.
