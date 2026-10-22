@@ -11,6 +11,16 @@ A `relay:job` agent runs one job and returns the job report verbatim. Launch it 
 Agent({ subagent_type: "relay:job", description: "<3-5 words>", prompt: "<header>\n---\n<brief>", run_in_background: true })
 ```
 
+## Relay or a T3 Code delegate
+
+In a T3 Code thread (the `t3-code` MCP server's tools are there, `delegate_task` among them), consider a T3 delegate first for a plain fan-out of independent agents: reviews, research, one-off fixes. T3 runs each child as a thread of its own, on any provider and model in its catalog with that model's options, tracks it with `task_status`, and wakes the lead when it ends. No Claude relay holds a slot or spends Claude usage while the child works.
+
+Use `relay:job` for:
+
+- the jobs of a dynamic workflow: a Workflow script cannot call T3's tools;
+- a job that needs relay itself: a header's `mode` and `web-search`, steering a running turn, continuing the session, adoption on `resumeFromRunId`, or the state block a script reads;
+- every job outside T3 Code, in the plain Claude Code harness.
+
 ## The prompt
 
 Header lines of `key: value`, a line `---`, then the brief, which reaches the job byte for byte. Only the header sets the job: "do not edit files" in a brief leaves `mode` as it is.
