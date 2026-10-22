@@ -104,6 +104,7 @@ export function jobPaths(jobDir) {
     outcomes: path.join(jobDir, "inbox", "outcomes"),
     attempts: path.join(jobDir, "attempts"),
     lease: path.join(jobDir, "worker.lease"),
+    wake: path.join(jobDir, "relay-wake.json"),
     // The job's current relay binding, written when a re-spawned relay takes the job over.
     // job.json keeps the binding at creation: the worker is its only writer while it lives
     // and holds its own copy, so a later binding lives here and is merged in by readJob.
