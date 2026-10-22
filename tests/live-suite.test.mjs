@@ -690,6 +690,39 @@ for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', '
   });
 }
 
+// Greptile: a session cut off while writing its transcript left no record, so the table kept an
+// older pass. The run now fails on record, after that pass.
+test('a sent run that cannot be analyzed writes failing records that hide an older pass', async t => {
+  const ctx = scratch(t);
+  const pluginDir = receipt(ctx);
+  const args = ['run', registry[1].id, '--plugin-dir', pluginDir, '--records-dir', ctx.recordsDir, '--backends', 'codex'];
+  const driver = cut => async (input, selected, { run }) => {
+    t.after(() => {
+      fs.rmSync(input.workDir, { recursive: true, force: true });
+      fs.rmSync(input.jobsHome, { recursive: true, force: true });
+    });
+    const file = path.join(input.evidenceDir, 'main.jsonl');
+    writeTranscript(file, entries(input.runId));
+    if (cut) fs.appendFileSync(file, '{"type":"assistant","message":{"content":[{"ty');
+    run.promptSentAt = start;
+    run.transcript = file;
+  };
+  assert.equal(await main(args, registry, readers, { env: ctx.env, log() {}, warn() {}, driver: driver(false) }), 0);
+  const warnings = [];
+  assert.equal(await main(args, registry, readers, { env: ctx.env, log() {}, warn: line => warnings.push(line), driver: driver(true) }), 1);
+  assert.match(warnings.join('\n'), /Invalid JSON at/);
+  const files = fs.readdirSync(ctx.recordsDir).sort();
+  assert.equal(files.length, 2);
+  const [failed] = readRecords(ctx.recordsDir).filter(record => record.result === 'fail');
+  assert.deepEqual(Object.keys(failed), recordKeys);
+  assert.match(failed.reason, /^The run could not be analyzed: Invalid JSON at /);
+  assert.doesNotMatch(JSON.stringify(failed), /\/tmp\/|\/home\//);
+  assert.ok(Date.parse(failed.finishedAt) > Date.parse(readRecords(ctx.recordsDir).find(record => record.result === 'pass').finishedAt));
+  const table = renderTable(readRecords(ctx.recordsDir), registry, readers);
+  const row = table.split('## T3 Code')[0].split('\n').find(line => line.startsWith(`| ${registry[1].title} |`));
+  assert.equal(row.split(' | ')[1], '—');
+});
+
 test('run all executes checks serially in fresh work and jobs folders and canonical backend order', async t => {
   const ctx = scratch(t);
   const pluginDir = receipt(ctx);

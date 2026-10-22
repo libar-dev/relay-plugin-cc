@@ -173,6 +173,27 @@ function withoutPaths(value, replacements) {
   return value;
 }
 
+function cleaner(run, root) {
+  const replacements = [[os.homedir(), '~'], [root, '<evidence>'],
+    [fileURLToPath(new URL('../../../', import.meta.url)).replace(/\/$/, ''), '<repo>'],
+    [os.tmpdir(), '<tmp>'], ['/tmp', '<tmp>'], [run.workDir, '<work>'], [run.jobsHome, '<jobs>']]
+    .filter(([source]) => source).sort((a, b) => b[0].length - a[0].length);
+  return value => withoutPaths(value, replacements);
+}
+
+// A run that sent its prompt and then could not be analyzed (a transcript cut off in the middle of
+// a line, say) still fails on record, timed at the failure, so the table stops showing an older
+// pass for it. The evidence folder keeps what the run left.
+export function unanalyzedRecords(run, message, readers, root = evidenceRoot(), now = new Date()) {
+  const clean = cleaner(run, root);
+  return readers.BACKENDS.filter(backend => run.backends.includes(backend)).map(backend => clean({
+    schema: 'relay.live-record/1', runId: run.runId, check: run.check, surface: run.surface, backend, model: null,
+    relayVersion: run.relayVersion ?? null, relayCommit: run.relayCommit ?? null, claudeCodeVersion: null,
+    leadModel: null, platform: run.platform ?? process.platform, startedAt: run.promptSentAt ?? null,
+    finishedAt: now.toISOString(), durationSeconds: null, delivery: null, timings: {}, result: 'fail',
+    reason: `The run could not be analyzed: ${message}`, evidence: `runs/${run.runId}` }));
+}
+
 export function makeRecords(run, check, analysis, entries, readers, root = evidenceRoot()) {
   entries = (check.scope ?? readers.scopeToRun)(entries, run.runId);
   const span = readers.runSpan(entries, run.runId, check.marker);
@@ -183,11 +204,7 @@ export function makeRecords(run, check, analysis, entries, readers, root = evide
   const entrypoint = entries.find(entry => !entry.isSidechain && entry.entrypoint)?.entrypoint ?? null;
   const expected = (check.entrypoints ?? { terminal: ['cli'], t3: ['sdk-ts'] })[run.surface] ?? [];
   const accepted = expected.includes(entrypoint);
-  const replacements = [[os.homedir(), '~'], [root, '<evidence>'],
-    [fileURLToPath(new URL('../../../', import.meta.url)).replace(/\/$/, ''), '<repo>'],
-    [os.tmpdir(), '<tmp>'], ['/tmp', '<tmp>'], [run.workDir, '<work>'], [run.jobsHome, '<jobs>']]
-    .filter(([source]) => source).sort((a, b) => b[0].length - a[0].length);
-  const clean = value => withoutPaths(value, replacements);
+  const clean = cleaner(run, root);
   return readers.BACKENDS.filter(backend => run.backends.includes(backend)).map(backend => {
     const result = analysis.results.find(row => row.backend === backend);
     let reason = result?.reason ?? (result ? null : run.error || `The check produced no result for ${backend}.`);

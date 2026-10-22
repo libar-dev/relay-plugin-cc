@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { analyzeRun, cancelUnfinishedJobs, configDirectory, createRun, evidenceRoot, pluginCommit, pluginVersion, readJson,
-  runDirectory, settingsGuard, smokeInstall, writeJson } from './lib/runs.mjs';
+  runDirectory, settingsGuard, smokeInstall, unanalyzedRecords, writeJson, writeRecords } from './lib/runs.mjs';
 import { runTerminal } from './lib/terminal.mjs';
 import { writeTable } from './lib/table.mjs';
 
@@ -167,6 +167,8 @@ export async function runChecks(options, registry, readers, { env = process.env,
         save();
         warn(error.message);
         status = 1;
+        const records = unanalyzedRecords(run, error.message, readers, evidenceRoot(env));
+        summaries({ records, file: writeRecords(run, records, evidenceDir, options.recordsDir) }, registry, log);
       }
     } else status = 1;
     if (run.interrupted) break;
