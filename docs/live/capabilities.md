@@ -18,7 +18,7 @@ holds the checks; the records below name the builds.
 | Answer /relay:transfer with no model turn | no model turn; imported in 0.9 s | n/a | n/a | n/a |
 | Answer /relay:result and /relay:status in claude -p with no model turn | num_turns 0; answered in 0.1 s | num_turns 0; answered in 0.1 s | num_turns 0; answered in 0.1 s | num_turns 0; answered in 0.1 s |
 | Stop a running job with TaskStop | cancelled in 0.3 s | cancelled in 0.2 s | cancelled in 0.3 s | cancelled in 0.4 s |
-| End the Claude session during a job; the job runs on | ran on and completed 151.3 s after the session ended | ran on and completed 147.5 s after the session ended | ran on and completed 166.3 s after the session ended | ran on and completed 152.9 s after the session ended |
+| End the Claude session during a job; the job runs on | ran on and completed 149.8 s after the session ended | ran on and completed 148.9 s after the session ended | ran on and completed 176.3 s after the session ended | ran on and completed 154.9 s after the session ended |
 | Spawn with a bad header fails at once | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs |
 
 ## T3 Code
@@ -72,10 +72,10 @@ holds the checks; the records below name the builds.
 | stop | terminal | grok | grok-4.7 | 3.0.0-dev.4 (7a0d4b7206a1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T151206Z-stop-terminal-e44f](records/20261022T151206Z-stop-terminal-e44f.jsonl) |
 | stop | terminal | zcode | glm-5.3-flash | 3.0.0-dev.4 (7a0d4b7206a1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T151206Z-stop-terminal-e44f](records/20261022T151206Z-stop-terminal-e44f.jsonl) |
 | stop | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.4 (7a0d4b7206a1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T151206Z-stop-terminal-e44f](records/20261022T151206Z-stop-terminal-e44f.jsonl) |
-| session-end | terminal | codex | gpt-6.1-sol | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150641Z-session-end-terminal-1ff5](records/20261022T150641Z-session-end-terminal-1ff5.jsonl) |
-| session-end | terminal | grok | grok-4.7 | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150641Z-session-end-terminal-1ff5](records/20261022T150641Z-session-end-terminal-1ff5.jsonl) |
-| session-end | terminal | zcode | glm-5.3-flash | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150641Z-session-end-terminal-1ff5](records/20261022T150641Z-session-end-terminal-1ff5.jsonl) |
-| session-end | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150641Z-session-end-terminal-1ff5](records/20261022T150641Z-session-end-terminal-1ff5.jsonl) |
+| session-end | terminal | codex | gpt-6.1-sol | 3.0.0-dev.4 (42e3c6e23384) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T154548Z-session-end-terminal-c9b8](records/20261022T154548Z-session-end-terminal-c9b8.jsonl) |
+| session-end | terminal | grok | grok-4.7 | 3.0.0-dev.4 (42e3c6e23384) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T154548Z-session-end-terminal-c9b8](records/20261022T154548Z-session-end-terminal-c9b8.jsonl) |
+| session-end | terminal | zcode | glm-5.3-flash | 3.0.0-dev.4 (42e3c6e23384) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T154548Z-session-end-terminal-c9b8](records/20261022T154548Z-session-end-terminal-c9b8.jsonl) |
+| session-end | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.4 (42e3c6e23384) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T154548Z-session-end-terminal-c9b8](records/20261022T154548Z-session-end-terminal-c9b8.jsonl) |
 | spawn-check | terminal | codex | gpt-6.1-sol | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150945Z-spawn-check-terminal-4b11](records/20261022T150945Z-spawn-check-terminal-4b11.jsonl) |
 | spawn-check | terminal | grok | grok-4.7 | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150945Z-spawn-check-terminal-4b11](records/20261022T150945Z-spawn-check-terminal-4b11.jsonl) |
 | spawn-check | terminal | zcode | glm-5.3-flash | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150945Z-spawn-check-terminal-4b11](records/20261022T150945Z-spawn-check-terminal-4b11.jsonl) |

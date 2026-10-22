@@ -331,7 +331,7 @@ TaskStop hook words a job that ended before its cancel:
 | Check | Terminal | T3 Code |
 |---|---|---|
 | `stop` | cancelled 0.2–0.4 s after the TaskStop | 0.2–0.4 s |
-| `session-end` | ran on, and completed 148–166 s after the session ended | terminal only |
+| `session-end` | ran on, and completed 148–176 s after the session ended | terminal only |
 | `spawn-check` | refused at the spawn with the parser's message, all four backends | the same |
 | `steer-main` | 2.4–4.4 s to the job's ledger | 1.5–6.4 s |
 | `steer-workflow`, `steer-plugin`, `continue` | 2.5–3.9 s | Phase 5's records stand |
