@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { analyzeRun, cancelUnfinishedJobs, configDirectory, createRun, evidenceRoot, pluginCommit, pluginVersion, readJson,
@@ -19,6 +20,22 @@ node scripts/live/suite.mjs table [--records-dir DIR] [--out FILE] [--relay-vers
 `;
 
 export class UsageError extends Error {}
+
+function selectedBackends(check, backends) {
+  const selected = backends.filter(backend => !check.backends || check.backends.includes(backend));
+  if (!selected.length) throw new UsageError(`${check.id} does not apply to any selected backend.`);
+  return selected;
+}
+
+async function setupRun(check, ctx, dependencies) {
+  if (!check.setup) return;
+  try { await check.setup(ctx, dependencies); }
+  catch (error) {
+    ctx.run.setupFailed = true;
+    ctx.run.error = `Setup failed: ${error.message}`;
+    throw new Error(ctx.run.error);
+  } finally { ctx.save(); }
+}
 
 export function parseArgs(args, registry, backends) {
   if (args.includes('--help') || args.includes('-h')) return { help: true };
@@ -67,13 +84,16 @@ export function parseArgs(args, registry, backends) {
       const check = registry.find(item => item.id === id);
       if (!check) throw new UsageError(`Unknown check: ${id}`);
       if (!check.surfaces.includes('terminal')) throw new UsageError(`${id} does not support terminal.`);
+      selectedBackends(check, options.backends);
     }
+    if (options.checks.length === 1) options.backends = selectedBackends(registry.find(check => check.id === options.checks[0]), options.backends);
     if (options.checks.length > 1 && (options.workDir || options.jobsHome)) throw new UsageError('--work-dir and --jobs-home require a single check.');
   } else if (command === 'prepare') {
     if (positional.length !== 1) throw new UsageError('prepare requires one check.');
     if (!registry.some(check => check.id === positional[0])) throw new UsageError(`Unknown check: ${positional[0]}`);
     if (options.surface !== 't3' || !options.workDir) throw new UsageError('prepare requires --surface t3 and --work-dir DIR.');
     options.checkId = positional[0];
+    options.backends = selectedBackends(registry.find(check => check.id === options.checkId), options.backends);
   } else if (command === 'analyze') {
     if (positional.length !== 1) throw new UsageError('analyze requires one run id.');
     try { runDirectory('', positional[0]); } catch (error) { throw new UsageError(error.message); }
@@ -112,7 +132,7 @@ export async function runChecks(options, registry, readers, { env = process.env,
     if (!options.workDir) execFileSync('git', ['init', '--quiet', workDir]);
     fs.mkdirSync(jobsHome, { recursive: true });
     const { run, evidenceDir } = createRun(evidenceRoot(env), check, { surface: 'terminal',
-      backends: readers.BACKENDS.filter(backend => options.backends.includes(backend)), workDir: fs.realpathSync(workDir),
+      backends: selectedBackends(check, readers.BACKENDS.filter(backend => options.backends.includes(backend))), workDir: fs.realpathSync(workDir),
       jobsHome: fs.realpathSync(jobsHome), workDirCreated: !options.workDir, jobsHomeCreated: !options.jobsHome,
       pluginDir, relayVersion, relayCommit: commitOf(pluginDir), model: options.model,
       timeoutMinutes: options.timeoutMinutes ?? check.timeoutMinutes,
@@ -127,8 +147,9 @@ export async function runChecks(options, registry, readers, { env = process.env,
         { run, save, readers, keep: options.keep, env, log, warn, ...overrides }) };
     let analysis, sessionFailed = false;
     try {
+      await setupRun(check, ctx, { env });
       if (check.runTerminal) {
-        analysis = await check.runTerminal(ctx);
+        analysis = await check.runTerminal(ctx, { env });
         // An override returning its analysis has completed its session work.
         run.promptSentAt ??= run.preparedAt;
         run.transcript ??= analysis?.evidence.transcripts[0] ?? null;
@@ -141,7 +162,7 @@ export async function runChecks(options, registry, readers, { env = process.env,
     } finally {
       const after = commitOf(pluginDir);
       if (run.relayCommit && after !== run.relayCommit) run.relayCommit = run.relayCommit.replace(/-dirty$/, '') + '-dirty';
-      if (run.promptSentAt && run.jobsHomeCreated && (sessionFailed || run.interrupted || run.completed === false)) {
+      if (!run.setupFailed && ((run.promptSentAt && run.jobsHomeCreated) || run.setup?.jobs) && (sessionFailed || run.interrupted || run.completed === false)) {
         try {
           const cancellations = await cancelJobs(run, { env });
           for (const item of cancellations.filter(item => item.status === 'failed')) {
@@ -191,8 +212,13 @@ export async function main(args, registry, readers, dependencies = {}) {
       if (!check.surfaces.includes('t3')) throw new Error(`${check.id} does not support t3.`);
       requireWorkTree(options.workDir);
       const build = smokeInstall(options.workDir, env);
-      const { run, evidenceDir } = createRun(evidenceRoot(env), check, { surface: 't3', backends: options.backends, ...build });
+      const { run, evidenceDir } = createRun(evidenceRoot(env), check, { surface: 't3', backends: options.backends, ...build,
+        ...(check.setup ? { jobsHome: path.resolve(env.RELAY_JOBS_HOME || path.join(os.homedir(), '.relay-jobs')), jobsHomeCreated: false } : {}) });
+      const save = () => writeJson(path.join(evidenceDir, 'run.json'), run);
+      await setupRun(check, { ...run, run, save, evidenceDir }, { env });
       log(`${run.runId}\n${path.join(evidenceDir, 'prompt.txt')}\n---\n${fs.readFileSync(path.join(evidenceDir, 'prompt.txt'), 'utf8').replace(/\n$/, '')}`);
+      if (check.commands) log('---\nAfter the marker, send each line below as its own message, in order; wait until the thread is idle after each:\n' +
+        check.commands(run).map(command => command.text).join('\n'));
       return 0;
     }
     if (options.command === 'analyze') {

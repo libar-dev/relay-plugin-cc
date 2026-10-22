@@ -69,10 +69,11 @@ export function pluginCommit(pluginDir) {
 }
 
 export async function cancelUnfinishedJobs(run, { env = process.env, execute = promisify(execFile) } = {}) {
-  if (!run.jobsHomeCreated || !run.promptSentAt) return [];
+  const owned = Object.values(run.setup?.jobs ?? {}).flatMap(jobs => Object.values(jobs));
+  if (!owned.length && (!run.jobsHomeCreated || !run.promptSentAt)) return [];
   const directories = dir => fs.readdirSync(dir, { withFileTypes: true })
     .filter(entry => entry.isDirectory()).map(entry => path.join(dir, entry.name));
-  const jobs = directories(run.jobsHome).flatMap(directories)
+  const jobs = (owned.length ? owned.map(job => path.resolve(run.jobsHome, job.jobDir)) : directories(run.jobsHome).flatMap(directories))
     .filter(dir => fs.existsSync(path.join(dir, 'job.json'))).sort();
   run.cancellations = [];
   for (const dir of jobs) {
@@ -197,10 +198,11 @@ export function unanalyzedRecords(run, message, readers, root = evidenceRoot(), 
 export function makeRecords(run, check, analysis, entries, readers, root = evidenceRoot()) {
   entries = (check.scope ?? readers.scopeToRun)(entries, run.runId);
   const span = readers.runSpan(entries, run.runId, check.marker);
+  if (check.commands) span.finishedAt = entries.findLast(entry => entry?.timestamp)?.timestamp ?? span.finishedAt;
   // A command-only scope need not contain a Live suite prompt.
   if (check.scope) span.startedAt ??= entries.find(entry => entry.timestamp)?.timestamp ?? null;
   const duration = span.startedAt && span.finishedAt ? (Date.parse(span.finishedAt) - Date.parse(span.startedAt)) / 1000 : null;
-  const completed = check.completed ? check.completed(entries) : Boolean(check.marker && readers.hasMarker(entries, check.marker));
+  const completed = check.completed ? check.completed(entries, run) : Boolean(check.marker && readers.hasMarker(entries, check.marker));
   const entrypoint = entries.find(entry => !entry.isSidechain && entry.entrypoint)?.entrypoint ?? null;
   const expected = (check.entrypoints ?? { terminal: ['cli'], t3: ['sdk-ts'] })[run.surface] ?? [];
   const accepted = expected.includes(entrypoint);
@@ -273,7 +275,7 @@ export function copyEvidence(run, analysis, evidenceDir) {
         } });
       jobCopies.set(source, target);
     }
-    for (const file of new Set([run.transcript, ...analysis.evidence.transcripts].filter(Boolean))) {
+    for (const file of new Set([run.transcript, ...analysis.evidence.transcripts, ...(analysis.evidence.files ?? [])].filter(Boolean))) {
       if (!available(file)) continue;
       const relative = relativeInside(path.dirname(run.transcript), file);
       let target = relative === null ? null : path.join(session, relative);
@@ -330,6 +332,7 @@ export function copyEvidence(run, analysis, evidenceDir) {
     }
     fs.rmSync(backup, { recursive: true, force: true });
     return { transcript: paths.has(run.transcript) ? finalPath(paths.get(run.transcript)) : null,
+      files: Object.fromEntries([...paths].map(([source, target]) => [source, finalPath(target)])),
       jobsHome: finalPath(jobsHome), manifest: path.join(copy, 'manifest.json'), originalJobDirs: [...jobCopies.keys()] };
   } finally { fs.rmSync(staging, { recursive: true, force: true }); }
 }
@@ -398,7 +401,13 @@ export function analyzeRun(run, evidenceDir, registry, readers, options = {}) {
   run.promptSentAt ??= readers.runSpan(entries, run.runId, check.marker).startedAt ??
     (check.scope ? entries.find(entry => entry.timestamp)?.timestamp : null) ?? run.preparedAt;
   const input = { runId: run.runId, backends: run.backends, surface: run.surface, transcript,
-    jobsHome: path.resolve(jobsHome), relayVersion: run.relayVersion, evidenceDir };
+    jobsHome: path.resolve(jobsHome), relayVersion: run.relayVersion, evidenceDir, run,
+    evidencePath: file => {
+      if (!options.fromCopy) return file;
+      const copied = run.copy?.files?.[file];
+      if (!copied) throw new Error('Cannot read command evidence: ENOENT.');
+      return copied;
+    } };
   const analysis = options.analysis ?? check.analyze(input);
   const records = makeRecords(run, check, analysis, allEntries, readers, path.dirname(path.dirname(evidenceDir)));
   if (!options.fromCopy) {

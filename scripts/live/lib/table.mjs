@@ -50,6 +50,7 @@ export function renderTable(records, registry, { BACKENDS, BACKEND_NAMES }, rela
     lines.push(`## ${title}`, '', row(['Check', ...BACKENDS.map(backend => BACKEND_NAMES[backend])]), '|---|---|---|---|---|');
     for (const check of registry.filter(item => item.surfaces.includes(surface))) {
       lines.push(row([check.title, ...BACKENDS.map(backend => {
+        if (check.backends && !check.backends.includes(backend)) return 'n/a';
         const record = latest.get(`${check.id}/${surface}/${backend}`);
         if (record?.result !== 'pass') return '—';
         shown.push(record);

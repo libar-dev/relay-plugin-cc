@@ -462,3 +462,88 @@ export function analyzeCheck(input, { source = 'main', messages, kind = 'steer',
   });
   return { results, details, evidence };
 }
+
+function commandInput(entry) {
+  if (!entry || entry.isSidechain || !(entry.type === 'user' ||
+      (entry.type === 'system' && entry.subtype === 'local_command'))) return null;
+  const text = entry.type === 'system' ? entry.content : textContent(entry.message?.content);
+  const match = typeof text === 'string' && text.match(/^<command-name>\/([^<\n]+)<\/command-name>[\s\S]*?<command-args>([\s\S]*?)<\/command-args>$/);
+  return match ? { command: match[1], args: match[2] } : null;
+}
+
+function commandBoundary(entry) {
+  if (!entry || entry.isSidechain) return false;
+  if (commandInput(entry)) return true;
+  const text = textContent(entry.message?.content);
+  if (text.includes('<task-notification>')) return true;
+  if (entry.type === 'attachment' && /task[_-]notification/.test(entry.attachment?.type ?? '')) return true;
+  return entry.type === 'user' && !entry.isMeta && Boolean(text) && !text.startsWith('<local-command-caveat>');
+}
+
+export function noModelReply(entries, command) {
+  return Boolean(command.answer && command.plugin === 'relay' &&
+    !entries.slice(command.inputIndex + 1, command.endIndex).some(entry => !entry.isSidechain &&
+      entry.type === 'assistant' && entry.message?.model !== '<synthetic>'));
+}
+
+export function commandRuns(entries, run = {}) {
+  const commands = [];
+  let previousAnswer = -1;
+  for (let i = 0; i < entries.length; i++) {
+    const input = commandInput(entries[i]);
+    if (!input) continue;
+    let endIndex = entries.findIndex((entry, index) => index > i && commandBoundary(entry));
+    if (endIndex < 0) endIndex = entries.length;
+    const answerIndex = entries.findIndex((entry, index) => index > i && index < endIndex && !entry.isSidechain &&
+      entry.type === 'system' && entry.subtype === 'local_command' &&
+      entry.commandRun?.command === input.command && entry.commandRun?.args === input.args);
+    const answer = answerIndex < 0 ? null : entries[answerIndex];
+    const enqueue = entries.slice(previousAnswer + 1, i).findLast(entry => !entry.isSidechain &&
+      entry.type === 'queue-operation' && entry.operation === 'enqueue');
+    const sent = run.commands?.[commands.length];
+    const startedAt = sent?.sentAt ?? enqueue?.timestamp ?? null;
+    const answeredAt = answer?.timestamp ?? null;
+    const seconds = (Date.parse(answeredAt) - Date.parse(startedAt)) / 1000;
+    const row = { ...input, input: entries[i], inputIndex: i, endIndex, answer,
+      plugin: answer?.commandRun?.plugin ?? null,
+      text: answer?.content?.match(/^<local-command-stdout>([\s\S]*)<\/local-command-stdout>$/)?.[1] ?? null,
+      startedAt, answeredAt, seconds: Number.isFinite(seconds) ? seconds : null };
+    row.noModelReply = noModelReply(entries, row);
+    commands.push(row);
+    if (answer) previousAnswer = answerIndex;
+  }
+  return commands;
+}
+
+export function moduleText(text) {
+  if (typeof text !== 'string') return null;
+  text = text.replace(/^relay: /, '');
+  const opening = text.match(/^\n(`{3,})text\n/);
+  if (!opening) return null;
+  const fence = opening[1], rest = text.slice(opening[0].length);
+  const end = rest.indexOf(`\n${fence}\n`);
+  if (end < 0) return null;
+  const verbatim = rest.slice(0, end + 1), tail = rest.slice(end + fence.length + 2);
+  if ((verbatim.match(/`+/g) ?? []).some(run => run.length >= fence.length)) return null;
+  if (tail && !tail.startsWith('---\n')) return null;
+  return { verbatim, report: tail ? tail.slice(4) : null };
+}
+
+export function statusRows(verbatim) {
+  const cells = line => {
+    if (!line.startsWith('|') || !line.endsWith('|')) return null;
+    return line.slice(1, -1).split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, '|'));
+  };
+  const lines = verbatim.split('\n');
+  const start = lines.findIndex(line => cells(line)?.[0] === 'job');
+  if (start < 0) return [];
+  const header = cells(lines[start]), separator = cells(lines[start + 1] ?? '');
+  if (!separator || separator.length !== header.length || !separator.every(cell => /^-+$/.test(cell))) return [];
+  const rows = [];
+  for (const line of lines.slice(start + 2)) {
+    const values = cells(line);
+    if (!values || values.length !== header.length) break;
+    rows.push(Object.fromEntries(header.map((key, index) => [key, values[index]])));
+  }
+  return rows;
+}

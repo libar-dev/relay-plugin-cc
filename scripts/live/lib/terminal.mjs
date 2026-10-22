@@ -108,7 +108,8 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
       }
       if (all) {
         const entries = (check.scope ?? readers.scopeToRun)(all, run.runId);
-        done = check.completed ? check.completed(entries) : Boolean(check.marker && screen.includes(check.marker) && readers.hasMarker(entries, check.marker));
+        done = check.commands ? readers.hasMarker(entries, check.marker) : check.completed ? check.completed(entries, run) :
+          Boolean(check.marker && screen.includes(check.marker) && readers.hasMarker(entries, check.marker));
         if (done) break;
       }
       if (Date.now() - lastUpdate >= 30000) {
@@ -116,6 +117,10 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
         lastUpdate = Date.now(); save();
       }
       await pause(2000);
+    }
+    if (done && check.commands) {
+      run.completed = false;
+      await runCommands(ctx, check, { run, save, readers, drive, pause, aborted: () => aborted });
     }
     run.completed = done;
     if (aborted) throw new Error('Interrupted.');
@@ -144,5 +149,47 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
         save();
       }
     }
+  }
+}
+
+export function sessionEnvironment(env = process.env) {
+  // pane.sh owns this list; read its case patterns without executing the tmux driver.
+  const source = fs.readFileSync(paneScript, 'utf8');
+  const patterns = source.match(/^        (CLAUDECODE\|[A-Z_*|]+)\)$/m)?.[1].split('|');
+  if (!patterns) throw new Error('Cannot read the parent-session variable list in pane.sh.');
+  const removed = Object.keys(env).filter(key => patterns.some(pattern =>
+    pattern.endsWith('*') ? key.startsWith(pattern.slice(0, -1)) : key === pattern)).sort();
+  return { env: Object.fromEntries(Object.entries(env).filter(([key]) => !removed.includes(key))), removed };
+}
+
+export async function runCommands(ctx, check, { run, save, readers, drive = pane, pause = delay,
+  aborted = () => false, now = Date.now } = {}) {
+  const answers = () => {
+    try {
+      return readers.readTranscript(run.transcript).filter(entry => !entry.isSidechain &&
+        entry.type === 'system' && entry.subtype === 'local_command' && entry.commandRun).length;
+    } catch (error) {
+      if (String(error.message).startsWith('Invalid JSON at ')) return null;
+      throw error;
+    }
+  };
+  run.commands = [];
+  for (const command of check.commands(run)) {
+    if (aborted()) throw new Error('Interrupted.');
+    const before = answers();
+    if (before === null) throw new Error('Incomplete transcript before command send.');
+    run.commands.push({ text: command.text, sentAt: new Date(now()).toISOString() });
+    save();
+    drive(['send', run.pane, command.text]);
+    const deadline = now() + 120000;
+    let answered = false;
+    while (now() < deadline && !aborted()) {
+      fs.writeFileSync(path.join(ctx.evidenceDir, 'screen.txt'), drive(['read', run.pane, '2000']));
+      const count = answers();
+      if (count !== null && count > before) { answered = true; break; }
+      await pause(1000);
+    }
+    if (aborted()) throw new Error('Interrupted.');
+    if (!answered) throw new Error(`No answer to ${command.text} within 120 seconds. Available evidence will be analyzed.`);
   }
 }
