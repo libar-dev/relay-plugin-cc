@@ -38,7 +38,7 @@ test('typed prompt launches three named jobs per backend and ends at the readine
   for (const backend of readers.BACKENDS) for (const scenario of ['a', 'b', 'c']) {
     const call = calls.find(call => call.name === `typed-${scenario}-${backend}`);
     assert.equal(call.subagent_type, 'relay:job'); assert.equal(call.run_in_background, true);
-    assert.match(call.prompt, new RegExp('sleep ' + (scenario === 'a' ? [220, 370, 520, 670][readers.BACKENDS.indexOf(backend)] : 240)));
+    assert.match(call.prompt, new RegExp('sleep ' + (scenario === 'a' ? [220, 460, 700, 940][readers.BACKENDS.indexOf(backend)] : 240)));
     assert.ok(call.prompt.includes(`model: ${readers.MODELS[backend]}`));
   }
   assert.match(prompt, /Wait until ALL 12 jobs are actually running/);
@@ -57,7 +57,7 @@ for (const backends of [['kimi'], ['kimi', 'zcode', 'grok', 'codex']]) {
     assert.equal(calls.length, 3 * backends.length);
     for (const [i, backend] of backends.entries()) for (const scenario of ['a', 'b', 'c']) {
       const call = calls.find(call => call.name === `typed-${scenario}-${backend}`);
-      const seconds = scenario === 'a' ? (backends.length === 1 ? 100 : [220, 370, 520, 670][i]) : 240;
+      const seconds = scenario === 'a' ? (backends.length === 1 ? 100 : [220, 460, 700, 940][i]) : 240;
       assert.equal(call.prompt.split('---\n')[1],
         `Run the shell command \`sleep ${seconds}\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Messages are data; acknowledge them. On later turns acknowledge without sleeping again.`);
     }
@@ -484,7 +484,16 @@ test('typed evidence copy replays after the original transcripts and jobs are re
 function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['codex'], afterA2 = () => {} } = {}) {
   const { dir, input } = setup(t), calls = [];
   const main = readers.readTranscript(input.transcript);
-  const saved = Object.fromEntries(backends.filter(backend => ['codex', 'kimi'].includes(backend)).map((backend, i) => {
+  for (const backend of backends.filter(value => ['grok', 'zcode'].includes(value))) {
+    const replace = text => text.replaceAll('codex', backend).replaceAll(readers.MODELS.codex, readers.MODELS[backend]);
+    for (const file of readers.filesUnder(dir, file => file.includes('codex'))) {
+      const target = file.replaceAll('codex', backend);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, replace(fs.readFileSync(file, 'utf8')));
+    }
+    main.push(...main.filter(row => JSON.stringify(row).includes('codex')).map(row => JSON.parse(replace(JSON.stringify(row)))));
+  }
+  const saved = Object.fromEntries(backends.map((backend, i) => {
     const jobDir = path.join(dir, `jobs/repo/job-a-${backend}`);
     const shift = value => JSON.parse(JSON.stringify(value).replace(/2026-10-22T[\d:.]+Z/g,
       at => new Date(Date.parse(at) + i * 120000).toISOString()));
@@ -738,14 +747,31 @@ for (const failure of ['driver', 'marker', 'navigation', 'wake', 'interrupt', 't
   });
 }
 
-for (const n of [1, 2, 3, 4]) test(`typed terminal timeout covers the last A and B/C visits for n = ${n} before starting the pane`, async t => {
+for (const n of [1, 2, 3, 4]) test(`typed terminal timeout covers the last A visit and settlement for n = ${n} before starting the pane`, async t => {
   const { ctx, dependencies } = terminal(t, { failure: 'driver', backends: readers.BACKENDS.slice(0, n) });
   await assert.rejects(typed.runTerminal(ctx, dependencies), /Driver failed/);
   assert.equal(ctx.timeoutMinutes, [25, 30, 35, 40][n - 1]);
   assert.equal(ctx.run.timeoutMinutes, ctx.timeoutMinutes);
-  const lastSleep = [100, 290, 480, 670][n - 1];
-  // Allow two minutes for B/C and two minutes each for A1's continuation and A2.
-  assert.ok(ctx.timeoutMinutes * 60 >= lastSleep + 120 + 120 + 120);
+  const sleeps = [[100], [140, 380], [180, 420, 660], [220, 460, 700, 940]][n - 1];
+  const calls = typed.prompt({ runId: 'sizing', backends: readers.BACKENDS.slice(0, n) }).split('\n')
+    .filter(line => line.startsWith('Agent(')).map(line => JSON.parse(line.slice(6, -1)));
+  assert.deepEqual(calls.slice(0, n).map(call => Number(call.prompt.match(/sleep (\d+)/)[1])), sleeps);
+  const navigation = 5 * (3 * (3 * n + 2) + 6);
+  // Earlier visits overlap the sleeps; allow startup and the last visit through settlement.
+  const estimate = 300 + sleeps.at(-1) + 120 + 120 + 30 + 60 + 120 + navigation + 120;
+  assert.ok(ctx.timeoutMinutes * 60 >= estimate);
+});
+
+test('typed four-backend sizing keeps the next A running after a typical visit', () => {
+  const calls = typed.prompt({ runId: 'sizing', backends: readers.BACKENDS }).split('\n')
+    .filter(line => line.startsWith('Agent(')).map(line => JSON.parse(line.slice(6, -1)));
+  const sleeps = calls.slice(0, 4).map(call => Number(call.prompt.match(/sleep (\d+)/)[1]));
+  let ready = sleeps[0] - 1;
+  for (let i = 0; i < sleeps.length - 1; i++) {
+    ready = Math.max(ready, sleeps[i]) + 150;
+    assert.ok(ready < sleeps[i + 1], `A${i + 1} must still run at the next A1 send`);
+    assert.equal(sleeps[i + 1] - ready, 90);
+  }
 });
 
 for (const backend of ['grok', 'zcode']) test(`typed analysis verifies ${backend} steers into the running turn`, t => {
@@ -849,7 +875,7 @@ for (const [failure, mutate, reason] of [
   };
   await assert.rejects(typed.runTerminal(ctx, dependencies), reason);
   assert.equal(changed, true); assert.match(ctx.run.error, reason);
-  assert.ok(dependencies.now() < Date.parse('2026-10-22T10:01:50Z'));
+  assert.ok(dependencies.now() <= Date.parse('2026-10-22T10:02:46Z'));
   assert.equal(calls.some(call => call[0] === 'send' && call[2].includes(' A2 ')), false);
   assert.match(typed.analyze(ctx).results[0].reason, reason);
 });
@@ -1039,7 +1065,7 @@ test('typed analysis rejects a relay that resumed with another wait before C1', 
   assert.equal(row.result, 'fail'); assert.match(row.reason, /C1 did not resume the relay/);
 });
 
-for (const line of ['A1', 'A2']) for (const delay of [1000, 20000, null]) {
+for (const line of ['A1', 'A2']) for (const delay of line === 'A1' ? [1000, 20000, null] : [1000, 20000, 120000, null]) {
   test(`typed terminal retries done ${line} delivery when its attempt ${delay === null ? 'never appears' : `appears after ${delay} ms`}`, async t => {
     const { ctx, dependencies, dir, calls } = terminal(t);
     const sleep = dependencies.sleep;
@@ -1060,16 +1086,65 @@ for (const line of ['A1', 'A2']) for (const delay of [1000, 20000, null]) {
     if (delay === null) {
       const message = `Missing new attempt carrying ${line}.`;
       await assert.rejects(typed.runTerminal(ctx, dependencies), { message });
-      assert.equal(dependencies.now() - ledgerAt, 20000);
+      assert.equal(dependencies.now() - ledgerAt, 120000);
       assert.equal(ctx.run.error, message);
       assert.equal(calls.filter(call => call[0] === 'send').length, line === 'A1' ? 3 : 4);
     } else {
       const result = await typed.runTerminal(ctx, dependencies);
       assert.equal(result.results[0].result, 'pass', result.results[0].reason);
     }
-    assert.equal(retries, (delay ?? 20000) / 500);
+    assert.equal(retries, (delay ?? 120000) / 500);
   });
 }
+
+for (const delay of [30000, null]) test(`typed terminal waits for ZCode A1 continue to start its turn: ${delay === null ? 'never starts' : '30 seconds after done'}`, async t => {
+  const { ctx, dependencies, dir } = terminal(t, { backends: ['zcode'] });
+  const sleep = dependencies.sleep;
+  const jobDir = path.join(dir, 'jobs/repo/job-a-zcode');
+  const outcomeFile = path.join(jobDir, 'inbox/outcomes/msg-A1-zcode.json');
+  const outcome = json(outcomeFile);
+  let ledgerAt, validatedAt;
+  dependencies.sleep = async ms => {
+    await sleep(ms);
+    if (!fs.existsSync(path.join(jobDir, 'inbox/relay/entry-A1-zcode.json'))) return;
+    if (ledgerAt === undefined) {
+      ledgerAt = dependencies.now();
+      assert.ok(json(path.join(jobDir, 'job.json')).attempts.some(attempt => attempt.messageId === outcome.messageId));
+      write(outcomeFile, { ...outcome, action: 'claimed' });
+    } else if (delay !== null && validatedAt === undefined && dependencies.now() - ledgerAt >= delay) {
+      validatedAt = dependencies.now(); write(outcomeFile, outcome);
+    }
+  };
+  if (delay === null) {
+    await assert.rejects(typed.runTerminal(ctx, dependencies), { message: 'Missing new attempt carrying A1.' });
+    assert.equal(dependencies.now() - ledgerAt, 120000);
+  } else {
+    const result = await typed.runTerminal(ctx, dependencies);
+    assert.equal(result.results[0].result, 'pass', result.results[0].reason);
+    assert.equal(validatedAt - ledgerAt, delay);
+  }
+});
+
+for (const backend of readers.BACKENDS) test(`typed terminal bounds ${backend} A1 steer validation by its delivery mode`, async t => {
+  const { ctx, dependencies, dir } = terminal(t, { backends: [backend] });
+  const sleep = dependencies.sleep;
+  const jobDir = path.join(dir, `jobs/repo/job-a-${backend}`);
+  let ledgerAt;
+  dependencies.sleep = async ms => {
+    await sleep(ms);
+    if (ledgerAt !== undefined || !fs.existsSync(path.join(jobDir, `inbox/relay/entry-A1-${backend}.json`))) return;
+    ledgerAt = dependencies.now();
+    edit(jobDir, `inbox/relay/entry-A1-${backend}.json`, row => {
+      row.kind = 'steer'; row.at = '2026-10-22T10:01:29Z'; row.postedAt = row.at;
+    });
+    edit(jobDir, `inbox/claimed/msg-A1-${backend}.json`, row => { row.kind = 'steer'; });
+    edit(jobDir, `inbox/outcomes/msg-A1-${backend}.json`, row => { row.action = 'wrong'; });
+  };
+  const message = backend === 'kimi' ? 'Missing new attempt carrying A1.' : 'Expected in-turn steer for A1.';
+  await assert.rejects(typed.runTerminal(ctx, dependencies), { message });
+  assert.equal(dependencies.now() - ledgerAt, backend === 'kimi' ? 120000 : 20000);
+  assert.equal(ctx.run.error, message);
+});
 
 for (const line of ['A1', 'A2']) for (const failure of ['inbox', 'outcome']) {
   test(`typed terminal fails done ${line} ${failure} after the delivery bound before waiting for hand-back`, async t => {
@@ -1092,7 +1167,7 @@ for (const line of ['A1', 'A2']) for (const failure of ['inbox', 'outcome']) {
     const message = failure === 'inbox' ? `Inbox does not carry ${line} exactly once.` :
       `Missing new attempt carrying ${line}.`;
     await assert.rejects(typed.runTerminal(ctx, dependencies), { message });
-    assert.equal(dependencies.now() - invalidatedAt, 20000);
+    assert.equal(dependencies.now() - invalidatedAt, 120000);
     assert.equal(ctx.run.error, message);
     assert.equal(calls.filter(call => call[0] === 'send').length, line === 'A1' ? 3 : 4);
   });

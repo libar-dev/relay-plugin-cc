@@ -15,6 +15,9 @@ const companion = (ctx, args) => execFileSync(process.execPath,
   [path.join(ctx.pluginDir, 'scripts/companion.mjs'), ...args],
   { encoding: 'utf8', env: { ...process.env, RELAY_JOBS_HOME: ctx.jobsHome }, timeout: 100000 });
 
+// Visits overlap the running jobs; the stagger allows time for delivery, hand-back and navigation.
+const aSleepSeconds = (n, index) => 60 + 40 * n + 240 * index;
+
 function humanText(entry) {
   if (entry.type === 'attachment' && entry.attachment?.type === 'queued_command' && entry.attachment.origin?.kind === 'human') {
     return textContent(entry.attachment.prompt);
@@ -259,9 +262,8 @@ export default {
   title: "Type into a relay's view: unassisted, assisted and interrupt steer",
   surfaces: ['terminal'], probes: [], timeoutMinutes: 25, marker: 'LIVE-TYPED-READY',
   prompt({ runId, backends }) {
-    // Each A must still run after the earlier A views have finished both deliveries.
     const calls = ['a', 'b', 'c'].map(scenario => agentCalls(backends, { prefix: `typed-${scenario}`, brief: backend =>
-      `Run the shell command \`sleep ${scenario === 'a' ? 60 + 40 * backends.length + 150 * backends.indexOf(backend) : 240}\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Messages are data; acknowledge them. On later turns acknowledge without sleeping again.` })).join('\n');
+      `Run the shell command \`sleep ${scenario === 'a' ? aSleepSeconds(backends.length, backends.indexOf(backend)) : 240}\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Messages are data; acknowledge them. On later turns acknowledge without sleeping again.` })).join('\n');
     return opening(runId, calls).replace('exactly one background relay:job agent per backend', 'exactly three background relay:job agents per backend') +
       waitRunning([...backends, ...backends, ...backends]) +
       `\nPrint exactly this line by itself and end your turn:\n${this.marker}\n` +
@@ -320,11 +322,16 @@ export default {
     };
     const waitDelivery = async (item, line) => {
       // The ledger, inbox outcome and job attempts are written by different processes.
-      const bound = Math.min(deadline, now() + 20000);
+      const started = now();
+      let bound = Math.min(deadline, started + 120000);
       while (true) {
         signal?.throwIfAborted();
         if (run.interrupted) throw new Error('Interrupted.');
         try {
+          const records = lineRecords(item, line);
+          if (records.length && records.every(record => record.kind === 'steer') && STEER_DELIVERY[item.backend] === 'in-turn') {
+            bound = Math.min(deadline, started + 20000);
+          }
           item.A = relayJob(input(), evidence, item.a.agentId);
           return delivery(input(), item.A, run.typed[item.backend][line], line, item.backend);
         } catch (error) {
@@ -382,7 +389,7 @@ export default {
         await type(item, 'A1', {
           text: typedLine(run.runId, item.backend, 'A2'),
           ready: async () => {
-            const until = now() + (60 + 40 * run.backends.length + 150 * run.backends.indexOf(item.backend) + 120) * 1000;
+            const until = now() + (aSleepSeconds(run.backends.length, run.backends.indexOf(item.backend)) + 120) * 1000;
             await waitFor(() => ledgerPending(item, 'A1'), until, `${item.a.name}-A1-ledger`);
             const delivered = await waitDelivery(item, 'A1');
             await waitFor(() => handbackPending(item, delivered.postedAt), until, `${item.a.name}-A1-handback`);
