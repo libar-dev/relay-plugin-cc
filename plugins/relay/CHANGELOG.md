@@ -1,8 +1,12 @@
 # Changelog
 
-## 2.3.0 (2026-10-22)
+## 3.0.0 (unreleased)
 
-Phase 1 of the Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)).
+The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5, built on the branch
+`release/3.0` ([docs/mods/release-3.0.md](../../docs/mods/release-3.0.md)). Each phase adds its
+entries here.
+
+Phase 1, steer wake:
 
 - A message to a running `relay:job` agent reaches the job within seconds. The plugin has a hooks
   module, `hooks/mod/register.js`, with one `session.send` hook: when a message is sent to a relay,

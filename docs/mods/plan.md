@@ -1,7 +1,9 @@
 # Relay and Claude Code Mods: the plan
 
-Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. Phase 1 is done in relay
-2.3.0, and the later phases were reviewed in its light ([After Phase 1](#after-phase-1-what-held-and-what-changed)).
+Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. Phase 1 is done on the
+branch `release/3.0`, and the later phases were reviewed in its light
+([After Phase 1](#after-phase-1-what-held-and-what-changed)). Phases 1 to 5 ship together as relay 3.0.0
+([release-3.0.md](release-3.0.md)); every decision taken on the way is in [decisions.md](decisions.md).
 It combines three independent plans in this directory:
 
 - [claude-opus-5-5.md](claude-opus-5-5.md) (Opus 5.5, high)
@@ -109,7 +111,7 @@ grows to 540 seconds, inside the Bash tool's 600-second maximum. A long job then
 quarter of the model calls it costs today, and steering stays as fast. The backend still decides what a steer
 means: Kimi runs it as the next turn, and the board and the docs say so.
 
-## Phase 1: the module, and steer wake (done: relay 2.3.0)
+## Phase 1: the module, and steer wake (done, on `release/3.0`)
 
 What shipped:
 
@@ -142,7 +144,7 @@ What shipped:
   `scripts/live/steer-wake.mjs` (the live steer check below).
 
 Live results on the Fedora machine, Claude Code 2.1.308 (`scripts/live/steer-wake.mjs` and its analyzer, Sonnet
-lead). The last terminal run and the T3 run used the final rule and relay 2.3.0:
+lead). The last terminal run and the T3 run used the final rule, on the build then numbered 2.3.0:
 
 | Surface | Sender | Backends | Delivered to `inbox/relay/` after the send |
 |---|---|---|---|
@@ -153,7 +155,7 @@ lead). The last terminal run and the T3 run used the final rule and relay 2.3.0:
 | T3 Code (Agent SDK host) | Main thread `SendMessage`, three rounds | Codex, Grok, ZCode, Kimi | 12 of 12, 1.5 to 6.7 s |
 
 Kimi took each steer as a next turn, as documented. The release smoke test (`relay-plugin-cc-smoke`) passed on
-the installed 2.3.0 build: the workflow's five agents, the plain fan-out with its refused header, and a steer
+the installed build (then 2.3.0): the workflow's five agents, the plain fan-out with its refused header, and a steer
 from the lead and from a Workflow agent.
 
 ## After Phase 1: what held and what changed
@@ -171,8 +173,8 @@ What changed, and where:
 
 - **The wake rule** (Phase 1, above): a marker counts against the boundary read from the transcript. Nothing
   later depends on the planned guard check.
-- **Other agents' messages** were never delivered before 2.3.0. An orchestrator subagent steering a relay, which
-  the steering table counts on, works only from 2.3.0.
+- **Other agents' messages** were never delivered before Phase 1. An orchestrator subagent steering a relay, which
+  the steering table counts on, works only from 3.0.0.
 - **Phase 4's Steer and Continue** must not depend on `$.agent.list()`. The declarations say the list holds no
   Workflow agent, and drops a subagent some time after it ends, which is when Continue is needed. The buttons
   send to the agent id the job records (`relay.agentId`, `relay.json` after an adoption) with
@@ -374,10 +376,7 @@ own delegates. It is the article to link from a post to the T3 community.
 
 ## Open questions
 
-1. **TaskStop:** Phase 3 makes a TaskStop on a relay agent cancel its job, which reverses a documented decision.
-   Is that what you want?
-2. **Desktop:** Fedora can't run Claude Desktop. Is the test kit's `desktop` mount enough, plus one manual pass on
-   a Mac before each release that changes the board?
-3. **Wait bound:** 2.3.0 waits 540 seconds, as this plan proposed, now that the wake is proven. It is one
-   constant (`RELAY_WAIT_SECONDS`, with the Bash timeout beside it). Say if you want another value under the
-   Bash tool's 600-second maximum.
+None is open. The three this plan asked were answered on 22 October 2026, and are recorded with their reasons
+in [decisions.md](decisions.md): a TaskStop on a relay agent cancels its job (Phase 3); the board's Desktop
+check is the test kit's `desktop` mount plus one manual pass on a Mac before release (Phase 4); the wait bound is
+540 seconds (Phase 1). New questions go to the decision log, and only product forks go to the owner.
