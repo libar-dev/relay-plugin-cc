@@ -6,7 +6,8 @@ usage() {
 Usage: install-local.sh DIR [--ref REF] [--repo PATH] [--worktree]
 Install relay@relay-smoke for DIR only. REF defaults to HEAD.
 The default build uses git archive and excludes uncommitted edits.
---worktree copies plugins/relay, including uncommitted edits, except .claude-plugin/types/.
+--worktree copies plugins/relay, including uncommitted edits, except the declarations Claude Code
+           writes there (.claude-plugin/types/ and tsconfig.json).
 --ref and --worktree cannot be combined. Requires bash, git, tar, node and claude.
 EOF
 }
@@ -56,7 +57,7 @@ short_sha=${sha:0:12}
 mkt=$(mktemp -d "${TMPDIR:-/tmp}/relay-smoke-mkt-${short_sha}-XXXXXX")
 mkdir -p "$mkt/relay" "$mkt/.claude-plugin"
 if [[ $worktree == true ]]; then
-  tar -C "$repo/plugins/relay" --exclude='./.claude-plugin/types' -cf - . | tar -C "$mkt/relay" -xf -
+  tar -C "$repo/plugins/relay" --exclude='./.claude-plugin/types' --exclude='./tsconfig.json' -cf - . | tar -C "$mkt/relay" -xf -
 else
   git -C "$repo" archive "$sha" plugins/relay | tar -C "$mkt/relay" --strip-components=2 -xf -
 fi
