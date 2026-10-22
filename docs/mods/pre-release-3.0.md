@@ -175,7 +175,9 @@ libar-infra. It keeps each machine's pin and checks the machine against it. The 
 runs, for reference.
 
 Before a switch: no Workflow running or waiting to be resumed, and no relay job `starting`, `running` or `dead`. Ask
-Claude to list them, with their Workflow runs, from `status --all --json`: the plain list is too long to read by eye.
+Claude to list them with their Workflow runs: the plain list is too long to read by eye. On pre.1,
+`status --all --json` lists every job. From pre.2, `status --all --active --json` lists only those jobs, a page at a
+time: Claude reads every page, following `nextCursor`.
 
 To a cut (its tag):
 
