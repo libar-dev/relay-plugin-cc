@@ -78,7 +78,9 @@ export function readLaunchPrompt(text, { baseDir = process.cwd(), env = process.
     if (!path.isAbsolute((header.cd ?? "").trim())) delete header.cd;
     header.addDirs = header.addDirs.filter(dir => path.isAbsolute(dir.trim()));
   }
-  return { request: buildLaunchRequest(header, { baseDir, env }), brief: briefText };
+  return { request: buildLaunchRequest(header, {
+    baseDir, env, skipLinkedWorktreeRoots: !relativePaths && !path.isAbsolute((header.cd ?? "").trim())
+  }), brief: briefText };
 }
 
 function parseBoolean(value, name) {
@@ -141,6 +143,7 @@ function normalizeModelOrEffort(value, name, backend = DEFAULT_BACKEND) {
 // Build the stored launch request from header values. `baseDir` resolves a relative cd.
 // `env` locates the user config: when `fastTier` there is "off", `fast: true` is ignored
 // with a note, never an error, and the backend config sets the tier.
+// `skipLinkedWorktreeRoots` defers inferred roots when the job's directory is unknown.
 export function buildLaunchRequest(values, options = {}) {
   const baseDir = options.baseDir ?? process.cwd();
   const env = options.env ?? process.env;
@@ -202,7 +205,7 @@ export function buildLaunchRequest(values, options = {}) {
       notes.push("network and add-dir are ignored in yolo mode: the sandbox is off.");
     }
   } else if (mode === "write") {
-    writableRoots = [...new Set([...addDirs, ...linkedWorktreeRoots(cwd)])];
+    writableRoots = [...new Set([...addDirs, ...(options.skipLinkedWorktreeRoots ? [] : linkedWorktreeRoots(cwd))])];
   } else if (addDirs.length > 0) {
     notes.push("add-dir is ignored in read-only mode.");
   }

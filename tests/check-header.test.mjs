@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 
 import { readLaunchPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { COMPANION, companion, relayContext, relayStart } from "./support/relay-fixture.mjs";
-import { makeTempDir, run } from "./support/helpers.mjs";
+import { initGitRepo, makeTempDir, run } from "./support/helpers.mjs";
 
 const prompt = (extra = "", brief = "hi") => `model: m\neffort: low\n${extra}\n---\n${brief}`;
 
@@ -19,6 +19,66 @@ function context() {
 function check(ctx, text, argv = []) {
   return run(process.execPath, [COMPANION, "check-header", ...argv], { cwd: ctx.work, env: ctx.env, input: text });
 }
+
+function linkedWorktreeContext() {
+  const ctx = relayContext();
+  initGitRepo(ctx.work);
+  const committed = run("git", ["commit", "--allow-empty", "-m", "fixture"], { cwd: ctx.work, env: ctx.env });
+  assert.equal(committed.status, 0, committed.stderr);
+  const linked = path.join(makeTempDir(), "linked");
+  const added = run("git", ["worktree", "add", "-b", "linked", linked], { cwd: ctx.work, env: ctx.env });
+  assert.equal(added.status, 0, added.stderr);
+  ctx.work = linked;
+  ctx.base.cwd = linked;
+  return ctx;
+}
+
+const grokWrite = extra => prompt(`backend: grok\nmode: write\n${extra}`);
+const grokRootsRefusal = /^error: Grok mode: write cannot add writable roots for add-dir or a linked git worktree\./;
+
+for (const cd of ["relative cd", "no cd"]) {
+  test(`check-header defers linked-worktree roots for Grok write with ${cd}`, () => {
+    const ctx = linkedWorktreeContext();
+    const text = grokWrite(cd === "relative cd" ? "cd: .." : "");
+    const before = fs.readdirSync(ctx.home);
+    const result = check(ctx, text);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(result.stdout, "ok\n");
+    assert.equal(result.stderr, "");
+    assert.deepEqual(fs.readdirSync(ctx.home), before);
+    if (cd === "relative cd") {
+      const launch = readLaunchPrompt(text, { baseDir: ctx.work, env: ctx.env });
+      assert.equal(launch.request.cwd, path.dirname(ctx.work));
+      assert.deepEqual(launch.request.writableRoots, []);
+    } else {
+      assert.throws(() => readLaunchPrompt(text, { baseDir: ctx.work, env: ctx.env }), /Grok mode: write cannot add writable roots/);
+    }
+  });
+}
+
+test("check-header and start --from-relay still refuse Grok write with absolute cd in a linked worktree", async () => {
+  const ctx = linkedWorktreeContext();
+  const text = grokWrite(`cd: ${ctx.work}`);
+  const checked = check(ctx, text);
+  assert.equal(checked.status, 1);
+  assert.equal(checked.stderr, "");
+  assert.match(checked.stdout, grokRootsRefusal);
+  assert.deepEqual(fs.readdirSync(ctx.home), []);
+  ctx.append(ctx.prompt(text));
+  const { started, jobId } = await relayStart(ctx);
+  assert.equal(jobId, null);
+  assert.equal(started.status, 1);
+  assert.equal(checked.stdout, started.stdout.split("\n").filter(line => line.startsWith("error: ")).join("\n") + "\n");
+});
+
+test("check-header retains absolute add-dir roots when it defers linked-worktree roots", () => {
+  const ctx = linkedWorktreeContext();
+  const result = check(ctx, grokWrite(`cd: ..\nadd-dir: ${path.dirname(ctx.work)}`));
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, grokRootsRefusal);
+  assert.deepEqual(fs.readdirSync(ctx.home), []);
+});
 
 test("check-header prints ok for a valid prompt and creates nothing", () => {
   const ctx = context();

@@ -288,8 +288,10 @@ agent spawned with no `cwd` runs in its parent agent's directory, while the modu
 the session's. So `check-header` checks absolute paths and leaves relative ones to `start`. The first version
 resolved them against the spawn's directory; both reviewers (GPT-6.1 Sol and Opus 5.5) showed launches it would
 have refused that `start` accepts (a `cd:` that climbs out of a worktree, a brief file that exists only in a
-subagent's worktree). The documented forms are absolute, so the common mistake, a wrong absolute `cd:`, still
-fails at the spawn.
+subagent's worktree). Their second round found the same through `mode: write`'s linked-worktree roots, which
+`buildLaunchRequest` infers from the job's directory and Grok refuses: from a linked worktree, as every T3 thread
+runs in, a relative `cd:` was refused. Check mode infers no such roots unless `cd:` is absolute. The documented
+forms are absolute, so the common mistake, a wrong absolute `cd:`, still fails at the spawn.
 
 ### D47. A TaskStop on a whole Workflow tells the caller which jobs run on (Phase 3 thread)
 

@@ -14,9 +14,10 @@ export function sessionEndCalls(backends) {
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const processes = ({ pid, timeoutMs }) => {
   const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: timeoutMs });
-  if (result.error) throw result.error;
+  if (result.error) throw Object.assign(result.error, { signal: result.signal, status: result.status });
   if (result.status === 1 && !result.stdout.trim() && !result.stderr.trim()) return '';
-  if (result.status !== 0) throw new Error(`Could not read Claude process start time: ${result.stderr.trim() || result.signal || result.status}`);
+  if (result.status !== 0) throw Object.assign(new Error(`Could not read Claude process start time: ${result.stderr.trim() || result.signal || result.status}`),
+    { signal: result.signal, status: result.status });
   return result.stdout.trim();
 };
 const validPid = identity => Number.isSafeInteger(identity?.pid) && identity.pid > 0 &&
@@ -55,15 +56,24 @@ export default {
     };
     try {
       delete run.claudePid;
+      delete run.claudePidError;
       await ctx.paneDriver(ctx, this, { keep: false, drive(args, input) {
         if (args[0] !== 'stop') return drive(args, input);
         try {
           const raw = String(drive(['pid', args[1]])).trim();
           const pid = /^\d+$/.test(raw) ? Number(raw) : null;
           if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Missing Claude pane pid.');
-          const startedAt = String(processRunner({ pid, timeoutMs: 5000 })).trim();
-          run.claudePid = { pid, startedAt };
-          if (!validPid(run.claudePid)) throw new Error('Missing Claude process start time.');
+          const result = processRunner({ pid, timeoutMs: 5000 });
+          // The driver's drive call is synchronous; only the later wait loop can await this runner.
+          if (typeof result?.then === 'function') throw new Error('processRunner must be synchronous in the stop wrapper.');
+          const identity = { pid, startedAt: String(result).trim() };
+          if (!validPid(identity)) throw new Error('Missing Claude process start time.');
+          run.claudePid = identity;
+          ctx.save();
+        } catch (error) {
+          delete run.claudePid;
+          run.claudePidError = error.message;
+          if (signals.includes(error.signal)) aborted = true;
           ctx.save();
         } finally { drive(args, input); }
       } });
@@ -72,7 +82,7 @@ export default {
       checkAbort();
       const entries = (this.scope ?? scopeToRun)(readTranscript(run.transcript), run.runId);
       if (!this.completed(entries)) throw new Error(`Session ended without ${this.marker}.`);
-      if (!validPid(run.claudePid)) throw new Error('Missing Claude pane pid and start time.');
+      if (!validPid(run.claudePid)) throw new Error(`Missing Claude pane pid and start time.${run.claudePidError ? ` ${run.claudePidError}` : ''}`);
       const deadline = now() + 15000;
       while (true) {
         checkAbort();
@@ -124,7 +134,7 @@ export default {
       checkAbort();
       return analysis;
     } catch (error) {
-      if (aborted) { run.interrupted = true; error = new Error('Interrupted.'); }
+      if (aborted || run.interrupted || signals.includes(error.signal)) { run.interrupted = true; error = new Error('Interrupted.'); }
       run.error = error.message;
       ctx.save();
       throw error;

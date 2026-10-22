@@ -97,13 +97,13 @@ for (const key of ['createdMarketplace', 'createdCache', 'createdSettingsFile', 
 if (entries.some(e => e.scope !== 'local' || !e.projectPath || path.resolve(e.projectPath) !== dir)) {
   throw new Error(`${saved.name} has an installation outside this directory; refusing to remove its marketplace.`);
 }
-const problem = saved.createdMarketplace || saved.addedMarketplace
-  ? marketplaceProblem(saved, marketplace?.installLocation) : null;
-if (problem) console.error(`Leaving scratch marketplace: ${problem}.`);
+// The registry, not addedMarketplace, tells us whether a partially failed add registered the name.
+const problem = marketplaceProblem(saved, marketplace?.installLocation);
+if (problem) throw new Error(`Leaving ${saved.name} and keeping its receipt; changing nothing: ${problem}.`);
 console.log(saved.name);
 console.log(saved.installedPlugin && entries.length ? 'installed' : 'absent');
-console.log(saved.addedMarketplace && marketplace && !problem ? 'marketplace' : 'absent');
-console.log(JSON.stringify({ saved, installLocation: marketplace?.installLocation, marketplaceVerified: !problem }));
+console.log(marketplace ? 'marketplace' : 'absent');
+console.log(JSON.stringify({ saved, registeredMarketplace: !!marketplace }));
 NODE
 )
 # Four lines: the name, the plugin step, the marketplace step, the saved state as JSON. Plain reads, since
@@ -118,7 +118,13 @@ process.on('uncaughtException', (error) => { console.error(error.message); proce
 const fs = require('node:fs'), path = require('node:path');
 const dir = process.argv[2], file = path.join(dir, '.claude/settings.local.json');
 const marker = process.env.RELAY_SMOKE_RECEIPT;
-const { saved, installLocation, marketplaceVerified } = JSON.parse(process.argv[3]);
+const { saved, registeredMarketplace } = JSON.parse(process.argv[3]);
+const registry = path.join(process.env.RELAY_SMOKE_CONFIG, 'plugins/known_marketplaces.json');
+const marketplace = fs.existsSync(registry) ? JSON.parse(fs.readFileSync(registry, 'utf8'))[saved.name] : null;
+// Even a successful CLI exit must actually remove the registration before its folder can be deleted.
+if (marketplace) throw new Error(`Leaving ${saved.name} and keeping its marketplace folder and receipt: the name is still registered.`);
+const problem = marketplaceProblem(saved, saved.marketplace);
+if (problem) throw new Error(`Leaving ${saved.name} and keeping its receipt: ${problem}.`);
 if (fs.existsSync(file)) {
   const original = fs.readFileSync(file, 'utf8'), settings = JSON.parse(original);
   const before = JSON.stringify(settings);
@@ -131,7 +137,7 @@ if (fs.existsSync(file)) {
     if (!Object.keys(settings.enabledPlugins).length) delete settings.enabledPlugins;
   }
   if (settings.extraKnownMarketplaces) {
-    if (saved.addedMarketplace) delete settings.extraKnownMarketplaces[saved.name];
+    if (saved.addedMarketplace || registeredMarketplace) delete settings.extraKnownMarketplaces[saved.name];
     if (!Object.keys(settings.extraKnownMarketplaces).length) delete settings.extraKnownMarketplaces;
   }
   if (saved.createdSettingsFile && !Object.keys(settings).length) fs.rmSync(file);
@@ -140,11 +146,7 @@ if (fs.existsSync(file)) {
 if (saved.createdCache) {
   fs.rmSync(path.join(process.env.RELAY_SMOKE_CONFIG, 'plugins/cache', saved.name), { recursive: true, force: true });
 }
-if (saved.createdMarketplace && marketplaceVerified && fs.existsSync(saved.marketplace)) {
-  const problem = marketplaceProblem(saved, installLocation);
-  if (problem) console.error(`Leaving scratch marketplace: ${problem}.`);
-  else fs.rmSync(saved.marketplace, { recursive: true, force: true });
-}
+if (saved.createdMarketplace) fs.rmSync(saved.marketplace, { recursive: true, force: true });
 fs.rmSync(marker);
 const local = path.join(dir, '.claude');
 if (saved.createdClaudeDirectory && fs.readdirSync(local).length === 0) fs.rmdirSync(local);

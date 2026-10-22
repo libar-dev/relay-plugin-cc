@@ -214,7 +214,7 @@ const WORKFLOW_RESULT = { toolUseResult: {
 const WORKFLOW_RUN = WORKFLOW_RESULT.toolUseResult.runId;
 
 function workflowStop(ctx) {
-  const transcript = path.join(ctx.work, "caller.jsonl");
+  const transcript = ctx.base.transcript_path;
   fs.writeFileSync(transcript, `${JSON.stringify(WORKFLOW_RESULT)}\n`);
   return input(ctx, { transcript_path: transcript, tool_input: { task_id: "wceoygoi3" },
     tool_response: { task_id: "wceoygoi3", task_type: "local_workflow" } });
@@ -269,25 +269,42 @@ for (const scenario of ["no running jobs", "task absent from transcript", "unrea
   });
 }
 
-test("TaskStop finds a Workflow run in agent_transcript_path before transcript_path", () => {
+test("TaskStop finds a subagent's own Workflow in its resolved transcript before the session transcript", () => {
   const { ctx } = recorded();
   const event = workflowStop(ctx);
   workflowJob(ctx, "job-agent-run", "running");
   workflowJob(ctx, "job-session-run", "running", "session-run");
-  event.agent_transcript_path = path.join(ctx.work, "agent.jsonl");
-  fs.copyFileSync(event.transcript_path, event.agent_transcript_path);
+  event.agent_id = ctx.agentId;
+  event.session_id = ctx.sessionId;
+  assert.equal(event.agent_transcript_path, undefined);
+  assert.equal(ctx.transcript, path.join(path.dirname(event.transcript_path), ctx.sessionId, "subagents", `agent-${ctx.agentId}.jsonl`));
+  fs.copyFileSync(event.transcript_path, ctx.transcript);
   fs.writeFileSync(event.transcript_path, JSON.stringify({ toolUseResult: { ...WORKFLOW_RESULT.toolUseResult, runId: "session-run" } }));
   event.tool_response = JSON.stringify(event.tool_response);
   const output = handleTaskStop(event, ctx.env);
   assert.ok(context(output).includes(`Workflow run ${WORKFLOW_RUN}`));
   assert.ok(context(output).includes("job-agent-run"));
   assert.ok(!context(output).includes("job-session-run"));
-  // A supplied caller transcript is authoritative even when it cannot be read or has no match.
-  event.agent_transcript_path = ctx.work;
-  assert.equal(handleTaskStop(event, ctx.env), null);
-  event.agent_transcript_path = path.join(ctx.work, "agent.jsonl");
-  fs.writeFileSync(event.agent_transcript_path, "");
-  assert.equal(handleTaskStop(event, ctx.env), null);
+});
+
+test("TaskStop falls back to the session transcript when a subagent stops a Workflow the main thread started", () => {
+  const { ctx } = recorded();
+  const event = workflowStop(ctx);
+  event.agent_id = ctx.agentId;
+  event.session_id = ctx.sessionId;
+  workflowJob(ctx, "job-session-run", "running");
+  workflowJob(ctx, "job-other-run", "running", "other-run");
+  fs.writeFileSync(ctx.transcript, JSON.stringify({ toolUseResult: { ...WORKFLOW_RESULT.toolUseResult, taskId: "another-task", runId: "other-run" } }));
+  const before = diskTree(ctx.home);
+  for (const scenario of ["no matching task", "missing transcript", "unreadable transcript"]) {
+    if (scenario === "missing transcript") fs.rmSync(ctx.transcript);
+    if (scenario === "unreadable transcript") fs.mkdirSync(ctx.transcript);
+    const output = handleTaskStop(event, ctx.env);
+    assert.ok(context(output)?.includes(`Workflow run ${WORKFLOW_RUN}`), scenario);
+    assert.ok(context(output).includes("job-session-run"), scenario);
+    assert.ok(!context(output).includes("job-other-run"), scenario);
+    assert.deepEqual(diskTree(ctx.home), before);
+  }
 });
 
 test("TaskStop ignores other tools, other hook events and inputs without an agent", () => {

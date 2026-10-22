@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { readRelayPointer } from "../lib/harness/relay.mjs";
+import { readRelayPointer, resolveAgentTranscript } from "../lib/harness/relay.mjs";
 import { readWorkflowRunId } from "../lib/harness/workflow.mjs";
 import { absoluteJobsHomeEnv, listJobDirs, readJob, TERMINAL_STATES } from "../lib/jobs/store.mjs";
 import { appendRelayViolation } from "../lib/jobs/messages.mjs";
@@ -26,7 +26,8 @@ export function handleTaskStop(input, env = process.env) {
   const { jobDir } = readRelayPointer(env, agentId);
   if (!jobDir) {
     if (response?.task_type !== "local_workflow") return null;
-    const runId = readWorkflowRunId(input.agent_transcript_path ?? input.transcript_path, agentId);
+    const callerTranscript = input.agent_id ? resolveAgentTranscript(input).file : input.agent_transcript_path;
+    const runId = readWorkflowRunId(callerTranscript, agentId) ?? readWorkflowRunId(input.transcript_path, agentId);
     if (!runId) return null;
     const jobs = listJobDirs({ env }).map(dir => readJob(dir))
       .filter(job => job?.relay?.workflowRunId === runId && !TERMINAL_STATES.has(job.state));

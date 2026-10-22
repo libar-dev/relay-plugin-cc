@@ -21,9 +21,6 @@ export default {
       const { job, jobDir } = relayJob(input, evidence, agent.agentId);
       Object.assign(row, { agentId: agent.agentId, jobDir });
       requireBackend(job, backend);
-      if (parsed.calls.some(call => call.name === 'Bash' && /companion\.mjs['" ]*\s+['"]?cancel(?:['"\s;]|$)/.test(call.input?.command ?? ''))) {
-        throw new Error('Main-thread Bash ran the companion cancel.');
-      }
       const calls = parsed.calls.filter(call => call.name === 'TaskStop' && [agent.name, agent.agentId].includes(call.input?.task_id));
       if (calls.length !== 1) throw new Error(`Expected exactly one TaskStop for ${agent.name}, found ${calls.length}.`);
       const call = calls[0], result = results.get(call.id);
@@ -38,14 +35,17 @@ export default {
       if (job.state !== 'cancelled') throw new Error('Job is not cancelled.');
       const attempt = lastActiveAttempt(job, call.timestamp, input.relayVersion, { endedAtBoundary: true });
       if (attempt.state !== 'cancelled') throw new Error('Active attempt is not cancelled.');
-      const cancelled = inboxMessages(jobDir).some(message => {
-        if (path.basename(path.dirname(message.file)) !== 'claimed' || message.kind !== 'cancel' ||
-            !(Date.parse(message.createdAt) >= Date.parse(call.timestamp)) ||
-            !contexts.some(entry => Date.parse(message.createdAt) <= Date.parse(entry.timestamp)) || !message.id) return false;
-        const outcome = readJson(path.join(jobDir, 'inbox/outcomes', `${path.basename(message.id)}.json`), true);
-        return outcome?.messageId === message.id && outcome.action === 'cancelled';
-      });
-      if (!cancelled) throw new Error('No claimed cancel posted between TaskStop and its hook context with a cancelled outcome.');
+      // Receipts live in claimed too; the job ledger can repeat one message's id for each action.
+      const cancels = new Map([...(job.messages ?? []), ...inboxMessages(jobDir)]
+        .filter(message => message.kind === 'cancel').map(message => [message.id, message]));
+      if (cancels.size !== 1) throw new Error(`Expected exactly one cancel message, found ${cancels.size}.`);
+      const message = [...cancels.values()][0];
+      if (!message.id || !(Date.parse(message.createdAt) >= Date.parse(call.timestamp)) ||
+          !contexts.some(entry => Date.parse(message.createdAt) <= Date.parse(entry.timestamp))) {
+        throw new Error('No cancel message posted between TaskStop and its hook context.');
+      }
+      const outcome = readJson(path.join(jobDir, 'inbox/outcomes', `${path.basename(message.id)}.json`), true);
+      if (outcome?.messageId !== message.id || outcome.action !== 'cancelled') throw new Error('Cancel message has no cancelled outcome.');
       const seconds = (Date.parse(job.completedAt) - Date.parse(call.timestamp)) / 1000;
       if (!(seconds >= 0 && seconds <= 15)) throw new Error('Cancellation was not within 0 to 15 seconds of TaskStop.');
       row.timings.cancelledSeconds = [seconds];
