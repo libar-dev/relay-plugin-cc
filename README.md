@@ -273,7 +273,7 @@ runs on command hooks and the transcript.
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.1.2. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.2.0. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
