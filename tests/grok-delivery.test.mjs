@@ -771,8 +771,9 @@ import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mj
       const [block] = output.backends;
       assert.equal(output.ready, !options.signedOut && !options.versionFail);
       assert.equal(result.status, output.ready ? 0 : 1);
-      assert.deepEqual(ctx.grok().invocations.map(call => call.args).sort(), [['--version'], ['models']]);
-      assert.equal(ctx.grok().invocations.find(call => call.args[0] === 'models').env.GROK_HOME, path.join(ctx.user, '.grok-jobs'));
+      // A signed-out home is asked twice before setup says so (D71).
+      assert.deepEqual(ctx.grok().invocations.map(call => call.args).sort(), options.signedOut ? [['--version'], ['models'], ['models']] : [['--version'], ['models']]);
+      for (const call of ctx.grok().invocations.filter(call => call.args[0] === 'models')) assert.equal(call.env.GROK_HOME, path.join(ctx.user, '.grok-jobs'));
       assert.equal(ctx.grok().requests.length, 0);
       if (options.signedOut) { assert.equal(block.signIn.state, 'signed-out'); assert.match(block.signIn.detail, /Not signed in/); }
       if (options.versionFail) {
