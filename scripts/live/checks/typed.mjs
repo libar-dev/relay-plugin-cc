@@ -16,7 +16,7 @@ const companion = (ctx, args) => execFileSync(process.execPath,
   { encoding: 'utf8', env: { ...process.env, RELAY_JOBS_HOME: ctx.jobsHome }, timeout: 100000 });
 
 // Visits overlap the running jobs; the stagger allows time for delivery, hand-back and navigation.
-const aSleepSeconds = (n, index) => 60 + 40 * n + 240 * index;
+const aSleepSeconds = (n, index) => 60 + 40 * n + 360 * index;
 
 function humanText(entry) {
   if (entry.type === 'attachment' && entry.attachment?.type === 'queued_command' && entry.attachment.origin?.kind === 'human') {
@@ -92,6 +92,23 @@ function interruptedRedirect(entries, entry, receipt) {
   }
   if (before.slice(note + 1).some(row => row.type === 'assistant')) {
     throw new Error('C1 did not resume the relay: an assistant entry followed the interrupt before C1.');
+  }
+  const inbound = row => row.type === 'user' || row.type === 'queued_command' ||
+    (row.type === 'attachment' && row.attachment?.type === 'queued_command');
+  if (before.slice(note + 1).some(inbound)) {
+    throw new Error('C1 did not resume the relay: another input followed the interrupt before C1.');
+  }
+  const ancestors = new Map(before.filter(row => row.uuid).map(row => [row.uuid, row]));
+  const seen = new Set();
+  let parent = entry.parentUuid;
+  while (parent && parent !== before[note].uuid && !seen.has(parent)) {
+    seen.add(parent);
+    const row = ancestors.get(parent);
+    if (!row || inbound(row)) break;
+    parent = row.parentUuid;
+  }
+  if (!parent || parent !== before[note].uuid) {
+    throw new Error('C1 ancestry does not lead to the interrupt through non-inbound entries.');
   }
 }
 
@@ -273,7 +290,11 @@ export default {
   async runTerminal(ctx, dependencies = {}) {
     const { drive = pane, sleep = pause, now = Date.now, companionRunner = companion, signal } = dependencies;
     const { run } = ctx;
-    if (ctx.timeoutMinutes === this.timeoutMinutes) ctx.timeoutMinutes += 5 * (run.backends.length - 1);
+    if (ctx.timeoutMinutes === this.timeoutMinutes) {
+      ctx.timeoutMinutes += 5 * (run.backends.length - 1);
+      // Four backends need 2410 seconds with startup, the final visit and settlement.
+      if (run.backends.length === 4) ctx.timeoutMinutes++;
+    }
     run.timeoutMinutes = ctx.timeoutMinutes;
     const deadline = now() + ctx.timeoutMinutes * 60000;
     const check = () => {
@@ -324,15 +345,29 @@ export default {
       // The ledger, inbox outcome and job attempts are written by different processes.
       const started = now();
       let bound = Math.min(deadline, started + 120000);
+      let nextTurn = false;
       while (true) {
         signal?.throwIfAborted();
         if (run.interrupted) throw new Error('Interrupted.');
         try {
           const records = lineRecords(item, line);
-          if (records.length && records.every(record => record.kind === 'steer') && STEER_DELIVERY[item.backend] === 'in-turn') {
+          if (!nextTurn && records.length && records.every(record => record.kind === 'steer') && STEER_DELIVERY[item.backend] === 'in-turn') {
             bound = Math.min(deadline, started + 20000);
           }
           item.A = relayJob(input(), evidence, item.a.agentId);
+          if (records.length === 1 && records[0].kind === 'steer') {
+            const record = records[0];
+            nextTurn ||= STEER_DELIVERY[item.backend] === 'next-turn' ||
+              readJson(path.join(item.A.jobDir, 'inbox/outcomes', `${path.basename(record.messageId)}.json`), true)?.action === 'queued-next-turn';
+            if (nextTurn) {
+              // A queued steer cannot start its turn until the current attempt has ended.
+              bound = deadline;
+              const active = runningAt(item.A.job, record.at, run.relayVersion);
+              const ended = Date.parse(active.endedAt);
+              if (!Number.isFinite(ended) || now() < ended) throw new Error(`Current attempt has not ended before next-turn ${line}.`);
+              bound = Math.min(deadline, ended + 120000);
+            }
+          }
           return delivery(input(), item.A, run.typed[item.backend][line], line, item.backend);
         } catch (error) {
           if (now() >= bound) throw error;
