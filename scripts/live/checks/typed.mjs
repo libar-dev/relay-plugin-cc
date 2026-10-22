@@ -128,12 +128,14 @@ function footer(screen) {
   return main < 0 ? [] : rows.slice(main);
 }
 
-export async function typeInView(ctx, name, text, { agentCount, drive = pane, sleep = pause, beforeSend = () => {}, check = () => {}, interrupt = false, followup } = {}) {
+export async function typeInView(ctx, name, text, { agentCount, drive = pane, sleep = pause, now = Date.now, beforeSend = () => {}, check = () => {}, interrupt = false, followup } = {}) {
   let step = 0;
+  let screenFile;
   const screen = () => {
     check();
     const value = String(drive(['read', ctx.run.pane, '0']));
-    fs.writeFileSync(path.join(ctx.evidenceDir, `typed-${name}-${text.includes(' A2 ') ? 'A2' : 'first'}-${step++}.txt`), value);
+    screenFile = `typed-${name}-${text.includes(' A2 ') ? 'A2' : 'first'}-${step++}.txt`;
+    fs.writeFileSync(path.join(ctx.evidenceDir, screenFile), value);
     return value;
   };
   const verify = (value, expected, why) => { if (!expected(value)) throw new Error(`Navigation: expected ${why}; screen saved in ${ctx.evidenceDir}.`); };
@@ -146,10 +148,25 @@ export async function typeInView(ctx, name, text, { agentCount, drive = pane, sl
   const prompt = name => value => name === 'main' ? /^\s*❯\s*[^\n]*$/m.test(value) && !value.includes('Message @') &&
     footer(value).some(row => row.name === 'main' && row.viewed) && !footer(value).some(row => row.selected) :
     viewPrompt(value) && footer(value).length > 0 && !footer(value).some(row => row.selected);
-  const key = async (key, expected, why) => {
-    check(); drive(['keys', ctx.run.pane, key]); await sleep(250);
-    const value = screen();
-    verify(value, expected, why);
+  const key = async (key, expected, why, timeoutMs = 5000) => {
+    check();
+    const started = now(), deadline = started + timeoutMs;
+    drive(['keys', ctx.run.pane, key]);
+    let value, settled = false, reads = 0;
+    while (now() < deadline) {
+      await sleep(Math.min(200, deadline - now()));
+      value = screen(); reads++;
+      if (expected(value)) { settled = true; break; }
+    }
+    if (!settled) {
+      // A late draw must get one final read, never a second key press.
+      value = screen(); reads++;
+      settled = expected(value);
+    }
+    fs.appendFileSync(path.join(ctx.evidenceDir, 'typed-navigation.jsonl'), JSON.stringify({
+      agent: name, text, key, expected: why, elapsedMs: now() - started, timeoutMs, reads, settled, screen: screenFile
+    }) + '\n');
+    verify(value, () => settled, why);
     return value;
   };
   const walk = async (value, direction, expected, why) => {
@@ -170,7 +187,7 @@ export async function typeInView(ctx, name, text, { agentCount, drive = pane, sl
   const opened = await key('Enter', value => viewPrompt(value) && footer(value).some(row => row.name === name && row.viewed), `${name}'s view`);
   await walk(opened, 'Up', prompt(name), `${name}'s prompt`);
   if (interrupt) {
-    await key('Escape', value => prompt(name)(value) && /\bInterrupted\b/.test(value), `${name}'s interrupted prompt`);
+    await key('Escape', value => prompt(name)(value) && /\bInterrupted\b/.test(value), `${name}'s interrupted prompt`, 15000);
     await sleep(3000);
     verify(screen(), prompt(name), `${name}'s prompt after the interrupt`);
   }
@@ -252,7 +269,7 @@ export default {
         run.typed[item.backend][line] = { text, sentAt: new Date(now()).toISOString() }; ctx.save();
       };
       const type = (item, line, followup) => typeInView(ctx, item[line[0].toLowerCase()].name,
-        typedLine(run.runId, item.backend, line), { agentCount: parsed.spawns.length, drive, sleep, check, interrupt: line === 'C1',
+        typedLine(run.runId, item.backend, line), { agentCount: parsed.spawns.length, drive, sleep, now, check, interrupt: line === 'C1',
           beforeSend: () => receipt(item, line), followup });
       for (const item of jobs) {
         await type(item, 'B1');
