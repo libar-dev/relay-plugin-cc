@@ -20,9 +20,9 @@ it: where the work goes, what each step must pass, and how the work was done in 
    checks, one record per check and backend in `docs/live/records/`, the terminal and T3 as surfaces, and the
    capability table `docs/live/capabilities.md` generated from the records. Every later phase adds its checks to
    `scripts/live/checks/`.
-3. **Phases 2 and 3**, as two PRs that can run at the same time: commands answered by the module, and the spawn
-   check with TaskStop cancelling the job (D2). Both add hooks to `hooks/mod/register.js`; whichever merges second
-   rebases.
+3. **Phases 2 and 3**, as two PRs that can run at the same time: commands answered by the module (Phase 2, PR
+   PRNUMBER), and the spawn check with TaskStop cancelling the job (D2). Both add hooks to `hooks/mod/register.js`;
+   whichever merges second rebases.
 4. **Phase 4**, in this order: the companion's `--json` changed in place (the board reads it), the status line,
    the board pane.
 5. **Phase 6**, the investigation report, at any point. No code (PR #9). Reported in
@@ -95,6 +95,22 @@ What worked in Phase 1:
 - `$.agent.list()` holds no Workflow agent. A message from another agent reaches a relay as origin kind `peer`.
 - Never set `CLAUDE_CONFIG_DIR` and never answer a dialog that stores a choice (D13). Check
   `~/.claude/settings.json` against a copy taken before a live run.
+
+## What Phase 2 learned about the tools
+
+- A check whose subject is a slash command sends the prompt (with its run line) first; `prepare` prints the commands
+  to send after the marker. In T3, send each as its own message with `t3_thread_send` and wait until the thread is
+  idle before the next. T3 passes a slash command to Claude Code as a command, arguments included.
+- Claude Code 2.1.308 shows and records a command a plugin answered without its arguments, and prompt history keeps
+  no such command. The module's answer starts with the command as typed, and the checks read the arguments there.
+- The terminal and T3 draw a command's text as Markdown; T3 runs a paragraph's lines together.
+- `claude -p` exits with a command's `exitCode` under `--output-format text` and `json`, and 0 under `stream-json`;
+  only the stream has the init event that lists the loaded plugins and their paths.
+- `scripts/smoke/install-local.sh` stamps the export with its commit (`.claude-plugin/build.json`), and `status`
+  shows it, so a T3 check proves the build that answered even when two builds share a `3.0.0-dev.N`. Install, then
+  start a new thread: a thread that started before the install keeps the module it loaded.
+- `pane.sh` starts panes at 200 columns. `tmux -S <socket> resize-window -t <pane> -x 100` narrows one; the socket
+  is in `pane.sh attach-command`'s output.
 
 ## What Phase 6 learned about the tools
 
