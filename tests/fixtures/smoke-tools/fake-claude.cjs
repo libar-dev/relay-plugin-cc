@@ -4,6 +4,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.SMOKE_CALL_LOG, JSON.stringify(args) + '\n');
+// What each call saw of CLAUDE_CONFIG_DIR, for the test that the scripts never set it themselves.
+if (process.env.SMOKE_ENV_LOG) fs.appendFileSync(process.env.SMOKE_ENV_LOG, JSON.stringify(process.env.CLAUDE_CONFIG_DIR ?? null) + '\n');
 if (args[0] === '--version') {
   console.log('2.1.308 (Claude Code)');
   process.exit(0);

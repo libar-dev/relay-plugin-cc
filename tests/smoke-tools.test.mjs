@@ -423,15 +423,21 @@ for (const preexistingCache of [true, false]) {
   });
 }
 
-test('unset config override uses the scratch HOME .claude directory', t => {
+test('unset config override uses the scratch HOME .claude directory, and claude runs without one', t => {
   const { dir, home, env } = fakeCli(t);
   delete env.CLAUDE_CONFIG_DIR;
+  // With CLAUDE_CONFIG_DIR set to ~/.claude, Claude Code reads ~/.claude/.claude.json as its global
+  // config and runs its settings migrations again, so the scripts must not set it themselves.
+  env.SMOKE_ENV_LOG = path.join(dir, 'env.log');
   const work = workDir(dir);
   const installed = installSmoke(work, env);
   assert.equal(installed.status, 0, installed.stderr);
   assert.equal(readJson(receiptPath(work)).config, path.join(home, '.claude'));
   assert.equal(smokeScript('uninstall', work, env).status, 0);
   assert.equal(fs.existsSync(path.join(home, '.claude/plugins/cache/relay-smoke')), false);
+  const seen = fs.readFileSync(env.SMOKE_ENV_LOG, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.ok(seen.length >= 4, `claude ran ${seen.length} times`);
+  assert.deepEqual([...new Set(seen)], [null]);
 });
 
 test('uninstall keeps new unrelated settings and a pre-existing .claude directory', t => {

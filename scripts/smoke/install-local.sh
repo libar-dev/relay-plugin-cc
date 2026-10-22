@@ -39,14 +39,19 @@ if top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null); then
   [[ $dir == "$top" ]] || die "DIR must be the git work tree top level: $top"
 fi
 # Resolve once, before changing cwd, including when the override is relative.
-CLAUDE_CONFIG_DIR=$(node -e 'const p = require("node:path"), fs = require("node:fs"); const dir = p.resolve(process.env.CLAUDE_CONFIG_DIR || p.join(require("node:os").homedir(), ".claude")); console.log(fs.existsSync(dir) ? fs.realpathSync(dir) : dir)')
-export CLAUDE_CONFIG_DIR
+# The Claude config directory that holds the plugin registry and cache. A set CLAUDE_CONFIG_DIR is
+# made absolute, since the claude commands below run from DIR. An unset one stays unset: with it set
+# to ~/.claude, Claude Code reads ~/.claude/.claude.json as its global config instead of
+# ~/.claude.json, starts a fresh one there and runs its settings migrations again.
+RELAY_SMOKE_CONFIG=$(node -e 'const p = require("node:path"), fs = require("node:fs"); const dir = p.resolve(process.env.CLAUDE_CONFIG_DIR || p.join(require("node:os").homedir(), ".claude")); console.log(fs.existsSync(dir) ? fs.realpathSync(dir) : dir)')
+export RELAY_SMOKE_CONFIG
+if [[ -n ${CLAUDE_CONFIG_DIR:-} ]]; then export CLAUDE_CONFIG_DIR=$RELAY_SMOKE_CONFIG; fi
 node - "$dir" <<'NODE'
 // A refusal is one line for the person, not a stack trace.
 process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const dir = process.argv[2], home = fs.realpathSync(os.homedir());
-const config = process.env.CLAUDE_CONFIG_DIR;
+const config = process.env.RELAY_SMOKE_CONFIG;
 const read = file => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 if (dir === home || dir === (fs.existsSync(config) ? fs.realpathSync(config) : config)) {
   throw new Error('Refusing to install in HOME or the Claude config directory.');
@@ -89,9 +94,9 @@ const file = path.join(dir, '.claude/settings.local.json');
 const settings = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 fs.writeFileSync(path.join(dir, '.claude/relay-smoke-local.json'), JSON.stringify({
   tool: 'relay-plugin-cc/scripts/smoke/install-local.sh',
-  config: process.env.CLAUDE_CONFIG_DIR,
+  config: process.env.RELAY_SMOKE_CONFIG,
   marketplace: mkt, createdMarketplace: true,
-  cacheExisted: fs.existsSync(path.join(process.env.CLAUDE_CONFIG_DIR, 'plugins/cache/relay-smoke')),
+  cacheExisted: fs.existsSync(path.join(process.env.RELAY_SMOKE_CONFIG, 'plugins/cache/relay-smoke')),
   createdCache: false,
   createdSettingsFile: !fs.existsSync(file), createdClaudeDirectory,
   hadPreviousRelay: Object.hasOwn(settings.enabledPlugins ?? {}, 'relay@libar-relay'),
