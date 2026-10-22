@@ -11,8 +11,8 @@ it: where the work goes, what each step must pass, and how the work was done in 
 - `main` and the M1 stay on 2.2.0 until the release PR merges `release/3.0` into `main`. The M3 and the ThinkPad
   run the pre-release cuts (D95).
 - The branch carries `3.0.0-dev.N`, and each phase PR raises N with `node scripts/bump-version.mjs` (D6). A
-  pre-release cut sets `3.0.0-pre.N` and is tagged `v3.0.0-pre.N` (D70). The release PR sets 3.0.0 and dates the
-  CHANGELOG.
+  pre-release cut sets `3.0.0-pre.N` and is tagged `v3.0.0-pre.N`; the next phase PR sets the next `3.0.0-dev.N`
+  over it (D70). The release PR sets 3.0.0 and dates the CHANGELOG.
 - Each phase adds its entries under the CHANGELOG's 3.0.0 heading, and records its forks in decisions.md.
 - Threads that work in parallel take decision numbers from the blocks the coordinating thread assigns them, so
   their entries never collide; a PR that merges after another puts its entries in numeric order.
@@ -33,8 +33,8 @@ it: where the work goes, what each step must pass, and how the work was done in 
    [messages-from-a-job.md](messages-from-a-job.md).
 
 Steps 6 to 8 start while Phase 4 is open; each part starts once what it needs has merged. Pre-release cuts run
-beside them (see "Pre-release cuts" below): pre.1 from the tip after #14, pre.2 once Phase 4's `--json` and the
-typed-message fix merge, and more as Phase 4 lands and the owner's issues are fixed.
+beside them, and the owner uses each one (see "Pre-release cuts" below): pre.1 from the tip after #14, pre.2 once
+Phase 4's `--json` and the typed-message fix merge, and more as Phase 4 lands and the owner's issues are fixed.
 
 6. **The real-API suite**, in the private smoke kit repository `libar-dev/relay-plugin-cc-smoke`, run by hand and
    locally only; the kit keeps its Apify and Firecrawl CLIs. It runs the real backends where the unit tests mock
@@ -59,10 +59,10 @@ typed-message fix merge, and more as Phase 4 lands and the owner's issues are fi
    guide (with screenshots that explain the features). A screenshot that is published, in the T3 post or the
    user guide, shows no account or session names.
 9. **The release PR**, `release/3.0` into `main`.
-10. **The owner's testing.** Production use of each cut on the M3 and the ThinkPad, with the guide lead's
-    pre-release guide as its checklist; the M1 stays on 2.2.0 as a fallback (D95). Once the release candidate is
-    confirmed (decisions.md, "Open for the owner"), and on the owner's word, the release PR merges with a merge
-    commit, and `v3.0.0` is tagged and published as a GitHub release.
+10. **The release candidate.** The release PR's head is cut as one more pre-release (D70), and the owner uses it
+    on the M3 and the ThinkPad as every cut before it. Once the release candidate is confirmed (decisions.md,
+    "Open for the owner"), and on the owner's word, the release PR merges with a merge commit, and `v3.0.0` is
+    tagged and published as a GitHub release.
 11. **The fleet update, then the publication**, when the owner decides. The merge already makes 3.0.0 what the
     marketplace serves; the publication is the T3 post and, later, public screenshots for users, taken in a
     clean demo setup.
@@ -83,7 +83,8 @@ typed-message fix merge, and more as Phase 4 lands and the owner's issues are fi
   rule 7), and the CHANGELOG and decisions.md entries.
 
 Other PRs into `release/3.0`, such as the reviews' fixes, pass the same gates, except the review of every later
-phase; their last commit updates the CHANGELOG and decisions.md.
+phase; their last commit updates the CHANGELOG and decisions.md. A pre-release cut has gates of its own (see
+"Pre-release cuts").
 
 ## What the release PR must pass
 
@@ -98,7 +99,8 @@ and dropped the demo recording: feature screenshots and the user guide replace i
 - D3's checks of the board: its Mod tests on the test kit's `desktop` mount, which `claude plugin test` runs on
   Fedora, and the manual Desktop pass on the M3 (D54).
 - The screenshots of every user-facing feature, in the CLI and in Desktop, the status line and the board included.
-- The feature walkthrough done, the user guide in the release, and the owner's manual test script ready.
+- The feature walkthrough done, the user guide in the release, and the owner's checklist ready (for the cuts,
+  the guide lead's pre-release guide takes the place of the manual test script).
 - The reviews of step 7 done, and their fixes merged: the skills review with Opus 5.5's skill updates, the
   coverage review, the review of the whole branch, and the UX and UI review.
 - The texts that promise for every relay what holds only for a relay started with the Agent tool, fixed:
@@ -121,24 +123,34 @@ when the owner decides.
 
 ## Pre-release cuts
 
-D95 and D70. A cut is a PR into `release/3.0` that runs `node scripts/bump-version.mjs 3.0.0-pre.N` and adds one
-line under the CHANGELOG's 3.0.0 heading. It passes `npm test`, `npm run check`, `claude plugin validate`,
-`claude plugin test` and CI, and the end-to-end suite has passed on its plugin code on Fedora and on the M3 through
-cmux. Its merge commit is tagged `v3.0.0-pre.N` and pushed; no GitHub release, no npm. The two-family review and the
-bots may follow the merge, and what they find goes into the next cut.
+D95 and D70. Each cut goes on the M3 and the ThinkPad, and the owner uses it for production work, with the guide
+lead's pre-release guide as the checklist; the threads run heavy orchestration testing on both. The M1 stays on
+2.2.0 as the fallback.
 
-libar-infra installs the cut on the M3 and the ThinkPad with its fleet tool, in a terminal the owner watches:
+A cut is a PR into `release/3.0` whose diff is `node scripts/bump-version.mjs 3.0.0-pre.N`, the README's
+Development line and one line under the CHANGELOG's 3.0.0 heading. It passes the gates of any PR into
+`release/3.0`, with `npm run check-version`, and the real-API suite (step 6) on its head on Fedora and on the M3
+through cmux. It merges while `release/3.0` has not moved since that run; otherwise it is rebased and the suite
+runs again. Its merge commit is tagged `v3.0.0-pre.N` and pushed: no GitHub release, no npm. pre.1 was cut at once
+on the owner's word, with the reviews after the merge and the suite's earlier Fedora runs on the same plugin code
+(D70).
 
-1. **A quiet moment.** No relay job starting or running (`companion status --all`), and no session holding a
-   Workflow of relays. `claude plugin marketplace remove` uninstalls every plugin of that marketplace and deletes
-   their `enabledPlugins` entries from every settings file. Copy `~/.claude/settings.json` first.
-2. **Switch.** `claude plugin marketplace remove libar-relay`, `claude plugin marketplace add
-   'libar-dev/relay-plugin-cc#v3.0.0-pre.N'`, `claude plugin install relay@libar-relay`.
+libar-infra installs each cut with its fleet tool, in a terminal the owner watches:
+
+1. **A quiet moment.** No relay job starting or running (`node
+   ~/.claude/plugins/cache/libar-relay/relay/<installed version>/scripts/companion.mjs status --all`), and no
+   session about to reload its plugins while it holds a Workflow of relays. On the ThinkPad the leads hold such
+   Workflows for hours: their sessions keep the build they loaded. Copy `~/.claude/settings.json` first.
+2. **Switch,** from `$HOME`: `claude plugin marketplace remove libar-relay`, `claude plugin marketplace add
+   'libar-dev/relay-plugin-cc#v3.0.0-pre.N'`, `claude plugin install relay@libar-relay`. The remove uninstalls
+   every plugin of that marketplace and drops their `enabledPlugins` entries from the settings it sees: the user's,
+   and those of the folder it runs in.
 3. **Check.** `claude plugin list` shows `3.0.0-pre.N`; a new session's `/relay:status` says `relay-version:
    3.0.0-pre.N`; `~/.claude/settings.json` differs from the copy only in plugin and marketplace entries.
-4. **Sessions.** A session that started before the switch keeps the build it loaded until its plugins reload; new
-   ones run the cut.
-5. **The way back** is the same with `#v2.2.0`.
+4. **Sessions.** A session that started before the switch keeps the build it loaded until its plugins reload,
+   and reloads only when it holds no Workflow of relays. New sessions run the cut.
+5. **The way back** is the same with `#v2.2.0`. Whether 2.2.0 reads a jobs home a cut wrote is checked with pre.2;
+   until then, roll back only once every job the cut started has ended and been read.
 
 No mixed versions across a resume: switch only while nothing runs, and never in the middle of a Workflow. A Workflow
 started under one version finishes, or is abandoned and its jobs cancelled, under that version. Adoption across
