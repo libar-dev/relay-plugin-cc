@@ -115,8 +115,8 @@ otherwise. The others are relay's documented behaviour.
   call again as a new job. Collect its work first.
 - **To collect a cancelled job's work** from a relay started with the Agent tool, send its agent a message such as
   "report what you have done so far, then stop". The job runs a new turn on the same session and reports.
-- A Workflow job's agent has ended, and a message to it does not reach the job: ask Claude to continue the job by
-  its id with the companion's `continue`, as the jobs skill says.
+- **To collect a cancelled Workflow job's work,** ask Claude to continue the job by its id with the companion's
+  `continue`, as the jobs skill says: its agent has ended, so a message to it does not reach the job.
 - **To cancel one job of a running Workflow,** use `/relay:cancel <job>`, from another thread if the lead holds its
   turn. TaskStop cannot target one agent of a Workflow.
 - `/relay:status --workflow <run>` lists every job of a run, in any repository.
@@ -197,5 +197,6 @@ claude plugin install relay@libar-relay
 - New sessions and new T3 threads load the new version. An open session keeps its version until `/reload-plugins`, or
   until its process is replaced (in T3: a Stop, a kill or a restart). Do not reload a session whose relay is running.
 - 2.2.0 reads the jobs pre.1 wrote (checked 22 October). Not checked: continuing or resuming a pre.1 job under
-  2.2.0. After going back, read pre.1's jobs with `/relay:result`; do not continue or resume them.
+  2.2.0, or 2.2.0 reading a later cut's jobs. After going back, read pre.1's jobs with `/relay:result`; do not
+  continue or resume them.
 - When 3.0.0 is released, libar-infra moves the machines back to following `main`.
