@@ -4,8 +4,8 @@ Before 3.0.0, relay ships as pre-release cuts: 3.0.0-pre.1, then pre.2 and on. l
 user scope on the M3 and on the ThinkPad, the way it installs releases, and you use it for real work. The M1 stays on
 relay 2.2.0: if a cut gets in your way, carry on there, or go back (the last section).
 
-Each cut has been through the end-to-end suite on Fedora and on the M3, and its section below lists the issues it
-is known to have. This page is for daily use: what to watch while you work, how to note a problem so a lead can act
+Each cut is checked before it goes on the two machines, and its section below lists the issues it is known to have.
+This page is for daily use: what to watch while you work, how to note a problem so a lead can act
 on it, and how to install a cut or go back by hand. The [README](../../README.md) explains each feature; the user
 guide comes with a later docs PR.
 
@@ -14,14 +14,15 @@ guide comes with a later docs PR.
 Version `3.0.0-pre.1`, tag `v3.0.0-pre.1` (217adc8, 22 October 2026), installed by libar-infra on the M3 and the
 ThinkPad. It is `release/3.0` with the code of 3.0.0-dev.4: a message reaches a running job within seconds, the four
 commands answer without a model turn, a bad header fails at the launch, and TaskStop cancels the job. The status line
-and the board are not in it yet. Its known issues, each fixed in pre.2 or later:
+and the board are not in it yet. Before it was installed, it passed the smoke test and libar-infra's checks on both
+machines, and the end-to-end suite ran on its code on Fedora. Its known issues, each fixed in pre.2 or later:
 
 - **A message typed into an agent's own view is lost.** In the terminal's agent view (`↓`, `Enter`, then type), the
   message never reaches the job, while it runs or after it ends. Send messages through Claude.
-- **A relay can wrap its hand-back in a code fence and be let go.** Now and then (3 of 40 relays in the suite) the
-  relay agent retypes the job's block inside a ``` fence eight times; relay then lets it end. The job itself ran
-  correctly, but `/relay:status` marks it `not handed back` and its block carries a `relay-violation:` line.
-  `/relay:result <job>` has its block and report.
+- **A relay can wrap its hand-back in a code fence and be let go.** Now and then (3 of 40 relays in the suite), a
+  relay started with the Agent tool retypes the job's block inside a ``` fence eight times; relay then lets it end.
+  The job itself ran correctly, but `/relay:status` marks it `not handed back` and its block carries a
+  `relay-violation:` line. `/relay:result <job>` has its block and report.
 - **A job cancelled with TaskStop is marked `not handed back`**, though Claude got its cancelled block.
 - **`/relay:setup` can misread Grok's sign-in** and show it signed out. Run it again; a Grok job shows whether the
   sign-in works.
@@ -83,7 +84,8 @@ Each line is what should happen. When one does not, note it (next section).
 **Stopping**
 - `/relay:cancel`, the message `cancel` and TaskStop each cancel the job within seconds.
 - Stopping the agent yourself (`x` in the agent list, Esc twice in its view, or the Stop button in Desktop's
-  Background tasks) ends the agent and leaves its job running to its end, `not handed back` (D96).
+  Background tasks) ends the agent and leaves its job running to its end, `not handed back` (the owner's decision,
+  D96).
   <!-- pending the fix lead's PR B --> From a later cut, a notice names the job, with `/relay:cancel` and
   `/relay:result`.
 
@@ -99,7 +101,7 @@ Each line is what should happen. When one does not, note it (next section).
 - Commands answer as the assistant's message; steering and continue work as in the terminal. T3 draws no status
   line and no board.
 
-**From pre.2: the status line and the board** <!-- outline until Phase 4's PRs 2 and 3 merge -->
+**Planned for pre.2: the status line and the board** <!-- outline until Phase 4's PRs 2 and 3 merge -->
 - While this repository has jobs to tell about, a line under the prompt reads `relay: 2 running · 1 dead · 3 owed`,
   and it goes away when they end. Terminal and Desktop only.
 - `/relay:board` lists the jobs; selecting one shows its report and how each message was taken; its buttons steer,
