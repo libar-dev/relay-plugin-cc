@@ -138,6 +138,45 @@ test("end to end: prompt, messages before, during and after the run, and every h
   assert.equal(fs.existsSync(path.join(markerDir, "e2e-marker")), false, "the brief was never run by a shell");
 });
 
+test("end to end: a message from another agent steers the running job, and one after the hand-back continues it", async () => {
+  const ctx = relayContext("job", { turnMs: 2500 });
+  ctx.append(ctx.prompt("model: gpt-test\neffort: low\n---\nPeer brief."), ctx.systemReminder());
+  const started = await relayCall(ctx, "Bash", { command: agentCommand("start --from-relay"), description: "Start the Codex job" });
+  assert.equal(started.result.status, 0, started.result.stdout + started.result.stderr);
+  const jobId = /^job: (\S+)$/m.exec(started.result.stdout)[1];
+  ctx.append(ctx.toolUse(started.input.command));
+
+  // A Workflow agent's SendMessage while the turn runs: the harness's peer entry.
+  await waitFor(() => readJobJson(ctx, jobId).turnId && readJobJson(ctx, jobId).state === "running");
+  const during = ctx.peerQueued("Peer during: also check the tests.");
+  ctx.append(during);
+  let waited;
+  for (let round = 0; round < 10; round += 1) {
+    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 120").replace("<id>", jobId), timeout: 180000 });
+    if (!stillRunning(waited)) break;
+  }
+  assert.equal(waited.result.status, 0, waited.result.stdout);
+  const handback = await relayCall(ctx, "SubagentHandback", { message: "x" });
+  assert.equal(handback.decision, "allow");
+  ctx.append(ctx.toolUse("SubagentHandback"));
+
+  // The same agent writes again after the hand-back: the relay is resumed, the job continued.
+  const after = ctx.peerAfterHandback("[quick] Peer after: one more line, please.");
+  ctx.append(after);
+  for (let round = 0; round < 10; round += 1) {
+    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 120").replace("<id>", jobId), timeout: 180000 });
+    if (!stillRunning(waited)) break;
+  }
+  assert.equal(waited.result.status, 0, waited.result.stdout);
+
+  const received = codexReceived(ctx);
+  assert.deepEqual(received.steers.filter((text) => text.startsWith("Peer during")), ["Peer during: also check the tests."], "steered into the running turn once, without the envelope");
+  assert.ok(received.turns.indexOf("[quick] Peer after: one more line, please.") > 0, "the message after the end ran as a new turn");
+  const ledger = path.join(jobDirOf(ctx, jobId), "inbox", "relay");
+  assert.deepEqual(fs.readdirSync(ledger).sort(), [during.uuid, after.uuid].map((uuid) => `${uuid}.json`).sort());
+  assert.doesNotMatch(companion(ctx, ["result", jobId]).stdout, /relay-violation/);
+});
+
 test("end to end under the Workflow harness: the computed task is the prompt, the user request never reaches Codex, the return is the state block", async () => {
   const ctx = relayContext("job", { workflow: "wf_invented-001", turnMs: 1500 });
   const markerDir = makeTempDir("e2e-marker-");

@@ -22,6 +22,7 @@ import {
   pre,
   readJobJson,
   realEntry,
+  peerEntry,
   reason,
   relayContext,
   relayStart,
@@ -135,6 +136,30 @@ test("the parser reads the real prompt byte for byte and recognises messages by 
   );
   assert.deepEqual(parsed.messages.map((message) => message.uuid), [realEntry("queuedBeforeStart").uuid, realEntry("queuedDuringRun").uuid, realEntry("messageAfterHandback").uuid]);
   assert.deepEqual(parsed.problems, []);
+});
+
+test("a message from another agent is read from its origin's body, while the relay works and after it handed back", () => {
+  const entries = [realEntry("prompt"), realEntry("systemReminder"), peerEntry("peerQueuedDuringRun"), peerEntry("peerAfterHandback")];
+  const parsed = parseRelayTranscript(entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+  assert.deepEqual(parsed.messages.map((message) => message.text), [
+    "steer from a workflow agent (sent 2026-10-22T05:53:08.493Z)",
+    "peer message after the hand-back"
+  ]);
+  assert.deepEqual(parsed.messages.map((message) => message.uuid), [peerEntry("peerQueuedDuringRun").uuid, peerEntry("peerAfterHandback").uuid]);
+  assert.deepEqual(parsed.problems, []);
+});
+
+test("a message from another agent with no body is a problem, never skipped in silence", () => {
+  const during = peerEntry("peerQueuedDuringRun");
+  delete during.attachment.origin.body;
+  const after = peerEntry("peerAfterHandback");
+  delete after.origin.body;
+  const parsed = parseRelayTranscript([realEntry("prompt"), during, after].map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+  assert.deepEqual(parsed.messages, []);
+  assert.deepEqual(parsed.problems, [
+    `entry ${during.uuid} is a queued message whose text could not be read`,
+    `entry ${after.uuid} is a message from another agent whose text could not be read`
+  ]);
 });
 
 test("a plain user message that starts with <system-reminder> is still a message", () => {

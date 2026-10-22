@@ -26,8 +26,15 @@ const FIXTURE = JSON.parse(fs.readFileSync(path.join(ROOT, "tests", "fixtures", 
 
 const WORKFLOW_FIXTURE = JSON.parse(fs.readFileSync(path.join(ROOT, "tests", "fixtures", "relay-transcript-workflow-entries.json"), "utf8")).entries;
 
+const PEER_FIXTURE = JSON.parse(fs.readFileSync(path.join(ROOT, "tests", "fixtures", "relay-transcript-peer-entries.json"), "utf8")).entries;
+
 export function realEntry(name) {
   return structuredClone(FIXTURE[name].entry);
+}
+
+// A real entry of a message from another agent of the session (Claude Code 2.1.308).
+export function peerEntry(name) {
+  return structuredClone(PEER_FIXTURE[name].entry);
 }
 
 // An entry in the shape of a real workflow subagent transcript; every text is invented.
@@ -202,6 +209,19 @@ export function relayContext(behavior = "job", options = {}) {
       return fresh("messageAfterHandback", agentId, (entry) => {
         entry.message.content = `The coordinator sent a message while you were working:\n${text}\n\nAddress this before completing your current task.`;
       });
+    },
+    // A message from another agent: the harness wraps it, and keeps the text in origin.body.
+    peerQueued(text, from = "a0peer") {
+      return fresh("peerQueuedDuringRun", agentId, (entry) => {
+        entry.attachment.prompt = `<agent-message from="${from}">\n${text}\n</agent-message>`;
+        entry.attachment.origin = { ...entry.attachment.origin, from, senderTaskId: from, name: from, body: text };
+      }, peerEntry);
+    },
+    peerAfterHandback(text, from = "a0peer") {
+      return fresh("peerAfterHandback", agentId, (entry) => {
+        entry.message.content = entry.message.content.replace(/<agent-message from="[^"]*">\n[\s\S]*?\n<\/agent-message>/, `<agent-message from="${from}">\n${text}\n</agent-message>`);
+        entry.origin = { ...entry.origin, from, senderTaskId: from, name: from, body: text };
+      }, peerEntry);
     },
     userTurn(text) {
       return { parentUuid: null, isSidechain: true, agentId, type: "user", message: { role: "user", content: text }, uuid: randomUUID(), timestamp: new Date().toISOString() };
