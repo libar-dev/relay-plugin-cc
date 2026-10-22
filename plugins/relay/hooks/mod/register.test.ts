@@ -1208,6 +1208,12 @@ for (const surface of SURFACES) {
     expect(await rowText(ui, 'j-2')).toBe('  j-2 · codex · dead · attempt 2 · 3 owed · 1 violation')
     expect(await rowText(ui, 'j-1')).toBe('  j-1 · codex · completed · attempt 1 · not handed back')
     expect((await ui.findAll({ type: 'Button' })).map((b: any) => b.key)).toEqual(['job:j-5', 'job:j-4', 'job:j-3', 'job:j-2', 'job:j-1', 'more'])
+    // The keys the pane takes land on the first row, not on nothing.
+    const ring = async () => (await ui.findAll({ type: 'Button' })).filter((b: any) => b.props.autoFocus).map((b: any) => b.key)
+    expect(await ring()).toEqual(['job:j-5'])
+    // Once a row is selected the ring starts there.
+    await ui.press({ key: 'job:j-2' })
+    expect(await ring()).toEqual(['job:j-2'])
 
     // More reads a page more.
     await ui.press({ key: 'more' })
@@ -1236,6 +1242,7 @@ for (const surface of SURFACES) {
 
     expect(seen.runs.at(-1)).toEqual({ argv: companionArgv('result', 'j-1', '--json'), init: { cwd: CWD, timeoutMs: 30000 } })
     expect(await rowText(ui, 'j-1')).toMatch(/^> j-1/)
+    expect((await ui.find({ key: 'job:j-1' }))?.props.autoFocus).toBe(true)
     expect(await ui.find({ type: 'Text', text: 'model gpt-6.1-sol · effort low' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'relay review · Workflow run wf_7f3a' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '- steer · stop after the tests · steered' })).toBeDefined()

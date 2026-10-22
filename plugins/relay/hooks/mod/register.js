@@ -565,9 +565,13 @@ async function drawBoard($, e, board) {
   if (list.jobs.length === 0) {
     nodes.push(h(Text, { dimColor: true }, "No jobs in this repository."));
   }
+  // The pane takes the keys when it opens and at ctrl+x tab; the ring then starts on the selected row, or
+  // the first, rather than on nothing, so the person sees where the keys went.
+  const ring = list.jobs.some((one) => one.id === selected) ? selected : list.jobs[0]?.id;
   for (const job of list.jobs) {
     const mark = job.id === selected ? "> " : "  ";
-    nodes.push(h(Button, { key: "job:" + job.id, plain: true, onPress: () => selectJob($, board, job.id) }, mark + rowText(job, list.readAt)));
+    const focus = job.id === ring ? { autoFocus: true } : {};
+    nodes.push(h(Button, { key: "job:" + job.id, plain: true, ...focus, onPress: () => selectJob($, board, job.id) }, mark + rowText(job, list.readAt)));
   }
   if (list.nextCursor !== null && (await read($, boardLimit)) < 200) {
     nodes.push(h(Button, { key: "more", label: "More", onPress: () => moreJobs($, board) }));
