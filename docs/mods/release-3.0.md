@@ -77,15 +77,15 @@ Phase 4's `--json` and the typed-message fix merge, and more as Phase 4 lands an
   is fixed or declined, then the thread is resolved.
 - When the phase changes plugin code: its own checks in the live suite, in the terminal and in T3, on the Fedora
   ThinkPad, with their records committed and `docs/live/capabilities.md` regenerated
-  (`node scripts/live/suite.mjs table`); and the smoke kit (`relay-plugin-cc-smoke`) on the PR's head, installed
-  with `scripts/smoke/install-local.sh`. A phase that changes no plugin code, such as Phase 6's report, raises no
-  version and runs neither (D51).
+  (`node scripts/live/suite.mjs table`); and the smoke kit (`relay-plugin-cc-smoke`) on the PR's head, which
+  libar-infra installs on the lead's request (`scripts/smoke/install-local.sh`; D97). A phase that changes no
+  plugin code, such as Phase 6's report, raises no version and runs neither (D51).
 - Its last commit updates plan.md: a review of every later phase in light of what the PR learned (the plan's
   rule 7), and the CHANGELOG and decisions.md entries.
 
 Other PRs into `release/3.0`, such as the reviews' fixes, pass the same gates, except the review of every later
-phase; their last commit updates the CHANGELOG and decisions.md. A pre-release cut follows its own, shorter procedure (see
-"Pre-release cuts").
+phase; their last commit updates the CHANGELOG and decisions.md. A pre-release cut follows its own, shorter
+procedure (see "Pre-release cuts").
 
 ## What the release PR must pass
 
@@ -124,18 +124,20 @@ when the owner decides.
 
 ## Pre-release cuts
 
-D95, D97, D98 and D70. Each cut goes on the M3 and the ThinkPad and is tested there, with the guide lead's
-pre-release guide as the owner's checklist; the threads run heavy orchestration testing on both. Fixes go into the
-next cut, and cuts keep coming for 48 hours, until the owner is confident; only then do heavy production workloads
-go onto both machines. A survey of how the cuts are used runs partway through and at the end (D98). The M1 stays on
-2.2.0 as the fallback.
+D95, D97, D98 and D70. Each cut goes on the M3 and the ThinkPad. The owner tests it with real use, with the guide
+lead's pre-release guide as a checklist, and the threads' testing runs against it: the real-API suite, infra's
+thread tests and heavy orchestration runs. Fixes go into the next cut, and cuts keep coming for 48 hours; the owner's
+heavy production workloads wait until the owner is confident. A survey of how the cuts are used runs partway through
+and at the end (D98). The M1 stays on 2.2.0 as the fallback.
 
 A cut is a PR into `release/3.0` that changes only the version fields `node scripts/bump-version.mjs 3.0.0-pre.N`
-sets, the README's Development line and one CHANGELOG entry under the 3.0.0 heading (D70). It merges once CI
-passes, and its merge commit is tagged `v3.0.0-pre.N` and pushed: no GitHub release, no npm. The two-family review
-and the bots follow the merge, and what they find goes into the next cut. The fixes and phase PRs it carries have
-passed their own gates first. The coordinating thread hears before each tag and has libar-infra install the cut;
-no thread installs a build itself, at any scope.
+sets, the README's Development line and one CHANGELOG entry under the 3.0.0 heading (D70). It merges once
+`npm run check-version` and CI pass, and its merge commit is tagged `v3.0.0-pre.N` and pushed: no GitHub release,
+no npm. The two-family review and the bots follow the merge, and what they find goes into the next cut. The fixes
+and phase PRs it carries have passed their own gates first. The release lead tells the coordinating thread before
+it pushes each tag, and the coordinating thread has libar-infra install the cut. Every plugin install or update on
+a machine, at any scope, goes through libar-infra; a `--plugin-dir` run installs nothing and stays with the leads
+(D97).
 
 libar-infra installs each cut with its fleet tool, in a terminal the owner watches:
 
@@ -151,8 +153,10 @@ libar-infra installs each cut with its fleet tool, in a terminal the owner watch
    3.0.0-pre.N`; `~/.claude/settings.json` differs from the copy only in plugin and marketplace entries.
 4. **Sessions.** A session that started before the switch keeps the build it loaded until its plugins reload or
    its process is replaced; it reloads only when it holds no Workflow of relays. New sessions run the cut.
-5. **The way back** is the same with `#v2.2.0`. pre.1's rollback check showed that 2.2.0 reads the jobs pre.1 wrote
-   (D70); after a rollback, check that 2.2.0's `status --all` lists the jobs home.
+5. **The way back** is the same with `#v2.2.0`. pre.1's rollback check showed that 2.2.0's companion reads ended
+   jobs pre.1 wrote (D70); a running job, `continue` across versions and a `cancel --attempt` record were not
+   checked. Roll back only once every job the cut started has ended and been read, and check afterwards that
+   2.2.0's `status --all` lists the jobs home.
 
 No mixed versions across a resume. A Workflow started under one version finishes, or is abandoned and its jobs
 cancelled, under that version; adoption across versions is untested. A session that held an old version's Workflow
@@ -175,13 +179,15 @@ What worked in Phase 1:
   per-session bypass setting and a Sonnet lead, and fails the run when `~/.claude/settings.json` changed. A check
   that needs another plugin names a probe Mod from `scripts/live/probes/`, loaded with a second `--plugin-dir`;
   such a check runs in the terminal only.
-- In T3, the lead installs the build into the smoke folder (`scripts/smoke/install-local.sh
-  ~/dev-libar/relay-plugin-cc-smoke`), runs `node scripts/live/suite.mjs prepare <check> --surface t3 --work-dir
-  ~/dev-libar/relay-plugin-cc-smoke`, and sends the printed prompt as the first message of a new thread of the T3
-  project `relay-plugin-cc-smoke` (`t3_thread_launch`, Sonnet). It follows the thread with `t3_thread_wait`,
-  sends a message if the thread stops before the check's marker, and then runs `node scripts/live/suite.mjs analyze
-  <run id>`, which finds the thread's transcript by the prompt's first line.
-- The smoke kit run, a phase PR's gate: `scripts/smoke/install-local.sh ~/dev-libar/relay-plugin-cc-smoke`, then
+- In T3, libar-infra installs the build into the smoke folder on the lead's request
+  (`scripts/smoke/install-local.sh ~/dev-libar/relay-plugin-cc-smoke`; D97). The lead runs `node
+  scripts/live/suite.mjs prepare <check> --surface t3 --work-dir ~/dev-libar/relay-plugin-cc-smoke`, and sends the
+  printed prompt as the first message of a new thread of the T3 project `relay-plugin-cc-smoke`
+  (`t3_thread_launch`, Sonnet). It follows the thread with `t3_thread_wait`, sends a message if the thread stops
+  before the check's marker, and then runs `node scripts/live/suite.mjs analyze <run id>`, which finds the thread's
+  transcript by the prompt's first line.
+- The smoke kit run, a phase PR's gate, with libar-infra running the install and the uninstall on the lead's request
+  (D97): `scripts/smoke/install-local.sh ~/dev-libar/relay-plugin-cc-smoke`, then
   `scripts/smoke/pane.sh start relay-smoke ~/dev-libar/relay-plugin-cc-smoke -- claude
   --dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}'`, then the kit's workflow
   with `args {"dir": "/home/darkomijic/dev-libar/relay-plugin-cc-smoke"}` and its plain fan-out, then

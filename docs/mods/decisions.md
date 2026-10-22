@@ -606,22 +606,25 @@ How D95's cuts are made.
   smoke installs use marketplaces of their own, and the live suite runs `--plugin-dir`. Rejected: `3.0.0-pre.N.M`
   for dev builds, which reads like a cut; renaming the dev series, which would change D6 for no reader.
 - **The cut PR** changes only the version fields, the README's Development line and one CHANGELOG entry. It merges
-  once CI passes, and its merge commit is tagged; the coordinating thread then has libar-infra install the cut. The
-  owner ruled the loop simple: fix, cut, install, test with real use, repeat. With a diff of version strings, the
-  two-family review and the bots follow the merge, and what they find goes into the next cut. The fixes and phase
-  PRs a cut carries have passed their own gates before they merged.
+  once `npm run check-version` and CI pass. The release lead tells the coordinating thread before it pushes the
+  tag on the merge commit, and the coordinating thread has libar-infra install the cut. The owner ruled, through the
+  coordinating thread, that the loop stays simple: fix, cut, install, test with real use, repeat (D97). With a diff
+  of version strings, the two-family review and the bots follow the merge, and what they find goes into the next
+  cut. The fixes and phase PRs a cut carries have passed their own gates before they merged.
 - **The release candidate** is the last cut, made from `release/3.0` once the reviews' fixes have merged. The
   release PR then changes only the version (3.0.0), the README line and the CHANGELOG's date, so the owner's
   machines run the plugin code that merges. A change to the plugin after the last cut needs another cut.
 - **pre.1** (217adc8, from c73e053) was the first cut, made at once on the owner's word that it be installed: no
   plugin code had changed since 962130b, where the real-API suite's recorded run on Fedora passed or hit its known
-  limits, but for the fenced hand-back the typed-message fix closes. libar-infra installed it on the ThinkPad while
-  a lead's Workflow had two relay jobs running, which finished under that session's 2.2.0. A rollback check ran
-  after the tag and passed: 2.2.0's companion read a completed job, a job cancelled by the message `cancel` and one
-  cancelled by TaskStop, all written by pre.1 in a live session, with the same output as pre.1's, and the seven
-  jobs pre.1 had written in the ThinkPad's jobs home.
+  limits, but for the fenced hand-back the typed-message fix closes. pre.1's companion listed the same 404 jobs as
+  2.2.0 in a copy of a 2.2.0 jobs home, and gave the same report for one ended job. libar-infra installed it on the
+  ThinkPad while a lead's Workflow had two relay jobs running, which finished under that session's 2.2.0.
+- **pre.1's rollback check** ran after the tag and passed. A live pre.1 session wrote three jobs: one completed, one
+  cancelled by the message `cancel`, one cancelled by TaskStop. 2.2.0's companion listed them (`status --all`) and
+  gave the same `result` output as pre.1's. It also listed and read the seven completed jobs pre.1 had written in
+  the ThinkPad's jobs home. Not checked: a running job, `continue` across versions, a `cancel --attempt` record.
 
-### D95. Pre-release cuts before 3.0.0, on the M3 and the ThinkPad (owner, 22 October 2026)
+### D95. Pre-release cuts before 3.0.0, on the M3 and the ThinkPad (owner, 22 October 2026; amended by D97)
 
 The owner, in four messages that day:
 
@@ -697,20 +700,35 @@ The owner, after pre.1 was installed:
 > and fedora.
 
 So pre.1 stays installed on the M3 and the ThinkPad and is tested now. What its smoke runs, the suites and the
-reviews find is fixed, pre.2 is cut, and pre-releases keep coming for 48 hours, until the owner is confident. Only
-then do heavy production workloads go onto the M3 and the ThinkPad. The loop stays simple, as the owner ruled: fix,
-cut (D70), libar-infra installs the cut at user scope on both machines, the owner tests it with real use, repeat.
+reviews find is fixed, pre.2 is cut, and pre-releases keep coming for 48 hours, until we are confident. Only then do
+heavy production workloads go onto the M3 and the ThinkPad.
 
-What it changes: D95. The cuts are tested and fixed for 48 hours before the owner's production work on them grows
-to heavy workloads. Arranged by the coordinating thread: a plan for the 48 hours, with what each cut must fix and a
-go/no-go for heavy production, which the owner gives.
+Later that night the owner ruled, through the coordinating thread, that the loop stays simple: fix, cut, libar-infra
+installs the cut, the owner tests it with real use, repeat. A cut is the version PR with its checks, then the tag
+(D70). And every plugin install or update on a machine, at any scope, and every infrastructure change, goes through
+libar-infra; the owner, in that thread: "any plugin updates, any infrastructure changes, need to be handled by
+prompting the infra project session."
+
+What it changes:
+
+- **D95.** The cuts are tested and fixed for 48 hours before the owner's production work on them grows to heavy
+  workloads.
+- **D70's cut.** The per-cut gates planned that evening are dropped: the rollback check, the real-API suite on the
+  cut's head and the throwaway-`HOME` check. pre.1's rollback check stays on record.
+- **The smoke kit's installs.** libar-infra runs `scripts/smoke/install-local.sh` and its uninstall for the leads; a
+  `--plugin-dir` run installs nothing and stays with the leads.
+
+Arranged by the coordinating thread: a plan for the 48 hours, from 22 October 23:45 CEST to about 24 October 23:45,
+with what each cut must fix and a go/no-go for heavy production. The owner decides when we are confident.
 
 ### D98. A survey of how the pre-releases are used (owner, 22 October 2026)
 
 > We'll do this kind of survey again. https://github.com/libar-dev/relay-plugin-cc/pull/5
 
-A survey like relay 2.2.0's (PR #5) reads every T3 thread on the M1, the M3 and the ThinkPad, and the jobs homes,
-for how the pre-releases are used and where relay fails. It runs twice: once partway through D97's 48 hours, to feed
-the next cut, and once at the end, before the go for heavy production. Each pass records its cutoff in
-[docs/thread-surveys.md](../thread-surveys.md), and the next starts there. Client threads are read for relay's
-behaviour only, and nothing from a client goes into the repository.
+So the pre-releases get a survey like relay 2.2.0's (PR #5). Client threads are read for relay's behaviour only, and
+nothing from a client goes into the repository, as [docs/thread-surveys.md](../thread-surveys.md) says.
+
+Arranged by the coordinating thread: the survey reads every T3 thread on the M1, the M3 and the ThinkPad, and the
+jobs homes, for how the pre-releases are used and where relay fails. It runs twice: once partway through D97's 48
+hours, to feed the next cut, and once at the end, before the go for heavy production. Each pass records its cutoff
+in docs/thread-surveys.md, and the next starts there.
