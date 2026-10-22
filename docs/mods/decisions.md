@@ -18,7 +18,8 @@ Entries are never edited after the fact. A reversed decision gets a new entry th
 
 ## Open for the owner
 
-None.
+- **What confirms the release candidate before the owner's manual testing** (D60, part 11). Read for now as the
+  automated checks passing on the release candidate; to confirm with the owner at that step.
 
 ## Entries
 
@@ -456,10 +457,13 @@ attempts. `C steer` and `C continue` already reach a job without its relay. The 
 
 The owner's decisions after PR #12, in parts. What they change:
 
-- **D3 and D54.** D3's one manual Desktop pass of the board becomes part of the screenshots of every user-facing
-  feature (part 4). D54's route, the M3 through Cua Driver, now takes the CLI's screenshots as well as Desktop's.
-- **The steering demo.** release-3.0.md's release gate "a recording of the steering demo the funding notes ask
-  for" is dropped (part 3). Its "Sequence" and "What the release PR must pass" follow these parts.
+- **D3 and D54.** D3's manual Desktop pass of the board stands, on the M3 (D54). Beside it come screenshots of
+  every user-facing feature, the board's included (part 4), and D54's route, the M3 through Cua Driver, now takes
+  the CLI's screenshots as well as Desktop's.
+- **The steering demo.** The release gate "a recording of the steering demo the funding notes ask for" is dropped
+  (part 3).
+
+release-3.0.md's "Sequence" and "What the release PR must pass" follow these parts.
 
 The parts:
 
@@ -479,7 +483,7 @@ The parts:
 6. **A UX and UI review by Opus 5.5** of the user-facing surfaces, with the screenshots: the commands' output, the
    status line, the board (a narrow and a wide terminal, and Desktop), the README, `docs/desktop.md` and the user
    guide.
-7. **A review of every skill by GPT-6 Astra**, including the skills that are missing: `plugins/relay/skills/`
+7. **A review of every skill the plugin ships by GPT-6 Astra**, and of the skills it is missing: `plugins/relay/skills/`
    (jobs with `internals.md`, `grok-home.md` and `kimi-home.md`; codex-prompting with its references;
    result-handling), `agents/job.md` and `commands/`. Opus 5.5 makes the skill updates.
 8. **A test-coverage review by Kimi K3 at max effort**, as a T3 Code delegate.
@@ -495,11 +499,10 @@ The parts:
      of it are stale: `hi-refused` is now refused at the spawn.
 10. **T3 Code screenshots for the post to the T3 community** ([t3-code.md](t3-code.md),
     [t3-code-discord-post.md](t3-code-discord-post.md)): relay in a T3 thread on the M3 (a command's output, a
-    steered job, a Workflow relay), beside what T3 does not draw, the status line and the board.
+    steered job, a Workflow relay), beside what T3 does not draw (the status line and the board).
 11. **A manual test script for the owner.** Once the release candidate is confirmed, the owner tests it by hand on
     one Mac and on Fedora at the same time, and the M1 stays on the released relay as a fallback. One feature
     walkthrough feeds both the script, each step with its expected result, and the user guide, with screenshots
-    that explain the features. Which confirmation the testing waits for is to be checked with the owner at that
-    step; it is read for now as the automated checks passing on the release candidate.
+    that explain the features.
 12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
     owner decides.

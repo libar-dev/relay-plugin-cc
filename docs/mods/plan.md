@@ -36,7 +36,7 @@ or in Desktop.
    command hooks.** A Mod hook runs above the plugin's command hooks and is skipped when it fails. That makes it
    the wrong place for the guard and the right place for `session.send`, which no command hook sees.
 6. **One test machine.** All development and live testing run on the Fedora ThinkPad, which does nothing else
-   meanwhile.
+   meanwhile. The release's runs on a Mac and the screenshots on the M3 are the exceptions (D3, D54, D60).
 7. **Every PR reviews the rest of the plan.** A phase's PR ends with a review of every later phase, in light of
    what the PR learned: what the live suite showed, what the declarations or the code turned out to be, what was
    harder or easier than planned. The review records which assumptions held, which phases change and why, and which

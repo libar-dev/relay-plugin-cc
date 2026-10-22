@@ -13,7 +13,7 @@ it: where the work goes, what each step must pass, and how the work was done in 
   release PR sets 3.0.0 and dates the CHANGELOG.
 - Each phase adds its entries under the CHANGELOG's 3.0.0 heading, and records its forks in decisions.md.
 - Threads that work in parallel take decision numbers from the blocks the coordinating thread assigns them, so
-  their entries never collide; whichever PR merges second keeps decisions.md in numeric order.
+  their entries never collide; a PR that merges after another puts its entries in numeric order.
 
 ## Sequence
 
@@ -30,33 +30,37 @@ it: where the work goes, what each step must pass, and how the work was done in 
 5. **Phase 6**, the investigation report, at any point. No code (PR #9). Reported in
    [messages-from-a-job.md](messages-from-a-job.md).
 
-Steps 6 to 8 run beside Phase 4, each as soon as what it waits for is merged (D60).
+Steps 6 to 8 start while Phase 4 is open; each part starts once what it needs has merged.
 
 6. **The real-API suite**, in the private smoke kit repository `libar-dev/relay-plugin-cc-smoke`, run by hand and
-   locally only. It runs the real backends where the unit tests mock them: a dynamic Workflow, a plain fan-out
-   with the Agent tool, tool calls from jobs, steering and continue, cancel and TaskStop, a refused header, the
-   commands the module answers, the status line and the board once built, on every backend. It can start now and
-   adds the status line and the board when they merge.
+   locally only; the kit keeps its Apify and Firecrawl CLIs. It runs the real backends where the unit tests mock
+   them: a dynamic Workflow, a plain fan-out with the Agent tool, tool calls from jobs, steering and continue,
+   cancel and TaskStop, a refused header, the commands the module answers, the status line and the board once
+   built, on every backend. It does not wait for Phase 4, and adds the status line and the board when they merge.
 7. **The reviews**, as T3 Code delegates, each given the brief and the code:
-   - After Phase 4's `--json` PR, which changes the jobs skill: GPT-6 Astra's review of every skill, the missing
-     ones included, `agents/job.md` and `commands/`, and Kimi K3's test-coverage review at max effort. Opus 5.5
-     makes the skill updates in one PR, with the texts that promise for every relay what holds only for one the
-     Agent tool started ([plan.md](plan.md#after-phase-6-what-held-and-what-changed)); the coverage fixes are
-     another PR. Once the status line and the board merge, a second pass of both reviews covers them.
-   - After Phase 4: GPT-6 Astra's review of the whole `release/3.0` branch against `main`, at `xhigh`, and
-     Opus 5.5's UX and UI review of the user-facing surfaces with the screenshots. Their fixes merge before the
-     release PR.
+   - After Phase 4's `--json` PR, which changes the jobs skill: GPT-6 Astra's review of every skill the plugin
+     ships and the ones it is missing, `agents/job.md` and `commands/`, and Kimi K3's test-coverage review at max
+     effort. Opus 5.5 makes the skill updates in one PR, with the texts that promise for every relay what holds
+     only for a relay started with the Agent tool ([plan.md](plan.md#after-phase-6-what-held-and-what-changed));
+     the coverage fixes are another PR. Once the status line and the board merge, a second pass of both reviews
+     covers them.
+   - After Phase 4: GPT-6 Astra's review of the whole `release/3.0` branch against `main`, at `xhigh`. And, once
+     step 8's screenshots and guide exist, Opus 5.5's UX and UI review, with the screenshots, of the commands'
+     output, the status line, the board, the README, `docs/desktop.md` and the user guide. Their fixes merge
+     before the release PR.
 8. **The screenshots, the walkthrough and the guide.** Screenshots of every user-facing feature, in the CLI and in
    Desktop, taken on the M3 (D54), with the status line and the board once built (the CLI in a narrow and a wide
    terminal, and Desktop); they stay local. T3 screenshots for the post to the T3 community. One feature
    walkthrough, which feeds the owner's manual test script (each step with its expected result) and the user
    guide (with screenshots that explain the features).
 9. **The release PR**, `release/3.0` into `main`.
-10. **The owner's manual testing** of the release candidate, with the manual test script, on one Mac and on
-    Fedora at the same time; the M1 stays on the released relay as a fallback. Then, on the owner's word, the
-    release PR merges with a merge commit, and `v3.0.0` is tagged and published as a GitHub release.
-11. **The fleet update, then the publication**, when the owner decides: the T3 post, and later the public
-    screenshots for users, taken in a clean demo setup.
+10. **The owner's manual testing.** Once the release candidate is confirmed (decisions.md, "Open for the owner"),
+    the owner tests it by hand with the manual test script, on one Mac and on Fedora at the same time; the M1
+    stays on 2.2.0 as a fallback. Then, on the owner's word, the release PR merges with a merge commit, and
+    `v3.0.0` is tagged and published as a GitHub release.
+11. **The fleet update, then the publication**, when the owner decides. The merge already makes 3.0.0 what the
+    marketplace serves; the publication is the T3 post and, later, public screenshots for users, taken in a
+    clean demo setup.
 
 ## What a phase PR must pass
 
@@ -73,30 +77,36 @@ Steps 6 to 8 run beside Phase 4, each as soon as what it waits for is merged (D6
 - Its last commit updates plan.md: a review of every later phase in light of what the PR learned (the plan's
   rule 7), and the CHANGELOG and decisions.md entries.
 
+Other PRs into `release/3.0`, such as the reviews' fixes, pass the same gates.
+
 ## What the release PR must pass
 
-As D60 sets it:
+D60 added the real-API suite, the screenshots, the walkthrough with its test script and guide, and the reviews,
+and dropped the demo recording: feature screenshots and the user guide replace it.
 
 - `npm test`, `npm run check`, `claude plugin validate plugins/relay`, `claude plugin test plugins/relay`, CI,
   CodeRabbit and Greptile.
 - The full live suite on all four backends, in the terminal and in T3, on the release head.
 - The real-API suite on the release head, on Fedora and on a Mac through cmux.
+- D3's manual Desktop pass of the board, on the M3 (D54).
 - The screenshots of every user-facing feature, in the CLI and in Desktop, the status line and the board included.
-  The board's Desktop captures are D3's manual pass.
+- The feature walkthrough, with the owner's manual test script and the user guide it feeds.
 - The reviews of step 7 done, and their fixes merged: the skills review with Opus 5.5's skill updates, the
   coverage review, the review of the whole branch, and the UX and UI review.
-- The texts that promise for every relay what holds only for one the Agent tool started, fixed: design.md's
-  interface table and "Under the Workflow tool", the jobs skill's message rules, `agents/job.md` on continue and
-  cancel, and the CHANGELOG's Phase 1 line on messages from other agents.
+- The texts that promise for every relay what holds only for a relay started with the Agent tool, fixed:
+  design.md's interface table and "Under the Workflow tool", the jobs skill's message rules, `agents/job.md` on
+  continue and cancel, and the CHANGELOG's Phase 1 line on messages from other agents. The docs say what a
+  Workflow relay does with a steer, a continue and the message `cancel`, and each claim rests on a live check or
+  is marked unmeasured ([plan.md](plan.md#after-phase-6-what-held-and-what-changed)).
 - The capability table, generated from the suite's records, in the README.
 - The smoke kit's `SMOKE-TEST.md` current for 3.0.
 - 3.0.0 everywhere `scripts/bump-version.mjs` sets it, the marketplace included, and the consolidated CHANGELOG,
   dated.
 
-No demo recording: feature screenshots and the user guide replace it. The PR merges only on the owner's word, after
-the owner's manual testing, with a merge commit; then the tag `v3.0.0` and a GitHub release. There is no npm
-release: users install relay from this repository's marketplace, which serves `main`. Then the fleet update, then
-the publication. The owner decides the timing of both.
+The PR merges only on the owner's word, after the owner's manual testing, with a merge commit; then the tag
+`v3.0.0` and a GitHub release. There is no npm release: users install relay from this repository's marketplace,
+which serves `main`, so the merge is what makes 3.0.0 available. Then the fleet update, then the publication, each
+when the owner decides.
 
 ## How the work is done
 
