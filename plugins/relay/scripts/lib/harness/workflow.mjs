@@ -52,9 +52,15 @@ const WORKFLOW_TRAILERS = Object.freeze({
 });
 
 // What Claude Code writes as a user entry, with no origin and no `isMeta`, when it interrupts an agent's turn: a
-// TaskStop, or a Workflow stopped while the agent ran (read from Claude Code 2.1.308). A relay that runs again
-// afterwards (a Workflow relay's other loop, or a relay a message resumes) must not hand it to the job as a message.
-const INTERRUPT_MARKERS = Object.freeze(["[Request interrupted by user]", "[Request interrupted by user for tool use]"]);
+// TaskStop, or a Workflow stopped while the agent ran; the third stands in for a note marked
+// `interruptedByShutdown` when an agent the session's end interrupted is resumed (read from Claude Code 2.1.308).
+// A relay that runs again afterwards (a Workflow relay's other loop, or a relay a message resumes) must not hand
+// it to the job as a message.
+const INTERRUPT_MARKERS = Object.freeze([
+  "[Request interrupted by user]",
+  "[Request interrupted by user for tool use]",
+  "[Request interrupted: the session ended before this agent finished. Nobody asked it to stop.]"
+]);
 
 export function isInterruptMarker(text) {
   return typeof text === "string" && INTERRUPT_MARKERS.includes(text.trim());

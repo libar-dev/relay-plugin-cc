@@ -32,7 +32,7 @@ Phase 3, spawn and stop like a Claude agent:
   TaskStop on a Workflow comes back with the list of its jobs that keep running. A cancel the hook
   could not finish is told to the caller and shown as a `relay-violation:` line. The
   message `cancel` still cancels a job and lets its relay hand back the cancelled state; it is also
-  how to cancel one Workflow agent's job, since TaskStop cannot stop one agent of a Workflow.
+  how to cancel one Workflow agent's job, since TaskStop has no task for one agent of a Workflow.
 - **A bad header fails at the spawn.** The hooks module has an `agent.spawn` hook: before a
   `relay:job` agent starts, it runs the new `companion check-header`, the parser and request
   builder `start` uses, and refuses the spawn with the parser's message. The Agent call fails, or a

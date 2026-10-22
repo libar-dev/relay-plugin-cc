@@ -323,9 +323,9 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   relay and the job has not ended, it runs `cancel` and waits for it, so the caller's TaskStop
   returns with the cancelled job's block beside it. A cancel that fails, or that leaves a newer
   worker still running, is told to the caller and recorded as a relay violation. Claude Code has no
-  TaskStop for one agent of a Workflow until a message has reached it (a message to a running
-  Workflow relay starts a second loop under its id, which TaskStop can stop, and that cancels the job
-  like any relay's). A TaskStop on a whole Workflow cancels nothing: its
+  TaskStop for one agent of a Workflow, except while a second loop a message started runs (a message
+  to a running Workflow relay starts one under its id, and a TaskStop on it cancels the job like any
+  relay's). A TaskStop on a whole Workflow cancels nothing: its
   relays end, the jobs run on, and the `resumeFromRunId` that usually follows adopts them, which it
   never does for a cancelled job. The hook tells the caller which of the run's jobs keep running,
   with the command to cancel one. Cancel one Workflow job while its relay runs with the message

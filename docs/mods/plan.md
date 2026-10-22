@@ -247,9 +247,10 @@ What shipped:
   takes the stopped agent's id from the tool's result: the input names the agent by id or by name, the result
   always by id (D41). When the agent is its job's current relay and the job has not ended, the hook runs
   `companion cancel`, waits, and gives the caller the cancelled job's block as its context (D43); a failed cancel
-  is told to the caller and recorded as a relay violation. Claude Code has no TaskStop for one Workflow agent, and a
-  TaskStop on a whole Workflow cancels nothing, so a resume adopts its jobs (D42); the hook lists the run's jobs
-  that keep running (D47). The message `cancel` stays (D44).
+  is told to the caller and recorded as a relay violation. Claude Code has no TaskStop for one Workflow agent (D48
+  has the exception), and a TaskStop on a whole Workflow cancels nothing, so a resume adopts its jobs (D42); the
+  hook lists the run's jobs that keep running (D47). The message `cancel` stays (D44). A stopped relay that runs
+  again never hands Claude Code's interrupt note to its job (D48).
 - design.md, the relay:jobs skill and internals, `agents/job.md`, the README and architecture.md describe both.
 - The live suite: `stop`, `session-end` (a `runTerminal` check that ends the pane's Claude process mid-job,
   waits for its pid to go, and follows the jobs to their end) and `spawn-check`.

@@ -307,8 +307,8 @@ export function parseRelayTranscript(text, toolUseId = null) {
     if (!fromCoordinator && classifyHarnessEntry(messageText) === "user-request") {
       return; // harness context, never a message
     }
-    if (!fromCoordinator && isInterruptMarker(messageText)) {
-      return; // Claude Code's note that it interrupted the relay, never a message
+    if (entry.origin == null && isInterruptMarker(messageText)) {
+      return; // Claude Code's note that it interrupted the relay, never a message; it carries no origin
     }
     addMessage(fromCoordinator ? unwrapCoordinator(messageText) : messageText, fromCoordinator ? "coordinator" : "user");
   });

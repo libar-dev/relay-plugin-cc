@@ -239,7 +239,7 @@ the job through that id's relay pointer. It cancels only when the agent is the j
 Code kills the relay's running Bash call, and no `SubagentStop` fires for a stopped relay, so nothing else of the
 guard runs. Reopen if TaskStop's result stops naming the agent by id.
 
-### D42. A TaskStop on a whole Workflow cancels nothing (Phase 3 thread)
+### D42. A TaskStop on a whole Workflow cancels nothing (Phase 3 thread; amended by D48)
 
 D2 covers a TaskStop on a relay agent. Claude Code offers no TaskStop for one agent of a Workflow (`No task found
 with ID`), and a TaskStop on the Workflow's own task (`task_type: "local_workflow"`) ends all its relays at once.
@@ -259,7 +259,7 @@ and recorded as a relay violation, so `status` and `result` show it. Rejected: r
 `async` hook or a background child), which returns sooner but tells the caller nothing, and leaves a failed
 cancel unseen until someone reads the job.
 
-### D44. The message `cancel` stays beside TaskStop (Phase 3 thread)
+### D44. The message `cancel` stays beside TaskStop (Phase 3 thread; amended by D48)
 
 Rule 4 asks for one solution for each thing. These are two: TaskStop ends the agent and cancels the job, and the
 caller gets no hand-back; the message `cancel` cancels the job and the relay hands back the cancelled job's
@@ -306,17 +306,30 @@ relay jobs gets no output.
 
 When Claude Code interrupts an agent's turn (TaskStop, a stopped Workflow), it writes a user entry,
 `[Request interrupted by user for tool use]` or `[Request interrupted by user]`, with no origin and no `isMeta`.
-The guard took every plain user turn for a message, so a stopped relay that ran again handed the note to its job:
-on a cancelled job that is a continue, which restarted the job TaskStop had just cancelled. A relay runs again after
-a stop in two ways. A message resumes it. And, as the Phase 6 thread found, a `SendMessage` to a running Workflow
-relay starts a second loop under the same agent id while the first runs on. That second loop is a `local_agent`
-task that TaskStop can stop: the TaskStop hook then cancels the job, as D2 and D41 say, and the first loop's guard
-delivered the note. A live probe showed exactly that (the job back to `completed` in a second attempt); with the
-two notes recognised as harness entries, read from the 2.1.308 binary and kept with the other markers in
-`lib/harness/workflow.mjs`, the same probe left the job `cancelled` and both Workflow agents returned
-`state: cancelled`. The same probe measured D44's advice: the message `cancel` to a running Workflow relay goes
-through such a second loop and cancelled its job in under a second. So D42's "no TaskStop for one Workflow agent"
-holds until a message has reached that agent; after one, a TaskStop on its id cancels the job like any relay's.
+The guard took every plain user turn for a message. So a stopped relay that ran again handed the note to its job,
+and on a cancelled job a message is a continue: the job TaskStop had just cancelled started again.
+
+A stopped relay runs again in two ways. A message resumes it. Or, as the Phase 6 thread found, a `SendMessage` to a
+running Workflow relay starts a second loop under the same agent id while the first runs on; that second loop is a
+`local_agent` task TaskStop can stop, and the TaskStop hook then cancels the job, as D2 and D41 say. A live probe
+showed the rest: the first loop's guard delivered the note, and the job came back `completed` in a second attempt.
+
+The notes are now harness markers, kept with the others in `lib/harness/workflow.mjs`: the two above and a third
+that 2.1.308 substitutes when it resumes an agent the session's end interrupted, read from the binary. The parser
+skips them only on an entry with no origin, as every real one is, so a person who types those words is still
+heard. With the fix the same probe left the job `cancelled`, and both Workflow agents returned `state: cancelled`.
+GPT-6.1 Sol and Opus 5.5 reviewed it.
+
+What this amends:
+
+- D44: the probe measured the message `cancel` to a running Workflow relay. The wake ended the first loop's wait,
+  its guard delivered the cancel at the next call, and the job was `cancelled` 1.8 s and 2.7 s after the send.
+- D42: "no TaskStop for one Workflow agent" holds except while a second loop a message started still runs; a
+  TaskStop on its id then cancels the job like any relay's.
+
+Open, from before Phase 3 (the plan, "After Phase 6"): a fork splits the agent's entries between the Workflow
+transcript the job records, which the guard reads, and `subagents/agent-<id>.jsonl`, which it does not, and not the
+same way each time. A message that lands in the second file is not delivered.
 
 ### D51. Phase 6's PR raises no version (Phase 6 thread)
 

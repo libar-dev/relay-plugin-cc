@@ -174,9 +174,13 @@ test("Claude Code's interrupt notes are never messages, and a coordinator messag
   const parsed = parseRelayTranscript(entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
   assert.deepEqual(parsed.messages.map((message) => message.text), ["Carry on after the stop."]);
   assert.deepEqual(parsed.problems, []);
+  const shutdown = interrupted("[Request interrupted: the session ended before this agent finished. Nobody asked it to stop.]");
+  const afterShutdown = parseRelayTranscript([ctx.prompt(PROMPT), shutdown].map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+  assert.deepEqual(afterShutdown.messages, []);
   const quoted = { ...ctx.userTurn("[Request interrupted by user]"), origin: { kind: "coordinator" } };
-  const fromLead = parseRelayTranscript([ctx.prompt(PROMPT), quoted].map((entry) => `${JSON.stringify(entry)}\n`).join(""));
-  assert.deepEqual(fromLead.messages.map((message) => message.text), ["[Request interrupted by user]"]);
+  const typed = { ...interrupted("[Request interrupted by user for tool use]"), origin: { kind: "human" } };
+  const fromPeople = parseRelayTranscript([ctx.prompt(PROMPT), quoted, typed].map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+  assert.deepEqual(fromPeople.messages.map((message) => message.text), ["[Request interrupted by user]", "[Request interrupted by user for tool use]"]);
 });
 
 test("a plain user message that starts with <system-reminder> is still a message", () => {
