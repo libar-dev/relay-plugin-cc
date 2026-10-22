@@ -22,6 +22,25 @@ Phase 1, steer wake:
   it received before it, since none of them has a delivery record.
 - Needs Claude Code 2.1.307 or later, for the module's `session.send` event.
 
+Phase 2, commands answered by the module:
+
+- `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` start no model turn and cost
+  no tokens. The hooks module answers each with a `command.run` hook that runs the companion and
+  shows its output: its own lines in a code block, exactly as printed, and a job's report after them
+  as Markdown. Until now a model ran the command and retold its output. A headless
+  `claude -p "/relay:result <job>"` exits with the companion's exit code.
+- `C status` prints the job list as a Markdown table with a header row (job, state, kind, backend,
+  model/effort, duration, summary, relay); every row names its backend, Codex included. It replaces
+  the two-space-separated lines, and is the list `/relay:status` shows. `--json` is unchanged.
+- Claude no longer calls `/relay:status` and `/relay:result` itself: a model's call of a command
+  never reaches the module. It reads jobs with `C status` and `C result`, which print the same text.
+  `Skill(relay:status)` and `Skill(relay:result)` in `permissions.allow` have no use any more.
+- `transfer` finds the session's file by the session's id (`RELAY_COMPANION_SESSION_ID`), in the
+  project folders of `~/.claude/projects`; `--source` still takes a file. The SessionStart hook no
+  longer exports `RELAY_COMPANION_TRANSCRIPT_PATH`.
+- The live suite has checks for the commands: `commands` (status, result and cancel on each backend,
+  in the terminal and in T3), `transfer`, and `headless` (`claude -p`, `num_turns: 0`).
+
 Phase 5, the live suite (development tooling; the plugin itself does not change):
 
 - `scripts/live/suite.mjs` runs live checks against the real backends, in the terminal and in T3 Code, and

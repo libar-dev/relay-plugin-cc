@@ -252,5 +252,5 @@ test("review accepts --background while still running as a tracked review job", 
 
   assert.equal(status.status, 0, status.stderr);
   assert.match(status.stdout, /^jobs: 1$/m);
-  assert.match(status.stdout, /review-\S+  completed  review/);
+  assert.match(status.stdout, /\| review-\S+ +\| completed +\| review +\|/);
 });

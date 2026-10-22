@@ -187,7 +187,7 @@ test("ZCode review: the plain prompt with the diff inlined, a fresh read-only se
   assert.equal(job.request.mode, "read-only");
   assert.equal(job.sessionId, "sess_1");
   for (const args of [["status", job.id], ["status"], ["result", job.id]]) {
-    assert.match(companion(ctx, args).stdout, /backend: zcode/, args.join(" "));
+    assert.match(companion(ctx, args).stdout, args.length === 1 ? /\| zcode +\|/ : /backend: zcode/, args.join(" "));
   }
   assert.match(fs.readFileSync(path.join(jobDirs(ctx)[0], "report.md"), "utf8"), /^# ZCode Review/);
 });

@@ -112,7 +112,7 @@ words of the request.
 |---|---|
 | Relay agent (`relay:job`) | an agent id and a transcript for the job; three commands |
 | Hooks | the prompt, the messages and the report; the relay's allowlist; session exports; the stop gate |
-| Hooks module (`hooks/mod/register.js`) | waking a waiting relay when a message is sent to it |
+| Hooks module (`hooks/mod/register.js`) | waking a waiting relay when a message is sent to it; answering `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` |
 | Companion (`scripts/companion.mjs`) | the command line: creating jobs, posting messages, reading views |
 | Worker | one job's `job.json`, its turns and its backend server |
 | Backend server | the backend session while a worker or a review runs |
@@ -130,15 +130,15 @@ passes `model: sonnet` gets a Sonnet relay.
 (matcher `^relay:job$`) run the relay guard. It acts only inside a relay subagent, with agent type
 `relay:job` and an agent id or agent transcript, so a main session started with
 `--agent relay:job` is untouched and every other hook call exits at once. A guard that throws
-exits 0, so a broken hook never traps an agent. SessionStart exports `RELAY_COMPANION_SESSION_ID` and
-`RELAY_COMPANION_TRANSCRIPT_PATH`, each at most once. It fires on start, resume, clear and
+exits 0, so a broken hook never traps an agent. SessionStart exports `RELAY_COMPANION_SESSION_ID`
+at most once per value. It fires on start, resume, clear and
 compaction, and appending each time grew `CLAUDE_ENV_FILE` until every Bash call failed with E2BIG
 (openai/codex-plugin-cc#783, openai/codex-plugin-cc#788). Stop runs the
 [review gate](#the-stop-time-review-gate). No hook ends a job,
 because jobs belong to no session; a `SessionEnd` hook that killed a session's jobs lost their work.
 
-**The companion.** `scripts/companion.mjs` is the one command line, for the relay, the slash
-commands, the hooks, the worker launcher and scripts (the skill's "Direct use"). While a worker
+**The companion.** `scripts/companion.mjs` is the one command line, for the relay, the hooks
+module, the hooks, the worker launcher and scripts (the skill's "Direct use"). While a worker
 lives, the companion never writes `job.json`; it talks to the worker through the inbox.
 
 **The worker.** A detached process (a new session, its output in `stderr.log`), one per job at a
@@ -355,7 +355,7 @@ received message not yet delivered, in order: steered while the job runs, contin
 Claude Code puts a message queued for a subagent into its conversation only between two tool
 calls. A relay spends nearly all its time inside one tool call, `wait`, so a message would wait for
 the wait to end. The plugin's hooks module, `hooks/mod/register.js` (listed under `modules` in
-`hooks/hooks.json`), ends it sooner. Its one hook, on `session.send`, runs for every message that
+`hooks/hooks.json`), ends it sooner. Its `session.send` hook runs for every message that
 leaves the conversation: a `SendMessage` from the main thread or from any subagent, and a plugin's
 `$.session.send`. Once Claude Code reports the message queued at the recipient, the hook resolves
 the recipient through `$.agent.list()` (an id, else a name; a Workflow's agents are not listed and
@@ -390,6 +390,33 @@ The module draws nothing, so it runs wherever the plugin loads: the terminal, De
 and Agent SDK hosts. Where it does not run, on a Claude Code below the 2.1.307 floor, a message
 waits for the relay's wait to end, up to 540 seconds. Its `session.send` hook waits for `wake`,
 about 80 ms, before the sender's `SendMessage` returns.
+
+### The commands
+
+`/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` are answered by the hooks module, with a
+`command.run` hook on each of the plugin's own command names. The hook runs the companion with argv, never a
+shell (`node <plugin root>/scripts/companion.mjs <command> <arguments as typed>`, in the session's directory), and
+its output is the command's answer. No model turn starts and nothing costs tokens: `claude -p "/relay:status"`
+reports `num_turns: 0`. A model no longer retells the output, so nothing has to ask it not to summarize a report.
+Like every plugin command, these run once the current turn has ended.
+
+Every surface draws the answer as Markdown. The terminal draws a command's text as Markdown, where a `---` line
+right after the state block turns the block into a heading, and T3 Code shows it as the assistant's message, with
+the lines of a paragraph run together. So the module puts the companion's lines up to the first `---` line in a
+code block, with anything the companion wrote to stderr after them, and then `---` and the job's report, which the
+backend wrote as Markdown and which is drawn as such. The text starts with a line break, because Claude Code puts
+`relay: ` in front of its first line. The model reads the same text. In a headless run the command exits with the
+companion's exit code (the table under [The state block](#the-state-block) for `result`).
+
+Each call has a timeout above its command's own deadline: 30 seconds for `status` and `result`, which read in under
+a second, 60 for `cancel`, which waits `RELAY_JOBS_CANCEL_GRACE_MS` (10 s) before it kills a worker, and 180 for
+`transfer`, which gives Codex's import two minutes. A call that timed out or could not start, and output that
+`$.process.run` cut at 4 MiB, answer an error text that names the shell command to run instead, never a partial
+list. The markdown files keep the names, descriptions and argument hints for the command picker, and their body
+only says that the module answers the command: Claude Code runs it when the module did not load. Claude does not
+call these four itself. A model's Skill call expands a command's markdown body and never reaches `command.run`, so
+Claude reads jobs with `C status` and `C result` in Bash, which print the same text, and cancels a job by sending
+its agent `cancel`.
 
 ### The report
 
@@ -799,9 +826,10 @@ of it. It is off by default, because each review is a Codex job and costs usage.
 ## Transfer
 
 `/relay:transfer` imports the current Claude Code session into a Codex session that one resumes
-with `codex resume <id>`. It finds the session file through `RELAY_COMPANION_TRANSCRIPT_PATH`,
-which the SessionStart hook exports, or `--source`, and accepts only a JSONL file under
-`~/.claude/projects`. One app-server runs `externalAgentConfig/import`, with two minutes to
+with `codex resume <id>`. It finds the session file by the session's id, `<id>.jsonl` in one of the
+project folders of `~/.claude/projects`, or takes `--source`, and accepts only a JSONL file under
+`~/.claude/projects`. The hooks module passes the id from `$.session.id()`; in Bash it comes from
+`RELAY_COMPANION_SESSION_ID`, which the SessionStart hook exports. One app-server runs `externalAgentConfig/import`, with two minutes to
 complete, and the imported thread id is read from the Codex home's import ledger, matched by the
 file's path and content hash. No other backend imports a Claude session, so transfer runs on Codex
 only.
@@ -811,10 +839,11 @@ only.
 The relay reads two things Claude Code does not publish as an interface: the agent transcript and
 the Workflow tool's run journal ([what it reads](#what-the-relay-reads-from-claude-code)). Its
 markers were read from Claude Code 2.1.287 and 2.1.288, and its hooks need `SubagentHandback`. Its
-hooks module needs the Mod API's `session.send` event, `$.agent.list()` and `$.process.run`, as
-Claude Code 2.1.307 declares them, so the floor is 2.1.307. A Claude Code update can break any of
-it. Delivery runs on command hooks and the transcript; the module only wakes a waiting relay
-([The wake](#the-wake)).
+hooks module needs the Mod API's `session.send` and `command.run` events, `$.agent.list()`,
+`$.session.cwd()`, `$.session.id()` and `$.process.run`, as Claude Code 2.1.307 declares them, so the
+floor is 2.1.307. A Claude Code update can break any of it. Delivery runs on command hooks and the
+transcript; the module only wakes a waiting relay ([The wake](#the-wake)) and answers four commands
+([The commands](#the-commands)).
 
 The Workflow journal has a second storage mode, behind a feature flag and off on 2.1.288, that
 keeps no `journal.jsonl` on disk. Under it a relay finds no key, so a resumed run's relay starts a
@@ -830,7 +859,9 @@ After a Claude Code update:
    state block must show no `relay-violation:` line, and the second message must run as a new turn.
    The live suite does both on every backend and times them: `node scripts/live/suite.mjs run steer-main
    continue`.
-3. If either fails, `scripts/hook-probe.mjs` logs what the hooks receive. Register it for
+3. Type `/relay:status`. It must answer with the job list and no model turn; `node scripts/live/suite.mjs run
+   commands transfer` checks the four commands.
+4. If one of these fails, `scripts/hook-probe.mjs` logs what the hooks receive. Register it for
    PreToolUse, PostToolUse and SubagentStop in a throwaway project, repeat the steps, and compare
    the log with what `lib/harness/` expects.
 

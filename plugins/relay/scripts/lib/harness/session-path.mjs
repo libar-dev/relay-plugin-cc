@@ -5,7 +5,6 @@ import path from "node:path";
 import { backendWith } from "../backends/index.mjs";
 import { ensureAbsolutePath } from "../util/fs.mjs";
 
-export const TRANSCRIPT_PATH_ENV = "RELAY_COMPANION_TRANSCRIPT_PATH";
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 
 function resolveUserPath(cwd, value) {
@@ -19,9 +18,35 @@ function resolveUserPath(cwd, value) {
 }
 
 export function resolveClaudeSessionPath(cwd, options = {}) {
-  const requestedPath = options.source || process.env[TRANSCRIPT_PATH_ENV];
+  let requestedPath = options.source;
   if (!requestedPath) {
-    throw new Error("Could not identify the current Claude transcript. Retry with --source <path-to-claude-jsonl>.");
+    const id = process.env.RELAY_COMPANION_SESSION_ID;
+    if (!id) {
+      throw new Error("Could not identify the current Claude session. Retry with --source <path-to-claude-jsonl>.");
+    }
+    if (/^[A-Za-z0-9][A-Za-z0-9-]*$/.exec(id)?.[0] !== id) {
+      throw new Error(`Invalid Claude session id: ${id}. Retry with --source <path-to-claude-jsonl>.`);
+    }
+    let folders;
+    try {
+      folders = fs.readdirSync(CLAUDE_PROJECTS_DIR, { withFileTypes: true });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      folders = [];
+    }
+    const matches = folders.filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(CLAUDE_PROJECTS_DIR, entry.name, `${id}.jsonl`))
+      .filter((file) => {
+        try { return fs.statSync(file).isFile(); }
+        catch (error) { if (error.code !== "ENOENT") throw error; return false; }
+      }).sort();
+    if (matches.length === 0) {
+      throw new Error(`Could not find the transcript of Claude session ${id} in ~/.claude/projects. Retry with --source <path-to-claude-jsonl>.`);
+    }
+    if (matches.length > 1) {
+      throw new Error(`Found several transcripts of Claude session ${id}: ${matches.join(", ")}. Retry with --source <path-to-claude-jsonl>.`);
+    }
+    requestedPath = matches[0];
   }
 
   const sourcePath = resolveUserPath(cwd, requestedPath);

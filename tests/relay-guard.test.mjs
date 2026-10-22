@@ -768,9 +768,9 @@ test("status --workflow lists the jobs of one Workflow run and no other", async 
   assert.equal(waitJob(ctx, jobId).status, 0);
   // Ended and not yet handed back: the listing says so, until the relay's final text passes. A
   // relay let go while the job ran is recorded, and handed back no result.
-  assert.match(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /  not handed back/);
+  assert.match(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /, not handed back(?:,| +\|)/);
   fs.appendFileSync(path.join(jobDirOf(ctx, jobId), "relay-handbacks.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), agentId: "earlier", attempts: 1, state: "running" })}\n`);
-  assert.match(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /  not handed back/, "a hand-back of a running job collects nothing");
+  assert.match(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /, not handed back(?:,| +\|)/, "a hand-back of a running job collects nothing");
   assert.equal(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt, null);
   assert.equal(await stop(ctx, companion(ctx, ["result", jobId, "--state-only"]).stdout), null);
   assert.doesNotMatch(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /not handed back/);
@@ -834,7 +834,7 @@ test("the state block prints dir: and where a relay job came from, labels on one
   const bareResult = resultOf(bare, bareId);
   assert.match(bareResult, new RegExp(`^report: .*\\ndir: ${escape(jobDirOf(bare, bareId))}$`, "m"));
   assert.match(bareResult, new RegExp(`^relay: ${bare.agentId}$`, "m"));
-  assert.match(companion(bare, ["status"]).stdout, new RegExp(`  relay:${bare.agentId}  not handed back$`, "m"));
+  assert.match(companion(bare, ["status"]).stdout, new RegExp(`\\| relay:${bare.agentId}, not handed back +\\|$`, "m"));
 
   // An Agent-tool relay with its meta file: the description is its label, on one line, cut to 80.
   const plain = relayContext("job", { turnMs: 100 });
@@ -844,7 +844,7 @@ test("the state block prints dir: and where a relay job came from, labels on one
   const plainId = await startedRelay(plain, QUICK);
   assert.equal(waitJob(plain, plainId).status, 0);
   assert.match(resultOf(plain, plainId), new RegExp(`^relay: ${plain.agentId} "${label}"$`, "m"));
-  assert.match(companion(plain, ["status"]).stdout, new RegExp(`  relay:${plain.agentId}/${label}  not handed back$`, "m"));
+  assert.match(companion(plain, ["status"]).stdout, new RegExp(`\\| relay:${plain.agentId}/${label}, not handed back +\\|$`, "m"));
 
   // Leading, trailing and inner whitespace (a newline among it) become single spaces, trimmed.
   const spaced = relayContext("job", { turnMs: 100 });
@@ -852,7 +852,7 @@ test("the state block prints dir: and where a relay job came from, labels on one
   const spacedId = await startedRelay(spaced, QUICK);
   assert.equal(waitJob(spaced, spacedId).status, 0);
   assert.match(resultOf(spaced, spacedId), new RegExp(`^relay: ${spaced.agentId} "Spaced label"$`, "m"));
-  assert.match(companion(spaced, ["status"]).stdout, new RegExp(`  relay:${spaced.agentId}/Spaced label  not handed back$`, "m"));
+  assert.match(companion(spaced, ["status"]).stdout, new RegExp(`\\| relay:${spaced.agentId}/Spaced label, not handed back +\\|$`, "m"));
 
   // 81 characters outside the BMP: cut to 80 characters, not 80 UTF-16 units.
   const wide = relayContext("job", { turnMs: 100 });
@@ -860,14 +860,14 @@ test("the state block prints dir: and where a relay job came from, labels on one
   const wideId = await startedRelay(wide, QUICK);
   assert.equal(waitJob(wide, wideId).status, 0);
   assert.match(resultOf(wide, wideId), new RegExp(`^relay: ${wide.agentId} "${"\u{1F600}".repeat(80)}"$`, "m"));
-  assert.match(companion(wide, ["status"]).stdout, new RegExp(`  relay:${wide.agentId}/${"\u{1F600}".repeat(80)}(?:  not handed back)?$`, "m"));
+  assert.match(companion(wide, ["status"]).stdout, new RegExp(`\\| relay:${wide.agentId}/${"\u{1F600}".repeat(80)}(?:, not handed back)? +\\|$`, "m"));
 
   const ctx = relayContext("job", { workflow: WORKFLOW, turnMs: 100 });
   ctx.append(ctx.userRequest(), ctx.workflowPrompt(), ctx.environment(), ctx.snapshot("string"));
   const { jobId } = await relayStart(ctx);
   assert.equal(waitJob(ctx, jobId).status, 0);
   assert.match(resultOf(ctx, jobId), new RegExp(`^relay: ${ctx.agentId} workflow ${WORKFLOW} "relay-test"$`, "m"));
-  assert.match(companion(ctx, ["status"]).stdout, new RegExp(`  workflow:${WORKFLOW}/relay-test(?:  not handed back)?$`, "m"));
+  assert.match(companion(ctx, ["status"]).stdout, new RegExp(`\\| workflow:${WORKFLOW}/relay-test(?:, not handed back)? +\\|$`, "m"));
   const view = JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout);
   assert.equal(view.id, jobId);
   assert.deepEqual(view.relay, {
@@ -1154,7 +1154,7 @@ test("a relay started over in the same run with the call's key takes over the ru
   assert.equal(await stop(retry, block), null);
   assert.equal((await stop(retry, "Done."))?.decision, "block");
   assert.deepEqual(codexReceived(first).turns, [WORKFLOW_BRIEF], "Codex ran the brief once");
-  assert.match(companion(retry, ["status"]).stdout, new RegExp(`  workflow:${WORKFLOW}/relay-test  adopted:1$`, "m"));
+  assert.match(companion(retry, ["status"]).stdout, new RegExp(`\\| workflow:${WORKFLOW}/relay-test, adopted:1 +\\|$`, "m"));
   const json = JSON.parse(companion(retry, ["result", jobId, "--json", "--state-only"]).stdout);
   assert.equal(json.relay.previous[0].agentId, first.agentId);
   assert.equal(json.relay.promptSha256, promptSha256(workflowPromptIn(first)));
@@ -1211,7 +1211,7 @@ test("a retry after the job finished returns that job's block at once; a third r
   for (const ctx of [first, retry, third]) {
     assert.equal(findRelayJob(ctx.env, ctx.agentId), jobDirOf(first, jobId));
   }
-  assert.match(companion(third, ["status"]).stdout, new RegExp(`  workflow:${WORKFLOW}/relay-test  adopted:2$`, "m"));
+  assert.match(companion(third, ["status"]).stdout, new RegExp(`\\| workflow:${WORKFLOW}/relay-test, adopted:2 +\\|$`, "m"));
   assert.deepEqual(codexReceived(first).turns, [WORKFLOW_BRIEF]);
   assert.deepEqual(jobDirsUnder(first.home), [jobId]);
 });

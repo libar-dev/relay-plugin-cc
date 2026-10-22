@@ -15,7 +15,7 @@ function normalizer(ctx, id) {
     let text = value.replaceAll(id, "<job>").replaceAll(slug, "<repo>");
     text = text.replaceAll(fs.realpathSync(ctx.root), "<tmp>").replaceAll(ctx.root, "<tmp>");
     for (const [index, clientId] of clientIds.entries()) text = text.replaceAll(clientId, `<message-${index + 1}>`);
-    return text.replace(/\b\d+[hms](?: \d+[hms])*/g, "<duration>");
+    return text.replace(/\b\d+[hms](?: \d+[hms])*/g, "<duration>").replace(/<duration> +(?=\|)/g, "<duration> ");
   };
   const walk = (value, key = "") => {
     if (value == null) return value;

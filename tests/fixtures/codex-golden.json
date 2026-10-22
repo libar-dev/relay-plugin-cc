@@ -194,7 +194,7 @@
             }
           ]
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       },
       {
         "phase": "continue",
@@ -288,7 +288,7 @@
             }
           ]
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       },
       {
         "phase": "resume",
@@ -407,7 +407,7 @@
             }
           ]
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       }
     ]
   },
@@ -606,7 +606,7 @@
             }
           ]
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       },
       {
         "phase": "continue",
@@ -700,7 +700,7 @@
             }
           ]
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       },
       {
         "phase": "resume",
@@ -819,7 +819,7 @@
             }
           ]
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n<job>  completed  task  gpt-test/low  <duration>  First turn.\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       }
     ]
   }
