@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.0.0 (unreleased)
+
+The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5, built on the branch
+`release/3.0` ([docs/mods/release-3.0.md](../../docs/mods/release-3.0.md)). Each phase adds its
+entries here.
+
+Phase 1, steer wake:
+
+- A message to a running `relay:job` agent reaches the job within seconds. The plugin has a hooks
+  module, `hooks/mod/register.js`, with one `session.send` hook: when a message is sent to a relay,
+  from the main thread, a subagent or another plugin, it runs `companion wake`, and the relay's
+  current wait returns. The guard then delivers the message as before. Until now a message waited
+  for the wait to end, up to two minutes.
+- A relay waits on its job in steps of up to 540 s (Bash timeout 600 s) instead of 120 s, so a long
+  job costs its Haiku relay about a quarter of the model calls.
+- A `SendMessage` from another agent, such as an orchestrator subagent or a Workflow agent, now
+  reaches the relay's job, while it runs and after it ended. The guard took only the main thread's
+  messages; Claude Code marks another agent's as `peer`, and the guard dropped it without a record.
+  The Phase 1 live check found it. A relay that lived through the update delivers the peer messages
+  it received before it, since none of them has a delivery record.
+- Needs Claude Code 2.1.307 or later, for the module's `session.send` event.
+
 ## 2.2.0 (2026-10-22)
 
 From a survey of every T3 Code thread on three machines, about 360 relay jobs from 17 to 22 October,

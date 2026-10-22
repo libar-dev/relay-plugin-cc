@@ -150,3 +150,8 @@ output/
 
 # Local working files of agents; evidence lives outside the repository
 scratchpad/
+
+# Declarations Claude Code writes into a plugin folder it loads with --plugin-dir, and the
+# tsconfig.json beside them that extends them
+plugins/relay/.claude-plugin/types/
+plugins/relay/tsconfig.json

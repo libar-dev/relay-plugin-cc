@@ -27,8 +27,10 @@ import { isTerminalView, JobViewBusy, loadJobView } from "../jobs/view.mjs";
 import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
 import { classifyHarnessEntry, unframeComputedTask, WORKFLOW_SYSTEM_NOTES } from "./workflow.mjs";
 
-export const RELAY_WAIT_SECONDS = 120;
-export const RELAY_BASH_TIMEOUT_MS = 180000;
+// The wake (the hooks module's session.send hook) ends a wait when a message is sent to the relay,
+// so the bound only caps a tool call. 600 s is the Bash tool's maximum.
+export const RELAY_WAIT_SECONDS = 540;
+export const RELAY_BASH_TIMEOUT_MS = 600000;
 // The guard lets a relay go, with a recorded violation, only after this many consecutive blocks.
 export const RELAY_BLOCK_BUDGET = 8;
 
@@ -124,6 +126,13 @@ function isToolResult(content) {
   return Array.isArray(content) && content.some((block) => block?.type === "tool_result");
 }
 
+// A message from another agent of the session (a subagent's or a Workflow agent's SendMessage)
+// has origin kind `peer`. The harness wraps its text in an envelope naming the sender, and keeps
+// the text as sent in `origin.body`, which is what the job gets.
+function peerBody(origin) {
+  return typeof origin?.body === "string" ? origin.body : null;
+}
+
 function unwrapCoordinator(text) {
   if (text.startsWith(COORDINATOR_PREFIX) && text.endsWith(COORDINATOR_SUFFIX) && text.length >= COORDINATOR_PREFIX.length + COORDINATOR_SUFFIX.length) {
     return text.slice(COORDINATOR_PREFIX.length, text.length - COORDINATOR_SUFFIX.length);
@@ -131,12 +140,34 @@ function unwrapCoordinator(text) {
   return text;
 }
 
+export function relayToolBoundary(entries, toolUseId) {
+  const index = toolUseId ? entries.findIndex((entry) =>
+    Array.isArray(entry.message?.content) && entry.message.content.some((block) => block?.type === "tool_use" && block.id === toolUseId)
+  ) : -1;
+  if (index === -1) return nowIso();
+  const messageId = entries[index].message.id;
+  // Claude Code can split one assistant message across entries, with hook attachments between
+  // its tool calls. All those calls share the boundary before the message's first entry.
+  const first = messageId == null ? index : entries.findIndex((entry) => entry.message?.id === messageId);
+  let boundary = null;
+  let latest = -Infinity;
+  for (const entry of entries.slice(0, first)) {
+    const at = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
+    if (at > latest) {
+      latest = at;
+      boundary = entry.timestamp;
+    }
+  }
+  return boundary ?? nowIso();
+}
+
 // The relay's first prompt and every message it received after it, in order. A message is
 // recognised by its entry type and origin, never by its text:
-// - an `attachment` entry of type `queued_command` whose origin is the coordinator
-//   (SendMessage while the relay works);
-// - a `user` entry whose origin is the coordinator (a message that resumes a relay that
-//   has handed back), unwrapped from the harness's fixed wrapper when it has one;
+// - an `attachment` entry of type `queued_command` whose origin is the coordinator or a peer
+//   (SendMessage while the relay works, from the main thread or from another agent);
+// - a `user` entry whose origin is the coordinator or a peer (a message that resumes a relay
+//   that has handed back), unwrapped from the harness's fixed wrapper when it has one; a
+//   peer's text is its origin's `body`;
 // - a plain `user` turn that is not metadata (`isMeta`) and not a tool result.
 // Under the Workflow tool the harness's two user entries are recognised by their marker line
 // (workflow-harness.mjs): the user request is skipped, the computed task is the prompt,
@@ -144,7 +175,7 @@ function unwrapCoordinator(text) {
 // StructuredOutput tool (a script passed `schema`). `stringReturn` is true when the relay's
 // final text is its return value (the string-return note, or a framed prompt): such a relay
 // has no SubagentHandback, so SubagentStop holds its final text.
-export function parseRelayTranscript(text) {
+export function parseRelayTranscript(text, toolUseId = null) {
   const lines = text.split("\n");
   const complete = text.endsWith("\n");
   let prompt = null;
@@ -154,6 +185,7 @@ export function parseRelayTranscript(text) {
   const messages = [];
   const problems = [];
   const seen = new Set();
+  const entries = [];
   lines.forEach((line, index) => {
     if (!line.trim()) {
       return;
@@ -172,6 +204,7 @@ export function parseRelayTranscript(text) {
       problems.push(`line ${index + 1} is not an entry`);
       return;
     }
+    entries.push(entry);
     const where = entry.uuid ? `entry ${entry.uuid}` : `line ${index + 1}`;
     const addMessage = (messageText, shape) => {
       if (!entry.uuid) {
@@ -186,8 +219,9 @@ export function parseRelayTranscript(text) {
     };
 
     if (entry.type === "attachment" && entry.attachment?.type === "queued_command") {
-      const origin = entry.attachment.origin?.kind ?? entry.origin?.kind ?? null;
-      if (origin !== "coordinator") {
+      const originEntry = entry.attachment.origin ?? entry.origin ?? null;
+      const origin = originEntry?.kind ?? null;
+      if (origin !== "coordinator" && origin !== "peer") {
         if (origin == null) {
           problems.push(`${where} is a queued command with no origin`);
         }
@@ -197,12 +231,14 @@ export function parseRelayTranscript(text) {
         problems.push(`${where} is a message that came before the prompt`);
         return;
       }
-      const messageText = typeof entry.attachment.prompt === "string" ? entry.attachment.prompt : textOfContent(entry.attachment.prompt);
+      const messageText = origin === "peer"
+        ? peerBody(originEntry)
+        : typeof entry.attachment.prompt === "string" ? entry.attachment.prompt : textOfContent(entry.attachment.prompt);
       if (messageText == null) {
         problems.push(`${where} is a queued message whose text could not be read`);
         return;
       }
-      addMessage(messageText, "queued_command");
+      addMessage(messageText, origin === "peer" ? "peer" : "queued_command");
       return;
     }
 
@@ -226,8 +262,9 @@ export function parseRelayTranscript(text) {
       return;
     }
     const fromCoordinator = entry.origin?.kind === "coordinator";
+    const fromPeer = entry.origin?.kind === "peer";
     if (prompt == null) {
-      if (entry.isMeta || fromCoordinator) {
+      if (entry.isMeta || fromCoordinator || fromPeer) {
         return;
       }
       const promptText = textOfContent(message.content);
@@ -249,8 +286,17 @@ export function parseRelayTranscript(text) {
       prompt = { uuid: entry.uuid ?? null, text: promptText, notes: [], framed: false };
       return;
     }
-    if (entry.isMeta && !fromCoordinator) {
+    if (entry.isMeta && !fromCoordinator && !fromPeer) {
       return; // harness metadata, marked as such by the entry itself
+    }
+    if (fromPeer) {
+      const body = peerBody(entry.origin);
+      if (body == null) {
+        problems.push(`${where} is a message from another agent whose text could not be read`);
+        return;
+      }
+      addMessage(body, "peer");
+      return;
     }
     const messageText = textOfContent(message.content);
     if (messageText == null) {
@@ -262,10 +308,10 @@ export function parseRelayTranscript(text) {
     }
     addMessage(fromCoordinator ? unwrapCoordinator(messageText) : messageText, fromCoordinator ? "coordinator" : "user");
   });
-  return { prompt, messages, problems, structuredOutput, stringReturn: stringReturnNote || framedPrompt };
+  return { prompt, messages, problems, structuredOutput, stringReturn: stringReturnNote || framedPrompt, wakeAfter: relayToolBoundary(entries, toolUseId) };
 }
 
-export function readRelayTranscript(file) {
+export function readRelayTranscript(file, toolUseId = null) {
   if (!file) {
     throw new Error("the relay transcript was not found");
   }
@@ -275,7 +321,7 @@ export function readRelayTranscript(file) {
   } catch (error) {
     throw new Error(`the relay transcript ${file} could not be read (${error.code ?? error.message})`);
   }
-  return parseRelayTranscript(text);
+  return parseRelayTranscript(text, toolUseId);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -678,24 +724,24 @@ export async function syncRelayMessages(input, jobDir, options = {}) {
     recorded && fs.existsSync(recorded) ? { file: recorded, candidates: [recorded] } : resolveAgentTranscript(input, [recorded]);
   let parsed;
   try {
-    parsed = readRelayTranscript(file);
+    parsed = readRelayTranscript(file, input.tool_use_id);
   } catch (error) {
     const why = file ? error.message : `the relay transcript was not found (looked at ${candidates.join(", ") || "no path"})`;
     appendRelayViolation(jobDir, { kind: "transcript", reason: `messages could not be checked: ${why}`, agentId: input.agent_id ?? null });
-    return { readable: false, messages: [], busy: false, undelivered: [], delivered: [] };
+    return { readable: false, messages: [], wakeAfter: nowIso(), busy: false, undelivered: [], delivered: [] };
   }
   for (const problem of parsed.problems) {
     appendRelayViolation(jobDir, { kind: "transcript", reason: `messages could not be checked: ${problem}`, agentId: input.agent_id ?? null });
   }
   try {
     const delivery = await deliverRelayMessages(jobDir, parsed.messages, { env, wait: options.wait ?? true });
-    return { readable: true, messages: parsed.messages, ...delivery };
+    return { readable: true, messages: parsed.messages, wakeAfter: parsed.wakeAfter, ...delivery };
   } catch (error) {
     // Failed delivery leaves work owed: received but not delivered, or delivered but
     // not run. Hand-back and stop wait even on a completed job, within the block budget.
     // A cancel is checked against the job's terminal state and retried at the next
     // hook on failure, three tries in all, with a recorded relay-violation.
     appendRelayViolation(jobDir, { kind: "delivery", reason: `messages could not be delivered: ${error instanceof Error ? error.message : String(error)}`, agentId: input.agent_id ?? null });
-    return { readable: true, messages: parsed.messages, busy: false, delivered: [], undelivered: undeliveredMessages(jobDir, parsed.messages) };
+    return { readable: true, messages: parsed.messages, wakeAfter: parsed.wakeAfter, busy: false, delivered: [], undelivered: undeliveredMessages(jobDir, parsed.messages) };
   }
 }

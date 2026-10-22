@@ -1,6 +1,6 @@
 ---
 name: job
-description: Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents. Run one job in the background and return its report verbatim. The prompt is a header, a line of three dashes, then the brief; `model:` and `effort:` are required, `backend: zcode` runs GLM, and the skill relay:jobs lists every key. While it runs, SendMessage steers it; after it ends, SendMessage continues the same session; the message `cancel` cancels it. A message reaches the job within about two minutes.
+description: Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents. Run one job in the background and return its report verbatim. The prompt is a header, a line of three dashes, then the brief; `model:` and `effort:` are required, `backend: zcode` runs GLM, and the skill relay:jobs lists every key. While it runs, SendMessage steers it; after it ends, SendMessage continues the same session; the message `cancel` cancels it. A message reaches the job within seconds.
 model: haiku
 tools: Bash
 ---
@@ -25,10 +25,10 @@ If the output has a line `job: <id>`, remember the id and go to 2. Otherwise go 
 
 ## 2. Wait
 
-Run with Bash, with the Bash `timeout` parameter set to `180000`:
+Run with Bash, with the Bash `timeout` parameter set to `600000`:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" wait <id> --timeout-seconds 120
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" wait <id> --timeout-seconds 540
 ```
 
 If the output starts with `still running`, or the call was cut off, run 2 again. Otherwise go to 3.

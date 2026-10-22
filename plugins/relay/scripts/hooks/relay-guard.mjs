@@ -8,8 +8,10 @@
 //   - Bash: only the companion's start, wait, result, status and cancel. `start --from-relay`
 //     is rewritten to carry the relay's transcript path and agent id; wait, result, status
 //     and cancel are rewritten to the job the relay started (found by agent id), wait with a
-//     120 s timeout and `--exit-zero-while-running` (a timeout on a running job exits 0 with a
-//     first line `still running: …`, so the Bash tool does not show it as an error);
+//     540 s timeout and `--exit-zero-while-running` (a timeout on a running job exits 0 with a
+//     first line `still running: …`, so the Bash tool does not show it as an error), and with
+//     `--wake-after` the boundary this call came after (relayToolBoundary): a wake marker newer
+//     than that ends the wait;
 //   - SubagentHandback: denied while the job runs or messages are owed, even on a
 //     completed job: received but not delivered, or delivered but not run;
 //     when allowed, its message is rewritten to exactly what `result <job>` prints (or, when
@@ -35,7 +37,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { appendRelayHandback, appendRelayViolation } from "../lib/jobs/messages.mjs";
-import { absoluteJobsHomeEnv, JOBS_HOME_ENV, readJob } from "../lib/jobs/store.mjs";
+import { absoluteJobsHomeEnv, JOBS_HOME_ENV, nowIso, readJob } from "../lib/jobs/store.mjs";
 import { isTerminalView, JobViewBusy, loadJobViewSettled, OUTCOME_KEYS, renderJobBlock, renderResultText } from "../lib/jobs/view.mjs";
 
 // A view of the job, or, while its record keeps changing, a marker that it is busy: not a state,
@@ -228,7 +230,7 @@ function rewriteBash(env, toolInput, args, extra = {}) {
   return { ...toolInput, command: `${JOBS_HOME_ENV}=${shellQuote(absoluteJobsHomeEnv(env)[JOBS_HOME_ENV])} node ${shellQuote(COMPANION)} ${args.join(" ")}`, ...extra };
 }
 
-function handleBash(input, env, jobDir, pointer) {
+function handleBash(input, env, jobDir, pointer, wakeAfter) {
   const toolInput = input.tool_input ?? {};
   const parsed = parseCompanionCommand(toolInput.command);
   if (!parsed) {
@@ -267,7 +269,7 @@ function handleBash(input, env, jobDir, pointer) {
   if (parsed.subcommand === "wait") {
     return allow(
       "relay:job relay wait on its own job.",
-      rewriteBash(env, toolInput, ["wait", shellQuote(jobId), "--auto-resume", "--exit-zero-while-running", "--timeout-seconds", String(RELAY_WAIT_SECONDS), ...stateOnly], { timeout: RELAY_BASH_TIMEOUT_MS })
+      rewriteBash(env, toolInput, ["wait", shellQuote(jobId), "--auto-resume", "--exit-zero-while-running", "--timeout-seconds", String(RELAY_WAIT_SECONDS), "--wake-after", shellQuote(wakeAfter), ...stateOnly], { timeout: RELAY_BASH_TIMEOUT_MS })
     );
   }
   if (parsed.subcommand === "result") {
@@ -357,7 +359,7 @@ async function handlePreToolUse(input, env = process.env) {
   }
   switch (input.tool_name) {
     case "Bash":
-      return handleBash(input, env, jobDir, pointer);
+      return handleBash(input, env, jobDir, pointer, sync?.wakeAfter ?? nowIso());
     case "SubagentHandback":
       return handleHandback(input, env, jobDir, pointer, sync);
     case "StructuredOutput":

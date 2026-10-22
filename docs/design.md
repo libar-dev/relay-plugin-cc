@@ -15,7 +15,7 @@ the [README](../README.md) installation and the commands, and the `relay:jobs` s
 |---|---|
 | `Agent({subagent_type, description, prompt})`, run in the background | `Agent({subagent_type: "relay:job", description, prompt})`, the same |
 | The completion notice carries the agent's final message | The completion notice carries a state block and the job's report, verbatim |
-| `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within about two minutes; a turn that cannot take it, or has just ended, gets it as the next turn |
+| `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within seconds; a turn that cannot take it, or has just ended, gets it as the next turn |
 | `SendMessage` after it ends continues it with its context | `SendMessage` after it ends starts a new turn on the same backend session and returns the new report |
 | `TaskStop` stops it | The message `cancel`, or `companion cancel <job>`, cancels the job. `TaskStop` stops only the agent, and the job keeps running |
 | The Agent tool's `model` picks the model | `model:` and `effort:` in the header pick the job's model; the Agent tool's `model` picks the relay's own |
@@ -112,12 +112,13 @@ words of the request.
 |---|---|
 | Relay agent (`relay:job`) | an agent id and a transcript for the job; three commands |
 | Hooks | the prompt, the messages and the report; the relay's allowlist; session exports; the stop gate |
+| Hooks module (`hooks/mod/register.js`) | waking a waiting relay when a message is sent to it |
 | Companion (`scripts/companion.mjs`) | the command line: creating jobs, posting messages, reading views |
 | Worker | one job's `job.json`, its turns and its backend server |
 | Backend server | the backend session while a worker or a review runs |
 
 **The relay agent.** `agents/job.md` runs on Haiku with the Bash tool only, and runs three
-commands: `start --from-relay`, then `wait <id> --timeout-seconds 120` while the output starts with
+commands: `start --from-relay`, then `wait <id> --timeout-seconds 540` while the output starts with
 `still running` or a message arrives, then `result <id>`, whose output it hands back. It exists
 because only a Claude subagent gets a background run, a completion notice, `SendMessage` and a
 Workflow `agent()` slot. It carries no content. In live trials a small model dropped a message,
@@ -335,8 +336,10 @@ received message not yet delivered, in order: steered while the job runs, contin
 
 - A message is recognised by its entry type and origin, never by its text: a `queued_command`
   attachment from the coordinator (a `SendMessage` while the relay works), a `user` entry from the
-  coordinator (a message after the hand-back, taken out of the harness's fixed wrapper), or a plain
-  `user` turn after the prompt that is neither metadata (`isMeta`) nor a tool result.
+  coordinator (a message after the hand-back, taken out of the harness's fixed wrapper), either of
+  the two from a peer (another agent's `SendMessage`: a subagent's or a Workflow agent's; the text
+  is the origin's `body`, without the harness's envelope), or a plain `user` turn after the prompt
+  that is neither metadata (`isMeta`) nor a tool result.
 - A message that arrives before the job exists is delivered by `start` once the job exists.
 - Each delivery is recorded in `inbox/relay/<transcript entry uuid>.json` under the relay lock, with
   the inbox message id chosen before posting. A hook cut off half way posts again under the same
@@ -346,6 +349,47 @@ received message not yet delivered, in order: steered while the job runs, contin
 - A `cancel` counts as delivered once the job is terminal. A failed try is a `relay-violation:` and
   stays pending while the job runs, with later messages waiting behind it. A try counts when it
   starts, and three started tries close it as failed.
+
+### The wake
+
+Claude Code puts a message queued for a subagent into its conversation only between two tool
+calls. A relay spends nearly all its time inside one tool call, `wait`, so a message would wait for
+the wait to end. The plugin's hooks module, `hooks/mod/register.js` (listed under `modules` in
+`hooks/hooks.json`), ends it sooner. Its one hook, on `session.send`, runs for every message that
+leaves the conversation: a `SendMessage` from the main thread or from any subagent, and a plugin's
+`$.session.send`. Once Claude Code reports the message queued at the recipient, the hook resolves
+the recipient through `$.agent.list()` (an id, else a name; a Workflow's agents are not listed and
+are addressed by id) and runs `companion wake --agent <id>`. It never refuses, rewrites or holds a
+message, and an error in it leaves the send as it was.
+
+`wake` reads the relay pointer for that agent id and nothing else, since it runs on every message
+a session sends. When the agent is the job's current relay, it writes `relay-wake.json`, with the
+time, in the job directory, also on a job that has ended: a message can continue it.
+
+A relay's `wait` returns on a marker that is newer than the boundary its tool call came after, and
+on no other. The boundary is where Claude Code last put queued messages into the relay's
+conversation, which it does only after every tool call of an assistant message has returned. The
+guard reads it from the relay's transcript at the `wait` call: the latest timestamp of the entries
+before the assistant message that holds the call. It passes it as `wait --wake-after <time>`. Every
+message queued before the boundary is in the conversation, and the guard delivers it at this call. A
+message queued after it, while the relay's model writes its `wait`, has a newer marker, and the wait
+returns at once, as a timeout would, with `still running: …`. The relay runs `wait` again, and the
+guard delivers the message at that call through the ledger above. The wake posts nothing, so a
+message still has one way to the job. When the guard cannot find the call in the transcript, the
+boundary is the guard's own time.
+
+Nothing removes a marker; a new wake moves its time forward. That matters in three cases a rule of
+"the wait takes the marker" got wrong. A `wait` left over from an earlier relay of the job (Claude
+Code killed, then a Workflow resume adopting the job) would take the current relay's marker and
+return to nobody. Two waits in one assistant message: the first would take the marker, and the
+second would run its whole bound before the boundary. A message queued just as the job ended, before
+a continue restarted it, would find no marker at all. A marker that only an earlier boundary covers
+costs one extra wait call; it cannot cause another, because the next call comes after a new boundary.
+
+The module draws nothing, so it runs wherever the plugin loads: the terminal, Desktop, `claude -p`
+and Agent SDK hosts. Where it does not run, on a Claude Code below the 2.1.307 floor, a message
+waits for the relay's wait to end, up to 540 seconds. Its `session.send` hook waits for `wake`,
+about 80 ms, before the sender's `SendMessage` returns.
 
 ### The report
 
@@ -360,13 +404,15 @@ owed, or the relay's final text differs from the result. A message after the han
 the relay; the hook delivers it at the next tool call, as a continue, and the next hand-back is
 rewritten the same way.
 
-### Two-minute waits, never trapped
+### Long waits, never trapped
 
-The hook sets every relay `wait` to 120 seconds with a Bash timeout of 180 seconds, so a message
-reaches the job within about two minutes. It also adds `--exit-zero-while-running`, so a wait that
-times out on a running job prints `still running: not an error. Run the same wait again.` first and
-exits 0. The Bash tool marks every non-zero exit as an error, and the `/workflows` view showed each
-two-minute wait of a long job as a failure. A direct `wait` keeps exit 4. Claude Code's stall timer
+The hook sets every relay `wait` to 540 seconds with a Bash timeout of 600 seconds, the Bash tool's
+maximum. A message does not wait for the bound: the wake ends the wait ([The wake](#the-wake)), so
+the bound only caps one tool call, and a long job costs its relay a model call about every nine
+minutes. It was 120 seconds before the wake, the time a message then took to arrive. The hook also
+adds `--exit-zero-while-running`, so a wait that times out on a running job prints `still running:
+not an error. Run the same wait again.` first and exits 0. The Bash tool marks every non-zero exit
+as an error, and the `/workflows` view showed each wait of a long job as a failure. A direct `wait` keeps exit 4. Claude Code's stall timer
 is off during a tool call, so it can fire on a waiting relay only when the relay's own model call
 stalls.
 
@@ -764,9 +810,11 @@ only.
 
 The relay reads two things Claude Code does not publish as an interface: the agent transcript and
 the Workflow tool's run journal ([what it reads](#what-the-relay-reads-from-claude-code)). Its
-markers were read from Claude Code 2.1.287 and 2.1.288, and its hooks need `SubagentHandback`, so
-the floor is Claude Code 2.1.271. A Claude Code update can break any of it. The relay needs no
-Claude Code mod. It runs on command hooks and the transcript.
+markers were read from Claude Code 2.1.287 and 2.1.288, and its hooks need `SubagentHandback`. Its
+hooks module needs the Mod API's `session.send` event, `$.agent.list()` and `$.process.run`, as
+Claude Code 2.1.307 declares them, so the floor is 2.1.307. A Claude Code update can break any of
+it. Delivery runs on command hooks and the transcript; the module only wakes a waiting relay
+([The wake](#the-wake)).
 
 The Workflow journal has a second storage mode, behind a feature flag and off on 2.1.288, that
 keeps no `journal.jsonl` on disk. Under it a relay finds no key, so a resumed run's relay starts a
@@ -778,8 +826,9 @@ After a Claude Code update:
    the job must record the call's key as `relay.journalKey` (`job.json`, or `relay.json` after an
    adoption).
 2. Steer one running `relay:job` agent with `SendMessage`, and send it one message after it hands
-   back. The state block must show no `relay-violation:` line, and the second message must run as a
-   new turn.
+   back. The steer must be recorded in the job's `inbox/relay/` within seconds of the send, the
+   state block must show no `relay-violation:` line, and the second message must run as a new turn.
+   `scripts/live/steer-wake.mjs` runs the steer on every backend and times it.
 3. If either fails, `scripts/hook-probe.mjs` logs what the hooks receive. Register it for
    PreToolUse, PostToolUse and SubagentStop in a throwaway project, repeat the steps, and compare
    the log with what `lib/harness/` expects.

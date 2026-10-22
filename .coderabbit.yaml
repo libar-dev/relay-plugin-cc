@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# relay 3.0 is built on release/3.0 (docs/mods/release-3.0.md): its phase PRs are reviewed like PRs into main.
+reviews:
+  auto_review:
+    base_branches:
+      - "release/.*"

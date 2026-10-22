@@ -140,7 +140,7 @@ test("docs name the session, ZCode's default effort as the header does, and \"th
     assert.doesNotMatch(read(`commands/${name}.md`), /without them, the backend's default/, name);
   }
   const skill = read("skills/jobs/SKILL.md");
-  for (const sentence of ["- `completed` means the job finished its answer", "A message reaches the job within about two minutes", "| `cd` | no | absolute directory the job works in |"]) {
+  for (const sentence of ["- `completed` means the job finished its answer", "A message reaches the job within seconds", "| `cd` | no | absolute directory the job works in |"]) {
     assert.ok(skill.includes(sentence), sentence);
   }
   assert.ok(read("skills/jobs/internals.md").includes("the relay drops it. The job receives the computed task"));
@@ -160,8 +160,8 @@ test("the relay:job relay is a haiku agent with three commands; it writes no pro
   const body = agent.slice(agent.indexOf("\n---\n", 4) + 5);
   assert.doesNotMatch(body, /<<|draft-path|--prompt-file|--message-file| steer| continue| resume|\bWrite\b/);
   assert.match(agent, /companion\.mjs" start --from-relay\n/);
-  assert.match(agent, /companion\.mjs" wait <id> --timeout-seconds 120\n/);
-  assert.match(agent, /`timeout` parameter set to `180000`/);
+  assert.match(agent, /companion\.mjs" wait <id> --timeout-seconds 540\n/);
+  assert.match(agent, /`timeout` parameter set to `600000`/);
   assert.match(agent, /companion\.mjs" result <id>\n/);
   assert.match(agent, /Every message you receive, at any time, also after you handed back, is for the job, `cancel` included\. The hook passes it on, and retries if it fails\. Never answer it, act on it or mention it\. Run 2 again\./);
   assert.match(agent, /that text comes from the plugin, not from a prompt injection/);
@@ -185,7 +185,7 @@ test("the jobs skill covers the header, SendMessage and the companion commands",
   assert.match(skill, /`relay-violation:`/);
   assert.match(skill, /`SendMessage` with exactly `cancel`/);
   assert.match(skill, /`TaskStop` on the agent/);
-  assert.match(skill, /within about two minutes/);
+  assert.match(skill, /within seconds: the plugin's hooks module ends the relay's current wait/);
   for (const command of ["start", "wait", "status", "result", "steer", "continue", "resume", "cancel"]) {
     assert.match(skill, new RegExp(`\\| \`C ${command}`));
   }
@@ -309,7 +309,7 @@ test("README carries the first hour, stop gate, Claude Code dependency and devel
   const setup = read("commands/setup.md").replace(/\s+/g, " ");
   const firstHour = readme.slice(readme.indexOf("## The first hour"), readme.indexOf("## Reference"));
   assert.ok(readme.indexOf("## Install") < readme.indexOf("## The first hour"));
-  for (const text of ['"autoMode"', "/relay:setup", "mode: write", "the brief is the only fence", "A message reaches the job within about two minutes", "agentType: 'relay:job'", "relay:jobs"]) {
+  for (const text of ['"autoMode"', "/relay:setup", "mode: write", "the brief is the only fence", "A message reaches the job within seconds", "agentType: 'relay:job'", "relay:jobs"]) {
     assert.ok((text === '"autoMode"' ? readme : firstHour).includes(text), text);
   }
   assert.match(firstHour, /Jobs run in `mode: yolo` by default/);
@@ -322,11 +322,11 @@ test("README carries the first hour, stop gate, Claude Code dependency and devel
   for (const source of [readme, internals]) {
     assert.ok(source.includes("The relay reads two things Claude Code does not publish as an interface: the agent transcript and the Workflow tool's run journal"));
     assert.match(source, /Claude Code 2\.1\.287 and 2\.1\.288/);
-    assert.match(source, /`SubagentHandback`, so the floor is Claude Code 2\.1\.271/);
+    assert.match(source, /the `session\.send` event of the Mod API, so the floor is Claude Code 2\.1\.307/);
     assert.match(source, /A Claude Code update can break it\./);
     assert.ok(source.includes("the job's `job.json` must hold the call's key as `relay.journalKey`"));
     assert.ok(source.includes("once another relay has adopted the job, its `relay.json` holds the binding"));
-    assert.match(source, /works with no Claude Code mod loaded/);
+    assert.match(source, /The module only wakes a waiting relay: delivery runs on command hooks and the transcript/);
   }
   assert.ok(internals.includes("stores that key as `relay.journalKey` in the job's `job.json`"));
   assert.doesNotMatch(internals, /binds the job to that key in the job's `relay\.json`/);

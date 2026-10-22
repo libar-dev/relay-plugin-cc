@@ -3,7 +3,8 @@
 The plugin is plain ES modules under `plugins/relay/scripts/`, checked by TypeScript through
 JSDoc and run by Node.js with no build step. Claude Code loads it from that folder: hooks run
 `${CLAUDE_PLUGIN_ROOT}/scripts/...`, and the agent and the commands call
-`scripts/companion.mjs`.
+`scripts/companion.mjs`. One more module, `hooks/mod/register.js`, runs in Claude Code's own
+module runtime, not in Node: it has no imports and reaches the companion through `$.process.run`.
 
 ## Layers
 
@@ -12,6 +13,7 @@ agents/job.md, commands/*.md, skills/       what Claude Code sees
 scripts/companion.mjs                        the command line: one dispatcher
 scripts/cli/                                 one module per command
 scripts/hooks/                               Claude Code hooks: relay guard, stop gate, session start
+hooks/mod/register.js                        the hooks module: wakes a waiting relay when a message is sent to it
 scripts/lib/harness/                         everything that reads Claude Code's own files
 scripts/lib/worker/                          the detached worker that runs a job's turns
 scripts/lib/review/                          review targets, prompts, rendering
@@ -68,11 +70,12 @@ $RELAY_JOBS_HOME (default ~/.relay-jobs) / <repo-slug> / <job-id> /
   worker.lease.d/         the worker lease: numbered records 1, 2, 3 ...
   relay.json              the current relay binding, once a second relay adopts the job
   relay-guard.json        the relay hook's state: its consecutive blocks and the last hand-back
+  relay-wake.json         when a message was last sent to the job's relay
   relay-handbacks.jsonl   every result a relay handed back, appended and never rewritten
   relay-violations.jsonl  every relay violation, appended and never rewritten
 ```
 
-`inbox/relay/`, `inbox/relay.lock.d/`, `relay-guard.json`, `relay-handbacks.jsonl` and `relay-violations.jsonl` exist
+`inbox/relay/`, `inbox/relay.lock.d/`, `relay-guard.json`, `relay-wake.json`, `relay-handbacks.jsonl` and `relay-violations.jsonl` exist
 only for a job a `relay:job` agent started. `worker.lease` and `inbox/relay.lock` are lock names,
 not files. [design.md](design.md#leases) explains the numbered records.
 

@@ -32,7 +32,8 @@ chosen). The stop-time review gate and transfer run on Codex.
 
 Requirements:
 
-- Claude Code 2.1.271 or later, for hooks on `SubagentHandback`.
+- Claude Code 2.1.307 or later: the plugin's hooks module needs its `session.send` event, and the
+  relay hooks need `SubagentHandback`.
 - Node.js 22 or later.
 - macOS or Linux. The process sweep reads the process table with `ps`.
 - At least one backend CLI, signed in: the Codex CLI, Grok Build, ZCode or Kimi Code. Release 2.1.2
@@ -132,9 +133,9 @@ relay: <the relay's agent id>
 
 `completed` means the job finished its answer, not that its commands passed. Read the report.
 
-**Talk to it.** A message reaches the job within about two minutes. The relay agent waits on the
-job in two-minute steps, so Claude Code's stall timer never fires on a long job, and its hook
-delivers a message at the next step. Send the agent "Also check the retry path in
+**Talk to it.** A message reaches the job within seconds. The relay agent waits on the job in steps
+of up to nine minutes, so Claude Code's stall timer never fires on a long job. A message sent to it
+ends the current step, and its hook delivers the message at the next. Send the agent "Also check the retry path in
 src/net/client.mjs." with `SendMessage` while the job runs, and Codex gets it inside the running
 turn. Sent after the job has ended, the same message starts a new turn on the same session, and the
 agent returns the new report. The message `cancel` cancels the job.
@@ -254,8 +255,8 @@ Your Codex sign-in, API key and provider configuration apply as they do in the C
 
 The relay reads two things Claude Code does not publish as an interface: the agent transcript and
 the Workflow tool's run journal. Its markers were read from Claude Code 2.1.287 and 2.1.288, and its
-hooks need `SubagentHandback`, so the floor is Claude Code 2.1.271. A Claude Code update can break
-it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json`
+hooks need `SubagentHandback`. Its hooks module needs the `session.send` event of the Mod API, so the
+floor is Claude Code 2.1.307. A Claude Code update can break it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json`
 must hold the call's key as `relay.journalKey` (once another relay has adopted the job, its
 `relay.json` holds the binding), and the script must get the state block back. Repeat this check
 after a Claude Code update. It was last run in full on Claude Code 2.1.302, on Fedora, for the 2.1.0
@@ -268,12 +269,14 @@ without the adoption.
 The hooks are PreToolUse on `Bash`, `Write`, `SubagentHandback` and `StructuredOutput`,
 SubagentStop on `relay:job`, SessionStart and Stop. Claude Code gives subagents the
 `SubagentHandback` tool only in auto mode. In other modes, the SubagentStop hook checks the relay's
-final text against the job's result instead. The relay works with no Claude Code mod loaded. It
+final text against the job's result instead. The hooks module (`hooks/mod/register.js`) adds one
+`session.send` hook: when a message is sent to a relay, it ends the relay's current wait, and the
+guard delivers the message at the relay's next call. The module only wakes a waiting relay: delivery
 runs on command hooks and the transcript.
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.2.0. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.1. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
@@ -281,6 +284,16 @@ npm ci
 npm test
 npm run check
 ```
+
+The hooks module runs only inside Claude Code, so its checks need the CLI (no sign-in):
+
+```bash
+claude plugin validate plugins/relay
+claude plugin test plugins/relay
+```
+
+`claude plugin test` runs `plugins/relay/hooks/mod/register.test.ts` against Claude Code's own test kit. CI runs both
+on a pinned Claude Code.
 
 `npm test` runs every file in `tests/` with `node --test` and takes about two minutes. Run it
 outside any sandbox. Its process tests use `ps` to find and stop test processes. The tests drive
@@ -293,6 +306,23 @@ removes it at exit once no test process runs from it. A directory whose run was 
 is removed by the next run once its recorded owner is gone. `RELAY_TEST_KEEP_TMP=1 npm test` keeps
 the directory of a file that failed; no later run removes it, so delete it yourself. `npm run check`
 type-checks every script with TypeScript, without an installed Codex CLI.
+
+A build is tried before a release in an independent Claude Code session on the test machine, while
+every other session there, the one that starts the test included, keeps the released plugin:
+
+- `scripts/smoke/install-local.sh <dir>` installs `HEAD`'s `plugins/relay` (`--worktree` adds
+  uncommitted edits) as `relay@relay-smoke` for `<dir>` only. It adds a scratch marketplace and
+  installs, and disables `relay@libar-relay`, at local scope, so only a session started in `<dir>`
+  loads the build. `scripts/smoke/uninstall-local.sh <dir>` undoes it. The install's receipt is kept
+  in `${XDG_STATE_HOME:-$HOME/.local/state}/relay-plugin-cc/smoke-installs/`, never in `<dir>`, so
+  nothing in a project folder can make the uninstall delete anything outside it.
+- `scripts/smoke/pane.sh` runs that session in tmux on a private socket, so an agent can start it,
+  type prompts and read the screen (`start`, `send`, `read`, `wait`, `trust`, `stop`).
+  `pane.sh attach-command <name>` prints the line to watch it.
+- `node scripts/live/steer-wake.mjs` starts a session with `--plugin-dir` and a fresh jobs home,
+  steers a running job on every backend three times, and checks that each message reaches the
+  job's `inbox/relay/` within 10 seconds. It keeps its records in the work directory's
+  `.live-steer/`.
 
 `claude plugin marketplace update` installs a new build only when the plugin's version goes up.
 Every release that changes the plugin bumps it with `node scripts/bump-version.mjs <version>`,
