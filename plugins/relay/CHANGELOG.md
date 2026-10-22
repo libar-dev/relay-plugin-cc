@@ -88,9 +88,9 @@ Phase 6, an investigation (the plugin does not change):
 
 Docs:
 
-- [docs/desktop.md](../../docs/desktop.md): relay in the Code tab of the Claude desktop app: what runs there,
-  the install through the CLI's shared configuration, the permission modes, a check that it works, and how to
-  try a build in one folder. Checked on a Mac in Claude for Mac 3.6556.1 with relay 3.0.0-dev.4.
+- [docs/desktop.md](../../docs/desktop.md): relay in the Code tab of the Claude desktop app. It covers what runs
+  there, installing with the CLI (the app loads what the CLI installs), the permission modes, a check that it works,
+  and how to try a build in one folder. Checked on a Mac in Claude for Mac 3.6556.1 with relay 3.0.0-dev.4.
 
 ## 2.2.0 (2026-10-22)
 

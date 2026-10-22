@@ -45,7 +45,7 @@ claude plugin install relay@libar-relay
 ```
 
 Then run `/reload-plugins` in open sessions, or start a new one. The Code tab of the Claude desktop app loads the
-same plugins: [docs/desktop.md](docs/desktop.md) says what runs there and how to check it.
+same plugins in its next new session: [docs/desktop.md](docs/desktop.md) says what runs there and how to check it.
 
 Update the plugin:
 
