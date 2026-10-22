@@ -317,11 +317,19 @@ async function runWorkerRound(jobDir, options, held) {
     }
   };
 
+  const cancelBeforeTurn = () => {
+    const attempts = (job.attempts ?? []).map(entry =>
+      entry.endedAt ? entry : { ...entry, state: "cancelled", endedAt: nowIso() });
+    save({ ...me_record, attempts, state: "cancelled", completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
+    cancelOutcome({ action: "cancelled" });
+    dropQueued("the job was cancelled");
+    return releaseAndReturn({});
+  };
+
   if (queue.length === 0) {
     if (cancelRequested) {
       if (!TERMINAL.has(job.state)) {
-        cancelOutcome({ action: "cancelled" });
-        return releaseAndReturn({ ...me_record, state: "cancelled", completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
+        return cancelBeforeTurn();
       }
       cancelOutcome({ action: "nothing-to-cancel", state: job.state });
       return releaseAndReturn(me_record);
@@ -329,9 +337,7 @@ async function runWorkerRound(jobDir, options, held) {
     return { job: null, held: handOff() };
   }
   if (cancelRequested) {
-    cancelOutcome({ action: "cancelled" });
-    dropQueued("the job was cancelled");
-    return releaseAndReturn({ ...me_record, state: "cancelled", completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
+    return cancelBeforeTurn();
   }
 
   // Begin an attempt: nonterminal state, attempt record and report ownership are written
@@ -735,15 +741,15 @@ async function runWorkerRound(jobDir, options, held) {
     clearInterval(poller);
     const last = job.attempts.at(-1);
     if (cancelRequested) {
+      if (last && !TERMINAL.has(last.state)) {
+        updateAttempt({ state: "cancelled", endedAt: nowIso() });
+      }
+      save({ state: "cancelled", errorMessage: "Cancelled.", completedAt: nowIso() });
       cancelOutcome({ action: "cancelled" });
       if (current.message && !CLOSED_ACTIONS.has(readOutcome(jobDir, current.message.id)?.action)) {
         outcome(current.message, { action: "dropped", reason: "the job was cancelled before this turn ran" });
       }
       dropQueued("the job was cancelled");
-      if (last && !TERMINAL.has(last.state)) {
-        updateAttempt({ state: "cancelled", endedAt: nowIso() });
-      }
-      save({ state: "cancelled", errorMessage: "Cancelled.", completedAt: nowIso() });
     } else {
       save({ state: last?.state ?? "failed", errorMessage: last?.errorMessage ?? null, completedAt: nowIso() });
     }

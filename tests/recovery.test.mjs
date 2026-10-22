@@ -9,7 +9,7 @@ import { buildEnv, installFakeCodex } from "./fakes/codex.mjs";
 import { makeTempDir } from "./support/helpers.mjs";
 import { acquireWorkerLease, isWorkerAlive, readLease, releaseWorkerLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 import { createJobDir, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
-import { claimInboxMessages, hasOpenCancel, writeOutcome, owedMessages, postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
+import { owedMessages, postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { DEFAULT_RESUME_MESSAGE, resumeDeadJobOnce } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
 import { loadJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
@@ -649,7 +649,7 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
   });
 
   for (const role of ["recovery", "cancel"]) {
-    test(`cancel names its ${role} lease holder`, async t => {
+    test(`cancel refuses to delegate to a persistently held ${role} lease`, async t => {
       const ctx = relayContext("job", { turnMs: 50, env: { CODEX_HOME: makeTempDir("relay-role-home-") } });
       const id = await start(ctx);
       const dir = jobDirOf(ctx, id);
@@ -660,10 +660,9 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
       assert.equal(acquireWorkerLease(dir, holder, role), true);
       t.after(() => releaseWorkerLease(dir, holder));
       const result = companion({ ...ctx, env: { ...ctx.env, RELAY_JOBS_CANCEL_GRACE_MS: "1" } }, ["cancel", id]);
-      assert.equal(result.status, 4, result.stdout + result.stderr);
-      assert.equal(result.stderr.trim(), `Job ${id} is still running; the cancel is with its ${role} (pid ${process.pid}).`);
-      assert.ok(result.stdout.split("\n").includes(`cancel: the job is still running; the cancel is with its ${role} (pid ${process.pid})`), result.stdout);
-      assert.doesNotMatch(result.stdout + result.stderr, /its worker/);
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /Could not take the job's lease to mark it cancelled/);
+      assert.equal(readLease(dir).role, role);
     });
   }
 }
@@ -738,29 +737,8 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
 }
 
 
-for (const stage of ["pending", "claimed"]) {
-  for (const action of [null, "interrupt-sent", "interrupt-failed", "cancelled", "nothing-to-cancel", "no-op"]) {
-    test(`hasOpenCancel: ${stage} cancel with ${action ?? "no outcome"}`, t => {
-      const ctx = setup(t);
-      const { jobDir: dir } = createJobDir(ctx.work, "job-open-cancel", ctx.env);
-      const startedAt = "2026-10-20T12:00:00.000Z";
-      const job = { id: "job-open-cancel", state: "cancelled", createdAt: "2026-10-19T12:00:00.000Z", attempts: [{ startedAt }] };
-      writeJob(dir, job);
-      assert.equal(hasOpenCancel(dir, job), false);
-      const message = postInboxMessage(dir, { kind: "cancel", text: "", attempt: 1 });
-      const file = path.join(dir, "inbox", `${message.id}.json`);
-      fs.writeFileSync(file, JSON.stringify({ ...message, createdAt: startedAt }));
-      if (stage === "claimed") claimInboxMessages(dir);
-      if (action) writeOutcome(dir, message.id, { action });
-      assert.equal(hasOpenCancel(dir, job), [null, "interrupt-sent", "interrupt-failed"].includes(action));
-      assert.equal(hasOpenCancel(dir, { ...job, attempts: [{ startedAt: "2026-10-21T12:00:00.000Z" }] }), false, "older cancel cannot block a newer attempt");
-      assert.equal(hasOpenCancel(dir, { ...job, attempts: [] }), [null, "interrupt-sent", "interrupt-failed"].includes(action), "starting jobs use createdAt");
-    });
-  }
-}
-
-for (const attempt of [1, undefined]) {
-  test(`recovery refuses an open cancel ${attempt ? "with attempt" : "without attempt"} and resumes after it closes`, async t => {
+for (const gone of ["removed", "dead", "reused pid"]) {
+  test(`recovery waits for a live cancel record and resumes after it is ${gone}`, async t => {
     const ctx = setup(t, { turnMs: 60000 });
     const { id } = startJob(ctx, undefined, "First turn.");
     const dir = jobDirs(ctx).find(dir => path.basename(dir) === id);
@@ -768,14 +746,28 @@ for (const attempt of [1, undefined]) {
     const before = readJob(ctx, id);
     process.kill(before.worker.pid, "SIGKILL");
     await waitForJob(() => !isWorkerAlive(before.worker));
-    const message = postInboxMessage(dir, { kind: "cancel", text: "", ...(attempt ? { attempt } : {}) });
-    const record = fs.readFileSync(path.join(dir, "job.json"), "utf8");
-    assert.equal(await resumeDeadJobOnce(dir, ctx.env), false);
-    assert.equal(fs.readFileSync(path.join(dir, "job.json"), "utf8"), record);
-    assert.equal(readLease(dir), null);
-    claimInboxMessages(dir);
-    assert.equal(await resumeDeadJobOnce(dir, ctx.env), false);
-    writeOutcome(dir, message.id, { action: "no-op" });
+    const holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+    t.after(() => holder.kill("SIGKILL"));
+    const record = path.join(dir, "cancelling", `${holder.pid}.json`);
+    fs.mkdirSync(path.dirname(record), { recursive: true });
+    const identity = { pid: holder.pid, startTime: readProcessStartTime(holder.pid), at: new Date().toISOString() };
+    fs.writeFileSync(record, JSON.stringify(identity));
+    // Pending work must not cause recovery's lease release to spawn a consumer.
+    const message = postInboxMessage(dir, { kind: "continue", text: "[long] New work." });
+    const stored = fs.readFileSync(path.join(dir, "job.json"), "utf8");
+    const leaseBefore = readLease(dir);
+    assert.equal(await resumeDeadJobOnce(dir, ctx.env), "busy");
+    assert.deepEqual(readLease(dir), leaseBefore);
+    assert.equal(fs.readFileSync(path.join(dir, "job.json"), "utf8"), stored);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.deepEqual(readLease(dir), leaseBefore);
+    assert.equal(readOutcome(dir, message.id), null);
+    if (gone === "removed") fs.unlinkSync(record);
+    else if (gone === "dead") {
+      const exited = once(holder, "exit");
+      holder.kill("SIGKILL");
+      await exited;
+    } else fs.writeFileSync(record, JSON.stringify({ ...identity, startTime: "another process" }));
     assert.equal(await resumeDeadJobOnce(dir, ctx.env), true);
     await waitForJob(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
     assert.equal(readJob(ctx, id).automaticResumes.length, 1);

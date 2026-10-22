@@ -969,6 +969,10 @@ After a Claude Code update:
 
 - `cancel` of a dead job signals the recorded worker pid without checking its start time, and its
   process-group kill can reach a nested job that kept the worker's group.
+- `cancel --attempt N` kills a worker that has not taken the cancel within the grace after checking that the
+  attempt is still N. A worker that wakes in the moment between that check and the signal, takes the cancel and
+  begins a newer attempt for a waiting message, is killed with it. Only a worker that ignored the cancel for the
+  whole grace is killed at all.
 - A `cancel` whose read of the process table fails after the grace period signals only the
   worker's process group, or its bare pid; a descendant outside that group, such as a tool
   command the server started in a session of its own, keeps running.
