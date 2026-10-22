@@ -8,10 +8,13 @@ it: where the work goes, what each step must pass, and how the work was done in 
 
 - `release/3.0` starts at `main` @ e961d9a. Each phase is a branch `mods/phase-<n>-<slug>` from the tip of
   `release/3.0`, and a PR into it, merged with a merge commit once its gates pass.
-- `main` and every fleet machine stay on 2.2.0 until the release PR merges `release/3.0` into `main`.
+- `main` and every fleet machine stay on 2.2.0 until the release PR merges `release/3.0` into `main`, except for
+  the release candidate the owner tests by hand before the merge (step 10).
 - The branch carries `3.0.0-dev.N`, and each phase PR raises N with `node scripts/bump-version.mjs` (D6). The
   release PR sets 3.0.0 and dates the CHANGELOG.
 - Each phase adds its entries under the CHANGELOG's 3.0.0 heading, and records its forks in decisions.md.
+- Threads that work in parallel take decision numbers from the blocks the coordinating thread assigns them, so
+  their entries never collide; a PR that merges after another puts its entries in numeric order.
 
 ## Sequence
 
@@ -27,7 +30,39 @@ it: where the work goes, what each step must pass, and how the work was done in 
    the board pane.
 5. **Phase 6**, the investigation report, at any point. No code (PR #9). Reported in
    [messages-from-a-job.md](messages-from-a-job.md).
-6. **The release PR**, `release/3.0` into `main`.
+
+Steps 6 to 8 start while Phase 4 is open; each part starts once what it needs has merged.
+
+6. **The real-API suite**, in the private smoke kit repository `libar-dev/relay-plugin-cc-smoke`, run by hand and
+   locally only; the kit keeps its Apify and Firecrawl CLIs. It runs the real backends where the unit tests mock
+   them: a dynamic Workflow, a plain fan-out with the Agent tool, tool calls from jobs, steering and continue,
+   cancel and TaskStop, a refused header, the commands the module answers, the status line and the board once
+   built, on every backend. It does not wait for Phase 4, and adds the status line and the board when they merge.
+7. **The reviews**, as T3 Code delegates, each given the brief and the code:
+   - After Phase 4's `--json` PR, which changes the jobs skill: GPT-6 Astra's review of every skill the plugin
+     ships and the ones it is missing, `agents/job.md` and `commands/`, and Kimi K3's test-coverage review at max
+     effort. Opus 5.5 makes the skill updates and fixes the texts that promise for every relay what holds only
+     for a relay started with the Agent tool ([plan.md](plan.md#after-phase-6-what-held-and-what-changed)), in
+     one PR; the coverage fixes are another PR. Once the status line and the board merge, a second pass of both
+     reviews covers them, and brings those texts in line with the board's live checks of a Workflow relay.
+   - After Phase 4: GPT-6 Astra's review of the whole `release/3.0` branch against `main`, at `xhigh`. And, once
+     step 8's screenshots and guide exist, Opus 5.5's UX and UI review, with the screenshots, of the commands'
+     output, the status line, the board, the README, `docs/desktop.md` and the user guide. Their fixes merge
+     before the release PR.
+8. **The screenshots, the walkthrough and the guide.** Screenshots of every user-facing feature, in the CLI and
+   in Desktop, taken on the M3 (D54, D60), with the status line and the board once built (the CLI in a narrow and
+   a wide terminal, and Desktop); they stay local. T3 screenshots for the post to the T3 community. One feature
+   walkthrough, which feeds the owner's manual test script (each step with its expected result) and the user
+   guide (with screenshots that explain the features). A screenshot that is published, in the T3 post or the
+   user guide, shows no account or session names.
+9. **The release PR**, `release/3.0` into `main`.
+10. **The owner's manual testing.** Once the release candidate is confirmed (decisions.md, "Open for the owner"),
+    the owner tests it by hand with the manual test script, on one Mac and on Fedora at the same time; the M1
+    stays on 2.2.0 as a fallback. Then, on the owner's word, the release PR merges with a merge commit, and
+    `v3.0.0` is tagged and published as a GitHub release.
+11. **The fleet update, then the publication**, when the owner decides. The merge already makes 3.0.0 what the
+    marketplace serves; the publication is the T3 post and, later, public screenshots for users, taken in a
+    clean demo setup.
 
 ## What a phase PR must pass
 
@@ -44,13 +79,39 @@ it: where the work goes, what each step must pass, and how the work was done in 
 - Its last commit updates plan.md: a review of every later phase in light of what the PR learned (the plan's
   rule 7), and the CHANGELOG and decisions.md entries.
 
+Other PRs into `release/3.0`, such as the reviews' fixes, pass the same gates, except the review of every later
+phase; their last commit updates the CHANGELOG and decisions.md.
+
 ## What the release PR must pass
 
-- The full live suite on all four backends, in the terminal and in T3, and the smoke kit, on the release head.
-- One smoke run on a Mac, through cmux, and the manual Desktop pass for the board (D3).
+D60 added the real-API suite, the screenshots, the walkthrough with its test script and guide, and the reviews,
+and dropped the demo recording: feature screenshots and the user guide replace it.
+
+- `npm test`, `npm run check`, `claude plugin validate plugins/relay`, `claude plugin test plugins/relay`, CI,
+  CodeRabbit and Greptile.
+- The full live suite on all four backends, in the terminal and in T3, on the release head.
+- The real-API suite, which replaces the smoke kit's release run, on the release head, on Fedora and on a Mac
+  through cmux.
+- D3's checks of the board: its Mod tests on the test kit's `desktop` mount, which `claude plugin test` runs on
+  Fedora, and the manual Desktop pass on the M3 (D54).
+- The screenshots of every user-facing feature, in the CLI and in Desktop, the status line and the board included.
+- The feature walkthrough done, the user guide in the release, and the owner's manual test script ready.
+- The reviews of step 7 done, and their fixes merged: the skills review with Opus 5.5's skill updates, the
+  coverage review, the review of the whole branch, and the UX and UI review.
+- The texts that promise for every relay what holds only for a relay started with the Agent tool, fixed:
+  design.md's interface table and "Under the Workflow tool", the jobs skill's message rules, `agents/job.md` on
+  continue and cancel, and the CHANGELOG's Phase 1 line on messages from other agents. The docs say what a
+  Workflow relay does with a steer, a continue and the message `cancel`, and each claim rests on a live check or
+  is marked unmeasured ([plan.md](plan.md#after-phase-6-what-held-and-what-changed)).
 - The capability table, generated from the suite's records, in the README.
-- The consolidated CHANGELOG, the version 3.0.0, and a recording of the steering demo the funding notes ask for.
-- Then the fleet updates, then the publication. The owner decides the timing of both.
+- The smoke kit's `SMOKE-TEST.md` current for 3.0.
+- 3.0.0 everywhere `scripts/bump-version.mjs` sets it, the marketplace included, and the consolidated CHANGELOG,
+  dated.
+
+The PR merges only on the owner's word, after the owner's manual testing, with a merge commit; then the tag
+`v3.0.0` and a GitHub release. There is no npm release: users install relay from this repository's marketplace,
+which serves `main`, so the merge is what makes 3.0.0 available. Then the fleet update, then the publication, each
+when the owner decides.
 
 ## How the work is done
 
@@ -74,7 +135,7 @@ What worked in Phase 1:
   project `relay-plugin-cc-smoke` (`t3_thread_launch`, Sonnet). It follows the thread with `t3_thread_wait`,
   sends a message if the thread stops before the check's marker, and then runs `node scripts/live/suite.mjs analyze
   <run id>`, which finds the thread's transcript by the prompt's first line.
-- The release smoke test: `scripts/smoke/install-local.sh ~/dev-libar/relay-plugin-cc-smoke`, then
+- The smoke kit run, a phase PR's gate: `scripts/smoke/install-local.sh ~/dev-libar/relay-plugin-cc-smoke`, then
   `scripts/smoke/pane.sh start relay-smoke ~/dev-libar/relay-plugin-cc-smoke -- claude
   --dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}'`, then the kit's workflow
   with `args {"dir": "/home/darkomijic/dev-libar/relay-plugin-cc-smoke"}` and its plain fan-out, then
