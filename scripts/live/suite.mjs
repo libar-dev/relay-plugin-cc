@@ -29,12 +29,33 @@ function selectedBackends(check, backends) {
 
 async function setupRun(check, ctx, dependencies) {
   if (!check.setup) return;
-  try { await check.setup(ctx, dependencies); }
+  try {
+    dependencies.signal?.throwIfAborted();
+    await check.setup(ctx, dependencies);
+    dependencies.signal?.throwIfAborted();
+  }
   catch (error) {
     ctx.run.setupFailed = true;
     ctx.run.error = `Setup failed: ${error.message}`;
     throw new Error(ctx.run.error);
   } finally { ctx.save(); }
+}
+
+function interruptionGuard(run, save) {
+  const controller = new AbortController();
+  const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => {
+    const handler = () => {
+      run.interrupted = true;
+      run.interruptedBy ??= signal;
+      save();
+      controller.abort(new Error(`Interrupted by ${run.interruptedBy}.`));
+    };
+    process.on(signal, handler);
+    return [signal, handler];
+  });
+  // The terminal driver still owns pane shutdown. This guard owns setup/headless cancellation
+  // and stays installed while cleanup runs, without passing its aborted signal to cancellation.
+  return { signal: controller.signal, close() { for (const [signal, handler] of handlers) process.off(signal, handler); } };
 }
 
 export function parseArgs(args, registry, backends) {
@@ -166,46 +187,65 @@ export async function runChecks(options, registry, readers, { env = process.env,
       model: run.model, timeoutMinutes: run.timeoutMinutes, run, save, readers,
       paneDriver: (input = ctx, selected = check, overrides = {}) => driver(input, selected,
         { run, save, readers, keep: options.keep, env, log, warn, ...overrides }) };
-    let analysis, sessionFailed = false;
+    const interruption = interruptionGuard(run, save);
+    let records;
     try {
-      await setupRun(check, ctx, { env });
-      if (check.runTerminal) {
-        analysis = await check.runTerminal(ctx, { env });
-        // An override returning its analysis has completed its session work.
-        run.promptSentAt ??= run.preparedAt;
-        run.transcript ??= analysis?.evidence.transcripts[0] ?? null;
-      } else await driver(ctx, check, { run, save, readers, keep: options.keep, env, log, warn });
-    } catch (error) {
-      run.error = error.message;
-      sessionFailed = true;
-      status = 1;
-      warn(error.message);
-    } finally {
-      const after = commitOf(pluginDir);
-      if (run.relayCommit && after !== run.relayCommit) run.relayCommit = run.relayCommit.replace(/-dirty$/, '') + '-dirty';
-      if (guard(run, evidenceDir, warn)) status = 1;
-      save();
-    }
-    try {
-      if (run.promptSentAt) {
-        try {
-          const result = analyzeRun(run, evidenceDir, registry, readers, { recordsDir: options.recordsDir, analysis, env });
-          summaries(result, registry, log);
-          if (result.records.some(record => record.result !== 'pass')) status = 1;
-        } catch (error) {
-          run.error = error.message;
-          save();
-          warn(error.message);
-          status = 1;
-          const records = unanalyzedRecords(run, error.message, readers, evidenceRoot(env));
-          summaries({ records, file: writeRecords(run, records, evidenceDir, options.recordsDir) }, registry, log);
-        }
-      } else status = 1;
-    } finally {
-      if (!run.setupFailed && (run.setup || (run.promptSentAt && run.jobsHomeCreated &&
-        (sessionFailed || run.interrupted || run.completed === false)))) {
+      let analysis, sessionFailed = false;
+      try {
+        await setupRun(check, ctx, { env, signal: interruption.signal });
+        interruption.signal.throwIfAborted();
+        if (check.runTerminal) {
+          analysis = await check.runTerminal(ctx, { env, signal: interruption.signal });
+          // An override returning its analysis has completed its session work.
+          run.promptSentAt ??= run.preparedAt;
+          run.transcript ??= analysis?.evidence.transcripts[0] ?? null;
+        } else await driver(ctx, check, { run, save, readers, keep: options.keep, env, log, warn });
+        interruption.signal.throwIfAborted();
+      } catch (error) {
+        run.error = error.message;
+        sessionFailed = true;
+        status = 1;
+        warn(error.message);
+      } finally {
+        const after = commitOf(pluginDir);
+        if (run.relayCommit && after !== run.relayCommit) run.relayCommit = run.relayCommit.replace(/-dirty$/, '') + '-dirty';
+        if (guard(run, evidenceDir, warn)) status = 1;
+        save();
+      }
+      if (!check.setup && run.promptSentAt && run.jobsHomeCreated &&
+        (sessionFailed || run.interrupted || run.completed === false)) {
         if (await cleanupRun(run, evidenceDir, { env, warn, cancelJobs })) status = 1;
       }
+      try {
+        if (run.promptSentAt) {
+          try {
+            const result = analyzeRun(run, evidenceDir, registry, readers, { recordsDir: options.recordsDir, analysis, env });
+            records = result.records;
+            summaries(result, registry, log);
+            if (result.records.some(record => record.result !== 'pass')) status = 1;
+          } catch (error) {
+            run.error = error.message;
+            save();
+            warn(error.message);
+            status = 1;
+            records = unanalyzedRecords(run, error.message, readers, evidenceRoot(env));
+            summaries({ records, file: writeRecords(run, records, evidenceDir, options.recordsDir) }, registry, log);
+          }
+        } else status = 1;
+      } finally {
+        if (check.setup && run.setup && (!run.setupFailed || run.interrupted)) {
+          if (await cleanupRun(run, evidenceDir, { env, warn, cancelJobs })) status = 1;
+        }
+      }
+    } finally {
+      try {
+        if (run.interrupted) {
+          status = 1;
+          // A signal during post-analysis cleanup must also invalidate the already written records.
+          if (records) writeRecords(run, records, evidenceDir, options.recordsDir);
+        }
+        save();
+      } finally { interruption.close(); }
     }
     if (run.interrupted) break;
   }
@@ -230,7 +270,15 @@ export async function main(args, registry, readers, dependencies = {}) {
       const { run, evidenceDir } = createRun(evidenceRoot(env), check, { surface: 't3', backends: options.backends, ...build,
         ...(check.setup ? { jobsHome: path.resolve(env.RELAY_JOBS_HOME || path.join(os.homedir(), '.relay-jobs')), jobsHomeCreated: false } : {}) });
       const save = () => writeJson(path.join(evidenceDir, 'run.json'), run);
-      await setupRun(check, { ...run, run, save, evidenceDir }, { env });
+      const interruption = interruptionGuard(run, save);
+      try {
+        await setupRun(check, { ...run, run, save, evidenceDir }, { env, signal: interruption.signal });
+      } finally {
+        try {
+          if (run.interrupted && run.setup) await cleanupRun(run, evidenceDir, { env, warn, cancelJobs: dependencies.cancelJobs });
+          save();
+        } finally { interruption.close(); }
+      }
       log(`${run.runId}\n${path.join(evidenceDir, 'prompt.txt')}\n---\n${fs.readFileSync(path.join(evidenceDir, 'prompt.txt'), 'utf8').replace(/\n$/, '')}`);
       if (check.commands) log('---\nAfter the marker, send each line below as its own message, in order; wait until the thread is idle after each:\n' +
         check.commands(run).map(command => command.text).join('\n'));

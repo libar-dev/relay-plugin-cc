@@ -11,8 +11,8 @@ import { checks, getCheck } from '../scripts/live/checks/index.mjs';
 import { commandRuns, moduleText, statusRows, noModelReply } from '../scripts/live/lib/evidence.mjs';
 import * as evidenceReaders from '../scripts/live/lib/evidence.mjs';
 import { analyzeRun } from '../scripts/live/lib/runs.mjs';
-import { setupJobs, requireCommand } from '../scripts/live/checks/commands.mjs';
-import { headlessCommands, runHeadless } from '../scripts/live/checks/headless.mjs';
+import { setupJobs, requireCommand, requireBuild } from '../scripts/live/checks/commands.mjs';
+import { headlessCommands, runHeadless, executeHeadless } from '../scripts/live/checks/headless.mjs';
 import { workflowScript } from '../scripts/live/checks/steer-workflow.mjs';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/live-suite');
@@ -1289,7 +1289,7 @@ function statusText(backends, state = 'running') {
 
 function commandsFixture(t, name = 'commands', surface = 'terminal', backends = ['codex']) {
   const dir = temp(t), check = getCheck(name), runId = `20261022T120000Z-${name}-${surface}-abcd`;
-  const run = { runId, check: name, surface, backends, relayVersion: '3.0.0-test', preparedAt: '2026-10-22T11:59:00Z',
+  const run = { runId, check: name, surface, backends, relayVersion: '3.0.0-test', relayCommit: '0123456789ab', preparedAt: '2026-10-22T11:59:00Z',
     pluginDir: path.join(dir, 'build'), workDir: path.join(dir, 'work'), jobsHome: path.join(dir, 'jobs'), setup: { jobs: {}, decoys: {} } };
   fs.mkdirSync(run.jobsHome, { recursive: true });
   if (name !== 'transfer') for (const backend of backends) {
@@ -1311,7 +1311,8 @@ function commandsFixture(t, name = 'commands', surface = 'terminal', backends = 
   const plan = name === 'headless' ? headlessCommands(run) : check.commands(run);
   const answer = (command, index) => {
     if (command.text === '/relay:transfer') return moduleAnswer('Codex session ID: abc-123\nResume in Codex: codex resume abc-123\n', null, command.text);
-    if (command.text === '/relay:status') return moduleAnswer(statusText(backends, index === 0 ? 'running' : 'cancelled'));
+    if (command.text === '/relay:status') return moduleAnswer(statusText(backends, index === 0 ? 'running' : 'cancelled')
+      .replace('relay-version: 3.0.0-test', `relay-version: 3.0.0-test${surface === 't3' ? ` (${run.relayCommit})` : ''}`));
     if (command.text.startsWith('/relay:cancel')) return moduleAnswer(`state: cancelled\njob: running-${command.backend}\n`, null, command.text);
     if (command.running) return moduleAnswer(`state: running\njob: ${run.setup.decoys.running.id}\n`, null, command.text);
     return moduleAnswer(`state: completed\njob: done-${command.backend}\n`, `# Done\ndone for ${command.backend}.\n`, command.text);
@@ -1342,7 +1343,7 @@ function commandsFixture(t, name = 'commands', surface = 'terminal', backends = 
   }
   const env = { CODEX_HOME: path.join(dir, 'codex') };
   if (name === 'transfer') write(path.join(env.CODEX_HOME, 'external_agent_session_imports.json'), { records: [
-    { imported_thread_id: 'abc-123', source_path: fs.realpathSync(run.transcript) }
+    { imported_thread_id: 'abc-123', source_path: fs.realpathSync(run.transcript), imported_at: Date.parse('2026-10-22T12:00:11Z') / 1000 }
   ] });
   return { dir, run, check, env, input: { ...run, run, evidenceDir: dir, env } };
 }
@@ -1773,3 +1774,121 @@ test('headless timings come from result durations even when enqueue includes a l
   assert.equal(result.result, 'pass');
   assert.deepEqual(result.timings.answeredSeconds, [0.25, 0.35, 0.45]);
 });
+
+for (const surface of ['terminal', 't3']) {
+  for (const commit of [null, '0123456789ab', '0123456789ab-dirty', 'abcdef012345']) {
+    test(`status build identity on ${surface}: ${commit}`, () => {
+      const parsed = { verbatim: `relay-version: 3.0.0-test${commit ? ` (${commit})` : ''}\n` };
+      const run = { surface, relayVersion: '3.0.0-test', relayCommit: '0123456789ab' };
+      if (commit === run.relayCommit || (commit === null && surface === 'terminal')) {
+        assert.deepEqual(requireBuild(parsed, run), { relayVersion: run.relayVersion, relayCommit: commit });
+      } else assert.throws(() => requireBuild(parsed, run), /relay-version commit/);
+      if (commit?.endsWith('-dirty')) {
+        assert.equal(requireBuild(parsed, { ...run, relayCommit: commit }).relayCommit, commit);
+      }
+    });
+  }
+}
+
+for (const name of ['commands', 'transfer']) {
+  for (const stamp of ['', ' (abcdef012345)']) {
+    test(`${name} rejects missing or mismatched T3 stamp ${JSON.stringify(stamp)}`, t => {
+      const ctx = commandsFixture(t, name, 't3');
+      const rows = readTranscript(ctx.run.transcript);
+      rows.find(row => row.commandRun?.command === 'relay:status').content = rows.find(row => row.commandRun?.command === 'relay:status')
+        .content.replace(' (0123456789ab)', stamp);
+      lines(ctx.run.transcript, rows);
+      const result = ctx.check.analyze(ctx.input).results[0];
+      assert.equal(result.result, 'fail');
+      assert.match(result.reason, /relay-version commit/);
+    });
+  }
+}
+
+for (const surface of ['terminal', 't3']) {
+  test(`transfer records the reported build separately from the run on ${surface}`, t => {
+    const ctx = commandsFixture(t, 'transfer', surface);
+    const { records } = analyzeRun(ctx.run, ctx.dir, [ctx.check], evidenceReaders,
+      { recordsDir: path.join(ctx.dir, 'records'), env: ctx.env });
+    assert.equal(records[0].result, 'pass');
+    assert.equal(records[0].relayVersion, '3.0.0-test');
+    assert.equal(records[0].relayCommit, surface === 't3' ? ctx.run.relayCommit : null);
+  });
+}
+
+for (const surface of ['terminal', 't3']) {
+  for (const offset of [-3, -2, 0, 2, 4, 5, null, '0', 0.5]) {
+    test(`transfer requires this command's import time on ${surface}: ${offset}`, t => {
+      const ctx = commandsFixture(t, 'transfer', surface);
+      const ledger = path.join(ctx.env.CODEX_HOME, 'external_agent_session_imports.json');
+      const saved = read(ledger), row = commandRuns(readTranscript(ctx.run.transcript), ctx.run)[1];
+      saved.records[0].imported_at = typeof offset === 'number' ? Date.parse(row.startedAt) / 1000 + offset : offset;
+      write(ledger, saved);
+      const pass = [-2, 0, 2, 4].includes(offset);
+      const recordsDir = path.join(ctx.dir, 'records');
+      const first = analyzeRun(ctx.run, ctx.dir, [ctx.check], evidenceReaders, { recordsDir, env: ctx.env });
+      assert.equal(first.records[0].result, pass ? 'pass' : 'fail');
+      if (!pass) assert.match(first.records[0].reason, /this command's time/);
+      fs.rmSync(ctx.env.CODEX_HOME, { recursive: true });
+      fs.rmSync(ctx.run.transcript);
+      assert.deepEqual(analyzeRun(ctx.run, ctx.dir, [ctx.check], evidenceReaders, { recordsDir, fromCopy: true }).records, first.records);
+    });
+  }
+}
+
+test('status rows decode escaped backslashes, pipes and trailing backslashes without splitting a cell', () => {
+  const values = ['a\\|b', 'trailing\\', '`sleep 600`'];
+  const escaped = values.map(value => value.replace(/\\/g, '\\\\').replace(/\|/g, '\\|'));
+  const table = '| job | summary |\n|---|---|\n' + escaped.map((value, i) => `| j-${i} | ${value} |`).join('\n');
+  assert.deepEqual(statusRows(table).map(row => row.summary), values);
+});
+
+test('headless execution supplies EOF immediately to a subprocess', async () => {
+  const output = await executeHeadless(process.execPath, ['-e',
+    'let bytes = 0; process.stdin.on("data", chunk => bytes += chunk.length); process.stdin.on("end", () => console.log(bytes));'],
+  { encoding: 'utf8', timeout: 5000 });
+  assert.equal(output.stdout, '0\n');
+});
+
+test('interrupted headless execution saves its partial output and starts no more commands', async t => {
+  const ctx = commandsFixture(t, 'headless'), controller = new AbortController();
+  let calls = 0;
+  await assert.rejects(runHeadless({ ...ctx.run, run: ctx.run, evidenceDir: ctx.dir, save() {} }, {
+    env: { CLAUDE_CONFIG_DIR: path.join(ctx.dir, 'claude') }, signal: controller.signal,
+    execute: async (file, args, options) => {
+      calls++;
+      assert.equal(options.signal, controller.signal);
+      controller.abort(new Error('Interrupted by SIGHUP.'));
+      throw Object.assign(new Error('Aborted'), { stdout: 'partial output', stderr: 'partial error' });
+    }
+  }), /Interrupted by SIGHUP/);
+  assert.equal(calls, 1);
+  assert.equal(ctx.run.headless.length, 1);
+  assert.equal(ctx.run.headless[0].interrupted, true);
+  assert.equal(fs.readFileSync(ctx.run.headless[0].stream, 'utf8'), 'partial output');
+  assert.notEqual(ctx.run.completed, true);
+});
+
+for (const when of ['start', 'wait']) {
+  test(`interrupted setup keeps the job receipt and cancels it (${when})`, async t => {
+    const dir = temp(t), controller = new AbortController(), calls = [];
+    const ctx = { backends: ['codex'], pluginDir: path.join(dir, 'plugin'), jobsHome: path.join(dir, 'jobs'),
+      workDir: dir, evidenceDir: dir, run: {}, save() {} };
+    await assert.rejects(setupJobs(ctx, true, {
+      signal: controller.signal, env: {},
+      async execute(file, args, options) {
+        calls.push(args[1]);
+        assert.equal(options.signal, undefined, 'cleanup must not inherit the aborted signal');
+        if (args[1] === 'cancel') return {};
+        const jobDir = path.join(ctx.jobsHome, 'repo/job-1');
+        write(path.join(jobDir, 'job.json'), { id: 'job-1', state: 'running' });
+        if (when === 'start') controller.abort(new Error('Interrupted.'));
+        return { stdout: `job: job-1\ndir: ${jobDir}\n` };
+      },
+      async pause() { controller.abort(new Error('Interrupted.')); }
+    }), /Interrupted/);
+    assert.deepEqual(calls, ['start', 'cancel']);
+    assert.deepEqual(ctx.run.setup.jobs.codex.done, { id: 'job-1', jobDir: 'repo/job-1' });
+    assert.deepEqual(ctx.run.setup.cancellations, [{ jobId: 'job-1', status: 'cancelled' }]);
+  });
+}

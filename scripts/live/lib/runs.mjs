@@ -83,8 +83,15 @@ export async function cancelUnfinishedJobs(run, { env = process.env, execute = p
   const jobs = owned.length ? owned.map(job => ({ id: job.id, dir: path.resolve(run.jobsHome, job.jobDir) })) :
     directories(run.jobsHome).flatMap(directories).filter(dir => fs.existsSync(path.join(dir, 'job.json'))).map(dir => ({ dir }));
   jobs.sort((a, b) => a.dir.localeCompare(b.dir));
-  run.cancellations = [];
+  const receipts = [];
+  run.cancellations ??= [];
   for (const { id, dir } of jobs) {
+    if (id && !fs.existsSync(dir)) {
+      const receipt = { jobId: id, status: 'gone' };
+      run.cancellations.push(receipt);
+      receipts.push(receipt);
+      continue;
+    }
     let job;
     try { job = readJson(path.join(dir, 'job.json')); } catch { /* Let cancel read a busy job. */ }
     if (['completed', 'failed', 'cancelled'].includes(job?.state)) continue;
@@ -98,8 +105,9 @@ export async function cancelUnfinishedJobs(run, { env = process.env, execute = p
       receipt.error = error.message;
     }
     run.cancellations.push(receipt);
+    receipts.push(receipt);
   }
-  return run.cancellations;
+  return receipts;
 }
 
 function projectFolders(workDir, configDir) {
@@ -226,7 +234,8 @@ export function makeRecords(run, check, analysis, entries, readers, root = evide
       .filter(([, values]) => Array.isArray(values) && values.every(Number.isFinite)));
     return clean({ schema: 'relay.live-record/1', runId: run.runId, check: run.check, surface: run.surface,
       backend, model: typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]*(\/[A-Za-z0-9._:-]+)?$/.test(model) && !localPath.test(model) ? model : null,
-      relayVersion: result?.relayVersion ?? run.relayVersion, relayCommit: run.relayCommit ?? null,
+      relayVersion: result?.relayVersion ?? run.relayVersion,
+      relayCommit: result && Object.hasOwn(result, 'relayCommit') ? result.relayCommit : run.relayCommit ?? null,
       claudeCodeVersion: readers.claudeCodeVersionOf(entries), leadModel: readers.leadModelOf(entries),
       platform: run.platform ?? process.platform, startedAt: span.startedAt, finishedAt: span.finishedAt,
       durationSeconds: Number.isFinite(duration) ? duration : null, delivery: result?.delivery ?? null,
@@ -237,6 +246,12 @@ export function makeRecords(run, check, analysis, entries, readers, root = evide
 
 export function writeRecords(run, records, evidenceDir, recordsDir) {
   if (!run.promptSentAt) return null;
+  if (run.interrupted) for (const record of records) {
+    record.result = 'fail';
+    if (!record.reason?.startsWith('The run was interrupted.')) {
+      record.reason = 'The run was interrupted.' + (record.reason ? ` ${record.reason}` : '');
+    }
+  }
   const lines = records.map(row => JSON.stringify(row)).join('\n') + '\n';
   fs.mkdirSync(recordsDir, { recursive: true });
   const file = path.join(recordsDir, `${run.runId}.jsonl`);

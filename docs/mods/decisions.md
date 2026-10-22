@@ -239,8 +239,9 @@ records a command a plugin answered without its arguments. So the answer's first
 (`relay: /relay:result <job>` on screen), then the companion's output in a fenced block up to its first line that is
 `---` or starts with `|` (with stderr after it, and a fence longer than any backtick run inside), then the rest as
 Markdown: a job's report after `---`, which the backend wrote as Markdown, or the job table, which the terminal
-draws as a box table and T3 as a table. The state block and every message the companion prints read exactly as in
-Bash, on every surface. Rejected: the bare text (mangled in both surfaces), a Markdown variant of the companion's
+draws as a box table (or, when it is wider than the terminal, as one block per job) and T3 as a table; its cells
+are drawn as Markdown too, so a brief's backticks show as inline code. The state block and every message the
+companion prints read exactly as in Bash, on every surface. Rejected: the bare text (mangled in both surfaces), a Markdown variant of the companion's
 output (a second human format, which the plan rules out), fencing the state block inside `renderResultText` (it
 would change the hand-back that every completion notice carries, for a display concern), and fencing the table
 too, which the first version did: Opus 5.5's review found it unreadable once a row wrapped in a terminal of 80 to
@@ -300,12 +301,15 @@ hooks module has loaded. `transfer` runs on Codex only; the table says `n/a` for
 check that applies to none of the backends asked for. Both reviewers (GPT-6.1 Sol and Opus 5.5) found the two
 false passes this closes: arguments a module dropped, and an older build answering in T3.
 
-### D37. `status` names the relay version (Phase 2 thread)
+### D37. `status` names the relay version, and a smoke install's commit (Phase 2 thread)
 
-The status header gains `relay-version: <version>` after `fast-tier:`. A person sees which build answers the commands,
-and a live check can prove that the module of the build under test answered: in T3 nothing else in the transcript
-names the build that loaded. `status <job>` and `--json` are
-unchanged; Phase 4 gives every `--json` output a `relayVersion`.
+The status header gains `relay-version: <version>` after `fast-tier:`. A person sees which build answers the
+commands, and a live check can prove that the module of the build under test answered: in T3 nothing else in the
+transcript names the build that loaded. Two builds can share a `3.0.0-dev.N` (D28), as both reviewers of the
+second round pointed out, so `install-local.sh` writes the commit into the export (`.claude-plugin/build.json`),
+and the line reads `relay-version: <version> (<commit>)` for such a build; a T3 check requires that commit to be
+the run's. A released install has no stamp. `status <job>` and `--json` are unchanged; Phase 4 gives every `--json`
+output a `relayVersion`.
 
 ### D51. Phase 6's PR raises no version (Phase 6 thread)
 

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { commandRuns, readTranscript, scopeToRun, formatSeconds } from '../lib/evidence.mjs';
-import { commandPrompt, commandResult, requireCommand, requireBuild } from './commands.mjs';
+import { commandPrompt, commandResult, requireCommand, requireBuild, statusBuild } from './commands.mjs';
 
 export default {
   id: 'transfer', title: 'Answer /relay:transfer with no model turn', backends: ['codex'],
@@ -37,14 +37,16 @@ export default {
       try {
         if (rows.length !== 2) throw new Error('Expected status and transfer commands.');
         const status = requireCommand(rows[0], '/relay:status');
-        result.relayVersion = status.verbatim.match(/^relay-version: (.+)$/m)?.[1] ?? null;
-        requireBuild(status, input.relayVersion);
+        Object.assign(result, statusBuild(status));
+        requireBuild(status, input.run);
         const { verbatim } = requireCommand(rows[1], '/relay:transfer');
         const id = verbatim.match(/^Codex session ID: ([A-Za-z0-9-]+)$/m)?.[1];
         if (!id || !verbatim.split('\n').some(line => line === `codex resume ${id}` || line === `Resume in Codex: codex resume ${id}`)) throw new Error('Transfer did not name a Codex session and its resume command.');
         if (imports.error) throw new Error(imports.error);
-        if (!imports.records.some(record => record.imported_thread_id === id && record.source_path === imports.sourcePath)) {
-          throw new Error('Transfer import ledger does not match the named Codex session and this transcript.');
+        const start = Date.parse(rows[1].startedAt) / 1000, answer = Date.parse(rows[1].answeredAt) / 1000;
+        if (!imports.records.some(record => record.imported_thread_id === id && record.source_path === imports.sourcePath &&
+          Number.isInteger(record.imported_at) && record.imported_at >= start - 2 && record.imported_at <= answer + 2)) {
+          throw new Error('Transfer import ledger does not match the named Codex session, this transcript and this command\'s time.');
         }
         result.timings = { transferSeconds: [rows[1].seconds] };
         result.result = 'pass';

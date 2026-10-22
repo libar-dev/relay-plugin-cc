@@ -535,7 +535,14 @@ export function moduleText(text) {
 export function statusRows(table) {
   const cells = line => {
     if (!line.startsWith('|') || !line.endsWith('|')) return null;
-    return line.slice(1, -1).split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, '|'));
+    const values = [''];
+    const text = line.slice(1, -1);
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '\\' && ['\\', '|'].includes(text[i + 1])) values[values.length - 1] += text[++i];
+      else if (text[i] === '|') values.push('');
+      else values[values.length - 1] += text[i];
+    }
+    return values.map(cell => cell.trim());
   };
   const lines = (table ?? '').split('\n');
   const start = lines.findIndex(line => cells(line)?.[0] === 'job');

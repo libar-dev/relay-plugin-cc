@@ -21,11 +21,19 @@ function formatArgs(format) {
   return format === 'stream-json' ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json'];
 }
 
-export async function runHeadless(ctx, { env = process.env, execute = promisify(execFile), uuid = randomUUID } = {}) {
+export function executeHeadless(file, args, options) {
+  const pending = promisify(execFile)(file, args, options);
+  // execFile always creates pipes; closing stdin supplies EOF before Claude starts reading it.
+  pending.child.stdin?.end();
+  return pending;
+}
+
+export async function runHeadless(ctx, { env = process.env, execute = executeHeadless, uuid = randomUUID, signal } = {}) {
   const clean = sessionEnvironment(env);
   ctx.run.removedEnvironment = clean.removed;
   ctx.run.headless = [];
   for (const command of headlessCommands(ctx.run)) {
+    signal?.throwIfAborted();
     const sessionId = uuid(), index = ctx.run.headless.length;
     const transcript = path.join(configDirectory(env), 'projects', ctx.workDir.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);
     const stream = path.join(ctx.evidenceDir, `headless-${index}.jsonl`);
@@ -38,7 +46,7 @@ export async function runHeadless(ctx, { env = process.env, execute = promisify(
     try {
       output = await execute('claude', ['-p', command.text, ...formatArgs(command.format),
         '--plugin-dir', ctx.pluginDir, '--session-id', sessionId, '--model', 'sonnet'],
-      { cwd: ctx.workDir, env: { ...clean.env, RELAY_JOBS_HOME: ctx.jobsHome }, timeout: 120000,
+      { cwd: ctx.workDir, env: { ...clean.env, RELAY_JOBS_HOME: ctx.jobsHome }, timeout: 120000, signal,
         encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
       receipt.exitCode = 0;
     } catch (error) {
@@ -55,7 +63,9 @@ export async function runHeadless(ctx, { env = process.env, execute = promisify(
     fs.writeFileSync(stream, output.stdout ?? '');
     fs.writeFileSync(path.join(ctx.evidenceDir, `headless-${index}.stderr.txt`), output.stderr ?? '');
     receipt.finished = true;
+    if (signal?.aborted) receipt.interrupted = true;
     ctx.save();
+    signal?.throwIfAborted();
   }
   ctx.run.completed = true;
   ctx.save();
@@ -123,7 +133,7 @@ export default {
           !running.parsed.verbatim.split('\n').includes(`job: ${input.run.setup?.decoys?.running?.id}`)) {
           throw new Error('Running result has the wrong job or state.');
         }
-        requireBuild(status.parsed, input.relayVersion);
+        requireBuild(status.parsed, input.run);
         requireResult(own.parsed, done);
         // The shared status command must cover every requested backend.
         for (const selected of input.backends) {

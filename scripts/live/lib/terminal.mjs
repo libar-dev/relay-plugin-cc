@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { configDirectory, findTranscript } from './runs.mjs';
+import { cancelTimeout, configDirectory, findTranscript } from './runs.mjs';
 
 const paneScript = fileURLToPath(new URL('../../smoke/pane.sh', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -120,7 +120,7 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
     }
     if (done && check.commands) {
       run.completed = false;
-      await runCommands(ctx, check, { run, save, readers, drive, pause, aborted: () => aborted });
+      await runCommands(ctx, check, { run, save, readers, drive, pause, env, aborted: () => aborted });
     }
     run.completed = done;
     if (aborted) throw new Error('Interrupted.');
@@ -142,7 +142,7 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
           }
         }
       } finally {
-        run.interrupted = aborted;
+        run.interrupted ||= aborted;
         process.off('SIGINT', abort);
         process.off('SIGTERM', abort);
         process.off('SIGHUP', abort);
@@ -163,7 +163,7 @@ export function sessionEnvironment(env = process.env) {
 }
 
 export async function runCommands(ctx, check, { run, save, readers, drive = pane, pause = delay,
-  aborted = () => false, now = Date.now } = {}) {
+  aborted = () => false, now = Date.now, env = process.env } = {}) {
   const answers = () => {
     try {
       return readers.readTranscript(run.transcript).filter(entry => !entry.isSidechain &&
@@ -187,7 +187,8 @@ export async function runCommands(ctx, check, { run, save, readers, drive = pane
     run.commands.push({ text: command.text, sentAt: new Date(now()).toISOString() });
     save();
     drive(['send', run.pane, command.text]);
-    const deadline = now() + 200000;
+    const timeout = /^\/relay:cancel(?:\s|$)/.test(command.text) ? Math.max(200000, cancelTimeout(env) + 20000) : 200000;
+    const deadline = now() + timeout;
     let answered = false;
     while (now() < deadline && !aborted()) {
       fs.writeFileSync(path.join(ctx.evidenceDir, 'screen.txt'), drive(['read', run.pane, '2000']));
@@ -196,6 +197,6 @@ export async function runCommands(ctx, check, { run, save, readers, drive = pane
       await pause(1000);
     }
     if (aborted()) throw new Error('Interrupted.');
-    if (!answered) throw new Error(`No answer to ${command.text} within 200 seconds. Available evidence will be analyzed.`);
+    if (!answered) throw new Error(`No answer to ${command.text} within ${timeout / 1000} seconds. Available evidence will be analyzed.`);
   }
 }
