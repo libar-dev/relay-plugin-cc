@@ -251,7 +251,10 @@ test("superseded matching cancels all receive interrupt-sent and cancelled while
   } finally {
     process.kill(worker.pid, "SIGCONT");
   }
-  await waitFor(() => messages.every(message => ["cancelled", "no-op"].includes(readOutcome(dir, message.id)?.action)));
+  await waitFor(() => {
+    const log = readJob(ctx, id).messages ?? [];
+    return messages.every(message => log.some(entry => entry.id === message.id && entry.action === (message.attempt === 2 ? "no-op" : "cancelled")));
+  });
   const job = readJob(ctx, id);
   for (const message of messages) {
     const actions = job.messages.filter(entry => entry.id === message.id).map(entry => entry.action);
@@ -286,10 +289,10 @@ fs.mkdirSync = function(...args) {
 
 for (const closing of [false, true]) {
   test(`cancel succeeds and preserves a continue ${closing ? "started during the close wait" : "arriving as attempt 1 is cancelled"}`, async t => {
-    const ctx = setup(t, { turnMs: 60000 });
+    const ctx = setup(t, { turnMs: 60000, behavior: "job-child" });
     const marker = path.join(ctx.root, "cancelled");
     const workerEnv = preload(ctx, "continue-on-cancel", `
-process.on("SIGTERM", () => fs.appendFileSync(${JSON.stringify(path.join(ctx.root, "worker-signals"))}, "SIGTERM\\n"));
+if (process.argv[2] === "worker") process.on("SIGTERM", () => fs.appendFileSync(${JSON.stringify(path.join(ctx.root, "worker-signals"))}, "SIGTERM\\n"));
 const rename = fs.renameSync;
 let posted = false;
 fs.renameSync = function(from, to) {
@@ -310,6 +313,8 @@ fs.renameSync = function(from, to) {
     await waitFor(() => readJob(ctx, id).turnId);
     const worker = readJob(ctx, id).worker;
     t.after(() => { try { process.kill(worker.pid, "SIGCONT"); } catch {} });
+    const descendant = await waitFor(() => ctx.fakeState().descendants?.[0]);
+    t.after(() => { try { process.kill(descendant.childPid, "SIGKILL"); } catch {} });
     const closeMarker = path.join(ctx.root, "closing");
     const cancelEnv = closing ? preload(ctx, "observe-closing", `
 const read = fs.readFileSync;
@@ -319,12 +324,15 @@ fs.readFileSync = function(file, ...args) {
   return read.call(this, file, ...args);
 };`) : {};
     const cancelled = asyncCompanion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...cancelEnv, RELAY_JOBS_CANCEL_GRACE_MS: "20000" });
+    let resumedAt;
     if (closing) {
       await waitFor(() => fs.existsSync(marker) && fs.existsSync(closeMarker));
       postInboxMessage(dir, { kind: "continue", text: "[long] Next." });
+      resumedAt = Date.now();
       process.kill(worker.pid, "SIGCONT");
     }
     const result = await cancelled;
+    if (resumedAt) assert.ok(Date.now() - resumedAt < 4000, "the close wait must stop when attempt 2 starts");
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.equal(result.stderr, "");
     const out = JSON.parse(result.stdout);
@@ -337,6 +345,7 @@ fs.readFileSync = function(file, ...args) {
     assert.equal(cancels(dir).length, 1);
     assert.equal(cancels(dir)[0].outcome.action, "cancelled");
     assert.equal(fs.existsSync(path.join(ctx.root, "worker-signals")), false);
+    assert.equal(isWorkerAlive({ pid: descendant.childPid }), false, "attempt 1's detached child must be swept on the runs-on path");
   });
 }
 
@@ -370,7 +379,7 @@ test("wait --auto-resume waits through a cancel sweep after the worker dies and 
 
 for (const beforeAttempt of [false, true]) {
   test(`a cancel kill preserves a continue's new worker ${beforeAttempt ? "before its attempt starts" : "after attempt 2 starts"}`, async t => {
-    const ctx = setup(t, { turnMs: 60000 });
+    const ctx = setup(t, { turnMs: 60000, behavior: "job-child" });
     const workerEnv = preload(ctx, "stop-after-interrupt", `
 const rename = fs.renameSync;
 fs.renameSync = function(from, to) {
@@ -380,6 +389,8 @@ fs.renameSync = function(from, to) {
     const { id } = startJob(ctx, undefined, "First turn.", workerEnv);
     const dir = jobDir(ctx, id);
     await waitFor(() => readJob(ctx, id).turnId);
+    const descendant = await waitFor(() => ctx.fakeState().descendants?.[0]);
+    t.after(() => { try { process.kill(descendant.childPid, "SIGKILL"); } catch {} });
     const pause = pauseBeforeMark(ctx);
     t.after(pause.release);
     const cancelled = asyncCompanion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...pause.env, RELAY_JOBS_CANCEL_GRACE_MS: "1200" });
@@ -415,6 +426,7 @@ fs.readFileSync = function(file, ...args) {
     assert.equal((await continued).status, 0);
     await waitFor(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
     assert.equal(isWorkerAlive(readJob(ctx, id).worker), true);
+    assert.equal(isWorkerAlive({ pid: descendant.childPid }), false, "the killed attempt's detached child must be swept");
     assert.equal(cancels(dir).length, 1);
     assert.equal(cancels(dir)[0].outcome.action, "cancelled");
     assert.equal(cancels(dir)[0].outcome.reason, "the cancel stopped attempt 1's worker");
@@ -753,4 +765,356 @@ fs.readFileSync = function(file, ...args) {
   const message = JSON.parse(fs.readFileSync(path.join(jobPaths(dir).inbox, name), "utf8"));
   assert.equal(readOutcome(dir, message.id).action, "cancelled");
   assert.equal(readOutcome(dir, message.id).reason, "the cancel stopped attempt 1's worker");
+});
+
+for (const state of ["cancelled"]) {
+  test(`a ${state} job with a pending first brief waits for a message`, async t => {
+    const { ctx, dir } = recorded(t, state, []);
+    writeJob(dir, { ...readStoredJob(dir), pendingFirstTurn: true,
+      request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: ctx.work }) });
+    fs.writeFileSync(jobPaths(dir).brief, "The cancelled brief.");
+    await runWorker(dir, { env: ctx.env });
+    assert.equal(readStoredJob(dir).state, state);
+    assert.deepEqual(readStoredJob(dir).attempts, []);
+    assert.equal(fs.existsSync(path.join(ctx.bin, "fake-codex-state.json")), false);
+  });
+}
+
+test("a job whose first turn failed still runs its brief before a resume message", async t => {
+  const { ctx, dir } = recorded(t, "failed", []);
+  writeJob(dir, { ...readStoredJob(dir), pendingFirstTurn: true,
+    request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: ctx.work }) });
+  fs.writeFileSync(jobPaths(dir).brief, "The failed brief.");
+  const message = postInboxMessage(dir, { kind: "resume", text: "Resume now." });
+  await runWorker(dir, { env: ctx.env });
+  assert.deepEqual(ctx.fakeState().turnStarts.map(turn => turn.prompt).slice(0, 2), ["The failed brief.", message.text]);
+});
+
+test("cancelling a dead start clears its pending brief before a later continue", async t => {
+  const { ctx, id, dir } = recorded(t, "starting", []);
+  writeJob(dir, { ...readStoredJob(dir), pendingFirstTurn: true,
+    request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: ctx.work }) });
+  fs.writeFileSync(jobPaths(dir).brief, "The cancelled brief.");
+  const result = companion(ctx, ["cancel", id, "--attempt", "1", "--json"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(readStoredJob(dir).pendingFirstTurn, false);
+  await runWorker(dir, { env: ctx.env });
+  assert.deepEqual(readStoredJob(dir).attempts, []);
+  const message = postInboxMessage(dir, { kind: "continue", text: "Run only this message." });
+  await runWorker(dir, { env: ctx.env });
+  assert.deepEqual(ctx.fakeState().turnStarts.map(turn => turn.prompt), [message.text]);
+});
+
+test("cancel's own lease closes pending and unfinished claimed cancels by their attempt", t => {
+  const { ctx, id, dir } = recorded(t, "running", [{ state: "completed" }, { state: "running" }]);
+  const unfinished = [];
+  for (const action of [null, "interrupt-sent", "interrupt-failed"]) {
+    for (const attempt of [1, 2, undefined]) {
+      const message = postInboxMessage(dir, { kind: "cancel", text: "", ...(attempt ? { attempt } : {}) });
+      claimInboxMessages(dir);
+      if (action) writeOutcome(dir, message.id, { action });
+      unfinished.push(message);
+    }
+  }
+  const closed = postInboxMessage(dir, { kind: "cancel", text: "", attempt: 1 });
+  claimInboxMessages(dir);
+  writeOutcome(dir, closed.id, { action: "nothing-to-cancel", state: "completed" });
+  const pending = [1, 2, undefined].map(attempt => postInboxMessage(dir, { kind: "cancel", text: "", ...(attempt ? { attempt } : {}) }));
+  const env = preload(ctx, "check-state-before-closing", `
+const rename = fs.renameSync;
+fs.renameSync = function(from, to) {
+  if (path.dirname(String(to)) === ${JSON.stringify(jobPaths(dir).outcomes)}) {
+    if (JSON.parse(fs.readFileSync(${JSON.stringify(jobPaths(dir).job)}, "utf8")).state !== "cancelled") throw new Error("outcome preceded terminal state");
+  }
+  return rename.apply(this, arguments);
+};`);
+  const result = companion(ctx, ["cancel", id, "--attempt", "2", "--json"], env);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  for (const message of [...unfinished, ...pending]) {
+    const outcome = readOutcome(dir, message.id);
+    assert.equal(outcome.action, message.attempt === 1 ? "no-op" : "cancelled");
+    if (message.attempt === 1) assert.equal(outcome.reason, "attempt 1 is not the job's current attempt (2)");
+  }
+  assert.equal(readOutcome(dir, closed.id).action, "nothing-to-cancel");
+});
+
+for (const scoped of [true, false]) {
+  test(`a killed worker's claimed ${scoped ? "scoped" : "unscoped"} cancel gets its final outcome`, async t => {
+    const ctx = setup(t, { turnMs: 60000 });
+    const env = preload(ctx, "hang-after-claim", `
+const rename = fs.renameSync;
+fs.renameSync = function(from, to) {
+  const result = rename.apply(this, arguments);
+  if (String(to).includes(path.sep + "claimed" + path.sep) && JSON.parse(fs.readFileSync(to, "utf8")).kind === "cancel") process.kill(process.pid, "SIGSTOP");
+  return result;
+};`);
+    const { id } = startJob(ctx, undefined, "First turn.", env);
+    const dir = jobDir(ctx, id);
+    await waitFor(() => readJob(ctx, id).turnId);
+    const result = await asyncCompanion(ctx, ["cancel", id, ...(scoped ? ["--attempt", "1"] : []), "--json"], { RELAY_JOBS_CANCEL_GRACE_MS: "800" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(JSON.parse(result.stdout).state, "cancelled");
+    assert.equal(cancels(dir).length, 1);
+    assert.equal(cancels(dir)[0].outcome.action, "cancelled");
+  });
+}
+
+for (const scoped of [true, false]) {
+  test(`a late ${scoped ? "scoped cancel lets queued work run" : "unscoped cancel takes precedence over queued work"}`, async t => {
+    const { ctx, dir } = recorded(t, "completed", [{ attempt: 1, state: "completed", endedAt: new Date().toISOString() }]);
+    writeJob(dir, { ...readStoredJob(dir), request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: ctx.work }) });
+    const cancel = postInboxMessage(dir, { kind: "cancel", text: "", ...(scoped ? { attempt: 1 } : {}) });
+    const cont = postInboxMessage(dir, { kind: "continue", text: "Next." });
+    await runWorker(dir, { env: ctx.env });
+    assert.equal(readOutcome(dir, cancel.id).action, scoped ? "nothing-to-cancel" : "cancelled");
+    assert.equal(readOutcome(dir, cont.id).action, scoped ? "turn-started" : "dropped");
+    assert.equal(readStoredJob(dir).attempts.length, scoped ? 2 : 1);
+  });
+}
+
+for (const advanced of [false, true]) {
+  test(`a cooperative turn outlasting the grace ${advanced ? "advances before marking without a duplicate cancel" : "ends in its original worker without a duplicate cancel"}`, async t => {
+    const ctx = setup(t, { turnMs: 60000 });
+    const workerEnv = preload(ctx, "hold-interrupt-outcome", `
+const rename = fs.renameSync;
+fs.renameSync = function(from, to) {
+  if (String(to).includes(path.sep + "outcomes" + path.sep) && JSON.parse(fs.readFileSync(from, "utf8")).action === "interrupt-sent") process.kill(process.pid, "SIGSTOP");
+  return rename.apply(this, arguments);
+};`);
+    const { id } = startJob(ctx, undefined, "First turn.", workerEnv);
+    const dir = jobDir(ctx, id);
+    await waitFor(() => readJob(ctx, id).turnId);
+    const worker = readJob(ctx, id).worker;
+    t.after(() => { try { process.kill(worker.pid, "SIGCONT"); } catch {} });
+    const pause = pauseBeforeMark(ctx);
+    t.after(pause.release);
+    const cancelling = asyncCompanion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...pause.env, RELAY_JOBS_CANCEL_GRACE_MS: "5000" });
+    await waitFor(() => cancels(dir).length === 1);
+    writeOutcome(dir, cancels(dir)[0].message.id, { action: "interrupt-sent" });
+    await waitFor(() => fs.existsSync(pause.marker), 15000);
+    process.kill(worker.pid, "SIGCONT");
+    if (advanced) {
+      await waitFor(() => readJob(ctx, id).state === "cancelled");
+      const continued = companion(ctx, ["continue", id, "--message", "[long] Next."]);
+      assert.equal(continued.status, 0, continued.stdout + continued.stderr);
+      await waitFor(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
+    }
+    pause.release();
+    const result = await cancelling;
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const out = JSON.parse(result.stdout);
+    assert.ok(out.actions.includes(`the worker (pid ${worker.pid}) has not ended the turn; it is left to finish`));
+    if (advanced) assert.ok(out.actions.includes("attempt 1 was stopped; attempt 2 started since, for a message, and runs on"));
+    // The resumed worker may end the job before or after the cancel takes the lease; either way it, not a
+    // second cancel, ended it.
+    else assert.ok(out.actions.includes(`the cancel went to the job's worker (pid ${worker.pid}), which ended it cancelled`) ||
+      out.actions.includes("a worker ended the job cancelled before the cancel wrote it"), result.stdout);
+    if (!advanced) assert.equal(out.state, "cancelled");
+    assert.equal(cancels(dir).length, 1);
+    assert.deepEqual(pendingInboxMessages(dir), []);
+  });
+}
+
+test("a turn that ends without taking the cancel preserves its worker when a continue starts during close", async t => {
+  const { ctx, id, dir, worker } = await idleWorker(t);
+  const signals = path.join(ctx.root, "signals");
+  const env = preload(ctx, "natural-end-and-continue", `
+const rename = fs.renameSync;
+let ended = false;
+fs.renameSync = function(from, to) {
+  const result = rename.apply(this, arguments);
+  if (path.dirname(String(to)) === ${JSON.stringify(jobPaths(dir).inbox)}) {
+    const file = ${JSON.stringify(jobPaths(dir).job)};
+    const job = JSON.parse(fs.readFileSync(file, "utf8"));
+    job.state = "completed";
+    job.attempts[0].state = "completed";
+    fs.writeFileSync(file, JSON.stringify(job));
+    ended = true;
+  }
+  return result;
+};
+const read = fs.readFileSync;
+fs.readFileSync = function(file, ...args) {
+  if (ended && String(file).startsWith("/proc/") && /waitUntil/.test(new Error().stack) && !/cancelStopped/.test(new Error().stack)) {
+    ended = false;
+    const file = ${JSON.stringify(jobPaths(dir).job)};
+    const job = JSON.parse(read.call(this, file, "utf8"));
+    job.state = "running";
+    job.attempts.push({ attempt: 2, state: "running" });
+    fs.writeFileSync(file, JSON.stringify(job));
+  }
+  return read.call(this, file, ...args);
+};
+const kill = process.kill;
+process.kill = function(pid, signal) {
+  if (Math.abs(pid) === ${worker.pid} && signal !== 0) fs.appendFileSync(${JSON.stringify(signals)}, String(signal));
+  return kill.apply(this, arguments);
+};`);
+  const result = companion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...env, RELAY_JOBS_CANCEL_GRACE_MS: "100" });
+  assert.equal(fs.existsSync(signals), false, "the naturally ended turn's reusable worker must receive no signal");
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.equal(JSON.parse(result.stdout).error.kind, "attempt-changed");
+  assert.equal(readStoredJob(dir).attempts.length, 2);
+  assert.equal(isWorkerAlive(worker), true);
+});
+
+test("cancel checks the attempt again after its second snapshot immediately before killing", async t => {
+  const { ctx, id, dir, worker } = await idleWorker(t);
+  const signals = path.join(ctx.root, "signals");
+  const env = preload(ctx, "advance-before-kill", `
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const spawnSync = childProcess.spawnSync;
+let snapshots = 0;
+childProcess.spawnSync = function(...args) {
+  const result = spawnSync.apply(this, args);
+  if (/snapshotProcessTree/.test(new Error().stack) && ++snapshots === 2) {
+    const file = ${JSON.stringify(jobPaths(dir).job)};
+    const job = JSON.parse(fs.readFileSync(file, "utf8"));
+    job.attempts.push({ attempt: 2, state: "running" });
+    fs.writeFileSync(file, JSON.stringify(job));
+  }
+  return result;
+};
+syncBuiltinESMExports();
+const kill = process.kill;
+process.kill = function(pid, signal) {
+  if (Math.abs(pid) === ${worker.pid} && signal !== 0) fs.appendFileSync(${JSON.stringify(signals)}, String(signal));
+  return kill.apply(this, arguments);
+};`);
+  const result = companion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...env, RELAY_JOBS_CANCEL_GRACE_MS: "0" });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.equal(JSON.parse(result.stdout).error.kind, "attempt-changed");
+  assert.equal(fs.existsSync(signals), false);
+  assert.equal(isWorkerAlive(worker), true);
+});
+
+for (const delivered of [true, false]) {
+  test(`a ${delivered ? "delivered kill sweeps the old tree and finalizes its cancel" : "failed kill neither claims success nor finalizes a newer attempt's cancel"}`, async t => {
+    const { ctx, id, dir, worker } = await idleWorker(t);
+    const replacement = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+    t.after(() => replacement.kill("SIGKILL"));
+    const next = { pid: replacement.pid, startTime: readProcessStartTime(replacement.pid) };
+    const swept = path.join(ctx.root, "swept");
+    const env = preload(ctx, "advance-after-signal", `
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+let signalled = false;
+const kill = process.kill;
+process.kill = function(pid, signal) {
+  if (Math.abs(pid) === ${worker.pid} && /terminateProcessTree/.test(new Error().stack)) {
+    if (!signalled) kill(${worker.pid}, "SIGKILL");
+    signalled = true;
+    if (${delivered}) return true;
+    throw Object.assign(new Error("gone"), { code: "ESRCH" });
+  }
+  return kill.apply(this, arguments);
+};
+const spawnSync = childProcess.spawnSync;
+childProcess.spawnSync = function(...args) {
+  if (signalled && /stopProcessSnapshot/.test(new Error().stack)) {
+    fs.writeFileSync(${JSON.stringify(swept)}, "");
+    const file = ${JSON.stringify(jobPaths(dir).job)};
+    const job = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (job.attempts.length === 1) {
+      job.attempts.push({ attempt: 2, state: "running" });
+      job.worker = ${JSON.stringify(next)};
+      fs.writeFileSync(file, JSON.stringify(job));
+    }
+  }
+  return spawnSync.apply(this, args);
+};
+syncBuiltinESMExports();`);
+    const result = companion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...env, RELAY_JOBS_CANCEL_GRACE_MS: "0" });
+    assert.equal(fs.existsSync(swept), true);
+    assert.equal(result.status, delivered ? 0 : 1, result.stdout + result.stderr);
+    const [name] = pendingInboxMessages(dir);
+    const message = JSON.parse(fs.readFileSync(path.join(jobPaths(dir).inbox, name), "utf8"));
+    if (delivered) {
+      const actions = JSON.parse(result.stdout).actions;
+      assert.ok(actions.some(action => action.startsWith("killed the worker process")));
+      assert.ok(actions.includes("attempt 1 was stopped; attempt 2 started since, for a message, and runs on"));
+      assert.equal(readOutcome(dir, message.id).action, "cancelled");
+      assert.equal(readOutcome(dir, message.id).reason, "the cancel stopped attempt 1's worker");
+    } else {
+      assert.equal(JSON.parse(result.stdout).error.kind, "attempt-changed");
+      assert.equal(readOutcome(dir, message.id), null);
+    }
+    assert.equal(isWorkerAlive(next), true);
+  });
+}
+
+test("a signal that finds the worker already gone prints no killed-worker action", async t => {
+  const { ctx, id, worker } = await idleWorker(t);
+  const env = preload(ctx, "signal-not-delivered", `
+const kill = process.kill;
+let gone = false;
+process.kill = function(pid, signal) {
+  if (Math.abs(pid) === ${worker.pid} && /terminateProcessTree/.test(new Error().stack)) {
+    if (!gone) kill(${worker.pid}, "SIGKILL");
+    gone = true;
+    throw Object.assign(new Error("gone"), { code: "ESRCH" });
+  }
+  return kill.apply(this, arguments);
+};`);
+  const result = companion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...env, RELAY_JOBS_CANCEL_GRACE_MS: "0" });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(JSON.parse(result.stdout).actions.some(action => action.startsWith("killed the worker")), false);
+});
+
+test("after a kill an unanswered cancel stops the delegated wait promptly when attempt 2 starts", async t => {
+  const { ctx, id, dir } = await running(t, { env: { RELAY_JOBS_CANCEL_GRACE_MS: "0" } });
+  process.kill(readJob(ctx, id).worker.pid, "SIGSTOP");
+  const pause = pauseBeforeMark(ctx);
+  t.after(pause.release);
+  const cancelling = asyncCompanion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...pause.env, RELAY_JOBS_CANCEL_GRACE_MS: "4000" });
+  await waitFor(() => fs.existsSync(pause.marker));
+  const holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+  t.after(() => holder.kill("SIGKILL"));
+  const worker = { pid: holder.pid, startTime: readProcessStartTime(holder.pid) };
+  assert.equal(acquireWorkerLease(dir, worker), true);
+  t.after(() => releaseWorkerLease(dir, worker));
+  const [message] = claimInboxMessages(dir);
+  assert.equal(readOutcome(dir, message.id), null);
+  writeJob(dir, { ...readStoredJob(dir), worker, attempts: [...readStoredJob(dir).attempts, { attempt: 2, state: "running" }] });
+  const started = Date.now();
+  pause.release();
+  const result = await cancelling;
+  assert.ok(Date.now() - started < 2000, "a delivered kill must not wait for the grace when the next attempt runs");
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(readOutcome(dir, message.id).action, "cancelled");
+  assert.ok(JSON.parse(result.stdout).actions.includes("attempt 1 was stopped; attempt 2 started since, for a message, and runs on"));
+});
+
+for (const role of ["recovery", "cancel"]) {
+  test(`a scoped kill leaves its original cancel with a persistent ${role} holder and exits 4`, async t => {
+    const { ctx, id, dir } = await running(t, { env: { RELAY_JOBS_CANCEL_GRACE_MS: "0" } });
+    process.kill(readJob(ctx, id).worker.pid, "SIGSTOP");
+    const pause = pauseBeforeMark(ctx);
+    t.after(pause.release);
+    const cancelling = asyncCompanion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...pause.env, RELAY_JOBS_CANCEL_GRACE_MS: "100" });
+    await waitFor(() => fs.existsSync(pause.marker));
+    const holder = { pid: process.pid, startTime: readProcessStartTime(process.pid) };
+    assert.equal(acquireWorkerLease(dir, holder, role), true);
+    t.after(() => releaseWorkerLease(dir, holder));
+    pause.release();
+    const result = await cancelling;
+    assert.equal(result.status, 4, result.stdout + result.stderr);
+    assert.ok(JSON.parse(result.stdout).actions.includes(`the job is still running; the cancel is with its ${role} (pid ${process.pid})`));
+    assert.equal(pendingInboxMessages(dir).length, 1);
+    assert.equal(cancels(dir).length, 0);
+  });
+}
+
+test("a late scoped cancel keeps nothing-to-cancel when queued work receives a later cancel", async t => {
+  const { ctx, dir } = recorded(t, "completed", [{ attempt: 1, state: "completed", endedAt: new Date().toISOString() }]);
+  writeJob(dir, { ...readStoredJob(dir), request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: ctx.work }) });
+  const late = postInboxMessage(dir, { kind: "cancel", text: "", attempt: 1 });
+  postInboxMessage(dir, { kind: "continue", text: "[long] Next." });
+  const working = runWorker(dir, { env: ctx.env });
+  await waitFor(() => readStoredJob(dir).attempts.length === 2 && readStoredJob(dir).turnId);
+  const current = postInboxMessage(dir, { kind: "cancel", text: "", attempt: 2 });
+  await working;
+  assert.equal(readOutcome(dir, late.id).action, "nothing-to-cancel");
+  assert.equal(readOutcome(dir, current.id).action, "cancelled");
 });

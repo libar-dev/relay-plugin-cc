@@ -512,6 +512,12 @@ construction:
 - The worker writes the terminal state before the cancel messages' outcomes, so no reader sees a closed cancel on a
   job that is not cancelled.
 
+A third, narrow round on these paths found smaller gaps (a pending cancel of another attempt settled as
+`cancelled`, attempt N's processes left unswept when a newer attempt ran on, a second cancel posted to a worker that
+had taken the first, a recovery that began before the cancel's record and acted after it, a lease holder's wait
+that dropped the old fallback). Each was fixed in place, and one that release/3.0 had too: a job cancelled before
+its first worker ran could run its brief when that worker came up late.
+
 Without `--attempt` nothing else changes; `/relay:cancel` and the TaskStop hook pass none.
 
 ### D58. A TaskStop that cancelled a job records its hand-back (Phase 4 thread)

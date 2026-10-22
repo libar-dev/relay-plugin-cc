@@ -283,7 +283,9 @@ async function runWorkerRound(jobDir, options, held) {
 
   // Work: the first brief if it never started, then messages a dead worker claimed but
   // never delivered, then new inbox messages.
-  if (job.pendingFirstTurn) {
+  // A job cancelled before its first turn never runs its brief later; a failed first turn keeps it
+  // for `resume`, which runs it before the resume message.
+  if (job.pendingFirstTurn && job.state !== "cancelled") {
     queue.push({ prompt: fs.readFileSync(paths.brief, "utf8"), source: "brief", message: null, clientId: `brief-${job.id}`, recoveryCandidate: true });
   }
   accept(owedMessages(jobDir), true);
@@ -325,6 +327,12 @@ async function runWorkerRound(jobDir, options, held) {
     dropQueued("the job was cancelled");
     return releaseAndReturn({});
   };
+
+  if (cancelRequested && TERMINAL.has(job.state) && cancelMessages.every(message => message.attempt !== undefined)) {
+    cancelOutcome({ action: "nothing-to-cancel", state: job.state });
+    cancelMessages.length = 0;
+    cancelRequested = false;
+  }
 
   if (queue.length === 0) {
     if (cancelRequested) {

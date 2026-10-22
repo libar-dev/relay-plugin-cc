@@ -580,10 +580,10 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     assert.ok(ctx.fakeState().turnStarts.length <= 2, "no turn ran after the cancel");
   }
 
-  test("cancel racing a resume on a dead job goes to the new worker, which ends it cancelled", async (t) => {
+  test("cancel racing a resume on a dead job goes to its worker, which ends it cancelled", async (t) => {
     const { ctx, id, dir, identity, worker, cancelled, resumed } = await cancelDuringResume(t, { RELAY_JOBS_CANCEL_GRACE_MS: "8000" });
     assert.equal(cancelled.status, 0, cancelled.stdout + cancelled.stderr);
-    assert.match(cancelled.stdout, new RegExp(`^cancel: the cancel went to the job's new worker \\(pid ${worker.pid}\\), which ended it cancelled$`, "m"));
+    assert.match(cancelled.stdout, new RegExp(`^cancel: the cancel went to the job's worker \\(pid ${worker.pid}\\), which ended it cancelled$`, "m"));
     assert.doesNotMatch(cancelled.stdout, /marked cancelled/);
     assert.match(cancelled.stdout, /^state: cancelled$/m);
     await resumed;
@@ -611,6 +611,27 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     assert.equal(cancelled.status, 0, cancelled.stdout + cancelled.stderr);
     assert.match(cancelled.stdout, /^cancel: worker was already gone; marked cancelled$/m);
     assert.equal(readJobJson(ctx, id).cancelledBy, "cancel command");
+  });
+
+  test("recovery rechecks live cancel records after its sweep and releases without spawning queued work", async t => {
+    const marker = path.join(makeTempDir("relay-cancel-recheck-"), "term");
+    const { identity } = await oldServer(t, { ignoreTerm: true, marker });
+    const ctx = sweepJob({ server: identity, servers: [identity] });
+    const env = { ...buildEnv(ctx.binDir), RELAY_JOBS_HOME: path.dirname(path.dirname(ctx.jobDir)) };
+    const before = fs.readFileSync(path.join(ctx.jobDir, "job.json"), "utf8");
+    const recovering = resumeDeadJobOnce(ctx.jobDir, env);
+    await waitFor(() => fs.existsSync(marker));
+    assert.equal(readLease(ctx.jobDir).role, "recovery");
+    const record = path.join(ctx.jobDir, "cancelling", `${process.pid}.json`);
+    fs.mkdirSync(path.dirname(record), { recursive: true });
+    fs.writeFileSync(record, JSON.stringify({ pid: process.pid, startTime: readProcessStartTime(process.pid) }));
+    assert.equal(await recovering, "busy");
+    assert.equal(readLease(ctx.jobDir), null);
+    assert.equal(fs.readFileSync(path.join(ctx.jobDir, "job.json"), "utf8"), before);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(readLease(ctx.jobDir), null);
+    assert.equal(readOutcome(ctx.jobDir, ctx.message.id), null);
+    assert.equal(fs.existsSync(path.join(ctx.binDir, "fake-codex-state.json")), false);
   });
 
   test("automatic recovery's lease is no wait-false consumer", async t => {
@@ -649,7 +670,7 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
   });
 
   for (const role of ["recovery", "cancel"]) {
-    test(`cancel refuses to delegate to a persistently held ${role} lease`, async t => {
+    test(`cancel posts its request and names a persistently held ${role} lease`, async t => {
       const ctx = relayContext("job", { turnMs: 50, env: { CODEX_HOME: makeTempDir("relay-role-home-") } });
       const id = await start(ctx);
       const dir = jobDirOf(ctx, id);
@@ -660,8 +681,11 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
       assert.equal(acquireWorkerLease(dir, holder, role), true);
       t.after(() => releaseWorkerLease(dir, holder));
       const result = companion({ ...ctx, env: { ...ctx.env, RELAY_JOBS_CANCEL_GRACE_MS: "1" } }, ["cancel", id]);
-      assert.equal(result.status, 1, result.stdout + result.stderr);
-      assert.match(result.stderr, /Could not take the job's lease to mark it cancelled/);
+      assert.equal(result.status, 4, result.stdout + result.stderr);
+      assert.match(result.stderr, new RegExp(`the cancel is with its ${role} \\(pid ${process.pid}\\)`));
+      const pending = fs.readdirSync(path.join(dir, "inbox")).filter(name => name.endsWith(".json"));
+      assert.equal(pending.length, 1);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "inbox", pending[0]), "utf8")).kind, "cancel");
       assert.equal(readLease(dir).role, role);
     });
   }

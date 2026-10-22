@@ -93,6 +93,7 @@ Phase 4, the companion's JSON, changed in place (the status line and the board r
 - `cancel --attempt N` cancels the job only while attempt N is current, so a cancel meant for one attempt never stops
   a newer one that a continue or an automatic recovery started; it then says `attempt-changed`. Once attempt N is
   stopped, a newer attempt a message starts runs on.
+- A job cancelled before its first turn ran no longer runs its brief when its first worker comes up late.
 - Automatic recovery waits while a `cancel` command runs on the job. A worker that died while a cancel was under
   way, or that the cancel killed, could be resumed by its relay's wait and meet the cancel again; the relay now sees
   the job end `cancelled`.

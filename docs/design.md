@@ -362,8 +362,13 @@ jobs started within one second, one failed on a request-rate limit after Codex's
     while it is still N. A new worker that then holds the lease came for a message (recovery waits while a cancel
     runs): a cancel still waiting in the inbox reaches it and ends the job, and a newer attempt it began runs on.
   - Once attempt N is stopped, a newer attempt a message starts is not this cancel's: it runs on, and `cancel`
-    says so and succeeds. A message still waiting when the cancel ends the job is dropped and reported, as for any
-    cancel. Without `--attempt` nothing changes but the wait below.
+    says so and succeeds, after it has swept attempt N's processes. A message still waiting when the cancel ends
+    the job is dropped and reported, as for any cancel. A cancel for attempt N that reaches the worker after N has
+    ended answers `nothing-to-cancel`, and work that came with it runs.
+  - Without `--attempt` nothing changes but the wait below.
+- **A start that was cancelled stays cancelled.** A job cancelled before its first turn ran never runs its brief
+  later, when its first worker comes up late or a message starts a worker; a job whose first turn failed keeps its
+  brief for `resume`.
 - **No recovery during a cancel.** See [Automatic recovery, once](#automatic-recovery-once).
 - **TaskStop on a relay.** A `PostToolUse` hook on `TaskStop` (`scripts/hooks/relay-stop.mjs`)
   takes the stopped agent's id from the tool's result, since the caller may have named the agent by
