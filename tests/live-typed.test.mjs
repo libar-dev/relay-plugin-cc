@@ -153,6 +153,37 @@ test('typed C analysis proves an interrupt steer in the running or next turn wit
   }
 });
 
+function recordedNotices(scenario = 'c') {
+  return readers.readTranscript(path.join(fixture, '20261022T194022Z-notices-c.jsonl')).map(row =>
+    JSON.parse(JSON.stringify(row).replaceAll('a6c3884c5d785b7dd', `agent-${scenario}-codex`)
+      .replaceAll('typed-c-codex', `typed-${scenario}-codex`)));
+}
+
+for (const scenario of ['a', 'b', 'c']) test(`typed analysis deduplicates recorded C notices for ${scenario.toUpperCase()}`, t => {
+  const { dir, input } = setup(t);
+  editLines(dir, 'transcript.jsonl', rows => {
+    if (scenario === 'c') rows.splice(rows.findIndex(row => row.message?.content?.includes?.('<task-id>agent-c-codex</task-id>')), 1);
+    rows.push(...recordedNotices(scenario));
+  });
+  const row = typed.analyze(input).results[0];
+  assert.equal(row.result, scenario === 'c' ? 'pass' : 'fail');
+  if (scenario !== 'c') assert.equal(row.reason, `typed-${scenario}-codex was stopped by user.`);
+});
+
+for (const [label, change] of [
+  ['tool-use id', text => text.replace('toolu_01Wsu16ffqJ7iVD14hf9X8YM', 'another-tool-use')],
+  ['status', text => text.replace('<status>killed</status>', '<status>failed</status>')],
+  ['body', text => text.replace('<result>', '<result>Another stop. ')]
+]) test(`typed analysis rejects a second distinct C stop with a different ${label}`, t => {
+  const { dir, input } = setup(t);
+  editLines(dir, 'transcript.jsonl', rows => {
+    rows.splice(rows.findIndex(row => row.message?.content?.includes?.('<task-id>agent-c-codex</task-id>')), 1);
+    const notices = recordedNotices();
+    rows.push(...notices, { ...notices[0], content: change(notices[0].content) });
+  });
+  assert.equal(typed.analyze(input).results[0].reason, 'Expected exactly one stopped by user notice for typed-c-codex.');
+});
+
 const failures = [
   ['missing marker', (dir) => editLines(dir, 'transcript.jsonl', rows => rows.splice(rows.findIndex(row => readers.hasMarker([row], typed.marker)), 1)), /marker/],
   ['wrong run', dir => edit(dir, 'run.json', run => { run.runId = 'other'; }), /run or marker/],
@@ -190,9 +221,9 @@ const failures = [
   ['C no stop notice', dir => editLines(dir, 'transcript.jsonl', rows => {
     rows.splice(rows.findIndex(row => row.message?.content?.includes?.('<task-id>agent-c-codex</task-id>')), 1);
   }), /exactly one stopped by user notice for typed-c-codex/],
-  ['C two stop notices', dir => editLines(dir, 'transcript.jsonl', rows => {
-    rows.push(rows.find(row => row.message?.content?.includes?.('<task-id>agent-c-codex</task-id>')));
-  }), /exactly one stopped by user notice for typed-c-codex/],
+  ['C unexpected notice', dir => editLines(dir, 'transcript.jsonl', rows => {
+    rows.push({ type: 'user', message: { content: '<task-notification><task-id>agent-c-codex</task-id><status>failed</status><summary>Agent "typed-c-codex" failed</summary></task-notification>' } });
+  }), /Unexpected task notification for typed-c-codex/],
   ['C job cancelled', dir => edit(dir, `${C}/job.json`, row => { row.state = 'cancelled'; row.completedAt = '2026-10-22T10:01:00Z'; }), /cancelled before cleanup/],
   ['C attempt cancelled', dir => edit(dir, `${C}/job.json`, row => { row.attempts[0].state = 'cancelled'; }), /cancelled before cleanup/],
   ['missing hand-back', dir => fs.rmSync(path.join(dir, A, 'relay-handbacks.jsonl')), /relay-handbacks/],
@@ -273,7 +304,7 @@ test('typed evidence copy replays after the original transcripts and jobs are re
   assert.deepEqual(typed.analyze({ ...input, transcript: run.copy.transcript, jobsHome: run.copy.jobsHome }).results, analysis.results);
 });
 
-function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['codex'] } = {}) {
+function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['codex'], afterA2 = () => {} } = {}) {
   const { dir, input } = setup(t), calls = [];
   const main = readers.readTranscript(input.transcript);
   const saved = Object.fromEntries(backends.filter(backend => ['codex', 'kimi'].includes(backend)).map((backend, i) => {
@@ -339,6 +370,7 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
       lines(input.transcript, main);
       time = Date.parse('2026-10-22T10:02:00Z') + offset;
       stage = null;
+      afterA2({ jobDir, handbacks, main, input });
     }
   }, drive(args) {
     calls.push(args);
@@ -420,6 +452,62 @@ for (const pendingB of [true, false]) for (const pendingC of [true, false]) test
   assert.equal(typed.analyze(ctx).results[0].result, 'pass');
   assert.equal(ctx.run.typed.codex.B1.assistance, 'manual-wake');
 });
+
+test('typed terminal waits for the final A2 hand-back and then its notice before analyzing once', async t => {
+  let pending, polls = 0, analyses = 0;
+  const { ctx, dependencies } = terminal(t, { afterA2(value) {
+    pending = value;
+    lines(path.join(value.jobDir, 'relay-handbacks.jsonl'), value.handbacks.slice(0, 1));
+    lines(value.input.transcript, value.main.slice(0, -2));
+  } });
+  const sleep = dependencies.sleep;
+  dependencies.sleep = async ms => {
+    const wasPending = Boolean(pending);
+    await sleep(ms);
+    if (!wasPending || ms !== 1000) return;
+    polls++;
+    if (polls === 1) lines(path.join(pending.jobDir, 'relay-handbacks.jsonl'), pending.handbacks);
+    if (polls === 2) lines(pending.input.transcript, pending.main);
+  };
+  const analyze = typed.analyze;
+  t.mock.method(typed, 'analyze', function (input) {
+    analyses++; assert.equal(polls, 2); return analyze.call(this, input);
+  });
+  const result = await typed.runTerminal(ctx, dependencies);
+  assert.equal(result.results[0].result, 'pass');
+  assert.equal(analyses, 1);
+});
+
+for (const failure of ['wrong B outcome', 'wrong final result', 'missing final hand-back', 'missing final notice']) {
+  test(`typed terminal returns a failing analysis within two minutes of A2's ledger: ${failure}`, async t => {
+    const { ctx, dependencies, dir, calls } = terminal(t, { afterA2({ jobDir, handbacks, main, input }) {
+      if (failure === 'missing final hand-back') lines(path.join(jobDir, 'relay-handbacks.jsonl'), handbacks.slice(0, 1));
+      if (failure === 'missing final notice') lines(input.transcript, main.slice(0, -2));
+      if (failure === 'wrong final result') editLines(input.evidenceDir, 'transcript.jsonl', rows => {
+        rows.at(-2).message.content = rows.at(-2).message.content.replace('Acknowledged.', 'Wrong report.');
+      });
+    } });
+    if (failure === 'wrong B outcome') edit(dir, `${B}/inbox/outcomes/msg-B1-codex.json`, row => { row.turnId = 'wrong'; });
+    const analyze = typed.analyze;
+    let analyses = 0;
+    t.mock.method(typed, 'analyze', function (input) { analyses++; return analyze.call(this, input); });
+    const result = await typed.runTerminal(ctx, dependencies);
+    assert.equal(analyses, 1);
+    const row = result.results[0];
+    assert.equal(row.result, 'fail');
+    assert.match(row.reason, failure === 'wrong B outcome' ? /Expected in-turn steer for B1/ :
+      failure === 'wrong final result' ? /Last hand-back is not the job result/ : /Missing completed hand-back/);
+    const ledgerAt = Date.parse(json(path.join(dir, A, 'inbox/relay/entry-A2-codex.json')).at);
+    const elapsed = dependencies.now() - ledgerAt;
+    assert.ok(elapsed <= 120000);
+    assert.equal(elapsed, failure.startsWith('missing') ? 120000 : 8000);
+    assert.equal(ctx.run.completed, true);
+    assert.equal(ctx.run.error, undefined);
+    assert.ok(ctx.run.checkFinishedAt);
+    assert.deepEqual(calls.at(-1), ['stop', 'fixture-pane']);
+    assert.equal(typed.analyze(ctx).results[0].reason, row.reason);
+  });
+}
 
 test('typed terminal finishes every B and C before visiting each backend A without reopening its view', async t => {
   const { ctx, dependencies, calls } = terminal(t, { backends: ['codex', 'kimi'], pendingB: false, pendingC: false });

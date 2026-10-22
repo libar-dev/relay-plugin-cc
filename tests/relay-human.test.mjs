@@ -333,6 +333,29 @@ test("a guard state without receivedUuids still exempts a stop with no new messa
   assert.equal(await stop(ctx, "Report delivered."), null);
 });
 
+test("a dev.4 hand-back ignores an earlier task notification but delivers a newly counted typed line", async () => {
+  const ctx = relayContext("job", { turnMs: 100 });
+  const notification = setOrigin(ctx.queued("Task finished."), { kind: "task-notification" });
+  ctx.append(ctx.prompt(QUICK), notification);
+  const { jobId, started } = await relayStart(ctx);
+  assert.ok(jobId, started.stdout + started.stderr);
+  assert.equal(companion(ctx, ["wait", jobId, "--timeout-seconds", "15"]).status, 0);
+  const dir = jobDirOf(ctx, jobId);
+  writeGuardState(ctx.env, ctx.agentId, dir, {
+    handback: { at: new Date().toISOString(), messageUuids: [] }
+  });
+  assert.equal(await stop(ctx, "Report delivered."), null);
+  assert.equal(readGuardState(ctx.env, ctx.agentId, dir).consecutiveBlocks, 0);
+  const typed = ctx.humanQueued("[quick] A typed line dev.4 did not count.");
+  ctx.append(typed);
+  assert.equal((await stop(ctx, "I passed your message on"))?.decision, "block");
+  assert.equal(readLedger(dir, typed.uuid).kind, "continue");
+  assert.equal(companion(ctx, ["wait", jobId, "--timeout-seconds", "15"]).status, 0);
+  assertExactResultBlock(await stop(ctx, "I passed your message on"), ctx, jobId);
+  assert.deepEqual(codexReceived(ctx).turns, ["[quick] Human brief.", typed.attachment.prompt]);
+  assert.equal(readLedger(dir, typed.uuid).status, "done");
+});
+
 test("without SubagentHandback, only one whole-message fence may surround the exact result", async (t) => {
   const ctx = relayContext("job", { turnMs: 100 });
   ctx.append(ctx.prompt(QUICK));
@@ -347,8 +370,10 @@ test("without SubagentHandback, only one whole-message fence may surround the ex
     assert.equal(await stop(ctx, fence(result())), null);
     assert.ok(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt);
   });
-  await t.test("a text info string and whitespace outside the fence pass", async () => {
-    assert.equal(await stop(ctx, `\n \t\n${fence(result(), "```text")}\n \t`), null);
+  await t.test("language tags and whitespace outside the fence pass", async () => {
+    for (const tag of ["", "text", "markdown", "plaintext", "aZ09_+.-"]) {
+      assert.equal(await stop(ctx, `\n \t\n${fence(result(), "```" + tag + " \t")}\n \t`), null);
+    }
   });
   await t.test("four backticks around a result containing a three-backtick block pass", async () => {
     fs.writeFileSync(path.join(dir, "report.md"), "A report with code:\n```\nexact code\n```\n");
@@ -356,6 +381,7 @@ test("without SubagentHandback, only one whole-message fence may surround the ex
     assert.equal(await stop(ctx, fence(result(), "````", "````")), null);
   });
   const cases = [
+    ["prose in the fence info string fails", (text) => fence(text, "```I passed your message on to the job")],
     ["an unclosed fence fails", (text) => `\`\`\`\n${text}`],
     ["a fence with a changed line fails", (text) => fence(text.replace("state: completed", "state: cancelled"))],
     ["a fence with an added line fails", (text) => fence(`${text}\nAdded line.`)],

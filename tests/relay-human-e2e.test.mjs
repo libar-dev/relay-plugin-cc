@@ -21,7 +21,7 @@ async function relayCall(ctx, toolName, toolInput) {
 
 async function startHeld(ctx, t) {
   ctx.env.FAKE_CODEX_RELEASE_FILE = path.join(makeTempDir("relay-human-e2e-release-"), "go");
-  ctx.append(ctx.prompt("model: gpt-test\neffort: low\n---\n[held] Typed-message brief."));
+  if (!ctx.workflow) ctx.append(ctx.prompt("model: gpt-test\neffort: low\n---\n[held] Typed-message brief."));
   const started = await relayCall(ctx, "Bash", { command: `${RELAY_CMD} start --from-relay` });
   assert.equal(started.result.status, 0, started.result.stdout + started.result.stderr);
   const jobId = /^job: (\S+)$/m.exec(started.result.stdout)?.[1];
@@ -54,7 +54,7 @@ test("end to end: typed text steers at the relay's next call and text after hand
   const duringText = "  Typed while running:\nkeep this spacing.  ";
   const during = ctx.humanQueued(duringText);
   ctx.append(during);
-  assert.deepEqual(codexReceived(ctx).steers, [], "typing alone has no wake or delivery hook");
+  assert.equal(fs.existsSync(path.join(jobDirOf(ctx, jobId), "relay-wake.json")), false, "typing alone writes no wake marker");
   await relayCall(ctx, "Bash", { command: `${RELAY_CMD} status ${jobId}` });
   const steered = await waitFor(() => {
     const received = codexReceived(ctx);
@@ -80,6 +80,42 @@ test("end to end: typed text steers at the relay's next call and text after hand
   const second = await relayCall(ctx, "SubagentHandback", { message: "I passed it on" });
   assert.equal(second.input.message, companion(ctx, ["result", jobId]).stdout);
   assertLedger(ctx, jobId, [during, after]);
+});
+
+test("end to end under the Workflow harness: typed text steers at the next call and a fenced state block passes the stop", async (t) => {
+  const ctx = relayContext("job", { workflow: "wf_typed-001", turnMs: 100 });
+  ctx.append(ctx.userRequest(), ctx.workflowPrompt("computedTask", "[held] Typed-message Workflow brief."),
+    ctx.environment(), ctx.snapshot("string"), ctx.systemReminder());
+  const jobId = await startHeld(ctx, t);
+  const text = "  Typed into the Workflow relay:\nkeep this spacing.  ";
+  const typed = ctx.humanQueued(text);
+  ctx.append(typed);
+  await relayCall(ctx, "Bash", { command: `${RELAY_CMD} status ${jobId}` });
+  const received = await waitFor(() => {
+    const state = codexReceived(ctx);
+    return state.steers.includes(text) && state;
+  });
+  assert.deepEqual(received.steers, [text]);
+  assert.equal(readLedger(jobDirOf(ctx, jobId), typed.uuid).kind, "steer");
+  fs.writeFileSync(ctx.env.FAKE_CODEX_RELEASE_FILE, "");
+  await waitJob(ctx, jobId);
+  const result = await relayCall(ctx, "Bash", { command: `${RELAY_CMD} result ${jobId}` });
+  assert.match(result.input.command, /--state-only$/);
+  const block = companion(ctx, ["result", jobId, "--state-only"]).stdout;
+  assert.equal(result.result.status, 0, result.result.stderr);
+  assert.equal(result.result.stdout, block);
+  assert.doesNotMatch(block, /^---$/m);
+  const stop = (text) => runHookProcess(ctx, hookInput(ctx, "SubagentStop", {
+    last_assistant_message: text, stop_hook_active: false
+  }));
+  const blocked = await stop("I passed your message on");
+  assert.equal(blocked.status, 0, blocked.stderr);
+  assert.equal(blocked.json?.decision, "block");
+  assert.equal(blocked.json.reason, "Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else:\n" + block);
+  const stopped = await stop("```text\n" + block.trimEnd() + "\n```");
+  assert.equal(stopped.status, 0, stopped.stderr);
+  assert.equal(stopped.stdout, "");
+  assertLedger(ctx, jobId, [typed]);
 });
 
 test("end to end: typed cancel while the job runs cancels it at the relay's next call", async (t) => {

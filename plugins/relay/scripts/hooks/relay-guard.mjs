@@ -76,7 +76,7 @@ function trimEnd(text) {
 function withoutOuterFence(text, expected) {
   // A relay may fence the result; only its outer envelope may differ.
   if (/^(?:[ \t]*\r?\n)*`{3,}/.test(String(expected ?? ""))) return text;
-  const fenced = /^(?:[ \t]*\r?\n)*(`{3,})[^`\r\n]*\r?\n([\s\S]*?)\r?\n\1$/.exec(trimEnd(text));
+  const fenced = /^(?:[ \t]*\r?\n)*(`{3,})[A-Za-z0-9_+.-]*[ \t]*\r?\n([\s\S]*?)\r?\n\1$/.exec(trimEnd(text));
   return fenced ? fenced[2] : text;
 }
 
@@ -396,7 +396,9 @@ async function handleSubagentStop(input, env = process.env) {
   const lastToolAt = guard.raw.lastToolAt ?? "";
   const current = jobDir ? jobViewOrBusy(jobDir) : null;
   if (guard.handback && lastToolAt <= guard.handback.at &&
-      (!jobDir || (sync.readable && sync.received.every((uuid) => (guard.handback.receivedUuids ?? guard.handback.messageUuids).includes(uuid)))) &&
+      (!jobDir || (sync.readable && (guard.handback.receivedUuids
+        ? sync.received.every((uuid) => guard.handback.receivedUuids.includes(uuid))
+        : sync.messages.every((message) => guard.handback.messageUuids.includes(message.uuid))))) &&
       !sync?.busy && !sync?.undelivered?.length &&
       (!current || (isTerminalView(current) && current.undelivered.length === 0))) {
     // The report already went out through SubagentHandback, rewritten by the hook, and the

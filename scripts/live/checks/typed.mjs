@@ -36,10 +36,15 @@ function runningAt(job, at, version) {
 }
 
 function notices(entries, agent) {
+  const seen = new Set();
   return entries.filter(entry => !entry.isSidechain && ['user', 'attachment', 'queue-operation'].includes(entry.type)).flatMap(entry => {
     const text = textContent(entry.message?.content ?? entry.content ?? entry.attachment?.prompt);
     return [...text.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)]
-      .filter(match => match[1].includes(`<task-id>${agent.agentId}</task-id>`))
+      .filter(match => {
+        if (!match[1].includes(`<task-id>${agent.agentId}</task-id>`) || seen.has(match[1])) return false;
+        // The queue record and its delivered prompt describe the same notification.
+        seen.add(match[1]); return true;
+      })
       .map(match => ({ text: match[1], at: entry.timestamp }));
   });
 }
@@ -254,11 +259,27 @@ export default {
             record.message === run.typed[item.backend].A2.text))
         });
       }
-      let analysis;
-      await waitFor(() => {
-        analysis = this.analyze(input());
-        return analysis.results.every(row => row.result === 'pass');
-      });
+      const last = jobs.at(-1);
+      const record = recordsFor(last.A.jobDir).find(record => record.message === run.typed[last.backend].A2.text);
+      const at = Date.parse(record.at);
+      const settledBy = Math.min(deadline, Number.isFinite(at) ? at + 120000 : now());
+      // Only A2's hand-back and notice can still be pending; analysis failures cannot settle.
+      while (now() < settledBy) {
+        check();
+        try {
+          const file = path.join(last.A.jobDir, 'relay-handbacks.jsonl');
+          const returned = fs.existsSync(file) ? readTranscript(file).at(-1) : null;
+          if (returned?.agentId === last.a.agentId && Date.parse(returned.at) >= at &&
+              notices(entries(), last.a).some(notice => notice.text.includes('<status>completed</status>') &&
+                Date.parse(notice.at) >= Date.parse(returned.at))) break;
+        } catch (error) {
+          if (!error.message.startsWith('Invalid JSON at ')) throw error;
+        }
+        await sleep(Math.min(1000, settledBy - now()));
+      }
+      signal?.throwIfAborted();
+      if (run.interrupted) throw new Error('Interrupted.');
+      const analysis = this.analyze(input());
       run.completed = true; run.checkFinishedAt = new Date(now()).toISOString(); ctx.save();
       return analysis;
     } catch (error) {
@@ -288,9 +309,16 @@ export default {
       if (run.error) throw new Error(run.error);
       for (const [agent, loaded] of [[a, A], [b, B], [c, C]]) {
         requireBackend(loaded.job, backend);
-        const stops = notices(entries, agent).filter(notice => notice.text.includes('was stopped by user'));
+        const notifications = notices(entries, agent);
+        const stopped = notice => notice.text.includes(`<summary>Agent "${agent.name}" was stopped by user</summary>`);
+        const stops = notifications.filter(stopped);
         if (agent === c && stops.length !== 1) throw new Error(`Expected exactly one stopped by user notice for ${agent.name}.`);
         if (agent !== c && stops.length) throw new Error(`${agent.name} was stopped by user.`);
+        if (agent === c && notifications.some(notice => !stopped(notice) &&
+            !notice.text.includes('<status>completed</status>') &&
+            !notice.text.includes(`<summary>Agent "${agent.name}" was resumed by the user</summary>`))) {
+          throw new Error(`Unexpected task notification for ${agent.name}.`);
+        }
         if (parsed.sends.some(send => send.agentId === agent.agentId)) throw new Error(`Lead sent a message to ${agent.name}.`);
       }
       const receipt = run.typed?.[backend];
@@ -298,7 +326,7 @@ export default {
       const a2 = delivery(input, A, receipt?.A2, 'A2', backend);
       const b1 = delivery(input, B, receipt?.B1, 'B1', backend);
       const c1 = delivery(input, C, receipt?.C1, 'C1', backend);
-      // Cleanup is allowed after the check passes; saved evidence must still replay then.
+      // Cleanup follows the final analysis; saved evidence must still replay then.
       const cleanup = Date.parse(receipt.C1.cleanupAt);
       const afterCheck = cleanup >= Date.parse(run.checkFinishedAt) && cleanup >= Date.parse(c1.postedAt);
       if ((C.job.state === 'cancelled' && !(afterCheck && Date.parse(C.job.completedAt) >= cleanup)) ||
