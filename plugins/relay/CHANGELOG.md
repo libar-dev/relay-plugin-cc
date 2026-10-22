@@ -6,6 +6,11 @@ The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5 and 
 on the branch `release/3.0` ([docs/mods/release-3.0.md](../../docs/mods/release-3.0.md)). Each phase adds
 its entries here.
 
+Pre-release cuts:
+
+- `3.0.0-pre.1` (2026-10-22, tag `v3.0.0-pre.1`): Phases 1, 2, 3 and 5 and Phase 6's report, as below; Phase 4
+  has not landed.
+
 Phase 1, steer wake:
 
 - A message to a running `relay:job` agent reaches the job within seconds. The plugin has a hooks

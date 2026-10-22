@@ -655,7 +655,7 @@ test('runTerminal override receives the contract context and skips the pane driv
   assert.equal(readRecords(ctx.recordsDir)[0].result, 'pass');
 });
 
-for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', 'SIGHUP', 'partial-start', 'stop-error', 'custom-completion', 'caller-trust', 'custom-scope', 'timeout', 'partial-line']) {
+for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', 'SIGHUP', 'partial-start', 'stop-error', 'custom-completion', 'caller-trust', 'custom-scope', 'timeout', 'partial-line', 'trust-retry', 'trust-stuck']) {
   test(`terminal driver with a fake pane: ${mode}`, async t => {
     const ctx = scratch(t);
     const created = createRun(ctx.env.RELAY_LIVE_HOME, registry[1], { surface: 'terminal', backends: ['codex'],
@@ -682,7 +682,8 @@ for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', '
       }
       if (args[0] === 'read' && args[2] === '0') {
         if (mode === 'bypass') return 'bypass permissions: Yes, I accept';
-        return polls++ === 0 ? 'Yes, I trust this folder' : 'ready';
+        // trust-retry: the first answer is lost, and the dialog stays for three polls.
+        return polls++ < ({ 'trust-retry': 3, 'trust-stuck': Infinity }[mode] ?? 1) ? 'Yes, I trust this folder' : 'ready';
       }
       if (args[0] === 'send') {
         assert.equal(prompt, check.prompt({ runId: input.runId, backends: ['codex'] }));
@@ -699,12 +700,12 @@ for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', '
     const selected = mode === 'custom-scope' ? { ...registry[1], scope: entries => entries, completed: entries => entries.some(entry => entry.observed === 'done') } : mode === 'custom-completion' ? { ...registry[1], marker: undefined, completed: entries => entries.some(entry => entry.type === 'assistant') } : registry[1];
     const action = runTerminal(input, selected, { run: created.run, save() {}, readers, env: ctx.env, drive,
       pause: async () => { if (mode === 'timeout' && created.run.promptSentAt) now += 60001; }, log() {}, warn() {}, keep: mode.startsWith('SIG') || mode === 'partial-start' });
-    if (['complete', 'custom-completion', 'custom-scope', 'partial-line'].includes(mode)) await action;
-    else await assert.rejects(action, mode === 'caller-trust' ? { message: `${ctx.workDir} is not trusted by Claude Code; open it in Claude Code once, or let the runner create the work folder.` } : mode === 'partial-start' ? /Start failed/ : mode === 'stop-error' ? /Could not stop/ : mode === 'bypass' ? /bypass-permissions dialog/ : mode === 'module-error' ? /wake-probe hooks module failed/ : mode === 'timeout' ? /Timed out waiting/ : /Interrupted/);
+    if (['complete', 'custom-completion', 'custom-scope', 'partial-line', 'trust-retry'].includes(mode)) await action;
+    else await assert.rejects(action, mode === 'trust-stuck' ? /trust dialog stayed after three answers/ : mode === 'caller-trust' ? { message: `${ctx.workDir} is not trusted by Claude Code; open it in Claude Code once, or let the runner create the work folder.` } : mode === 'partial-start' ? /Start failed/ : mode === 'stop-error' ? /Could not stop/ : mode === 'bypass' ? /bypass-permissions dialog/ : mode === 'module-error' ? /wake-probe hooks module failed/ : mode === 'timeout' ? /Timed out waiting/ : /Interrupted/);
     assert.equal(calls.filter(args => args[0] === 'stop').length, 1);
-    assert.equal(calls.filter(args => args[0] === 'send').length, ['bypass', 'module-error', 'partial-start', 'caller-trust'].includes(mode) ? 0 : 1);
-    assert.equal(calls.some(args => args[0] === 'trust'), !['bypass', 'partial-start', 'caller-trust'].includes(mode));
-    assert.equal(Boolean(created.run.promptSentAt), !['bypass', 'module-error', 'partial-start', 'caller-trust'].includes(mode));
+    assert.equal(calls.filter(args => args[0] === 'send').length, ['bypass', 'module-error', 'partial-start', 'caller-trust', 'trust-stuck'].includes(mode) ? 0 : 1);
+    assert.equal(calls.filter(args => args[0] === 'trust').length, ['bypass', 'partial-start', 'caller-trust'].includes(mode) ? 0 : { 'trust-retry': 2, 'trust-stuck': 3 }[mode] ?? 1);
+    assert.equal(Boolean(created.run.promptSentAt), !['bypass', 'module-error', 'partial-start', 'caller-trust', 'trust-stuck'].includes(mode));
     assert.deepEqual(created.run.removedEnvironment, mode === 'partial-start' ? ['CLAUDECODE'] : ['CLAUDECODE', 'RELAY_COMPANION_TEST']);
     if (created.run.promptSentAt) assert.equal(created.run.transcript, transcript);
     assert.equal(created.run.interrupted, mode.startsWith('SIG'));

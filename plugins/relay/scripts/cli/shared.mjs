@@ -41,7 +41,7 @@ export function printJson(command, value) {
 let parsedJson = null;
 
 export function jsonRequested(argv) {
-  return Boolean(parsedJson) || normalizeArgv(argv).some(token => token === "--json" || token.startsWith("--json="));
+  return Boolean(parsedJson) || normalizeArgv(argv).some(token => token === "--json" || (token.startsWith("--json=") && token !== "--json=false"));
 }
 
 

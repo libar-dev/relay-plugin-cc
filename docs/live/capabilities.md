@@ -14,10 +14,10 @@ holds the checks; the records below name the builds.
 | Steer a running job with a Workflow agent's SendMessage | into the running turn, delivered in 2.6 s | into the running turn, delivered in 3.3 s | into the running turn, delivered in 2.9 s | as the next turn, delivered in 2.7 s |
 | Steer a running job with a plugin's session.send | into the running turn, delivered in 3.3 s | into the running turn, delivered in 3.6 s | into the running turn, delivered in 3.5 s | as the next turn, delivered in 2.5 s |
 | Continue a job after its hand-back | a new turn of the job, delivered in 3.6 s | a new turn of the job, delivered in 3.9 s | a new turn of the job, delivered in 3.6 s | a new turn of the job, delivered in 3.2 s |
-| Answer /relay:status, /relay:result and /relay:cancel with no model turn | no model turn; answered in 0.6–0.7 s, cancelled in 0.9 s | no model turn; answered in 0.6–0.7 s, cancelled in 3.8 s | no model turn; answered in 0.6–0.7 s, cancelled in 1.7 s | no model turn; answered in 0.6–0.7 s, cancelled in 0.9 s |
+| Answer /relay:status, /relay:result and /relay:cancel with no model turn | no model turn; answered in 0.9–1.1 s, cancelled in 1.0 s | no model turn; answered in 0.7–1.1 s, cancelled in 4.0 s | no model turn; answered in 0.7–1.1 s, cancelled in 2.6 s | no model turn; answered in 0.7–1.1 s, cancelled in 1.0 s |
 | Answer /relay:transfer with no model turn | no model turn; imported in 0.9 s | n/a | n/a | n/a |
-| Answer /relay:result and /relay:status in claude -p with no model turn | num_turns 0; answered in 0.1–0.2 s | num_turns 0; answered in 0.1–0.2 s | num_turns 0; answered in 0.1–0.2 s | num_turns 0; answered in 0.1–0.2 s |
-| Stop a running job with TaskStop | cancelled in 0.4 s | cancelled in 0.2 s | cancelled in 0.3 s | cancelled in 0.5 s |
+| Answer /relay:result and /relay:status in claude -p with no model turn | num_turns 0; answered in 0.3–0.5 s | num_turns 0; answered in 0.4–0.5 s | num_turns 0; answered in 0.3–0.5 s | num_turns 0; answered in 0.3–0.5 s |
+| Stop a running job with TaskStop | cancelled in 0.5 s | cancelled in 0.6 s | cancelled in 0.8 s | cancelled in 0.8 s |
 | End the Claude session during a job; the job runs on | ran on and completed 149.8 s after the session ended | ran on and completed 148.9 s after the session ended | ran on and completed 176.3 s after the session ended | ran on and completed 154.9 s after the session ended |
 | Spawn with a bad header fails at once | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs |
 | Status line counts this repository's running jobs | — | — | — | — |
@@ -30,9 +30,9 @@ holds the checks; the records below name the builds.
 | Steer a running job with the main thread's SendMessage | into the running turn, delivered in 1.6–4.7 s | into the running turn, delivered in 1.5–6.4 s | into the running turn, delivered in 1.8–4.8 s | as the next turn, delivered in 1.6–6.4 s |
 | Steer a running job with a Workflow agent's SendMessage | into the running turn, delivered in 5.4 s | into the running turn, delivered in 6.3 s | into the running turn, delivered in 7.3 s | as the next turn, delivered in 6.3 s |
 | Continue a job after its hand-back | a new turn of the job, delivered in 4.6 s | a new turn of the job, delivered in 3.9 s | a new turn of the job, delivered in 4.3 s | a new turn of the job, delivered in 4.0 s |
-| Answer /relay:status, /relay:result and /relay:cancel with no model turn | no model turn; answered in 0.1 s, cancelled in 0.4 s | no model turn; answered in 0.1 s, cancelled in 3.1 s | no model turn; answered in 0.1 s, cancelled in 1.1 s | no model turn; answered in 0.1 s, cancelled in 0.6 s |
+| Answer /relay:status, /relay:result and /relay:cancel with no model turn | no model turn; answered in 0.1–0.5 s, cancelled in 1.2 s | no model turn; answered in 0.1–0.5 s, cancelled in 3.5 s | no model turn; answered in 0.1–0.5 s, cancelled in 2.3 s | no model turn; answered in 0.1–0.6 s, cancelled in 0.4 s |
 | Answer /relay:transfer with no model turn | no model turn; imported in 0.3 s | n/a | n/a | n/a |
-| Stop a running job with TaskStop | cancelled in 0.2 s | cancelled in 0.3 s | cancelled in 0.5 s | cancelled in 0.4 s |
+| Stop a running job with TaskStop | cancelled in 1.5 s | cancelled in 2.3 s | cancelled in 3.9 s | cancelled in 3.1 s |
 | Spawn with a bad header fails at once | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs |
 
 ## How each backend took a message
@@ -61,19 +61,19 @@ holds the checks; the records below name the builds.
 | continue | terminal | grok | grok-4.7 | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150115Z-continue-terminal-c496](records/20261022T150115Z-continue-terminal-c496.jsonl) |
 | continue | terminal | zcode | glm-5.3-flash | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150115Z-continue-terminal-c496](records/20261022T150115Z-continue-terminal-c496.jsonl) |
 | continue | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150115Z-continue-terminal-c496](records/20261022T150115Z-continue-terminal-c496.jsonl) |
-| commands | terminal | codex | gpt-6.1-sol | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T193823Z-commands-terminal-dcf3](records/20261022T193823Z-commands-terminal-dcf3.jsonl) |
-| commands | terminal | grok | grok-4.7 | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T193823Z-commands-terminal-dcf3](records/20261022T193823Z-commands-terminal-dcf3.jsonl) |
-| commands | terminal | zcode | glm-5.3-flash | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T193823Z-commands-terminal-dcf3](records/20261022T193823Z-commands-terminal-dcf3.jsonl) |
-| commands | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T193823Z-commands-terminal-dcf3](records/20261022T193823Z-commands-terminal-dcf3.jsonl) |
+| commands | terminal | codex | gpt-6.1-sol | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T204817Z-commands-terminal-ef6a](records/20261022T204817Z-commands-terminal-ef6a.jsonl) |
+| commands | terminal | grok | grok-4.7 | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T204817Z-commands-terminal-ef6a](records/20261022T204817Z-commands-terminal-ef6a.jsonl) |
+| commands | terminal | zcode | glm-5.3-flash | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T204817Z-commands-terminal-ef6a](records/20261022T204817Z-commands-terminal-ef6a.jsonl) |
+| commands | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T204817Z-commands-terminal-ef6a](records/20261022T204817Z-commands-terminal-ef6a.jsonl) |
 | transfer | terminal | codex | — | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T150445Z-transfer-terminal-9436](records/20261022T150445Z-transfer-terminal-9436.jsonl) |
-| headless | terminal | codex | gpt-6.1-sol | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | — | 2026-10-22 | [20261022T193931Z-headless-terminal-2d21](records/20261022T193931Z-headless-terminal-2d21.jsonl) |
-| headless | terminal | grok | grok-4.7 | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | — | 2026-10-22 | [20261022T193931Z-headless-terminal-2d21](records/20261022T193931Z-headless-terminal-2d21.jsonl) |
-| headless | terminal | zcode | glm-5.3-flash | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | — | 2026-10-22 | [20261022T193931Z-headless-terminal-2d21](records/20261022T193931Z-headless-terminal-2d21.jsonl) |
-| headless | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | — | 2026-10-22 | [20261022T193931Z-headless-terminal-2d21](records/20261022T193931Z-headless-terminal-2d21.jsonl) |
-| stop | terminal | codex | gpt-6.1-sol | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T193727Z-stop-terminal-f9c5](records/20261022T193727Z-stop-terminal-f9c5.jsonl) |
-| stop | terminal | grok | grok-4.7 | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T193727Z-stop-terminal-f9c5](records/20261022T193727Z-stop-terminal-f9c5.jsonl) |
-| stop | terminal | zcode | glm-5.3-flash | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T193727Z-stop-terminal-f9c5](records/20261022T193727Z-stop-terminal-f9c5.jsonl) |
-| stop | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T193727Z-stop-terminal-f9c5](records/20261022T193727Z-stop-terminal-f9c5.jsonl) |
+| headless | terminal | codex | gpt-6.1-sol | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | — | 2026-10-22 | [20261022T204948Z-headless-terminal-506a](records/20261022T204948Z-headless-terminal-506a.jsonl) |
+| headless | terminal | grok | grok-4.7 | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | — | 2026-10-22 | [20261022T204948Z-headless-terminal-506a](records/20261022T204948Z-headless-terminal-506a.jsonl) |
+| headless | terminal | zcode | glm-5.3-flash | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | — | 2026-10-22 | [20261022T204948Z-headless-terminal-506a](records/20261022T204948Z-headless-terminal-506a.jsonl) |
+| headless | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | — | 2026-10-22 | [20261022T204948Z-headless-terminal-506a](records/20261022T204948Z-headless-terminal-506a.jsonl) |
+| stop | terminal | codex | gpt-6.1-sol | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T204723Z-stop-terminal-39e9](records/20261022T204723Z-stop-terminal-39e9.jsonl) |
+| stop | terminal | grok | grok-4.7 | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T204723Z-stop-terminal-39e9](records/20261022T204723Z-stop-terminal-39e9.jsonl) |
+| stop | terminal | zcode | glm-5.3-flash | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T204723Z-stop-terminal-39e9](records/20261022T204723Z-stop-terminal-39e9.jsonl) |
+| stop | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T204723Z-stop-terminal-39e9](records/20261022T204723Z-stop-terminal-39e9.jsonl) |
 | session-end | terminal | codex | gpt-6.1-sol | 3.0.0-dev.4 (42e3c6e23384) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T154548Z-session-end-terminal-c9b8](records/20261022T154548Z-session-end-terminal-c9b8.jsonl) |
 | session-end | terminal | grok | grok-4.7 | 3.0.0-dev.4 (42e3c6e23384) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T154548Z-session-end-terminal-c9b8](records/20261022T154548Z-session-end-terminal-c9b8.jsonl) |
 | session-end | terminal | zcode | glm-5.3-flash | 3.0.0-dev.4 (42e3c6e23384) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T154548Z-session-end-terminal-c9b8](records/20261022T154548Z-session-end-terminal-c9b8.jsonl) |
@@ -94,15 +94,15 @@ holds the checks; the records below name the builds.
 | continue | t3 | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-continue-t3-c51f](records/20261022T100753Z-continue-t3-c51f.jsonl) |
 | continue | t3 | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-continue-t3-c51f](records/20261022T100753Z-continue-t3-c51f.jsonl) |
 | continue | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-continue-t3-c51f](records/20261022T100753Z-continue-t3-c51f.jsonl) |
-| commands | t3 | codex | gpt-6.1-sol | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T194641Z-commands-t3-c46d](records/20261022T194641Z-commands-t3-c46d.jsonl) |
-| commands | t3 | grok | grok-4.7 | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T194641Z-commands-t3-c46d](records/20261022T194641Z-commands-t3-c46d.jsonl) |
-| commands | t3 | zcode | glm-5.3-flash | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T194641Z-commands-t3-c46d](records/20261022T194641Z-commands-t3-c46d.jsonl) |
-| commands | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T194641Z-commands-t3-c46d](records/20261022T194641Z-commands-t3-c46d.jsonl) |
+| commands | t3 | codex | gpt-6.1-sol | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T205549Z-commands-t3-5091](records/20261022T205549Z-commands-t3-5091.jsonl) |
+| commands | t3 | grok | grok-4.7 | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T205549Z-commands-t3-5091](records/20261022T205549Z-commands-t3-5091.jsonl) |
+| commands | t3 | zcode | glm-5.3-flash | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T205549Z-commands-t3-5091](records/20261022T205549Z-commands-t3-5091.jsonl) |
+| commands | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T205549Z-commands-t3-5091](records/20261022T205549Z-commands-t3-5091.jsonl) |
 | transfer | t3 | codex | — | 3.0.0-dev.3 (f9d0c3526839) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T140608Z-transfer-t3-c056](records/20261022T140608Z-transfer-t3-c056.jsonl) |
-| stop | t3 | codex | gpt-6.1-sol | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T194527Z-stop-t3-2a42](records/20261022T194527Z-stop-t3-2a42.jsonl) |
-| stop | t3 | grok | grok-4.7 | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T194527Z-stop-t3-2a42](records/20261022T194527Z-stop-t3-2a42.jsonl) |
-| stop | t3 | zcode | glm-5.3-flash | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T194527Z-stop-t3-2a42](records/20261022T194527Z-stop-t3-2a42.jsonl) |
-| stop | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.5 (dd3e7d13801a) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T194527Z-stop-t3-2a42](records/20261022T194527Z-stop-t3-2a42.jsonl) |
+| stop | t3 | codex | gpt-6.1-sol | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T205333Z-stop-t3-93fe](records/20261022T205333Z-stop-t3-93fe.jsonl) |
+| stop | t3 | grok | grok-4.7 | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T205333Z-stop-t3-93fe](records/20261022T205333Z-stop-t3-93fe.jsonl) |
+| stop | t3 | zcode | glm-5.3-flash | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T205333Z-stop-t3-93fe](records/20261022T205333Z-stop-t3-93fe.jsonl) |
+| stop | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.5 (4fb33a8a36ba) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T205333Z-stop-t3-93fe](records/20261022T205333Z-stop-t3-93fe.jsonl) |
 | spawn-check | t3 | codex | gpt-6.1-sol | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T144722Z-spawn-check-t3-a4f2](records/20261022T144722Z-spawn-check-t3-a4f2.jsonl) |
 | spawn-check | t3 | grok | grok-4.7 | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T144722Z-spawn-check-t3-a4f2](records/20261022T144722Z-spawn-check-t3-a4f2.jsonl) |
 | spawn-check | t3 | zcode | glm-5.3-flash | 3.0.0-dev.4 (d90fd5944848) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T144722Z-spawn-check-t3-a4f2](records/20261022T144722Z-spawn-check-t3-a4f2.jsonl) |
