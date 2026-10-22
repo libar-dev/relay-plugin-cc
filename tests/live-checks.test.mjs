@@ -1454,7 +1454,8 @@ const spawnMutations = [
   ['Agent deny text with another message', dir => changeEntries(dir, e => { resultEntry(e, 'bad-codex').message.content[0].content = 'Subagent spawn denied by a plugin: other'; }), /Agent result/],
   ['meta file with bad name', dir => write(path.join(dir, 'transcript/subagents/agent-bad.meta.json'), { name: 'spawn-bad-codex' }), /meta file/],
   ['nested meta file with bad description', dir => write(path.join(dir, 'transcript/subagents/workflows/other/agent-bad.meta.json'), { description: 'spawn-bad-codex' }), /meta file/],
-  ['wrong Workflow script', dir => changeEntries(dir, e => { callBlock(e, 'workflow').input.script += '\n'; }), /expected script/],
+  ['wrong Workflow script', dir => changeEntries(dir, e => { const c = callBlock(e, 'workflow'); c.input.script = c.input.script.replace('spawn-good-codex', 'spawn-good-other'); }), /expected script/],
+  ['Workflow script with leading text', dir => changeEntries(dir, e => { callBlock(e, 'workflow').input.script = '// note\n' + callBlock(e, 'workflow').input.script; }), /expected script/],
   ['Workflow args', dir => changeEntries(dir, e => { callBlock(e, 'workflow').input.args = {}; }), /no args/],
   ['second Workflow', dir => changeEntries(dir, e => { e.push(callEntry('second-workflow', 'Workflow', { script: spawnScript(['codex']) })); }), /one Workflow/],
   ['Workflow result error', dir => changeEntries(dir, e => { resultEntry(e, 'workflow').message.content[0].is_error = true; }), /Workflow launch/],
@@ -1653,6 +1654,12 @@ for (const failure of ['meta file with bad name', 'extra job of this session', '
     assert.equal(after.results[0].result, 'fail'); assert.equal(after.results[0].reason, before.results[0].reason);
   });
 }
+
+test('spawn-check accepts the Workflow script with a trailing newline, as a lead copied it live', t => {
+  const dir = copy(t, 'spawn-check');
+  changeEntries(dir, e => { callBlock(e, 'workflow').input.script += '\n'; });
+  assert.equal(phaseAnalyze('spawn-check', dir).results[0].result, 'pass');
+});
 
 test('stop accepts cancellation and cancel posting at the exact TaskStop timestamp', t => {
   const dir = copy(t, 'stop');

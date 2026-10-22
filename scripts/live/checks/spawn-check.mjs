@@ -94,7 +94,8 @@ export default {
       if (!reply?.is_error || text !== `Subagent spawn denied by a plugin: ${expected}`) throw new Error('Agent result is not the parser spawn denial.');
       if (metadata.some(meta => meta.name === badName || meta.description === badName)) throw new Error('A meta file exists for the denied Agent.');
       const workflows = parsed.calls.filter(call => call.name === 'Workflow');
-      if (workflows.length !== 1 || workflows[0].input?.script !== workflowScript(input.backends) || Object.hasOwn(workflows[0].input, 'args')) {
+      // A lead copying the script may end it with a newline; anything else must be verbatim.
+      if (workflows.length !== 1 || String(workflows[0].input?.script ?? '').trimEnd() !== workflowScript(input.backends) || Object.hasOwn(workflows[0].input, 'args')) {
         throw new Error('Expected exactly one Workflow with the expected script and no args.');
       }
       const workflow = workflowEvidence(input, evidence, workflows[0], results.get(workflows[0].id));
