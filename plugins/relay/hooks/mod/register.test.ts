@@ -1222,7 +1222,7 @@ for (const surface of SURFACES) {
     expect(await ui.find({ type: 'Text', text: '- steer · stop after the tests · steered' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '- steer · and lint · pending (inbox)' })).toBeDefined()
     expect((await ui.find({ type: 'Markdown' }))?.props.text).toBe('# Findings\n\nAll good.\n')
-    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Steer: ')
+    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Steer')
 
     // The view is read again only when the row's facts change.
     const reads = () => seen.subs().filter((sub: string) => sub === 'result').length
@@ -1255,7 +1255,7 @@ for (const surface of SURFACES) {
     const { ui } = await openBoard($, surface)
     await ui.press({ key: 'job:j-1' })
 
-    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Continue: ')
+    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Continue')
     await ui.input({ key: 'message', text: 'now the docs' })
 
     expect(seen.sends).toEqual([{ to: 'a-j-1', text: 'now the docs', origin: { kind: 'plugin', name: 'relay' } }])
@@ -1325,9 +1325,9 @@ for (const surface of SURFACES) {
     const { ui } = await openBoard($, surface)
 
     await ui.press({ key: 'job:j-2' })
-    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Queue next turn: ')
+    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Queue next turn')
     await ui.press({ key: 'job:j-1' })
-    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Steer: ')
+    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Steer')
     await ui.unmount()
   })
 

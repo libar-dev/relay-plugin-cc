@@ -585,7 +585,7 @@ async function drawJob($, { Box, Text, Button, Input, Markdown }, job, board) {
   // The mobile app draws no text field.
   if (Input !== undefined) {
     const onSubmit = (text) => sendFromBoard($, board, job.id, text, false);
-    nodes.push(h(Input, { key: "message", label: sendLabel(job) + ": ", submitLabel: "send", onSubmit }));
+    nodes.push(h(Input, { key: "message", label: sendLabel(job), submitLabel: "send", onSubmit }));
   }
   const note = await read($, boardNote);
   if (note?.id === job.id) {
