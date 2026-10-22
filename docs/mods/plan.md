@@ -1,12 +1,13 @@
 # Relay and Claude Code Mods: the plan
 
 Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. Phase 1, Phase 5's suite
-runner, Phase 2 and Phase 3 are done on the branch `release/3.0`, Phase 6's investigation is reported, and the
-later phases were reviewed in the light of each ([After Phase 1](#after-phase-1-what-held-and-what-changed),
+runner, Phase 2, Phase 3 and the typed-message fix are done on the branch `release/3.0`, Phase 6's investigation
+is reported, and the later phases were reviewed in the light of each ([After Phase 1](#after-phase-1-what-held-and-what-changed),
 [After the suite runner](#after-the-suite-runner-what-held-and-what-changed),
 [After Phase 2](#after-phase-2-what-held-and-what-changed),
 [After Phase 6](#after-phase-6-what-held-and-what-changed),
-[After Phase 3](#after-phase-3-what-held-and-what-changed)). Phases 1 to 5 ship together as relay 3.0.0
+[After Phase 3](#after-phase-3-what-held-and-what-changed),
+[After the typed-message fix](#after-the-typed-message-fix-what-held-and-what-changed)). Phases 1 to 5 ship together as relay 3.0.0
 ([release-3.0.md](release-3.0.md)); every decision taken on the way is in [decisions.md](decisions.md).
 It combines three independent plans in this directory:
 
@@ -400,6 +401,58 @@ The later phases, in this light:
   capability table gains the stop and spawn rows the funding notes list. The smoke kit's `hi-refused` agent is now
   refused at the spawn (`Subagent spawn denied by a plugin: model: glm-5.3-flash is a ZCode model…`), not handed
   back as `state: not started`; the kit's SMOKE-TEST.md says the old form and needs the new one for 3.0.
+
+## The typed-message fix (done, on `release/3.0`)
+
+The M3 lead's CLI pass found that a line a person types into a running relay's own view (↓ in the footer, Enter,
+`Message @<agent>…`) never reached the job, and that a relay the line resumed after its hand-back could claim it
+had passed it on. What shipped (D100 to D104):
+
+- The guard delivers origin `human` in both shapes Claude Code writes: the queued text while the relay works, and
+  the wrapped `user` entry that resumes a relay after its hand-back or after an interrupt. It is a steer while the
+  job runs and a continue once it has ended; `cancel` cancels.
+- An origin the guard does not know is recorded as a `relay-violation:` line, once per entry, and not delivered;
+  the harness's `task-notification` is skipped.
+- A relay that anything inbound resumed after its hand-back must hand back again or end with exactly the result.
+  The exact compare accepts one code fence around the whole result, with no tag or a plain one (in the e2e suite's
+  first full run a relay sent the result fenced nine times and was let go after eight blocks).
+- No wake: no hook names a typed line's recipient, so it reaches the job at the relay's next call, at most 540 s
+  later, or as a continue when the job ends first. A line typed after a hand-back or an interrupt arrives at once.
+- The live check `typed` (terminal only) types into three relays per backend: unassisted (in a view held open
+  through the hand-back), with a hand-made wake, and after an interrupt. It passed on all four backends in one run.
+
+### After the typed-message fix: what held and what changed
+
+Assumptions that held:
+
+- One delivery path. A typed line goes through the guard's ledger like every other message; nothing new posts.
+- Origin, not text. The new kind is recognised by its origin; only the resuming entry's wrapper is read by text,
+  as the coordinator's is, and a changed wrapper still delivers the line and records the change.
+
+What changed, and where:
+
+- **"Every message the relay receives" was "every message the guard knows".** The same silent drop hit `peer` in
+  Phase 1 and `human` now. Unknown origins are recorded from here on, so the next new kind shows on the job.
+- **The relay's final text was trusted after a hand-back.** A resumed relay could end with its own words when
+  nothing was owed. It now has to hand back again whenever anything inbound arrived after its hand-back.
+- **The agent view is a user surface of its own.** It has a prompt that invites messages, an Esc that stops the
+  relay (not the job), and an `x to stop` in the agent list. No hook sees the typed line at Enter; a stop is seen
+  only as the module's `turn.complete` with `reason: "aborted"` and the agent listed `killed`.
+
+The later work, in this light:
+
+- **Phase 4.** The board's Steer and Continue are unchanged (they send as the lead does). Two items wait for
+  `register.js`, after PR 2 merges: the typed-line wake (D103: a pass-through `AbovePrompt` render hook that
+  records the view, and `prompt.change {clear}` waking the viewed relay; measure stale views, rapid switches and
+  several surfaces first), and, if the owner chooses it, the stop notice or the stop's cancel (a `turn.complete`
+  hook that skips agents a TaskStop named; measured: `$.ui.log` and `$.ui.toast` draw it in the terminal).
+- **The release.** `suite.mjs run all` gains `typed`, terminal only: about 15 minutes for the four backends in one
+  run (each A job is sized by its backend's place). It drives the agent view with keys, so run it on an unloaded
+  machine; it waits for each key's effect but fails on a step that does not settle within its bound. The real-API
+  suite and the manual test script can type into a relay's view, interrupt it with Esc and redirect it; the
+  guide should give the latency, Esc and `x to stop`. The docs that promise "within seconds" now say it for
+  `SendMessage`, and give the typed line's latency.
+- **The owner's decision on the stop** (Esc or `x to stop` in the agent view) is open; D2 covers TaskStop only.
 
 ## Phase 4: the terminal and Desktop board (separate PRs)
 

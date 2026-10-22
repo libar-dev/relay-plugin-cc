@@ -215,5 +215,8 @@ What worked in Phase 1:
   running agent's view stops the agent, and `x` on its row in the list stops it too; both end its turn with
   `turn.complete {reason: "aborted"}`, list it as `killed`, and fire no `SubagentStop`. Esc in the main view
   interrupts the main turn. Drive the view without Esc.
+- The Desktop app's Code tab (Claude for Mac 3.6556.1, checked on the M3) shows an agent's view with no input: Back,
+  Move, Expand and Close only, and `@` in the main prompt offers files, not agents. Esc in that view does nothing; the
+  Background tasks panel's Stop button ends the relay as `x to stop` does, and the job runs on.
 - `$.ui.log` writes a line into the main transcript (kept as `system`/`informational`, not sent to the model);
   `$.ui.toast` is drawn on the notification bar, also over an agent's view; `$.ui.notify` had no channel on Fedora.

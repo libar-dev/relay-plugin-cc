@@ -72,8 +72,9 @@ Phase 3, spawn and stop like a Claude agent:
 
 Messages typed into a relay's own view (a fix found by the Desktop and CLI passes):
 
-- **A line the user types into a `relay:job` agent's view reaches the job.** Claude Code lets a person
-  open a running agent's view (↓ in the footer, then Enter) and type at `Message @<agent>…`. Claude Code
+- **A line the user types into a `relay:job` agent's view reaches the job.** Claude Code in the terminal lets
+  a person open a running agent's view (↓ in the footer, then Enter) and type at `Message @<agent>…`; the
+  Desktop app's agent view has no input. Claude Code
   marks such a line as origin `human`, and the guard took only the main thread's and other agents'
   messages, so it dropped the line without a record. After the hand-back the line resumed the relay, the
   job got no turn, and the relay could say it had passed the message on. Now the line is delivered like
@@ -88,7 +89,7 @@ Messages typed into a relay's own view (a fix found by the Desktop and CLI passe
   hook can check it, the relay can no longer end with words of its own. (The block budget, a failing
   hook and a relay whose start failed stay as they were.)
 - A relay without `SubagentHandback` whose final message is the exact result inside one code fence is
-  no longer blocked: the fence, with no tag or a plain one such as `text` or `markdown`, is ignored. A Haiku
+  no longer blocked: the fence, with no tag or a plain one such as `text`, `markdown` or `yaml`, is ignored. A Haiku
   relay had sent the result fenced nine times and been let go after eight blocks, with no recorded hand-back.
   A Workflow relay's state block may carry the same one fence, and no fence line anywhere else.
 - A message of an origin the guard does not know is recorded as a `relay-violation:` line instead of

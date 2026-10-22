@@ -71,7 +71,7 @@ function handback(loaded, agent, entries, after) {
   return last;
 }
 
-function interruptedRedirect(entries, entry, receipt, job) {
+function interruptedRedirect(entries, entry, receipt) {
   if (entry.type !== 'user' || entry.origin?.kind !== 'human') throw new Error('C1 was not a resuming human user entry.');
   const before = entries.slice(0, entries.indexOf(entry));
   const note = before.findLastIndex(row => row.type === 'user' &&
@@ -81,12 +81,14 @@ function interruptedRedirect(entries, entry, receipt, job) {
       block.is_error && (row.toolDenialKind === 'user-rejected' || /tool use was rejected/.test(textContent(block.content))) &&
       before.slice(0, before.indexOf(row)).some(call => call.type === 'assistant' &&
         Array.isArray(call.message?.content) && call.message.content.some(tool => tool.type === 'tool_use' &&
-          tool.id === block.tool_use_id && /companion\.mjs["']?\s+wait\s/.test(tool.input?.command ?? '') &&
-          tool.input.command.includes(job.id)))));
+          tool.id === block.tool_use_id && /companion\.mjs["']?\s+wait(?:\s|$)/.test(tool.input?.command ?? '')))));
   if (note < 0 || !rejected || !(Date.parse(rejected.timestamp) <= Date.parse(before[note].timestamp)) ||
       !(Date.parse(before[note].timestamp) < Date.parse(receipt.sentAt)) ||
       !(Date.parse(receipt.sentAt) <= Date.parse(entry.timestamp))) {
     throw new Error('C1 lacks an interrupted wait before its typing receipt and resuming entry.');
+  }
+  if (before.slice(note + 1).some(row => row.type === 'assistant')) {
+    throw new Error('C1 did not resume the relay: an assistant entry followed the interrupt before C1.');
   }
 }
 
@@ -97,7 +99,7 @@ function delivery(input, loaded, receipt, line, backend) {
   const entries = readTranscript(path.resolve(input.jobsHome, job.relay.transcriptPath));
   const matches = entries.filter(entry => humanText(entry) === text);
   if (matches.length !== 1 || !matches[0].uuid) throw new Error(`Expected exactly one human transcript entry for ${line}.`);
-  if (line === 'C1') interruptedRedirect(entries, matches[0], receipt, job);
+  if (line === 'C1') interruptedRedirect(entries, matches[0], receipt);
   const uuid = matches[0].uuid;
   const ledger = recordsFor(jobDir).filter(record => path.basename(record.file, '.json') === uuid || record.message === text);
   if (ledger.length !== 1 || path.basename(ledger[0].file, '.json') !== uuid) throw new Error(`Expected exactly one ledger record for ${line}.`);
@@ -137,6 +139,19 @@ function delivery(input, loaded, receipt, line, backend) {
     }
   }
   return { kind: record.kind, seconds, at: record.at, postedAt: record.postedAt, delivery: expected };
+}
+
+function cleanupWarnings(analysis, run) {
+  for (const row of analysis.results) {
+    const warnings = [run.cleanupScanError && `cleanup scan: ${run.cleanupScanError}`, run.cleanupError && `cleanup: ${run.cleanupError}`,
+      ...Object.entries(run.typed?.[row.backend] ?? {}).flatMap(([line, receipt]) =>
+        receipt.cleanupError ? [`${line} cleanup: ${receipt.cleanupError}`] : [])].filter(Boolean);
+    if (warnings.length) {
+      // The record schema preserves reason without turning a passing result into a failure.
+      const note = `Warning: ${warnings.join('; ')}`;
+      if (!row.reason?.includes(note)) row.reason = [row.reason, note].filter(Boolean).join(' ');
+    }
+  }
 }
 
 function footer(screen) {
@@ -267,6 +282,7 @@ export default {
     const input = () => ({ ...run, jobsHome: ctx.jobsHome, evidenceDir: ctx.evidenceDir });
     const entries = () => scopeToRun(readTranscript(run.transcript), run.runId);
     const evidence = { agents: [], transcripts: [] }, jobs = [];
+    let analysis;
     const waitFor = async (pending, until, label, fail = true) => {
       const bound = Math.min(deadline, Number.isFinite(until) ? until : now());
       let diagnostic;
@@ -354,38 +370,52 @@ export default {
             const until = now() + (60 + 40 * run.backends.length + 150 * run.backends.indexOf(item.backend) + 120) * 1000;
             await waitFor(() => ledgerPending(item, 'A1'), until, `${item.a.name}-A1-ledger`);
             item.A = relayJob(input(), evidence, item.a.agentId);
-            const records = lineRecords(item, 'A1');
-            if (records.length !== 1 || !Number.isFinite(Date.parse(records[0].postedAt))) {
-              delivery(input(), item.A, run.typed[item.backend].A1, 'A1', item.backend);
-            }
-            await waitFor(() => handbackPending(item, records[0].postedAt), until, `${item.a.name}-A1-handback`);
             const delivered = delivery(input(), item.A, run.typed[item.backend].A1, 'A1', item.backend);
+            await waitFor(() => handbackPending(item, delivered.postedAt), until, `${item.a.name}-A1-handback`);
             handback(item.A, item.a, entries(), delivered.postedAt);
           },
           beforeSend: () => receipt(item, 'A2'),
           delivered: async () => {
             await waitFor(() => ledgerPending(item, 'A2'), now() + 60000, `${item.a.name}-A2-ledger`);
-            item.a2 = lineRecords(item, 'A2')[0];
+            item.A = relayJob(input(), evidence, item.a.agentId);
+            item.a2 = delivery(input(), item.A, run.typed[item.backend].A2, 'A2', item.backend);
           }
         });
+      }
+      for (const item of jobs) {
         const diagnostic = await waitFor(() => handbackPending(item, item.a2.postedAt), Date.parse(item.a2.at) + 120000,
           `${item.a.name}-A2-handback`, false);
         if (diagnostic) { run.typed[item.backend].A2.settleError = diagnostic; ctx.save(); }
       }
       signal?.throwIfAborted();
       if (run.interrupted) throw new Error('Interrupted.');
-      const analysis = this.analyze(input());
+      analysis = this.analyze(input());
       run.completed = true; run.checkFinishedAt = new Date(now()).toISOString(); ctx.save();
       return analysis;
     } catch (error) {
       run.completed = false; run.error = error.message; ctx.save(); throw error;
     } finally {
+      const saveCleanup = () => {
+        try { ctx.save(); } catch (error) { run.cleanupError = error.message; }
+      };
       try {
         const started = new Map(jobs.flatMap(item => ['A', 'B', 'C'].map(scenario =>
           [item[scenario].jobDir, { backend: item.backend, scenario, loaded: item[scenario] }])));
         // Startup or navigation can fail before the normal job inventory is complete.
-        if (run.transcript && fs.existsSync(run.transcript)) {
-          for (const agent of transcriptCalls(entries()).spawns) {
+        try {
+          const text = run.transcript && fs.existsSync(run.transcript) ? fs.readFileSync(run.transcript, 'utf8') : '';
+          const lines = text.split('\n');
+          const scanned = lines.flatMap((line, i) => {
+            if (!line.trim()) return [];
+            try { return [JSON.parse(line)]; }
+            catch {
+              const message = `Invalid JSON at ${run.transcript}:${i + 1}`;
+              // The lead can still be appending its last entry while cleanup runs.
+              if (i === lines.length - 1) { run.cleanupScanError = message; return []; }
+              throw new Error(message);
+            }
+          });
+          for (const agent of transcriptCalls(scopeToRun(scanned, run.runId)).spawns) {
             const scenario = ['a', 'b', 'c'].find(value => agent.name === `typed-${value}-${agent.backend}`);
             if (!scenario || !run.backends.includes(agent.backend)) continue;
             try {
@@ -393,22 +423,26 @@ export default {
               started.set(loaded.jobDir, { backend: agent.backend, scenario: scenario.toUpperCase(), loaded });
             } catch { /* A spawn may not have created a job yet. */ }
           }
-        }
+        } catch (error) { run.cleanupScanError = error.message; }
         for (const { backend, scenario, loaded } of started.values()) {
           const receipts = ((run.typed ??= {})[backend] ??= {});
           const receipt = (receipts[`${scenario}1`] ??= {});
           try {
             if (['completed', 'failed', 'cancelled'].includes(readJob(loaded.jobDir).state)) continue;
-            receipt.cleanupAt = new Date(now()).toISOString(); ctx.save();
+            receipt.cleanupAt = new Date(now()).toISOString(); saveCleanup();
             await companionRunner(ctx, ['cancel', loaded.jobDir]);
           } catch (error) {
             receipt.cleanupError = error.message;
           }
-          ctx.save();
+          saveCleanup();
         }
+      } catch (error) {
+        run.cleanupError = error.message;
       } finally {
-        if (run.pane) drive(['stop', run.pane]);
-        ctx.save();
+        try { if (run.pane) drive(['stop', run.pane]); }
+        catch (error) { run.cleanupError = error.message; }
+        saveCleanup();
+        if (analysis) cleanupWarnings(analysis, run);
       }
     }
   },
@@ -463,12 +497,14 @@ export default {
       row.timings = { a1Seconds: [a1.seconds], a2Seconds: [a2.seconds], b1WakeSeconds: [b1.seconds], c1Seconds: [c1.seconds] };
     });
     analysis.results.forEach((row, i) => { row.delivery = analysis.details[i].delivery ?? null; });
+    cleanupWarnings(analysis, readJson(path.join(input.evidenceDir, 'run.json')));
     return analysis;
   },
   cell(record) {
     return `typed while it runs: at the relay's next call (${formatSeconds(record.timings.a1Seconds ?? [])}, a ${record.delivery?.split(';')[0] ?? 'continue'}); ` +
       `after the hand-back: a new turn in ${formatSeconds(record.timings.a2Seconds ?? [])}; ` +
       `woken by hand: a steer in ${formatSeconds(record.timings.b1WakeSeconds ?? [])}${record.delivery?.includes('assisted-steer:next-turn') ? ' (next turn)' : ''}; ` +
-      `typed after an interrupt: a steer in ${formatSeconds(record.timings.c1Seconds ?? [])}${record.delivery?.endsWith('interrupt-steer:next-turn') ? ' (next turn)' : ''}`;
+      `typed after an interrupt: a steer in ${formatSeconds(record.timings.c1Seconds ?? [])}${record.delivery?.endsWith('interrupt-steer:next-turn') ? ' (next turn)' : ''}` +
+      (record.reason ? `; ${record.reason}` : '');
   }
 };

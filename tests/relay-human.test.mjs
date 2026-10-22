@@ -404,9 +404,16 @@ test("without SubagentHandback, only one whole-message fence may surround the ex
     assert.ok(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt);
   });
   await t.test("only the allowed tags and whitespace outside the fence pass", async () => {
-    for (const tag of ["", "text", "txt", "plaintext", "markdown", "md"]) {
+    for (const tag of ["", "text", "txt", "plaintext", "plain", "markdown", "md", "yaml", "yml", "ini", "console", "log", "YAML", "Text"]) {
       assert.equal(await stop(ctx, `\n \t\n${fence(result(), "```" + tag + " \t")}\n \t`), null);
     }
+  });
+  await t.test("outer fences indented by up to three spaces pass", async () => {
+    for (const indent of [" ", "  ", "   "]) {
+      assert.equal(await stop(ctx, fence(result(), indent + "```yaml", indent + "```")), null);
+    }
+    assert.equal(await stop(ctx, fence(result(), "```Text", "   ```")), null);
+    assert.equal(await stop(ctx, fence(result(), "   ```md", "```")), null);
   });
   await t.test("four backticks around a result containing a three-backtick block pass", async () => {
     fs.writeFileSync(path.join(dir, "report.md"), "A report with code:\n```\nexact code\n```\n");
@@ -416,7 +423,10 @@ test("without SubagentHandback, only one whole-message fence may surround the ex
   const cases = [
     ["prose in the fence info string fails", (text) => fence(text, "```I passed your message on to the job")],
     ["a prose tag without spaces fails", (text) => fence(text, "```passed-your-message-on.to.the-job")],
+    ["a hyphenated allowed tag fails", (text) => fence(text, "```yaml-extra")],
     ["an unrecognized language tag fails", (text) => fence(text, "```aZ09_+.-")],
+    ["an opening fence indented four spaces fails", (text) => fence(text, "    ```yaml")],
+    ["a closing fence indented four spaces fails", (text) => fence(text, "```yaml", "    ```")],
     ["an unclosed fence fails", (text) => `\`\`\`\n${text}`],
     ["a fence with a changed line fails", (text) => fence(text.replace("state: completed", "state: cancelled"))],
     ["a fence with an added line fails", (text) => fence(`${text}\nAdded line.`)],

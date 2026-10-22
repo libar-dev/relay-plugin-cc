@@ -111,10 +111,13 @@ test("end to end under the Workflow harness: typed text steers at the next call 
   const blocked = await stop("I passed your message on");
   assert.equal(blocked.status, 0, blocked.stderr);
   assert.equal(blocked.json?.decision, "block");
-  assert.equal(blocked.json.reason, "Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else:\n" + block);
+  assert.equal(blocked.json.reason, "Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n" + block);
   for (const text of [
     "```passed-your-message-on.to.the-job\n" + block + "```",
+    "```yaml-extra\n" + block + "```",
     "```I passed your message on to the job\n" + block + "```",
+    "    ```yaml\n" + block + "```",
+    "```yaml\n" + block + "    ```",
     block.replace("\n", "\n```I passed your message on to the job\n"),
     block.replace("\n", "\n```\n"),
     "````text\n" + block + "```",
@@ -123,11 +126,25 @@ test("end to end under the Workflow harness: typed text steers at the next call 
     const rejected = await stop(text);
     assert.equal(rejected.status, 0, rejected.stderr);
     assert.equal(rejected.json?.decision, "block", text);
+    const reset = await stop(block);
+    assert.equal(reset.status, 0, reset.stderr);
+    assert.equal(reset.stdout, "");
   }
-  for (const tag of ["", "text", "txt", "plaintext", "markdown", "md"]) {
+  for (const tag of ["", "text", "txt", "plaintext", "plain", "markdown", "md", "yaml", "yml", "ini", "console", "log", "YAML", "Text"]) {
     const stopped = await stop("\n \t\n````" + tag + " \t\n" + block.trimEnd() + "\n````\n \t");
     assert.equal(stopped.status, 0, stopped.stderr);
     assert.equal(stopped.stdout, "", tag);
+  }
+  for (const [opening, closing] of [
+    [" ```yaml", " ```"],
+    ["  ```YAML", "  ```"],
+    ["   ```Text", "   ```"],
+    ["```md", "   ```"],
+    ["   ```md", "```"]
+  ]) {
+    const stopped = await stop(opening + "\n" + block + closing);
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(stopped.stdout, "", opening + " / " + closing);
   }
   assertLedger(ctx, jobId, [typed]);
 });

@@ -6,7 +6,7 @@ import path from 'node:path';
 import typed, { typedLine, typeInView } from '../scripts/live/checks/typed.mjs';
 import { checks, getCheck } from '../scripts/live/checks/index.mjs';
 import * as readers from '../scripts/live/lib/evidence.mjs';
-import { copyEvidence } from '../scripts/live/lib/runs.mjs';
+import { copyEvidence, makeRecords } from '../scripts/live/lib/runs.mjs';
 
 const fixture = path.resolve('tests/fixtures/live-suite/typed');
 const json = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -539,12 +539,12 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
       lines(input.transcript, main.filter(row => Date.parse(row.timestamp) < Date.parse('2026-10-22T10:01:50Z') + offset));
       stage = 'idle';
     } else if (stage === 'idle') {
-      time = Date.parse('2026-10-22T10:01:50Z') + offset;
+      time = Math.max(time, Date.parse('2026-10-22T10:01:50Z') + offset);
       stage = null;
     } else if (stage === 'A2') {
       write(ledger[1].file, ledger[1].value); lines(relayFile, relay);
       write(path.join(jobDir, 'job.json'), job); lines(path.join(jobDir, 'relay-handbacks.jsonl'), handbacks);
-      time = Date.parse('2026-10-22T10:02:00Z') + offset;
+      time = Math.max(time, Date.parse('2026-10-22T10:02:00Z') + offset);
       lines(input.transcript, main.filter(row => Date.parse(row.timestamp) <= time));
       stage = null;
       afterA2({ jobDir, handbacks, main, input });
@@ -565,7 +565,7 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
           let idle = fs.readFileSync(path.join(fixture, 'screen-a-idle.txt'), 'utf8');
           if (failure === 'unfocused-a-prompt') idle = idle.replace('  ◯ main', '❯ ◯ main');
           screens.splice(9, 0, screens[8], failure === 'lost-a-view' ? screens[0] : idle, screens[8]);
-          time = Date.parse('2026-10-22T10:00:45Z') + saved[backend].offset;
+          time = Math.max(time, Date.parse('2026-10-22T10:00:45Z') + saved[backend].offset);
           if (failure === 'a-completed') write(path.join(saved[backend].jobDir, 'job.json'), saved[backend].job);
         }
         screens = screens.map(screen => screen.replaceAll('codex', backend));
@@ -843,7 +843,9 @@ for (const [failure, mutate, reason] of [
   if (changed) mutate(dir);
   dependencies.sleep = async ms => {
     await sleep(ms);
-    if (!changed && readers.readTranscript(path.join(dir, A, 'relay-handbacks.jsonl')).length) { changed = true; mutate(dir); }
+    const ready = failure === 'own words' ? readers.readTranscript(path.join(dir, A, 'relay-handbacks.jsonl')).length :
+      fs.existsSync(path.join(dir, A, 'inbox/relay/entry-A1-codex.json'));
+    if (!changed && ready) { changed = true; mutate(dir); }
   };
   await assert.rejects(typed.runTerminal(ctx, dependencies), reason);
   assert.equal(changed, true); assert.match(ctx.run.error, reason);
@@ -935,13 +937,23 @@ for (const outcome of ['pass', 'analysis failure', 'navigation failure']) {
       const result = await typed.runTerminal(ctx, dependencies);
       assert.equal(result.results[0].result, outcome === 'pass' ? 'pass' : 'fail');
       if (outcome === 'analysis failure') assert.match(result.results[0].reason, /in-turn steer for B1/);
+      assert.match(result.results[0].reason, /Warning: B1 cleanup: Cancel exited 1/);
+      if (outcome === 'pass') {
+        const [record] = makeRecords({ ...ctx.run, check: 'typed' }, typed, result,
+          readers.readTranscript(ctx.run.transcript), readers, dir);
+        assert.equal(record.result, 'pass');
+        assert.match(record.reason, /Warning: B1 cleanup: Cancel exited 1/);
+        assert.match(typed.cell(record), /Warning: B1 cleanup: Cancel exited 1/);
+      }
     }
     const scenarios = outcome === 'navigation failure' ? ['A', 'B', 'C'] : ['B', 'C'];
     assert.equal(calls.filter(call => call[0] === 'cancel').length, scenarios.length);
     for (const scenario of scenarios) assert.ok(ctx.run.typed.codex[`${scenario}1`].cleanupAt);
     assert.equal(ctx.run.typed.codex[`${scenarios[0]}1`].cleanupError, 'Cancel exited 1.');
     assert.deepEqual(calls.at(-1), ['stop', 'fixture-pane']);
-    assert.equal(typed.analyze(ctx).results[0].result, outcome === 'pass' ? 'pass' : 'fail');
+    const replay = typed.analyze(ctx).results[0];
+    assert.equal(replay.result, outcome === 'pass' ? 'pass' : 'fail');
+    assert.match(replay.reason, /Warning: [AB]1 cleanup: Cancel exited 1/);
   });
 }
 
@@ -955,7 +967,7 @@ test('typed terminal settles every A2 turn, hand-back and notice before analyzin
       write(path.join(value.jobDir, 'job.json'), { ...job, state: 'running',
         attempts: job.attempts.map((attempt, i) => i === 2 ? { ...attempt, state: 'running', endedAt: null } : attempt) });
       lines(path.join(value.jobDir, 'relay-handbacks.jsonl'), value.handbacks.slice(0, 1));
-      lines(value.input.transcript, value.main.filter(row => !row.message?.content?.includes?.(`<task-id>agent-a-${backend}</task-id>`) ||
+      lines(value.input.transcript, readers.readTranscript(value.input.transcript).filter(row => !row.message?.content?.includes?.(`<task-id>agent-a-${backend}</task-id>`) ||
         Date.parse(row.timestamp) < Date.parse(value.handbacks.at(-1).at)));
     }
   });
@@ -969,7 +981,9 @@ test('typed terminal settles every A2 turn, hand-back and notice before analyzin
       if (stage === 1) write(path.join(value.jobDir, 'job.json'), value.job);
       if (stage === 2) lines(path.join(value.jobDir, 'relay-handbacks.jsonl'), value.handbacks);
       if (stage === 3) {
-        lines(value.input.transcript, value.main.filter(row => Date.parse(row.timestamp) <= dependencies.now()));
+        const notice = value.main.filter(row => row.message?.content?.includes?.(`<task-id>agent-a-${backend}</task-id>`) &&
+          Date.parse(row.timestamp) >= Date.parse(value.handbacks.at(-1).at));
+        lines(value.input.transcript, [...readers.readTranscript(value.input.transcript), ...notice]);
         pending.delete(backend);
       }
     }
@@ -999,4 +1013,177 @@ test('typed analysis accepts the interrupted wait and resuming entry cut from th
   edit(dir, 'run.json', run => { run.typed.codex.C1.sentAt = '2026-10-22T10:00:31.293Z'; });
   const row = typed.analyze(input).results[0];
   assert.equal(row.result, 'pass', row.reason);
+});
+
+for (const command of ['wait', 'wait --timeout-seconds 540']) {
+  test(`typed analysis accepts an interrupted ${command} without a job id`, t => {
+    const { dir, input } = setup(t);
+    editLines(dir, 'transcript/subagents/agent-c-codex.jsonl', rows => {
+      rows[0].message.content[0].input.command = `node "/fixture/plugin/scripts/companion.mjs" ${command}`;
+    });
+    const row = typed.analyze(input).results[0];
+    assert.equal(row.result, 'pass', row.reason);
+  });
+}
+
+test('typed analysis rejects a relay that resumed with another wait before C1', t => {
+  const { dir, input } = setup(t);
+  editLines(dir, 'transcript/subagents/agent-c-codex.jsonl', rows => {
+    const resumed = structuredClone(rows[0]);
+    resumed.uuid = 'resumed-without-C1'; resumed.parentUuid = rows[2].uuid;
+    resumed.timestamp = '2026-10-22T10:00:34Z';
+    rows.at(-1).parentUuid = resumed.uuid;
+    rows.splice(3, 0, resumed);
+  });
+  const row = typed.analyze(input).results[0];
+  assert.equal(row.result, 'fail'); assert.match(row.reason, /C1 did not resume the relay/);
+});
+
+for (const line of ['A1', 'A2']) for (const failure of ['inbox', 'outcome']) {
+  test(`typed terminal validates done ${line} ${failure} before waiting for hand-back`, async t => {
+    const { ctx, dependencies, dir, calls } = terminal(t);
+    const sleep = dependencies.sleep;
+    let invalidatedAt;
+    dependencies.sleep = async ms => {
+      await sleep(ms);
+      if (invalidatedAt || !fs.existsSync(path.join(dir, A, `inbox/relay/entry-${line}-codex.json`))) return;
+      invalidatedAt = dependencies.now();
+      if (failure === 'inbox') edit(dir, `${A}/inbox/claimed/msg-${line}-codex.json`, row => { row.text += ' altered'; });
+      else edit(dir, `${A}/inbox/outcomes/msg-${line}-codex.json`, row => { row.action = 'wrong'; });
+      lines(path.join(dir, A, 'relay-handbacks.jsonl'), []);
+      editLines(dir, 'transcript.jsonl', rows => {
+        for (let i = rows.length - 1; i >= 0; i--) {
+          if (rows[i].message?.content?.includes?.('<task-id>agent-a-codex</task-id>')) rows.splice(i, 1);
+        }
+      });
+    };
+    const reason = failure === 'inbox' ? new RegExp(`Inbox does not carry ${line} exactly once`) :
+      new RegExp(`Missing new attempt carrying ${line}`);
+    await assert.rejects(typed.runTerminal(ctx, dependencies), reason);
+    assert.equal(dependencies.now(), invalidatedAt);
+    assert.match(ctx.run.error, reason);
+    assert.equal(calls.filter(call => call[0] === 'send').length, line === 'A1' ? 3 : 4);
+  });
+}
+
+for (const corruption of ['partial trailing line', 'malformed complete line']) {
+  for (const outcome of ['pass', 'analysis failure']) {
+    test(`typed cleanup preserves ${outcome} and cancels known jobs with a ${corruption}`, async t => {
+      const { ctx, dependencies, dir, calls } = terminal(t);
+      if (outcome === 'analysis failure') edit(dir, `${B}/inbox/outcomes/msg-B1-codex.json`, row => { row.turnId = 'wrong'; });
+      const analyze = typed.analyze;
+      let analyses = 0;
+      t.mock.method(typed, 'analyze', function (input) {
+        analyses++;
+        const result = analyze.call(this, input);
+        fs.appendFileSync(ctx.run.transcript, '{"type":' + (corruption === 'malformed complete line' ? '\n' : ''));
+        return result;
+      });
+      const result = await typed.runTerminal(ctx, dependencies);
+      assert.equal(analyses, 1);
+      assert.equal(result.results[0].result, outcome === 'pass' ? 'pass' : 'fail');
+      if (outcome === 'analysis failure') assert.match(result.results[0].reason, /^Expected in-turn steer for B1/);
+      assert.match(result.results[0].reason, /Warning: cleanup scan: Invalid JSON at/);
+      assert.match(ctx.run.cleanupScanError, /Invalid JSON at/);
+      assert.equal(json(path.join(dir, 'run.json')).cleanupScanError, ctx.run.cleanupScanError);
+      assert.deepEqual(calls.filter(call => call[0] === 'cancel').map(call => call[1]), [B, C].map(job => path.join(dir, job)));
+      assert.deepEqual(calls.at(-1), ['stop', 'fixture-pane']);
+    });
+  }
+}
+
+test('typed cleanup discovers jobs before a partial trailing line when startup fails', async t => {
+  const { ctx, dependencies, dir, calls } = terminal(t);
+  ctx.paneDriver = async () => {
+    fs.appendFileSync(ctx.run.transcript, '{"type":');
+    throw new Error('Startup failed after spawning.');
+  };
+  await assert.rejects(typed.runTerminal(ctx, dependencies), /Startup failed after spawning/);
+  assert.equal(ctx.run.error, 'Startup failed after spawning.');
+  assert.match(ctx.run.cleanupScanError, /Invalid JSON at/);
+  assert.deepEqual(calls.filter(call => call[0] === 'cancel').map(call => call[1]).sort(),
+    [A, B, C].map(job => path.join(dir, job)).sort());
+});
+
+test('typed cleanup reports a pane stop error without replacing the analysis', async t => {
+  const { ctx, dependencies } = terminal(t);
+  const drive = dependencies.drive;
+  dependencies.drive = args => {
+    if (args[0] === 'stop') throw new Error('Pane stop failed.');
+    return drive(args);
+  };
+  const result = await typed.runTerminal(ctx, dependencies);
+  assert.equal(result.results[0].result, 'pass');
+  assert.match(result.results[0].reason, /Warning: cleanup: Pane stop failed/);
+  assert.match(typed.cell(result.results[0]), /Warning: cleanup: Pane stop failed/);
+});
+
+test('typed replay carries cleanup warnings into records for the affected backends', t => {
+  const { dir, input } = setup(t);
+  edit(dir, 'run.json', run => {
+    run.cleanupScanError = 'Invalid JSON at transcript.jsonl:50';
+    run.typed.codex.B1.cleanupError = 'Cancel exited 1.';
+  });
+  const result = typed.analyze(input);
+  const records = makeRecords({ ...json(path.join(dir, 'run.json')), ...input, check: 'typed' }, typed, result,
+    readers.readTranscript(input.transcript), readers, dir);
+  assert.equal(records.length, 2);
+  for (const record of records) {
+    assert.equal(record.result, 'pass');
+    assert.match(record.reason, /Warning: cleanup scan: Invalid JSON at transcript.jsonl:50/);
+    assert.match(typed.cell(record), /Warning: cleanup scan: Invalid JSON at transcript.jsonl:50/);
+    assert.equal(record.reason.includes('B1 cleanup: Cancel exited 1.'), record.backend === 'codex');
+  }
+});
+
+test('typed terminal visits the second A before slow first A2 settlement and reads an expired bound once', async t => {
+  let pending, settled = false, secondSentAt;
+  const { ctx, dependencies, dir, calls } = terminal(t, { backends: ['codex', 'kimi'], pendingB: false, pendingC: false,
+    afterA2(value) {
+      if (!value.jobDir.endsWith('job-a-codex')) return;
+      pending = { ...value, job: json(path.join(value.jobDir, 'job.json')) };
+      write(path.join(value.jobDir, 'job.json'), { ...pending.job, state: 'running',
+        attempts: pending.job.attempts.map((attempt, i) => i === 2 ? { ...attempt, state: 'running', endedAt: null } : attempt) });
+      lines(path.join(value.jobDir, 'relay-handbacks.jsonl'), value.handbacks.slice(0, 1));
+      lines(value.input.transcript, readers.readTranscript(value.input.transcript).filter(row =>
+        !row.message?.content?.includes?.('<task-id>agent-a-codex</task-id>') ||
+        Date.parse(row.timestamp) < Date.parse(value.handbacks.at(-1).at)));
+    }
+  });
+  const sleep = dependencies.sleep, drive = dependencies.drive;
+  const secondEnds = Date.parse('2026-10-22T10:03:30Z'), firstSettles = secondEnds + 5000;
+  dependencies.sleep = async ms => {
+    await sleep(ms);
+    if (!secondSentAt && dependencies.now() >= secondEnds) {
+      edit(dir, 'jobs/repo/job-a-kimi/job.json', job => { job.state = 'completed'; });
+    }
+    if (pending && !settled && dependencies.now() >= firstSettles) {
+      write(path.join(pending.jobDir, 'job.json'), pending.job);
+      lines(path.join(pending.jobDir, 'relay-handbacks.jsonl'), pending.handbacks);
+      const notices = pending.main.filter(row => row.message?.content?.includes?.('<task-id>agent-a-codex</task-id>'));
+      lines(ctx.run.transcript, [...readers.readTranscript(ctx.run.transcript), ...notices]);
+      settled = true;
+    }
+  };
+  dependencies.drive = args => {
+    const value = drive(args);
+    if (args[0] === 'send' && args[2] === typedLine('synthetic-run', 'kimi', 'A1')) {
+      secondSentAt = dependencies.now();
+      assert.equal(settled, false);
+    }
+    return value;
+  };
+  const analyze = typed.analyze;
+  let analyses = 0;
+  t.mock.method(typed, 'analyze', function (input) {
+    analyses++;
+    assert.ok(dependencies.now() > Date.parse(json(path.join(dir, A, 'inbox/relay/entry-A2-codex.json')).at) + 120000);
+    assert.equal(ctx.run.typed.codex.A2.settleError, undefined);
+    return analyze.call(this, input);
+  });
+  const result = await typed.runTerminal(ctx, dependencies);
+  assert.ok(secondSentAt < secondEnds);
+  assert.equal(settled, true); assert.equal(analyses, 1);
+  assert.deepEqual(result.results.map(row => [row.result, row.reason]), [['pass', null], ['pass', null]]);
+  assert.equal(calls.filter(call => call[0] === 'send').length, 8);
 });

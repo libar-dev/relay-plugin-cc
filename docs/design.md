@@ -480,8 +480,8 @@ pipe. After a failed start the hand-back is allowed at once and carries the star
 Code gives a subagent the `SubagentHandback` tool only in auto mode, and a subagent under the
 Workflow tool does not get it. Without it, SubagentStop blocks while the job runs, a message is
 owed, or the relay's final text differs from the result; one code fence around the whole result,
-with no tag or `text`, `txt`, `plaintext`, `markdown` or `md` after its opening backticks, is not a difference; a
-Workflow relay's state block may have the same one fence and no other. A message after the hand-back resumes
+indented by at most three spaces, with no tag or `text`, `txt`, `plaintext`, `plain`, `markdown`, `md`, `yaml`, `yml`, `ini`, `console` or `log`, in any case after its opening
+backticks, is not a difference; a Workflow relay's state block may have the same one fence and no other. A message after the hand-back resumes
 the relay; the hook delivers it at the next tool call, as a continue, and the next hand-back is
 rewritten the same way. The hand-back records every inbound entry the hook saw, delivered or not.
 SubagentStop lets a relay that handed back stop without a check only while its transcript is
@@ -1017,7 +1017,10 @@ would need `grok agent`.
 - The session record's format is undocumented (`protocol_version` 1.5). Check one job after every
   Kimi update.
 
-**The agent view.** A line typed into a relay's own view has no wake ([The wake](#the-wake)): it
+**The agent view.** The terminal's agent view has a prompt; the Code tab of Claude for Mac (3.6556.1) draws the
+agent's view with no input, so there a person reaches a relay only through the main thread, and Esc in that view
+does nothing; its Background tasks panel's Stop button stops the relay as `x to stop` does. A line typed into a
+relay's own view has no wake ([The wake](#the-wake)): it
 reaches the job at the relay's next call, up to 540 seconds later, or as a continue once the job
 has ended. Esc in a running relay's view, or `x` on its row in the footer's agent list, stops the
 relay agent and leaves its job running, as any end of a relay other than TaskStop does; Claude Code

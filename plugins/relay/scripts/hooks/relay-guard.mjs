@@ -75,8 +75,8 @@ function trimEnd(text) {
 
 function withoutOuterFence(text, expected) {
   // A relay may fence the result; only its outer envelope may differ.
-  if (/^(?:[ \t]*\r?\n)*`{3,}/.test(String(expected ?? ""))) return text;
-  const fenced = /^(?:[ \t]*\r?\n)*(`{3,})(?:text|txt|plaintext|markdown|md)?[ \t]*\r?\n([\s\S]*?)\r?\n\1$/.exec(trimEnd(text));
+  if (/^(?:[ \t]*\r?\n)* {0,3}`{3,}/.test(String(expected ?? ""))) return text;
+  const fenced = /^(?:[ \t]*\r?\n)* {0,3}(`{3,})(?:text|txt|plaintext|plain|markdown|md|yaml|yml|ini|console|log)?[ \t]*\r?\n([\s\S]*?)\r?\n {0,3}\1$/i.exec(trimEnd(text));
   return fenced ? fenced[2] : text;
 }
 
@@ -438,7 +438,7 @@ async function handleSubagentStop(input, env = process.env) {
   if (expected != null && !matches) {
     problems.push({
       kind: "final-message",
-      reason: `Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else${stateBlock ? "" : ", with no code fence around it"}:\n${expected}`
+      reason: `Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n${expected}`
     });
   }
   if (problems.length === 0) {
