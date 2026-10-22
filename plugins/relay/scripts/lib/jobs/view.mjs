@@ -7,8 +7,8 @@ import path from "node:path";
 
 import { isWorkerAlive } from "./lease.mjs";
 import { isWorkerLease, readLease } from "./lease.mjs";
-import { jobPaths, readJob, TERMINAL_STATES } from "./store.mjs";
-import { messageAccount, readRelayHandbacks, readRelayViolations } from "./messages.mjs";
+import { jobPaths, readJob, readJsonOrNull, TERMINAL_STATES } from "./store.mjs";
+import { messageAccount, readJobMessages, readRelayHandbacks, readRelayViolations } from "./messages.mjs";
 
 export const EXIT = {
   ok: 0,
@@ -64,6 +64,8 @@ export function loadJobView(jobDir, options = {}) {
     const account = messageAccount(jobDir);
     const relayViolations = readRelayViolations(jobDir);
     const handbacks = readRelayHandbacks(jobDir);
+    const messages = readJobMessages(jobDir);
+    const lastToolAt = readJsonOrNull(path.join(jobDir, "relay-guard.json"))?.lastToolAt ?? null;
     const again = readJob(jobDir);
     if (!again || jobVersion(again) !== jobVersion(job)) {
       if (pass < VIEW_READS) continue;
@@ -78,7 +80,7 @@ export function loadJobView(jobDir, options = {}) {
     const undelivered = workerLive ? [] : account.undelivered;
     return {
       job, jobDir, paths, ...view, hasReport, report: hasReport ? read.text : null, reportPath: hasReport ? read.path : null,
-      undelivered, dropped: account.dropped, relayViolations, handbacks
+      undelivered, dropped: account.dropped, relayViolations, handbacks, ...messages, lastToolAt
     };
   }
 }
@@ -188,7 +190,7 @@ export function backendLines(request) {
 
 export function backendJson(request) {
   const backend = backendFor(request);
-  return { ...(backend === DEFAULT_BACKEND ? {} : { backend: backend.name }), ...backend.view.json(request) };
+  return { backend: backend.name, ...backend.view.json(request) };
 }
 
 export function backendSettingLines(request) {
@@ -363,6 +365,8 @@ export function jobViewJson(view) {
     deadReason: view.deadReason,
     sessionId: view.job.sessionId ?? null,
     turnId: view.job.turnId ?? null,
+    // The Claude Code session the job was started from (its relay's), unlike `sessionId`, the backend's.
+    claudeSessionId: view.job.launchedBy?.claudeSessionId ?? null,
     model: view.job.request?.model ?? null,
     effort: view.job.request?.effort ?? null,
     ...backendJson(view.job.request),
@@ -374,18 +378,41 @@ export function jobViewJson(view) {
     attempts: Array.isArray(view.job.attempts) ? view.job.attempts.length : 0,
     errorMessage: view.job.errorMessage ?? null,
     createdAt: view.job.createdAt ?? null,
+    updatedAt: view.job.updatedAt ?? null,
     completedAt: view.job.completedAt ?? null,
     jobDir: view.jobDir,
     reportPath: view.hasReport ? view.reportPath : null,
+    hasReport: Boolean(view.hasReport),
     summary: summarizeJob(view),
-    relay: view.job.relay ?? null,
+    relay: view.job.relay ? { ...view.job.relay, lastToolAt: view.lastToolAt ?? null } : null,
     relayViolations: view.relayViolations ?? [],
     handedBackAt: view.job.relay ? handedBackAt(view) : null,
+    notHandedBack: notHandedBack(view),
+    openMessages: view.openMessages ?? 0,
+    messages: view.messages ?? [],
     automaticResumes: view.job.automaticResumes ?? [],
     attemptRecords: view.job.attempts ?? [],
     server: view.job.server ?? null,
     undelivered: view.undelivered ?? [],
     dropped: view.dropped ?? []
+  };
+}
+
+export function jobRowJson(view) {
+  const { attemptRecords, server, messages, ...row } = jobViewJson(view);
+  const relay = row.relay;
+  return {
+    ...row,
+    errorMessage: firstLine(row.errorMessage) ? Array.from(firstLine(row.errorMessage)).slice(0, 200).join("") : null,
+    relay: relay ? {
+      agentId: relay.agentId ?? null, workflowRunId: relay.workflowRunId ?? null,
+      label: relay.label ?? null, phase: relay.phase ?? null,
+      adopted: relay.previous?.length ?? 0, lastToolAt: relay.lastToolAt ?? null
+    } : null,
+    relayViolations: row.relayViolations.map(entry => ({
+      at: entry.at ?? null, kind: entry.kind ?? null,
+      reason: entry.reason == null ? null : String(entry.reason).split(/\r?\n/)[0]
+    }))
   };
 }
 

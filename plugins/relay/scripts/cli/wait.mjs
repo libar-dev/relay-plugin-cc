@@ -1,4 +1,4 @@
-import { parseCommandInput, envNumber, sleep, outputResult } from "./shared.mjs";
+import { parseCommandInput, envNumber, sleep, printJson } from "./shared.mjs";
 import { default as process } from "node:process";
 import { resumeDeadJobOnce } from "../lib/worker/recovery.mjs";
 import { findJobDir, jobPaths, readJsonOrNull } from "../lib/jobs/store.mjs";
@@ -60,6 +60,11 @@ export async function handleWait(argv) {
   }
   if (!view) {
     // Still busy at the deadline: it is at work, as a job that still runs is.
+    if (options.json) {
+      printJson("wait", { error: { kind: "busy", message: busy ? busy.message : "The job is busy. Try again." } });
+      process.exitCode = EXIT.running;
+      return;
+    }
     if (options["exit-zero-while-running"]) process.stdout.write(`${STILL_RUNNING_LINE}\n`);
     process.stderr.write(`${busy ? busy.message : "The job is busy. Try again."}\n`);
     process.exitCode = options["exit-zero-while-running"] ? EXIT.ok : EXIT.running;
@@ -67,7 +72,7 @@ export async function handleWait(argv) {
   }
   const stillRunning = Boolean(options["exit-zero-while-running"]) && !isTerminalView(view);
   if (options.json) {
-    outputResult({ ...jobViewJson(view), report: view.hasReport && !options["state-only"] ? view.report : null }, true);
+    printJson("wait", { ...jobViewJson(view), report: view.hasReport && !options["state-only"] ? view.report : null });
   } else {
     process.stdout.write(`${stillRunning ? `${STILL_RUNNING_LINE}\n` : ""}${options["state-only"] ? renderJobBlock(view) : renderJobWithReport(view)}`);
   }

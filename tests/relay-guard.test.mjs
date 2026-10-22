@@ -35,7 +35,7 @@ import {
   workflowEntry
 } from "./support/relay-fixture.mjs";
 import { handleRelayHook, parseCompanionCommand } from "../plugins/relay/scripts/hooks/relay-guard.mjs";
-import { findRelayJob, parseRelayTranscript, promptSha256, readRelayPointer, relayAgentTypes, RELAY_BLOCK_BUDGET, stripRetrySuffix, transcriptCandidates, writeGuardState } from "../plugins/relay/scripts/lib/harness/relay.mjs";
+import { findRelayJob, parseRelayTranscript, promptSha256, readGuardState, readRelayPointer, relayAgentTypes, RELAY_BLOCK_BUDGET, stripRetrySuffix, transcriptCandidates, writeGuardState } from "../plugins/relay/scripts/lib/harness/relay.mjs";
 import { busyViews } from "./support/busy-view.mjs";
 import { parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { classifyHarnessEntry, SCHEMA_SENTENCE } from "../plugins/relay/scripts/lib/harness/workflow.mjs";
@@ -899,7 +899,8 @@ test("the state block prints dir: and where a relay job came from, labels on one
     workflowRunId: WORKFLOW,
     label: "relay-test",
     phase: "Test",
-    stringReturn: true
+    stringReturn: true,
+    lastToolAt: readGuardState(process.env, ctx.agentId, jobDirOf(ctx, jobId)).raw.lastToolAt ?? null
   });
   assert.ok(view.relay.promptUuid);
 });

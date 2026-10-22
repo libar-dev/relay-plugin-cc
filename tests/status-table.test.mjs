@@ -176,7 +176,8 @@ for (const build of [null, "a3801ed01234-dirty"]) {
       const output = run(process.execPath, [script, ...args], { cwd: work, env });
       assert.equal(output.status, 0, output.stderr);
       assert.ok(!output.stdout.includes("relay-version:"));
-      assert.ok(!output.stdout.includes("-dirty"));
+      if (args.includes("--json")) assert.equal(JSON.parse(output.stdout).relayBuild, build);
+      else assert.ok(!output.stdout.includes("-dirty"));
     }
   });
 }

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PLUGIN_VERSION } from "../plugins/relay/scripts/lib/util/plugin.mjs";
+import { PLUGIN_BUILD, PLUGIN_VERSION } from "../plugins/relay/scripts/lib/util/plugin.mjs";
 import { companion, finishJob, HEADER, makeHome, readJob, ROOT, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 
 const FIXTURE = path.join(ROOT, "tests/fixtures/codex-golden.json");
@@ -67,6 +67,16 @@ for (const inherited of [false, true]) {
     const expected = JSON.parse(fs.readFileSync(FIXTURE, "utf8"))[key];
     // The version follows the manifest; the fixture keeps the rest of the output fixed.
     for (const snapshot of expected.snapshots) {
+      const listing = snapshot.status;
+      Object.assign(listing, {
+        schema: "relay.status/1", relayVersion: "<version>", relayBuild: PLUGIN_BUILD,
+        scope: "repository", workflowRunId: null, active: false, limit: 50, nextCursor: null
+      });
+      for (const row of listing.jobs) {
+        delete row.attemptRecords;
+        delete row.server;
+        Object.assign(row, { backend: "codex", updatedAt: "<time>", hasReport: true, notHandedBack: false, openMessages: 0 });
+      }
       snapshot.row = snapshot.row.replace("\nfast-tier: allowed\n", `\nfast-tier: allowed\nrelay-version: ${PLUGIN_VERSION}\n`);
     }
     assert.deepEqual(actual, expected);

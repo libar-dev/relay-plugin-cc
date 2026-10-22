@@ -460,3 +460,54 @@ ThinkPad, on a smoke folder with the release build installed locally (`scripts/s
 no Fedora build (its Linux beta is for Debian 12+ and Ubuntu 22.04+), and an SSH session reads the ThinkPad's
 `~/.claude`, so the plugins and MCP servers there load as in the terminal. The app's own Claude Code (2.1.308 on both
 Macs) is above relay's floor.
+
+### D55. The companion's JSON: one object per command that names its shape (Phase 4 thread)
+
+Every `--json` output is one object on stdout whose first fields are `schema` (`relay.<command>/1`, raised when
+that command's shape changes), `relayVersion` and `relayBuild` (D37's commit). An error under `--json` is the same
+header with `error: { kind, message }` on stdout, nothing a reader needs on stderr, and the exit code it had: `busy`
+4, and `not-found`, `usage`, `attempt-changed` and `error` 1. A job object keeps today's fields and names, flat at
+the top, so a script that read `.state` or `.handedBackAt` reads them still; every field is present (null, false,
+0 or an empty list when it has no value), and `backend` is always set. `status` has two forms under one schema, a
+listing without a job and one job with it, as the command's arguments choose. Rejected: an envelope
+(`{ ok, data }`), which would move every field a script reads; a `bridge` command beside it (the plan's Rejected,
+a second interface); schema names per form, which would name the arguments, not the command.
+
+### D56. A JSON listing is pages of slim rows (Phase 4 thread)
+
+The status line and the board read listings through `$.process.run`, which keeps 4 MiB of stdout. A full row is
+mostly attempt records with server stderr tails (1.29 MB for 473 jobs), so a row leaves out `attemptRecords`, the
+server and the messages, and cuts the relay binding and the errors to what a list shows: 50 rows of a 300-job home
+with large attempt records came to 50 KB, read in 0.16 s. Pages are 50 rows by default and at most 200, newest
+first by `createdAt`, then job id, and a cursor names the last row's key, so a job created between pages never
+shifts them. `--active` keeps the jobs that are starting, running or dead, or owe messages; it skips a job whose
+stored state has ended and whose inbox owes nothing without viewing it. `--limit`, `--cursor` and `--active` are
+`--json` options: the text listing (`/relay:status`'s) is unchanged. One job's JSON keeps every field.
+
+### D57. `cancel --attempt` is checked by `cancel` and by the worker (Phase 4 thread)
+
+The board's Cancel names a job and an attempt; a continue or an automatic recovery can begin the next attempt
+between the press and the cancel. `cancel --attempt N` checks before it posts, the cancel message carries N and
+the worker answers `no-op` to one for another attempt (the window between `cancel`'s check and the worker taking
+the message), and `cancel` checks again before it kills after the grace and under the lease for a dead worker. A
+starting job's first attempt counts as 1. A refusal signals and writes nothing and is `attempt-changed`. After
+`cancel` has killed the attempt it was asked to, it checks no more: a relay's `wait --auto-resume` can see the
+killed worker's job as dead and start a recovery, and the review of the first version found that a check there
+would leave that recovery running, the job uncancelled. Without `--attempt` nothing changes; `/relay:cancel` and the
+TaskStop hook pass none.
+
+### D58. A TaskStop that cancelled a job records its hand-back (Phase 4 thread)
+
+Phase 3 left it open: such a job showed `not handed back`, though the TaskStop result carried the cancelled block,
+and the board would flag it as a lost result. The TaskStop hook appends `{ agentId, attempts, state: "cancelled",
+by: "TaskStop" }` to `relay-handbacks.jsonl` when its cancel ended the job, and only then. The `stop` check requires
+the record.
+
+### D59. The job's JSON carries each message's outcome, the relay's last call and the launching session (Phase 4 thread)
+
+The board shows how each message was taken and whether a running job's relay still lives, and routes Steer and
+Continue. So one job's JSON lists every message with its stage, a one-line preview (120 characters; the text stays in
+the job's files), the relay's transcript entry that carried it, and its outcome from `inbox/outcomes/`; `relay.lastToolAt`
+is the relay guard's record of the relay's last tool call (a relay calls at least every 540 s while its job runs);
+`claudeSessionId` is the Claude Code session the job was started from (`launchedBy`), which a relay of the
+Agent tool shares.

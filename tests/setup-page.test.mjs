@@ -45,7 +45,7 @@ test("the overview shows every backend home in one shape, ready, with no thread,
   const ctx = everyBackend(t, "home-probe");
   const { status, page: report } = page(ctx);
   assert.equal(status, 0);
-  assert.deepEqual(Object.keys(report).sort(), ["actionsTaken", "backends", "jobsHome", "nextSteps", "ready", "settings"]);
+  assert.deepEqual(Object.keys(report).sort(), ["actionsTaken", "backends", "jobsHome", "nextSteps", "ready", "relayBuild", "relayVersion", "schema", "settings"]);
   assert.deepEqual(report.settings, { fastTier: "off", mcpOff: [], reviewGate: false });
   assert.equal(report.jobsHome, ctx.jobs);
   assert.equal(report.ready, true);

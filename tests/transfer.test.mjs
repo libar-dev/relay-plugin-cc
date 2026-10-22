@@ -84,8 +84,12 @@ test("transfer reports an actionable upgrade error when native import is unsuppo
   });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /does not support Claude session transfer/);
-  assert.match(result.stderr, /@openai\/codex@latest/);
+  assert.equal(result.stderr, "");
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.schema, "relay.transfer/1");
+  assert.equal(payload.error.kind, "error");
+  assert.match(payload.error.message, /does not support Claude session transfer/);
+  assert.match(payload.error.message, /@openai\/codex@latest/);
 });
 
 test("transfer fails visibly when native import completes without a ledger record", () => {

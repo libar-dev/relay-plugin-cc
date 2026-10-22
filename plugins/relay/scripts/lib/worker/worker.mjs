@@ -213,6 +213,11 @@ async function runWorkerRound(jobDir, options, held) {
   const accept = (messages, recoveryCandidate = false) => {
     for (const message of messages) {
       if (message.kind === "cancel") {
+        const current = job.attempts?.length ?? 0;
+        if (message.attempt !== undefined && message.attempt !== current && !(message.attempt === 1 && current === 0)) {
+          outcome(message, { action: "no-op", reason: `attempt ${message.attempt} is not the job's current attempt (${current})` });
+          continue;
+        }
         cancelRequested = true;
         cancelMessage = message;
         continue;

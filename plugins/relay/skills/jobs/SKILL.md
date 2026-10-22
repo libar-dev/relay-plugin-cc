@@ -172,7 +172,7 @@ dir: ~/.relay-jobs/<repo>/<job>
 - `completed` means the job finished its answer, not that its commands passed. Read the report.
 - Lines that may appear: `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (messages to the job, acknowledged and not run yet; `resume` runs them; it says nothing about the report), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
 
-`status` marks a relay job that ended with no hand-back of its result `not handed back` (`handedBackAt: null` in `--json`): its caller died or gave up, and `C result <job>` has the report.
+`status` marks a relay job that ended with no hand-back of its result `not handed back` (`handedBackAt: null` in `--json`): its caller died or gave up, and `C result <job>` has the report. A job a `TaskStop` cancelled counts as handed back: the TaskStop result carried its block.
 
 A failed cancel stays pending while the job runs and tries remain. A terminal job closes it as done, and three started tries close it as failed.
 
@@ -199,7 +199,7 @@ A message reaches the job within seconds: the plugin's hooks module ends the rel
     const r = jobReturn(await agent(prompt, { agentType: 'relay:job', label: 'writer-3' }))
     if (r.state !== 'completed' || r.undelivered) return { step: 'writer-3', state: r.state, undelivered: r.undelivered, error: r.error, job: r.job }
 
-- The relay retypes the block. The hook accepts it with a line left out that restates the request or only informs (`relay:`, `model:`, `mode:`, `cwd:`, `session:`, `note:` and the like), never with an outcome line left out (`state:`, `job:`, `duration:`, `report:`, `dir:`, `error:`, `undelivered:` and the like) or any line changed. A return with no `state:` line comes from a relay that was let go or a Claude Code failure such as a usage limit, and its job may still run: find it by label with `C status --workflow <run> --json`.
+- The relay retypes the block. The hook accepts it with a line left out that restates the request or only informs (`relay:`, `model:`, `mode:`, `cwd:`, `session:`, `note:` and the like), never with an outcome line left out (`state:`, `job:`, `duration:`, `report:`, `dir:`, `error:`, `undelivered:` and the like) or any line changed. A return with no `state:` line comes from a relay that was let go or a Claude Code failure such as a usage limit, and its job may still run: find it by label with `C status --workflow <run> --json` (50 jobs a page; `--cursor <nextCursor>` lists the next).
 - A relay is a Claude agent and spends Claude usage for its job's whole run. When Claude's usage limit ends the relays, their jobs run on; collect them with `C status --workflow <run>` or `C status --all`.
 - Give a `relay:job` agent no `schema`. A script cannot read files either: for structured data, ask the brief for the shape, then hand `r.report` to a Claude agent that has the schema: `agent(\`Read ${r.report} and return its findings.\`, { schema: FINDINGS })`.
 - The agent holds its slot for the job's whole run, so size a launch by job length. `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` caps how many run at once.
@@ -223,7 +223,7 @@ You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:setup` and 
 | `C steer <job> --message-file F` | steer the running turn, or queue the message as the next turn |
 | `C continue <job> --message-file F` | a new turn on the same thread |
 | `C resume <job> [--message-file F]` | continue a dead or failed job |
-| `C cancel [<job>]` | interrupt the turn; if the job has not ended 10 s later, kill the worker; without a job, the only active job of this repository |
+| `C cancel [<job>] [--attempt N]` | interrupt the turn; if the job has not ended 10 s later, kill the worker; without a job, the only active job of this repository; with `--attempt N`, only while the job is at attempt N |
 | `C review [--backend B] [--model M] [--effort E] [--grok-home H] [--kimi-home H] [--base R \| --scope S]` | a read-only review in the foreground, recorded as a job; prints the review |
 | `C adversarial-review [the same flags] [focus]` | the same, with the adversarial prompt; exits 1 when the answer is not review JSON |
 | `C prune [--older-than 14d] [--all] [--dry-run]` | remove old ended jobs; live workers are kept |
@@ -233,6 +233,8 @@ You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:setup` and 
 | `C setup --backend codex\|grok\|zcode\|kimi [--grok-home H\|--kimi-home H] [--json]` | one backend home; exits 1 when it is not ready |
 
 A wide fan-out that needs no steering can start its jobs with `C start` a few seconds apart and collect them with `C wait` or `C status`; no Claude agent is held per job. Jobs started within the same second can hit a provider's request-rate limit. For Codex and Grok routes, the worker retries at 30, 60 and 120 s. ZCode and Kimi retry model calls themselves.
+
+`--json` prints one object whose first fields are `schema` (`relay.<command>/1`), `relayVersion` and `relayBuild`. An error under `--json` is that header with `error: { kind, message }` on stdout, `kind` one of `busy` (exit 4: try again), `not-found`, `usage`, `attempt-changed` or `error`. `C status --json` lists slim rows, newest first, 50 a page (`--limit N`, up to 200), with `nextCursor` for `--cursor`; `--active` lists only jobs that run, died or owe messages. One job (`C status <job> --json`, `result`, `wait`, `cancel`) has every field, among them `attemptRecords` and `messages`, each message with how the job took it.
 
 Exit codes of `wait` and `result`: `0` completed with a report, `3` ended without a report or with messages not yet run, `4` still running, `5` cancelled, including with a pending continuation because cancellation takes precedence, `1` usage error.
 

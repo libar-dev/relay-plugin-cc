@@ -120,6 +120,33 @@ words of the request.
 | `5` | cancelled; this wins over `3` |
 | `1` | usage error |
 
+### JSON for programs
+
+Every command that takes `--json` prints one JSON object, and only that, on stdout. Its first fields name the
+shape and the build: `schema` is `relay.<command>/1` (`relay.status/1`, `relay.cancel/1`, …), raised when that
+command's shape changes; `relayVersion` is the plugin's version, and `relayBuild` the commit of a build
+`scripts/smoke/install-local.sh` installed, else null. An error under `--json` is the same header with
+`error: { kind, message }`, also on stdout: `busy` (the job's record kept changing, exit 4, try again), `not-found`,
+`usage`, `attempt-changed` (below) or `error`. Every field is present, with null, false, 0 or an empty list when it
+has no value, and every job names its `backend`, Codex included. The status line and the board read this.
+
+- **One job** (`status <job>`, `result`, `wait`, `cancel`) is the full view: the state and its parts, the request,
+  `attemptRecords`, the relay binding with `lastToolAt` (the relay's last tool call: a relay calls at least every
+  540 seconds while its job runs), `handedBackAt` and `notHandedBack`, `claudeSessionId` (the Claude Code session
+  the job was started from), and `messages`: every message to the job, oldest first, with its stage, a one-line
+  preview, the relay's transcript entry that carried it, and its outcome, which says how the backend took it
+  (`steered`, `queued-next-turn`, `turn-started`, `dropped`, …). `openMessages` counts the work messages not yet
+  closed. `result` and `wait` add the report, `cancel` its actions.
+- **A listing** (`status`, `status --all`, `status --workflow <run>`) is bounded: slim rows (the full view without
+  `attemptRecords`, the server and the messages, with a short relay binding and one-line errors), newest first by
+  creation time and job id, 50 a page by default and at most 200 (`--limit`). `nextCursor` names the last row, and
+  `--cursor` lists the rows after it, so a job created meanwhile never shifts a page. `--active` lists only the jobs
+  that are starting, running or dead, or that owe messages. The text listing is unchanged. Before 3.0 the JSON
+  listing held every field of every job: 1.29 MB for 473 jobs, past what a hooks module's process call keeps
+  (4 MiB) at about 1,500 jobs.
+
+`check-header` keeps its text answer (`ok`, or `error: <message>` with exit 1), which the hooks module reads.
+
 ## Why each layer exists
 
 | Layer | What it owns |
@@ -317,6 +344,13 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   that worker has not ended the job within 10 seconds, `cancel` exits 4 and names the holder's role,
   so a relay tries again.
 - **An ended job** gets a no-op receipt, so every cancel is recorded as handled.
+- **An expected attempt.** `cancel --attempt N` cancels only while the job is at attempt N (a starting job's first
+  attempt counts as 1), so a cancel pressed on one attempt never stops a newer one that a continue or an automatic
+  recovery started meanwhile. It checks before it posts, the worker checks the message's attempt when it takes it
+  (and answers `no-op` for another), and `cancel` checks again before it kills the worker after the grace and under
+  the lease for a dead worker. A refused cancel signals and writes nothing, and says `attempt-changed`. Once it has
+  stopped the attempt it was asked to, a recovery that the kill set off is cancelled with it. Without `--attempt`
+  nothing changes.
 - **TaskStop on a relay.** A `PostToolUse` hook on `TaskStop` (`scripts/hooks/relay-stop.mjs`)
   takes the stopped agent's id from the tool's result, since the caller may have named the agent by
   its name, and finds the job through that id's relay pointer. When the agent is the job's current
@@ -329,7 +363,9 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   relays end, the jobs run on, and the `resumeFromRunId` that usually follows adopts them, which it
   never does for a cancelled job. The hook tells the caller which of the run's jobs keep running,
   with the command to cancel one. Cancel one Workflow job while its relay runs with the message
-  `cancel` to the relay's agent id, or at any time with `companion cancel`.
+  `cancel` to the relay's agent id, or at any time with `companion cancel`. A TaskStop that cancelled
+  the job records a hand-back (`by: "TaskStop"`): the caller got the cancelled block, so `status` does
+  not mark the job `not handed back`.
 
 ### Prune
 

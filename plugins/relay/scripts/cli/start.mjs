@@ -1,5 +1,5 @@
 import { BACKEND_HEADER_KEYS, backendHeaderValues } from "../lib/backends/index.mjs";
-import { readInputFile, createTaskJob, parseCommandInput, outputResult } from "./shared.mjs";
+import { readInputFile, createTaskJob, parseCommandInput, printJson } from "./shared.mjs";
 import { default as fs } from "node:fs";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
@@ -92,12 +92,13 @@ function relayProvenance(transcriptPath) {
 async function handleStartFromRelay(options) {
   const agentId = options["relay-agent"] || null;
   const transcriptPath = options["relay-transcript"] || null;
-  const fail = (reason) => {
+  const fail = (reason, kind = "usage") => {
     const text = `state: not started\nerror: ${String(reason).replace(/\s+/g, " ").trim()}\n`;
     if (agentId) {
       writeRelayPointer(process.env, { ...readRelayPointer(process.env, agentId), agentId, transcriptPath, startError: text, startFailedAt: nowIso() });
     }
-    process.stdout.write(text);
+    if (options.json) printJson("start", { error: { kind, message: String(reason) } });
+    else process.stdout.write(text);
     process.exitCode = EXIT.usage;
   };
   if (!agentId || !transcriptPath) {
@@ -106,7 +107,8 @@ async function handleStartFromRelay(options) {
   }
   const pointer = readRelayPointer(process.env, agentId);
   if (pointer.jobId) {
-    process.stdout.write(`job: ${pointer.jobId}\nerror: this relay already started job ${pointer.jobId}\n`);
+    if (options.json) printJson("start", { error: { kind: "usage", message: `this relay already started job ${pointer.jobId}` } });
+    else process.stdout.write(`job: ${pointer.jobId}\nerror: this relay already started job ${pointer.jobId}\n`);
     process.exitCode = EXIT.usage;
     return;
   }
@@ -136,7 +138,7 @@ async function handleStartFromRelay(options) {
     // Harness trailers dropped from the prompt (the worktree note, a reminder) are noted.
     request.notes = [...request.notes, ...(transcript.prompt.notes ?? [])];
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
+    fail(error instanceof Error ? error.message : String(error), error instanceof UsageError ? "usage" : "error");
     return;
   }
   // A string-return relay (under the Workflow tool) returns its final text, not a hand-back.
@@ -153,7 +155,9 @@ async function handleStartFromRelay(options) {
       appendRelayViolation(adoptable, { kind: "transcript", reason: `messages could not be checked: ${problem}`, agentId });
     }
     await deliverRelayMessages(adoptable, transcript.messages, { wait: false });
-    process.stdout.write(adoptedBlock(readJob(adoptable), adoptable));
+    const adopted = readJob(adoptable);
+    if (options.json) printJson("start", { jobId: adopted.id, state: loadJobView(adoptable).state, jobDir: adoptable, notes: adopted.request?.notes ?? [], ...backendJson(adopted.request) });
+    else process.stdout.write(adoptedBlock(adopted, adoptable));
     return;
   }
   const jobDir = createTaskJob(request, brief, {
@@ -166,7 +170,8 @@ async function handleStartFromRelay(options) {
     appendRelayViolation(jobDir, { kind: "transcript", reason: `messages could not be checked: ${problem}`, agentId });
   }
   await deliverRelayMessages(jobDir, transcript.messages, { wait: false });
-  process.stdout.write(startBlock(job, jobDir, request));
+  if (options.json) printJson("start", { jobId: job.id, state: job.state, jobDir, notes: request.notes, ...backendJson(request) });
+  else process.stdout.write(startBlock(job, jobDir, request));
 }
 
 
@@ -181,7 +186,7 @@ export async function handleStart(argv) {
   spawnWorker(jobDir, request.cwd);
   const job = readJob(jobDir);
   if (options.json) {
-    outputResult({ jobId: job.id, state: job.state, jobDir, notes: request.notes, ...backendJson(request) }, true);
+    printJson("start", { jobId: job.id, state: job.state, jobDir, notes: request.notes, ...backendJson(request) });
     return;
   }
   process.stdout.write(startBlock(job, jobDir, request));

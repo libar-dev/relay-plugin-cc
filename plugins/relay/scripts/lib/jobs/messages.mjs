@@ -171,6 +171,43 @@ export const CLOSED_ACTIONS = new Set([...DELIVERED_ACTIONS, "dropped", "skipped
 const WORK_KINDS = new Set(["steer", "continue", "resume"]);
 
 
+export function readJobMessages(jobDir) {
+  const paths = jobPaths(jobDir);
+  const relays = new Map();
+  const namesIn = (dir) => {
+    try { return fs.readdirSync(dir).filter(name => name.endsWith(".json") && !name.startsWith(".")); }
+    catch { return []; }
+  };
+  const relayDir = path.join(paths.inbox, "relay");
+  for (const name of namesIn(relayDir).sort()) {
+    const record = readJsonOrNull(path.join(relayDir, name));
+    if (record?.messageId) relays.set(record.messageId, { entry: record.uuid ?? name.slice(0, -5), at: record.at ?? null });
+  }
+  // Read pending before claimed so a message moved during the read keeps its latest stage.
+  const seen = new Map();
+  for (const [dir, stage] of [[paths.inbox, "pending"], [paths.claimed, "claimed"]]) {
+    for (const name of namesIn(dir)) {
+      const message = readJsonOrNull(path.join(dir, name));
+      if (!message?.id) continue;
+      const outcome = readOutcome(jobDir, message.id);
+      const line = String(message.text ?? "").split(/\r?\n/).find(line => line.trim()) ?? "";
+      seen.set(message.id, {
+        id: message.id, kind: message.kind ?? null, createdAt: message.createdAt ?? null, stage,
+        preview: Array.from(line.replace(/\s+/g, " ").trim()).slice(0, 120).join(""),
+        relay: relays.get(message.id) ?? null,
+        outcome: outcome ? {
+          action: outcome.action ?? null, at: outcome.at ?? null, reason: outcome.reason ?? null,
+          attempt: outcome.attempt ?? null, turnId: outcome.turnId ?? null
+        } : null
+      });
+    }
+  }
+  const messages = [...seen.values()].sort((a, b) => String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")) || a.id.localeCompare(b.id));
+  const openMessages = messages.filter(message => WORK_KINDS.has(message.kind) && !CLOSED_ACTIONS.has(message.outcome?.action)).length;
+  return { messages, openMessages };
+}
+
+
 function readClaimedMessages(jobDir) {
   const paths = jobPaths(jobDir);
   let names = [];

@@ -1,5 +1,5 @@
-import { backendNamed, backendWith } from "../lib/backends/index.mjs";
-import { parseCommandInput, resolveCommandCwd, createTaskJob, outputResult } from "./shared.mjs";
+import { backendFor, backendNamed, backendWith } from "../lib/backends/index.mjs";
+import { parseCommandInput, resolveCommandCwd, createTaskJob, printJson } from "./shared.mjs";
 import { default as fs } from "node:fs";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
@@ -52,23 +52,24 @@ export async function handleTask(argv) {
   if (options.background) {
     spawnWorker(jobDir, request.cwd);
     const job = readJob(jobDir);
-    outputResult(options.json ? { jobId: job.id, state: "starting", jobDir } : `job: ${job.id}\nstate: starting\ndir: ${jobDir}\n`, options.json);
+    if (options.json) printJson("task", { jobId: job.id, state: "starting", jobDir, backend: backendFor(request).name });
+    else process.stdout.write(`job: ${job.id}\nstate: starting\ndir: ${jobDir}\n`);
     return;
   }
   await runWorker(jobDir);
   const view = loadJobView(jobDir);
   const rawOutput = view.hasReport ? view.report : "";
   if (options.json) {
-    outputResult(
+    printJson("task",
       {
         jobId: view.job.id,
+        backend: backendFor(view.job.request).name,
         status: view.state === "completed" ? 0 : 1,
         state: view.state,
         sessionId: view.job.sessionId ?? null,
         rawOutput,
         errorMessage: view.job.errorMessage ?? null
-      },
-      true
+      }
     );
   } else {
     process.stdout.write(renderJobWithReport(view));
