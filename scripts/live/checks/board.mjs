@@ -57,7 +57,7 @@ export function focusedText(screen) {
   return text.trim();
 }
 export const steerText = (kind, backend) => `board steer ${kind} ${backend}`;
-export const continueText = (kind, backend) => `board continue ${kind} ${backend}: run the shell command \`sleep 60\` exactly once and wait for it. Then reply with one line: board continued ${kind} ${backend}.`;
+export const continueText = (kind, backend) => `board continue ${kind} ${backend}: run sleep 60 once, then reply one line`;
 const brief = backend => `Run the shell command \`sleep 120\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Then reply with one line: board done ${backend}. If a queued message arrives as a later turn, reply with one line without sleeping again.`;
 export function boardWorkflow(backends) {
   return 'export const meta = { name: \'live-board\', description: \'Board Workflow relays\' }\n' +
@@ -102,6 +102,20 @@ function relayFiles(input, job, evidence) {
     .filter(file => path.basename(file).includes(job.agentId) || readTranscript(file).some(entry => entry.agentId === job.agentId));
   evidence.transcripts.push(...files.filter(file => !evidence.transcripts.includes(file)));
   return files.map(file => path.relative(input.transcript.replace(/\.jsonl$/, ''), file)).sort();
+}
+
+// Counts distinguish appended entries even when a reused transcript has no timestamps.
+function workflowTranscripts(input, item, evidence) {
+  const root = input.transcript.replace(/\.jsonl$/, '');
+  const files = new Set([...filesUnder(item.folder, file => file.endsWith('.jsonl')),
+    ...relayFiles(input, item, evidence).map(file => path.join(root, file))]);
+  evidence.transcripts.push(...[...files].filter(file => !evidence.transcripts.includes(file)));
+  return [...files].map(file => [path.relative(root, file), readTranscript(file)]);
+}
+function handback(jobDir, attempt) {
+  const file = path.join(jobDir, 'relay-handbacks.jsonl');
+  return fs.existsSync(file) && readTranscript(file).findLast(entry =>
+    entry.attempts === attempt && (ended(entry) || entry.state === 'dead'));
 }
 
 const hasRow = (screen, job) => screen.split('\n').some(line => line.includes(`${job.id} · ${job.request.backend} · `) && / · attempt \d+\b/.test(line));
@@ -190,7 +204,7 @@ export default {
       await waitFor(`focus on ${wanted}`, async () => {
         const inverse = focusedText(await waitIdle(until));
         if (wanted instanceof RegExp ? wanted.test(inverse) : inverse.includes(wanted)) return true;
-        // ctrl+x Tab gives the pane the keys with its ring on nothing, and Tab walks the ring from there.
+        // ctrl+x Tab gives the pane the keys on the selected or first row; Tab walks from there.
         // Asked again while the pane holds the keys, it hands them back, so it is asked once, and again
         // only after polls that showed no ring. Esc goes first: a ctrl+x right after a typed command is lost.
         if (inverse) blind = 0;
@@ -243,20 +257,23 @@ export default {
       await select(item);
       const label = action === 'continue' ? 'Continue:' : item.backend === 'kimi' ? 'Queue next turn:' : 'Steer:';
       await click(label);
-      // Clear the field left by a previous selection before typing literal text.
+      // Clear any draft for this job before typing literal text.
       bytes('05', '15');
       const text = action === 'steer' ? steerText(item.kind, item.backend) : continueText(item.kind, item.backend);
       drive(['keys', run.pane, '-l', text]);
       const files = item.kind === 'workflow' ? relayFiles(input(), item, evidence) : undefined;
       const receipt = { runId: run.runId, sessionId: run.sessionId, jobId: item.job.id, kind: item.kind, backend: item.backend, action, text, at: stamp() };
-      if (files) receipt.relayFiles = files;
+      if (files) {
+        receipt.relayFiles = files;
+        receipt.relayEntries = Object.fromEntries(workflowTranscripts(input(), item, evidence).map(([file, entries]) => [file, entries.length]));
+      }
       saved.actions.push(receipt); bytes('0d'); ctx.save();
       // An Enter can be lost while the session redraws. The field then keeps its text and nothing
       // was sent, so pressing again cannot send the message twice.
       for (let tries = 1; ; tries++) {
         const until = now() + 4000;
         let pending = true;
-        while (now() < until && (pending = plain(drive(['screen-escapes', run.pane])).includes(`${label} ${text}`))) await sleep(250);
+        while (now() < until && (pending = plain(drive(['screen-escapes', run.pane])).includes(`${label} board ${action} ${item.kind} ${item.backend}`))) await sleep(250);
         if (!pending || tries === 3) break;
         await click(label); bytes('0d');
       }
@@ -278,8 +295,11 @@ export default {
         return ended(job) && (item.backend !== 'kimi' || job.attempts.length >= 2);
       }), 300000);
       // Cancel each Workflow continuation promptly, before its 60-second sleep can finish.
+      const continued = [];
       for (const item of jobs) {
-        await send(item, 'continue');
+        const action = await send(item, 'continue');
+        const message = messageFor(item.jobDir, action);
+        continued.push({ item, attempt: readJson(path.join(item.jobDir, 'inbox/outcomes', `${message.id}.json`)).attempt });
         if (item.kind !== 'workflow') continue;
         await waitFor('continued turn running', () => readJob(item.jobDir).state === 'running');
         const attempt = readJob(item.jobDir).attempts.at(-1).attempt;
@@ -288,7 +308,8 @@ export default {
         await waitFor('cancel confirmation', async () => {
           if (plain(drive(['screen-escapes', run.pane])).includes(`Cancel job ${item.job.id}, attempt ${attempt}?`)) return true;
           // The first press only asks; pressing it again before the question shows asks again.
-          if (now() - cancelAt > 3000) { await click('[ Cancel ]'); cancelAt = now(); }
+          const cell = elementCell(drive(['screen-escapes', run.pane]), '[ Cancel ]');
+          if (cell && now() - cancelAt > 3000) { bytes(...clickBytes(cell)); cancelAt = now(); }
           return false;
         });
         capture(`confirm-${item.backend}`);
@@ -305,7 +326,10 @@ export default {
         }, 15000, Date.parse(receipt.at));
         capture(`cancel-${item.backend}`);
       }
-      await waitFor('Agent continuations to end', () => jobs.every(item => ended(readJob(item.jobDir))), 120000);
+      await waitFor('Agent continuations to be handed back', () => continued.filter(({ item }) => item.kind === 'agent').every(({ item, attempt }) => {
+        const target = readJob(item.jobDir).attempts.find(entry => entry.attempt === attempt);
+        return target && ended(target) && handback(item.jobDir, attempt);
+      }), 600000);
       drive(['stop', run.pane]);
       const wide = { sessionId: run.sessionId, pane: run.pane, transcript: run.transcript, debugLog: run.debugLog,
         startupEvidence: run.startupEvidence, promptSentAt: run.promptSentAt };
@@ -382,6 +406,12 @@ export default {
           } else {
             route(item, action, message);
             if (kind === 'workflow') {
+              if (!action.relayEntries || typeof action.relayEntries !== 'object') throw new Error('Missing Workflow transcript snapshot before the press.');
+              for (const [file, entries] of workflowTranscripts(input, item, evidence)) {
+                const before = action.relayEntries[file] ?? 0;
+                if (!Number.isInteger(before) || before < 0 || before > entries.length) throw new Error('Invalid Workflow transcript snapshot.');
+                if (entries.slice(before).some(entry => JSON.stringify(entry).includes(action.text))) throw new Error('Workflow action text reached a relay transcript after the press.');
+              }
               const after = relayFiles(input, item, evidence);
               if (!Array.isArray(action.relayFiles) || after.some(file => !action.relayFiles.includes(file))) throw new Error('Workflow action started a new relay loop.');
             }
@@ -391,6 +421,12 @@ export default {
               if (!previous?.endedAt || !ended(previous) || !(Date.parse(previous.endedAt) <= at) || !target || target.attempt !== previous.attempt + 1 ||
                   target.messageId !== message.id || target.source !== 'continue' || outcome.action !== 'turn-started') throw new Error('Continue has no new attempt after the job ended.');
               requireVersion(target, input.relayVersion);
+              if (kind === 'agent') {
+                const returned = handback(jobDir, target.attempt);
+                if (!ended(target) || !returned || !(Date.parse(returned.at) >= Date.parse(target.endedAt) && Date.parse(returned.at) < end)) {
+                  throw new Error('Agent continuation has no terminal hand-back for its attempt before the runner finished.');
+                }
+              }
               elapsed = seconds(target.startedAt, action.at, 60, 'Continue');
             } else {
               if (!active) throw new Error('Steer did not target a running attempt.');

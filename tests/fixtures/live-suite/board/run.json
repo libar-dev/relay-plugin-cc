@@ -29,7 +29,7 @@
         "backend": "codex",
         "action": "continue",
         "at": "2026-10-22T10:02:30.000Z",
-        "text": "board continue agent codex: run the shell command `sleep 60` exactly once and wait for it. Then reply with one line: board continued agent codex."
+        "text": "board continue agent codex: run sleep 60 once, then reply one line"
       },
       {
         "runId": "synthetic-run",
@@ -42,7 +42,12 @@
         "text": "board steer workflow codex",
         "relayFiles": [
           "subagents/workflows/wf-board/agent-workflow-codex.jsonl"
-        ]
+        ],
+        "relayEntries": {
+          "subagents/workflows/wf-board/agent-workflow-codex.jsonl": 1,
+          "subagents/workflows/wf-board/agent-workflow-kimi.jsonl": 1,
+          "subagents/workflows/wf-board/journal.jsonl": 2
+        }
       },
       {
         "runId": "synthetic-run",
@@ -52,10 +57,15 @@
         "backend": "codex",
         "action": "continue",
         "at": "2026-10-22T10:02:30.000Z",
-        "text": "board continue workflow codex: run the shell command `sleep 60` exactly once and wait for it. Then reply with one line: board continued workflow codex.",
+        "text": "board continue workflow codex: run sleep 60 once, then reply one line",
         "relayFiles": [
           "subagents/workflows/wf-board/agent-workflow-codex.jsonl"
-        ]
+        ],
+        "relayEntries": {
+          "subagents/workflows/wf-board/agent-workflow-codex.jsonl": 1,
+          "subagents/workflows/wf-board/agent-workflow-kimi.jsonl": 1,
+          "subagents/workflows/wf-board/journal.jsonl": 2
+        }
       },
       {
         "runId": "synthetic-run",
@@ -85,7 +95,7 @@
         "backend": "kimi",
         "action": "continue",
         "at": "2026-10-22T10:02:30.000Z",
-        "text": "board continue agent kimi: run the shell command `sleep 60` exactly once and wait for it. Then reply with one line: board continued agent kimi."
+        "text": "board continue agent kimi: run sleep 60 once, then reply one line"
       },
       {
         "runId": "synthetic-run",
@@ -98,7 +108,12 @@
         "text": "board steer workflow kimi",
         "relayFiles": [
           "subagents/workflows/wf-board/agent-workflow-kimi.jsonl"
-        ]
+        ],
+        "relayEntries": {
+          "subagents/workflows/wf-board/agent-workflow-codex.jsonl": 1,
+          "subagents/workflows/wf-board/agent-workflow-kimi.jsonl": 1,
+          "subagents/workflows/wf-board/journal.jsonl": 2
+        }
       },
       {
         "runId": "synthetic-run",
@@ -108,10 +123,15 @@
         "backend": "kimi",
         "action": "continue",
         "at": "2026-10-22T10:02:30.000Z",
-        "text": "board continue workflow kimi: run the shell command `sleep 60` exactly once and wait for it. Then reply with one line: board continued workflow kimi.",
+        "text": "board continue workflow kimi: run sleep 60 once, then reply one line",
         "relayFiles": [
           "subagents/workflows/wf-board/agent-workflow-kimi.jsonl"
-        ]
+        ],
+        "relayEntries": {
+          "subagents/workflows/wf-board/agent-workflow-codex.jsonl": 1,
+          "subagents/workflows/wf-board/agent-workflow-kimi.jsonl": 1,
+          "subagents/workflows/wf-board/journal.jsonl": 2
+        }
       },
       {
         "runId": "synthetic-run",

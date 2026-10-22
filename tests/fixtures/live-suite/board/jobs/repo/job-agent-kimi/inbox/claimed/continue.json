@@ -2,5 +2,5 @@
   "id": "continue",
   "kind": "continue",
   "createdAt": "2026-10-22T10:02:31.000Z",
-  "text": "board continue agent kimi: run the shell command `sleep 60` exactly once and wait for it. Then reply with one line: board continued agent kimi."
+  "text": "board continue agent kimi: run sleep 60 once, then reply one line"
 }

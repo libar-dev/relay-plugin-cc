@@ -3000,6 +3000,55 @@ for (const [name, change, reason] of [
   });
 }
 
+for (const action of ['steer', 'continue']) {
+  for (const file of ['agent-workflow-codex.jsonl', 'agent-workflow-kimi.jsonl', 'nested/new-transcript.jsonl']) {
+    test(`board rejects ${action} text appended to Workflow transcript ${file}`, t => {
+      const dir = copy(t, 'board'), target = path.join(dir, 'transcript/subagents/workflows/wf-board', file);
+      const text = action === 'steer' ? steerText('workflow', 'codex') : continueText('workflow', 'codex');
+      const entries = fs.existsSync(target) ? readTranscript(target) : [];
+      // No timestamp or agent id: appending to the folder is sufficient evidence.
+      entries.push({ type: 'attachment', attachment: { type: 'queued_command', prompt: text,
+        origin: { kind: 'coordinator', plugin: 'relay' } } });
+      lines(target, entries);
+      const result = getCheck('board').analyze(boardInput(dir)).results[0];
+      assert.equal(result.result, 'fail'); assert.match(result.reason, /text reached a relay transcript after the press/);
+    });
+  }
+}
+
+test('board allows matching Workflow transcript text that predates the press', t => {
+  const dir = copy(t, 'board'), file = 'subagents/workflows/wf-board/agent-workflow-codex.jsonl';
+  const target = path.join(dir, 'transcript', file), entries = readTranscript(target);
+  entries.push(textEntry('user', steerText('workflow', 'codex')));
+  lines(target, entries);
+  edit(dir, 'run.json', run => {
+    for (const action of run.board.actions.filter(action => action.relayEntries)) action.relayEntries[file] = entries.length;
+  });
+  assert.ok(getCheck('board').analyze(boardInput(dir)).results.every(row => row.result === 'pass'));
+});
+
+test('board requires the Workflow transcript snapshot taken before the press', t => {
+  const dir = copy(t, 'board');
+  edit(dir, 'run.json', run => { delete run.board.actions.find(action => action.kind === 'workflow').relayEntries; });
+  const result = getCheck('board').analyze(boardInput(dir)).results[0];
+  assert.equal(result.result, 'fail'); assert.match(result.reason, /Missing Workflow transcript snapshot/);
+});
+
+for (const [name, change] of [
+  ['missing', () => []],
+  ['previous attempt', entries => entries.map(entry => ({ ...entry, attempts: 1 }))],
+  ['nonterminal', entries => entries.map(entry => ({ ...entry, state: 'running' }))],
+  ['before completion', entries => entries.map(entry => ({ ...entry, at: '2026-10-22T10:02:35Z' }))],
+  ['after shutdown', entries => entries.map(entry => ({ ...entry, at: '2026-10-22T10:03:56Z' }))]
+]) {
+  test(`board rejects an Agent continuation with a ${name} hand-back`, t => {
+    const dir = copy(t, 'board'), file = path.join(dir, boardAgent, 'relay-handbacks.jsonl');
+    lines(file, change(readTranscript(file)));
+    const result = getCheck('board').analyze(boardInput(dir)).results[0];
+    assert.equal(result.result, 'fail'); assert.match(result.reason, /no terminal hand-back for its attempt/);
+  });
+}
+
 test('board rejects a Kimi queue after 30 seconds and requires its later attempt', t => {
   const dir = copy(t, 'board');
   edit(dir, 'jobs/repo/job-agent-kimi/job.json', job => { job.messages[0].at = '2026-10-22T10:00:51Z'; });
@@ -3061,28 +3110,34 @@ test('board element search ignores transcript duplicates and handles styled fiel
   assert.equal(elementCell('job-mvjzvdlw-de4193aa · codex · running · attempt 1', 'job-mvjzvdlw-de4193aa'), null);
 });
 
-function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, outcomeDelay = 0, saveDelay = 0 } = {}) {
+function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, outcomeDelay = 0, saveDelay = 0, handbackDelay = 0, lostEnter = false, fieldWidth = 89, cancelRace = false } = {}) {
   const dir = temp(t), workDir = path.join(dir, 'work'), jobsHome = path.join(dir, 'jobs');
   fs.mkdirSync(workDir); fs.mkdirSync(jobsHome);
   const check = getCheck('board'), calls = [], run = { runId: 'synthetic-run', sessionId: 'board-session', completed: false };
   let time = Date.parse('2026-10-22T10:00:10Z'), selected, focus = -1, confirm = false, count = 0, handled = 0, command = '';
   let busyUntil = 0, paneFocused = false, prefix = false, stolen = 0, typed = false;
-  const pendingOutcomes = [], presses = [];
+  const pendingOutcomes = [], presses = [], drafts = new Map(), lost = new Set();
+  let endedAt, cancelAskedAt;
   const idleScreen = fs.readFileSync(path.join(fixture, 'board/lead-idle.txt'), 'utf8');
   const runningScreen = fs.readFileSync(path.join(fixture, 'board/lead-running.txt'), 'utf8');
   const ids = ['agent-codex', 'workflow-codex', 'agent-kimi', 'workflow-kimi'];
   const jobPath = id => path.join(jobsHome, `repo/job-${id}/job.json`);
   const job = id => read(jobPath(id));
   const saveJob = (id, value) => write(jobPath(id), value);
+  const fieldKey = () => `message:job-${selected}`;
   const field = () => job(selected).state === 'running' ? selected.endsWith('kimi') ? 'Queue next turn:' : 'Steer:' : 'Continue:';
   const elements = () => [...ids.map(id => `job-${id}`), ...(selected ? [field(), ...(confirm ? ['Yes', 'No'] : job(selected).state === 'running' ? ['Cancel'] : [])] : [])];
   const screen = () => {
     const rows = ids.map(id => `${selected === id ? '> ' : '  '}job-${id} · ${job(id).request.backend} · ${job(id).state} · attempt ${job(id).attempts.length}`);
-    if (selected) rows.push(`model ${job(selected).request.model} · effort low`, `relay ${job(selected).relay.label}`, field());
+    if (selected) rows.push(`model ${job(selected).request.model} · effort low`, `relay ${job(selected).relay.label}`, `${field()} ${drafts.get(fieldKey()) ?? ''}`.trimEnd().slice(0, fieldWidth));
     if (confirm) rows.push(`Cancel job job-${selected}, attempt ${job(selected).attempts.length}?`, '[ Yes ] [ No ]');
     else if (selected && job(selected).state === 'running') rows.push('[ Cancel ]');
     if (count === 1) {
       // Busy for the entire wide session; keyboard focus acquisition never works here.
+      if (paneFocused && focus >= 0 && focus < ids.length) {
+        const row = `job-${ids[focus]}`;
+        rows[focus] = rows[focus].replace(row, `\x1b[7m${row}\x1b[0m`);
+      }
       return [...rows.map(row => ' '.repeat(110) + '│' + row), runningScreen,
         '✻ Waiting for 4 background agents and 1 dynamic workflow to finish', '❯'].join('\n');
     }
@@ -3105,7 +3160,12 @@ function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, out
       }
     }
     if (run.board.actions.filter(a => a.action === 'cancel').length === 2 && handled >= 10) {
-      for (const id of ids.filter(id => id.startsWith('agent-'))) { const value = job(id); value.state = 'completed'; saveJob(id, value); }
+      endedAt ??= time;
+      for (const id of ids.filter(id => id.startsWith('agent-'))) {
+        const value = job(id); value.state = 'completed'; value.attempts.at(-1).state = 'completed'; saveJob(id, value);
+        if (time >= endedAt + handbackDelay) lines(path.join(jobsHome, `repo/job-${id}/relay-handbacks.jsonl`),
+          [{ attempts: value.attempts.at(-1).attempt, state: 'completed', at: new Date(time).toISOString() }]);
+      }
     }
   };
   const press = () => {
@@ -3115,6 +3175,8 @@ function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, out
       assert.equal(selected, id);
       assert.equal(elements()[focus], action.action === 'cancel' ? 'Yes' : field());
       if (action.action !== 'cancel') assert.equal(command, action.text);
+      if (lostEnter && action.action === 'continue' && !lost.has(id)) { lost.add(id); return; }
+      drafts.delete(fieldKey());
       presses.push({ action: { ...action }, at: time });
       handled = run.board.actions.length;
       if (action.action === 'continue') { value.state = 'running'; value.attempts.push({ attempt: value.attempts.length + 1 }); }
@@ -3122,17 +3184,22 @@ function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, out
       saveJob(id, value);
       write(path.join(jobsHome, `repo/${value.id}/inbox/claimed/${action.action}.json`), { id: action.action, kind: action.action, text: action.text, createdAt: action.at });
       const pending = { file: path.join(jobsHome, `repo/${value.id}/inbox/outcomes/${action.action}.json`),
-        value: { messageId: action.action, action: action.action === 'steer' ? 'steered' : 'turn-started' }, at: time + (typeof outcomeDelay === 'function' ? outcomeDelay(action.action) : outcomeDelay) };
+        value: { messageId: action.action, attempt: value.attempts.at(-1).attempt, action: action.action === 'steer' ? 'steered' : 'turn-started' }, at: time + (typeof outcomeDelay === 'function' ? outcomeDelay(action.action) : outcomeDelay) };
       pendingOutcomes.push(pending);
       if (pending.at === time) write(pending.file, pending.value);
     } else if (elements()[focus]?.startsWith('job-')) selected = elements()[focus].slice(4);
-    else if (elements()[focus] === 'Cancel') confirm = true;
+    else if (elements()[focus] === 'Cancel') {
+      if (cancelRace) cancelAskedAt ??= time;
+      else confirm = true;
+    }
   };
   const drive = (args, text) => {
     calls.push({ args, text, at: time });
     if (args[0] === 'screen-escapes') {
       if (failure === 'missing rows') return count === 1 && !command ? '❯' : 'Relay jobs';
-      return failure === 'missing field' && selected ? screen().replaceAll(field(), 'Hidden:') : screen();
+      const captured = failure === 'missing field' && selected ? screen().replaceAll(field(), 'Hidden:') : screen();
+      if (cancelAskedAt != null && time - cancelAskedAt > 3000) { confirm = true; cancelAskedAt = undefined; }
+      return captured;
     }
     if (count === 2 && ['keys', 'bytes'].includes(args[0])) assert.ok(time >= busyUntil, `sent ${args} before narrow prompt`);
     if (args[0] === 'keys') {
@@ -3140,6 +3207,7 @@ function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, out
       if (command !== '/relay-board') {
         assert.equal(paneFocused, true, 'text must go to the board');
         assert.equal(elements()[focus], field());
+        drafts.set(fieldKey(), command);
       }
     }
     if (args[0] !== 'bytes') return '';
@@ -3149,10 +3217,10 @@ function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, out
       const match = raw.match(/^\x1b\[<0;(\d+);(\d+)M\x1b\[<0;\1;\2m$/);
       assert.ok(match, 'one matching SGR left press and release');
       const x = Number(match[1]), y = Number(match[2]);
-      const row = failure === 'missing rows' ? '❯' : screen().split('\n')[y - 1];
+      const row = failure === 'missing rows' ? '❯' : screen().replace(/\x1b\[[0-9;]*m/g, '').split('\n')[y - 1];
       if (row === '❯') { assert.equal(x, 1); return ''; }
       const label = row.slice(x - 1);
-      const target = label.startsWith('job-') ? label.split(' · ')[0] : label.startsWith('[ Yes ]') ? 'Yes' : label.startsWith('[ Cancel ]') ? 'Cancel' : label;
+      const target = label.startsWith('job-') ? label.split(' · ')[0] : label.startsWith('[ Yes ]') ? 'Yes' : label.startsWith('[ Cancel ]') ? 'Cancel' : selected && label.startsWith(field()) ? field() : label;
       assert.ok(elements().includes(target), `click must hit first cell of an element: ${x},${y}`);
       paneFocused = true; focus = elements().indexOf(target);
       if (!selected || target !== field()) press();
@@ -3162,22 +3230,25 @@ function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, out
       if (['05', '15'].includes(byte)) {
         assert.equal(paneFocused, true, 'clear must go to the board');
         assert.equal(elements()[focus], field());
+        if (byte === '15') drafts.delete(fieldKey());
       }
       if (['18', '09', '1b'].includes(byte)) assert.equal(count, 2, 'wide session must never acquire keyboard focus');
       // As Claude Code 2.1.308 does: Esc returns the keys to the prompt and clears what a typed command left,
-      // which swallows a ctrl+x until then; ctrl+x Tab gives the pane the keys with the ring on nothing, or
-      // hands them back while it holds them; Tab walks the ring.
+      // which swallows a ctrl+x until then; ctrl+x Tab takes the keys on the selected or first row,
+      // or hands them back while it holds them; Tab walks the ring.
       if (byte === '1b') { paneFocused = false; focus = -1; typed = false; }
       if (byte === '18' && !typed) prefix = true;
       if (byte === '09') {
         if (stealFocus && (stolen === 0 || stealFocus === 'always')) {
           stolen++; paneFocused = false; prefix = false; focus = -1; busyUntil = time + 1000; return '';
         }
-        if (prefix) { paneFocused = !paneFocused; prefix = false; focus = -1; }
+        if (prefix) { paneFocused = !paneFocused; prefix = false; focus = paneFocused ? Math.max(0, ids.indexOf(selected)) : -1; }
         else if (paneFocused) focus = (focus + 1) % elements().length;
       }
       if (byte !== '0d') continue;
-      if (command === '/relay-board') { command = 'opened'; typed = count === 2; continue; }
+      if (command === '/relay-board') {
+        command = 'opened'; typed = count === 2; paneFocused = !stealFocus; focus = paneFocused ? 0 : -1; continue;
+      }
       if (count === 1) assert.equal(elements()[focus], field(), 'only field submission uses wide Enter');
       press();
     }
@@ -3193,6 +3264,7 @@ function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, out
         lines(path.join(dir, 'transcript.jsonl'), readTranscript(path.join(fixture, 'board/transcript.jsonl')));
         for (const id of ids) {
           const value = job(id); value.state = 'running'; value.attempts = value.attempts.slice(0, 1); saveJob(id, value);
+          fs.rmSync(path.join(jobsHome, `repo/job-${id}/relay-handbacks.jsonl`), { force: true });
           fs.rmSync(path.join(jobsHome, `repo/job-${id}/inbox`), { recursive: true });
         }
       }
@@ -3231,6 +3303,66 @@ test('board runTerminal clicks while wide is busy, uses narrow keys and saves ea
   assert.equal(ctx.run.sessionId, 'board-session');
   assert.equal(ctx.run.board.narrow.sessionId, 'narrow-session');
   assert.ok(calls.filter(call => call.args[0] === 'keys').every(call => call.args[2] === '-l'));
+});
+
+test('board continue text fits one 89-column field row for every backend', () => {
+  for (const kind of ['agent', 'workflow']) for (const backend of BACKENDS) {
+    const text = continueText(kind, backend);
+    assert.ok(`Continue: ${text}`.length <= 89);
+    assert.match(text, /run sleep 60 once, then reply one line$/);
+  }
+});
+
+test('board retries a lost Continue Enter with a clipped per-job field exactly once', async t => {
+  const { ctx, presses, calls, dependencies } = boardDriver(t, undefined, { lostEnter: true, fieldWidth: 45 });
+  await getCheck('board').runTerminal(ctx, dependencies);
+  assert.equal(ctx.run.completed, true);
+  const continues = presses.filter(({ action }) => action.action === 'continue');
+  assert.equal(continues.length, 4);
+  for (const { action, at } of continues) {
+    assert.ok(`Continue: ${action.text}`.length > 45);
+    assert.equal(at - Date.parse(action.at), 4000);
+  }
+  assert.equal(presses.length, 10);
+  assert.equal(calls.filter(call => call.args[0] === 'keys' && call.args.at(-1).startsWith('board continue')).length, 4);
+});
+
+test('board Cancel re-click tolerates the question replacing the button between captures', async t => {
+  const { ctx, presses, dependencies } = boardDriver(t, undefined, { cancelRace: true });
+  await getCheck('board').runTerminal(ctx, dependencies);
+  assert.equal(ctx.run.completed, true);
+  assert.equal(presses.filter(({ action }) => action.action === 'cancel').length, 2);
+});
+
+test('board uses the autofocus row immediately after opening either pane', async t => {
+  const { ctx, calls, dependencies } = boardDriver(t);
+  await getCheck('board').runTerminal(ctx, dependencies);
+  for (const phase of ['wide', 'narrow']) {
+    const screen = ctx.run.board.screens.find(screen => screen.phase === phase);
+    assert.equal(focusedText(fs.readFileSync(path.join(ctx.evidenceDir, screen.file), 'utf8')), 'job-agent-codex');
+  }
+  assert.equal(calls.some(call => call.args[0] === 'bytes' && call.args[1] === 'board-2' && call.args.includes('09')), false);
+});
+
+test('board keeps the wide session alive until every Agent continuation is handed back', async t => {
+  const { ctx, calls, presses, dependencies } = boardDriver(t, undefined, { handbackDelay: 9000 });
+  await getCheck('board').runTerminal(ctx, dependencies);
+  const stopped = calls.find(call => call.args[0] === 'stop');
+  assert.ok(stopped.at >= presses.at(-1).at + 9000);
+  for (const backend of ['codex', 'kimi']) {
+    const jobDir = path.join(ctx.jobsHome, `repo/job-agent-${backend}`);
+    const returned = readTranscript(path.join(jobDir, 'relay-handbacks.jsonl'))[0];
+    assert.equal(returned.attempts, readJob(jobDir).attempts.at(-1).attempt);
+    assert.ok(Date.parse(returned.at) <= stopped.at);
+  }
+});
+
+test('board bounds missing Agent hand-backs at ten minutes before stopping', async t => {
+  const { ctx, calls, presses, dependencies } = boardDriver(t, undefined, { handbackDelay: Infinity });
+  await assert.rejects(getCheck('board').runTerminal(ctx, dependencies), /Agent continuations to be handed back/);
+  assert.equal(ctx.run.completed, false);
+  assert.equal(calls.filter(call => call.args[0] === 'start').length, 1);
+  assert.equal(calls.find(call => call.args[0] === 'stop').at - presses.at(-1).at, 600000);
 });
 
 test('board idle detection distinguishes real spinner captures from completed turns', () => {
