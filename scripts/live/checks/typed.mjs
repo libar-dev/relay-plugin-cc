@@ -318,6 +318,21 @@ export default {
       return records.length > 1 || records.some(record => record.status === 'done') ? null :
         `${line} ledger ${records.length ? `status is ${records[0].status}` : 'record is missing'} for ${item.a.name}`;
     };
+    const waitDelivery = async (item, line) => {
+      // The ledger, inbox outcome and job attempts are written by different processes.
+      const bound = Math.min(deadline, now() + 20000);
+      while (true) {
+        signal?.throwIfAborted();
+        if (run.interrupted) throw new Error('Interrupted.');
+        try {
+          item.A = relayJob(input(), evidence, item.a.agentId);
+          return delivery(input(), item.A, run.typed[item.backend][line], line, item.backend);
+        } catch (error) {
+          if (now() >= bound) throw error;
+        }
+        await sleep(Math.min(500, bound - now()));
+      }
+    };
     const handbackPending = (item, after) => {
       item.A = relayJob(input(), evidence, item.a.agentId);
       const file = path.join(item.A.jobDir, 'relay-handbacks.jsonl');
@@ -369,16 +384,14 @@ export default {
           ready: async () => {
             const until = now() + (60 + 40 * run.backends.length + 150 * run.backends.indexOf(item.backend) + 120) * 1000;
             await waitFor(() => ledgerPending(item, 'A1'), until, `${item.a.name}-A1-ledger`);
-            item.A = relayJob(input(), evidence, item.a.agentId);
-            const delivered = delivery(input(), item.A, run.typed[item.backend].A1, 'A1', item.backend);
+            const delivered = await waitDelivery(item, 'A1');
             await waitFor(() => handbackPending(item, delivered.postedAt), until, `${item.a.name}-A1-handback`);
             handback(item.A, item.a, entries(), delivered.postedAt);
           },
           beforeSend: () => receipt(item, 'A2'),
           delivered: async () => {
             await waitFor(() => ledgerPending(item, 'A2'), now() + 60000, `${item.a.name}-A2-ledger`);
-            item.A = relayJob(input(), evidence, item.a.agentId);
-            item.a2 = delivery(input(), item.A, run.typed[item.backend].A2, 'A2', item.backend);
+            item.a2 = await waitDelivery(item, 'A2');
           }
         });
       }

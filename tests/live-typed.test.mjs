@@ -527,7 +527,7 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
   const controller = new AbortController();
   const dependencies = { signal: controller.signal, now: () => time, sleep: async ms => {
     calls.push(['sleep', ms]);
-    if (failure === 'timeout' || ms >= 1000) time += ms;
+    if (failure === 'timeout' || ms >= 500) time += ms;
     if (ms !== 1000 || !stage) return;
     const { jobDir, job, handbacks, relayFile, relay, ledger, offset } = saved[current.backend];
     if (stage === 'A1') {
@@ -1039,8 +1039,40 @@ test('typed analysis rejects a relay that resumed with another wait before C1', 
   assert.equal(row.result, 'fail'); assert.match(row.reason, /C1 did not resume the relay/);
 });
 
+for (const line of ['A1', 'A2']) for (const delay of [1000, 20000, null]) {
+  test(`typed terminal retries done ${line} delivery when its attempt ${delay === null ? 'never appears' : `appears after ${delay} ms`}`, async t => {
+    const { ctx, dependencies, dir, calls } = terminal(t);
+    const sleep = dependencies.sleep;
+    let ledgerAt, savedJob, retries = 0;
+    dependencies.sleep = async ms => {
+      await sleep(ms);
+      if (!fs.existsSync(path.join(dir, A, `inbox/relay/entry-${line}-codex.json`))) return;
+      if (ledgerAt === undefined) {
+        ledgerAt = dependencies.now();
+        savedJob = json(path.join(dir, A, 'job.json'));
+        write(path.join(dir, A, 'job.json'), { ...savedJob,
+          attempts: savedJob.attempts.filter(attempt => attempt.messageId !== `msg-${line}-codex`) });
+      } else if (ms === 500) {
+        retries++;
+        if (delay !== null && dependencies.now() - ledgerAt >= delay) write(path.join(dir, A, 'job.json'), savedJob);
+      }
+    };
+    if (delay === null) {
+      const message = `Missing new attempt carrying ${line}.`;
+      await assert.rejects(typed.runTerminal(ctx, dependencies), { message });
+      assert.equal(dependencies.now() - ledgerAt, 20000);
+      assert.equal(ctx.run.error, message);
+      assert.equal(calls.filter(call => call[0] === 'send').length, line === 'A1' ? 3 : 4);
+    } else {
+      const result = await typed.runTerminal(ctx, dependencies);
+      assert.equal(result.results[0].result, 'pass', result.results[0].reason);
+    }
+    assert.equal(retries, (delay ?? 20000) / 500);
+  });
+}
+
 for (const line of ['A1', 'A2']) for (const failure of ['inbox', 'outcome']) {
-  test(`typed terminal validates done ${line} ${failure} before waiting for hand-back`, async t => {
+  test(`typed terminal fails done ${line} ${failure} after the delivery bound before waiting for hand-back`, async t => {
     const { ctx, dependencies, dir, calls } = terminal(t);
     const sleep = dependencies.sleep;
     let invalidatedAt;
@@ -1057,11 +1089,11 @@ for (const line of ['A1', 'A2']) for (const failure of ['inbox', 'outcome']) {
         }
       });
     };
-    const reason = failure === 'inbox' ? new RegExp(`Inbox does not carry ${line} exactly once`) :
-      new RegExp(`Missing new attempt carrying ${line}`);
-    await assert.rejects(typed.runTerminal(ctx, dependencies), reason);
-    assert.equal(dependencies.now(), invalidatedAt);
-    assert.match(ctx.run.error, reason);
+    const message = failure === 'inbox' ? `Inbox does not carry ${line} exactly once.` :
+      `Missing new attempt carrying ${line}.`;
+    await assert.rejects(typed.runTerminal(ctx, dependencies), { message });
+    assert.equal(dependencies.now() - invalidatedAt, 20000);
+    assert.equal(ctx.run.error, message);
     assert.equal(calls.filter(call => call[0] === 'send').length, line === 'A1' ? 3 : 4);
   });
 }
