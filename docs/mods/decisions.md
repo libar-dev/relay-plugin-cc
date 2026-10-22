@@ -243,8 +243,10 @@ The plan had the module deliver a job's message with `$.session.send` as the rel
 2.1.308, a module's send always comes from the main conversation: it carries no sender agent from any loop, an
 `agentId` passed to it is dropped, `"main"` refuses it, and a peer reads it as the coordinator's. The relay agent
 can send as itself: it gets the `SendMessage` tool, and the `PreToolUse` guard takes the message from the job's
-outbox under the relay lock and rewrites the call's `message` and `to` with `updatedInput`; the hooks after the
-call record whether the send succeeded. The guard, not the job, decides the address and writes the header that
+outbox under the relay lock and rewrites the call's `message` and `to` with `updatedInput`; `PostToolUse` records
+whether the send succeeded. Measured: it fires for a subagent's and a Workflow agent's `SendMessage`, with the
+rewritten input and the result, and a failed send is `success: false` there; a denial fires no hook after the
+call, so the guard records its own. The guard, not the job, decides the address and writes the header that
 names the job. The relay never sees the text. Relay does not resend, so the guarantee is at most once, with a
 success, a failure or an unknown outcome on record. The answer to a question the job waits on goes back as the
 waiting tool call's result, because a steer ends that wait on no backend; how an answer, the deadline and a

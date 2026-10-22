@@ -15,7 +15,8 @@ from one run of relay end to end:
   MCP server that logs every request: GPT-6.1 Sol for Codex and ZCode, GPT-6 Astra for Grok and Kimi. No relay
   job ran in these.
 - **Claude Code.** Two Opus 5.5 workers ran Claude Code sessions in tmux panes, with Sonnet as the lead. One
-  measured the routes `SendMessage` already has, the other what a module and a plugin's hooks can do.
+  measured the routes `SendMessage` already has, the other what a module and a plugin's hooks can do. The lead
+  then measured what the hooks after a rewritten `SendMessage` see.
 - **T3 Code.** The lead repeated four of the routes in T3 threads: an agent's message to a busy and to an idle
   lead, from a background subagent and from a Workflow agent.
 - **A relay under the Workflow tool.** The lead ran one `relay:job` Workflow agent on Codex, on the 3.0.0-dev.2
@@ -164,8 +165,8 @@ What this means today, for relays that run under the Workflow tool:
 - A continue by `SendMessage` does not reach the job. The jobs skill already tells a Workflow to continue a
   finished job with `C continue <job>`.
 - The message `cancel` to a Workflow relay, which the Phase 3 branch's D42 and D44 name as the way to cancel one
-  Workflow agent's job, travels through such a fork. It was not measured. A forked id is also a background task that `TaskStop` can
-  stop.
+  Workflow agent's job, travels through such a fork. It was not measured. A forked id is also a background task
+  that `TaskStop` can stop.
 
 ## A design that fits
 
@@ -190,12 +191,15 @@ agent that started the relay: the main thread (also for a relay a Workflow start
    `PreToolUse` the guard, under the relay lock, checks that the caller is the job's current relay, takes the
    oldest pending message, ties it to the call's `tool_use_id`, marks it `sending`, and rewrites `to` and `message`
    with `updatedInput`. It denies a relay `SendMessage` with nothing pending, with the wait command. `PostToolUse`
-   and `PostToolUseFailure` for that `tool_use_id` mark it `sent` or `failed`. A `sending` message with neither
-   becomes `unknown` at the relay's next hook. Relay does not resend, so the guarantee is at most once, with a
-   success, a failure or an unknown outcome on record. A message that is not `sent` shows on the job, as
-   `undelivered:` does today. `sent` means queued for the receiver, not read. The relay never sees the text, so it
-   cannot change it. Whether those two hooks fire for a subagent's `SendMessage`, and see the rewritten input, was
-   not measured.
+   for that `tool_use_id` marks it `sent` or `failed` from the result's `success`. A `sending` message with no
+   `PostToolUse` (the relay died mid-call) becomes `unknown` at the relay's next hook. Relay does not resend, so the
+   guarantee is at most once, with a success, a failure or an unknown outcome on record. A message that is not
+   `sent` shows on the job, as `undelivered:` does today. `sent` means queued for the receiver, not read. The relay
+   never sees the text, so it cannot change it. Measured with the stand-in agent type, from a background agent and
+   from a Workflow agent: `PostToolUse` fires with the same `tool_use_id`, the rewritten input and the result. A
+   send that fails, to an address that does not exist or to the reserved address the guard did not rewrite, is a
+   `PostToolUse` with `success: false` ("No agent named … is reachable"), not a `PostToolUseFailure`, and reaches
+   nobody. A denial in `PreToolUse` fires neither hook, so the guard records its own denials.
 3. **The address and the header.** The guard decides the address, never the job: `"main"` for a relay the main
    thread or a Workflow started, the orchestrator's id while it runs for a relay an orchestrator subagent started,
    and a peer only if the lead allowed it when it started the job. A message to an orchestrator that has ended

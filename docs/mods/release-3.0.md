@@ -25,22 +25,22 @@ it: where the work goes, what each step must pass, and how the work was done in 
    rebases.
 4. **Phase 4**, in this order: the companion's `--json` changed in place (the board reads it), the status line,
    the board pane.
-5. **Phase 6**, the investigation report, at any point. No code. Reported in
+5. **Phase 6**, the investigation report, at any point. No code (PR #9). Reported in
    [messages-from-a-job.md](messages-from-a-job.md).
 6. **The release PR**, `release/3.0` into `main`.
 
 ## What a phase PR must pass
 
 - `npm test`, `npm run check`, `claude plugin validate plugins/relay`, `claude plugin test plugins/relay`, and CI.
-  A phase that changes no plugin code, such as Phase 6's report, raises no version and runs no live check and no
-  smoke kit (D51).
 - A review by two model families before the bots: GPT-6.1 Sol through relay, and Opus 5.5. Each gets the brief
   and the code, not the author's conclusions.
 - CodeRabbit and Greptile, followed with T3's `watch_pull_request`. A finding is answered on its thread when it
   is fixed or declined, then the thread is resolved.
-- The phase's own checks in the live suite, in the terminal and in T3, on the Fedora ThinkPad, with their records
-  committed and `docs/live/capabilities.md` regenerated (`node scripts/live/suite.mjs table`).
-- The smoke kit (`relay-plugin-cc-smoke`) on the PR's head, installed with `scripts/smoke/install-local.sh`.
+- When the phase changes plugin code: its own checks in the live suite, in the terminal and in T3, on the Fedora
+  ThinkPad, with their records committed and `docs/live/capabilities.md` regenerated
+  (`node scripts/live/suite.mjs table`); and the smoke kit (`relay-plugin-cc-smoke`) on the PR's head, installed
+  with `scripts/smoke/install-local.sh`. A phase that changes no plugin code, such as Phase 6's report, raises no
+  version and runs neither (D51).
 - Its last commit updates plan.md: a review of every later phase in light of what the PR learned (the plan's
   rule 7), and the CHANGELOG and decisions.md entries.
 
