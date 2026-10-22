@@ -240,6 +240,15 @@ export default {
       const receipt = { runId: run.runId, sessionId: run.sessionId, jobId: item.job.id, kind: item.kind, backend: item.backend, action, text, at: stamp() };
       if (files) receipt.relayFiles = files;
       saved.actions.push(receipt); bytes('0d'); ctx.save();
+      // An Enter can be lost while the session redraws. The field then keeps its text and nothing
+      // was sent, so pressing again cannot send the message twice.
+      for (let tries = 1; ; tries++) {
+        const until = now() + 4000;
+        let pending = true;
+        while (now() < until && (pending = plain(drive(['screen-escapes', run.pane])).includes(`${label} ${text}`))) await sleep(250);
+        if (!pending || tries === 3) break;
+        await click(label); bytes('0d');
+      }
       await waitFor(`${action} accepted by the job`, () => {
         const messages = inboxMessages(item.jobDir).filter(message => message.text === text && Date.parse(message.createdAt) >= Date.parse(receipt.at));
         return messages.some(message => readJson(path.join(item.jobDir, 'inbox/outcomes', `${message.id}.json`), true));
