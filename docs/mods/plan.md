@@ -256,22 +256,27 @@ What shipped:
   waits for its pid to go, and follows the jobs to their end) and `spawn-check`.
 - Smoke tooling: `install-local.sh --name` gives a second folder its own install, since Claude Code keeps one
   marketplace registry per config; `uninstall-local.sh` changes nothing of a name whose ownership it cannot verify.
-- Two review rounds by GPT-6.1 Sol and Opus 5.5. Both rounds found, in both families, a way the spawn check could
-  refuse a launch `start` accepts (a relative path, then `mode: write`'s worktree roots), and the first found the
-  `stop` check crediting a cancel the hook had not made.
+- Two review rounds by GPT-6.1 Sol and Opus 5.5, and a third on the interrupt-note fix (D48). Both rounds found, in
+  both families, a way the spawn check could refuse a launch `start` accepts (a relative path, then `mode: write`'s
+  worktree roots), and the first found the `stop` check crediting a cancel the hook had not made.
 
-Live results (the Fedora machine, Claude Code 2.1.308, 3.0.0-dev.3 at 9487e38, Sonnet 5.5 lead; records in
-`docs/live/records/`, table in [docs/live/capabilities.md](../live/capabilities.md)):
+Live results (the Fedora machine, Claude Code 2.1.308, 3.0.0-dev.3, Sonnet 5.5 lead; records in
+`docs/live/records/`, table in [docs/live/capabilities.md](../live/capabilities.md)). The phase's own checks and
+`steer-main` ran on the final build, 1f274c4; the whole suite ran on f7e474b, which differs from it only in where
+the interrupt-note filter applies (D48):
 
 | Check | Terminal | T3 Code |
 |---|---|---|
-| `stop` | cancelled 0.3–0.5 s after the TaskStop | cancelled 0.4–0.6 s after it |
-| `session-end` | ran on, and completed 147–194 s after the session ended | terminal only |
+| `stop` | cancelled 0.2–1.4 s after the TaskStop | 0.2–1.1 s |
+| `session-end` | ran on, and completed 140–159 s after the session ended | terminal only |
 | `spawn-check` | refused at the spawn with the parser's message, all four backends | the same |
-| `steer-main`, `steer-workflow`, `steer-plugin`, `continue` (the module's second hook in place) | all pass: 1.7–4.4 s to the job's ledger | `steer-main`: 1.4–6.1 s |
+| `steer-main` | 2.0–4.0 s to the job's ledger | 2.2–13.3 s (Kimi's 13.3 s with two suites running at once; the limit is 30 s) |
+| `steer-workflow`, `steer-plugin`, `continue` (f7e474b) | 3.1–4.1 s | Phase 5's records stand |
 
-40 of 40 records passed. The smoke kit passed on the same build (workflow `wf_7d6ed8af-5c2`, then the plain fan-out,
-whose `hi-refused` was refused at the spawn with the parser's message).
+64 of 64 records passed on those two builds, and 40 of 40 on 9487e38 before the last two fixes. The cancels of about
+a second on 1f274c4 ran beside a T3 run and the smoke kit; alone they took 0.2–0.5 s. The smoke kit passed on the
+final build (workflow `wf_f2f4cd17-c20`, then the plain fan-out, whose `hi-refused` was refused at the spawn with the
+parser's message).
 
 ### After Phase 3: what held and what changed
 
