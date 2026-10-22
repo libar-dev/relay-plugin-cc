@@ -100,8 +100,12 @@ for (const ended of [false, true]) {
     ctx.append(pending, { type: "api-request", timestamp: new Date().toISOString() }, ctx.toolUse(command));
     const delivered = await runHookProcess(ctx, hookInput(ctx, "PreToolUse", { tool_name: "Bash", tool_input: { command } }));
     assert.equal(delivered.json.hookSpecificOutput.permissionDecision, "allow");
+    // The hook returns once the worker writes an outcome. A continue's (`accepted-next-turn`) comes
+    // before the worker has started the turn the fake records, so the turns are awaited, not read.
+    const carried = received => [...received.turns, ...received.steers].filter(text => text === "C: sent after the boundary.").length;
+    await waitFor(() => carried(codexReceived(ctx)) >= 1 && (!ended || codexReceived(ctx).turns.includes("B: continue the job.")));
     const received = codexReceived(ctx);
-    assert.equal([...received.turns, ...received.steers].filter(text => text === "C: sent after the boundary.").length, 1);
+    assert.equal(carried(received), 1);
     if (ended) assert.ok(received.turns.includes("B: continue the job."));
   });
 }
