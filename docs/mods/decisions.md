@@ -591,3 +591,26 @@ The parts:
     that explain the features.
 12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
     owner decides.
+
+### D63. The status line: what it counts, where it reads, and how often (Phase 4 thread)
+
+The hooks module pins one line for the session's repository with `$.ui.status`: `2 running · 1 dead · 3 owed`, which
+Claude Code draws as `⚠ relay: 2 running · 1 dead · 3 owed` (it puts the plugin's name before a plugin's status line,
+so the text leaves `relay: ` out). Running is `starting` and `running`, dead is `dead`, owed is the sum of the rows'
+`undeliveredCount`; a part at 0 is left out, and with all three at 0 the line is cleared. It reads
+`companion status --json --active --limit 200` in the session's directory, by argv with a 10 s timeout, one read at a
+time. More pages write the running count with a `+`; a busy answer keeps the line; any other failure shows
+`status unavailable` until the next good answer.
+
+It reads only while `$.session.surfaces()` is not empty, so in an Agent SDK host such as T3 Code, where nothing
+draws, the status line runs no process. The live check runs in the terminal only, for the same reason.
+
+The timer ticks every five seconds. While a count shows, every tick reads. While the line is cleared, a job can only
+appear through a start, which the module sees only when a `relay:job` agent spawns in this session. So a cleared line
+reads every thirty seconds, and on every tick for thirty seconds after a relay event the module saw: a `relay:job`
+spawn, a send that woke a relay, one of its `/relay:*` commands, or a busy answer (a job's record was being written).
+An idle session then runs `node` twice a minute, not twelve times. A job a `relay:job` agent of this session starts
+shows within about five seconds of its start, if the start comes within thirty seconds of the spawn. Any other start
+shows within thirty seconds: a review, a `companion start` the model runs in Bash, a relay whose start waited on a
+permission prompt, or a start from another session or a shell. A `tool.call` hook on Bash would catch the first three,
+at a worker hop on every command of every session; the line does not take that cost.
