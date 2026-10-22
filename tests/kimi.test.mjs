@@ -833,3 +833,60 @@ test("the record reader keeps Kimi's engine turns apart from its prompt turns: a
   assert.equal(wire.turns.get(0).report, "OWNDONE", "the prompt turn's last text, as Kimi ended it");
   assert.equal(wire.prompts.get("p0").turnId, 0);
 });
+
+// Read what the fake binary actually wrote, independently of the worker's wire reader.
+function kimiRecords(ctx, id) {
+  const job = readJob(ctx, id);
+  const root = path.join(job.request.kimiHome, "sessions");
+  const file = fs.readdirSync(root).map(bucket => path.join(root, bucket, job.sessionId, "agents", "main", "wire.jsonl")).find(file => fs.existsSync(file));
+  return fs.readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(record => record.type !== "metadata");
+}
+
+const lateRecordOrder = ["agent.message.appended", "agent.turn.started", "turn.prompt", "turn.ended", "prompt.completed", "agent.message.appended", "agent.turn.ended"];
+
+test("a final answer recorded after turn.ended and prompt.completed reaches the completed job's report before the settle grace", async t => {
+  const ctx = fixture(t, { lateMessages: { releaseFile: "release-final" }, answer: "The late final answer." });
+  ctx.env.RELAY_JOBS_KIMI_SETTLE_MS = "3000";
+  const { id } = startJob(ctx, HEADER, "[quick] Late record.");
+  // The worker has observed this turn, but the fake's engine still holds its final batch.
+  await waitFor(() => readJob(ctx, id).turnId && kimiRecords(ctx, id).some(record => record.type === "prompt.completed"));
+  assert.equal(readJob(ctx, id).state, "running");
+  assert.deepEqual(kimiRecords(ctx, id).map(record => record.type), lateRecordOrder.slice(0, 5));
+  assert.equal(fs.existsSync(path.join(jobDir(ctx, id), "report.md")), false);
+  fs.writeFileSync(path.join(ctx.work, "release-final"), "");
+  await finishJob(ctx, id);
+  assert.equal(readJob(ctx, id).state, "completed");
+  assert.equal(readJob(ctx, id).attempts.at(-1).hasReport, true);
+  assert.equal(report(ctx, id), "The late final answer.\n");
+  assert.deepEqual(kimiRecords(ctx, id).map(record => record.type), lateRecordOrder);
+  const result = companion(ctx, ["result", id]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /^report: none$/m);
+  assert.match(result.stdout, /The late final answer\./);
+  assert.deepEqual(events(ctx, id).filter(e => e.params?.update?.sessionUpdate === "agent_message_chunk").map(e => e.params.update.content.text), ["The late final answer."]);
+  assert.equal(requests(ctx, "session/prompt").length, 1);
+});
+
+test("a final answer arriving after the settle grace stays in the record and events, but the job completes with report: none", async t => {
+  const ctx = fixture(t, { lateMessages: { afterClose: true }, answer: "Too late for the report." });
+  const { id } = startJob(ctx, HEADER, "[quick] Past the grace.");
+  // No engine end until connection close: the grace must bound the wait. Close then releases
+  // real final records and ACP chunks, after the worker has already chosen its empty report.
+  const end = await finishJob(ctx, id, 3);
+  const job = readJob(ctx, id);
+  assert.equal(job.state, "completed");
+  assert.equal(job.attempts.at(-1).hasReport, false);
+  assert.equal(fs.existsSync(path.join(jobDir(ctx, id), "report.md")), false);
+  assert.match(end.stdout, /^report: none$/m);
+  const records = kimiRecords(ctx, id);
+  assert.deepEqual(records.map(record => record.type), lateRecordOrder);
+  assert.equal(records[5].message.message.content.find(part => part.type === "text").text, "Too late for the report.");
+  assert.ok(records[5].time - records[3].time >= Number(ctx.env.RELAY_JOBS_KIMI_SETTLE_MS), "the final record arrived after the grace");
+  assert.deepEqual(events(ctx, id).filter(e => e.params?.update?.sessionUpdate === "agent_message_chunk").map(e => e.params.update.content.text), ["Too late for the report."]);
+  assert.equal(requests(ctx, "session/prompt").length, 1, "no resend or automatic recovery");
+  assert.equal(ctx.kimi().starts.length, 1);
+  const result = companion(ctx, ["result", id]);
+  assert.equal(result.status, 3, result.stderr);
+  assert.match(result.stdout, /^report: none$/m);
+  assert.doesNotMatch(result.stdout, /Too late for the report\./);
+});

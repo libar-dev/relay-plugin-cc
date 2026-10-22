@@ -6,6 +6,12 @@ import { installFakeCodex } from "./fakes/codex.mjs";
 import { installFakeGrok } from "./fakes/grok.mjs";
 import { companion, finishJob, HEADER, jobDir, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 import { DEFAULT_RESUME_MESSAGE } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
+import { backendNamed } from "../plugins/relay/scripts/lib/backends/index.mjs";
+import { readLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
+import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
+import { createJobDir, jobPaths, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
+import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
+import { makeTempDir } from "./support/helpers.mjs";
 
 // Capacity backoff and cancellation
 {
@@ -166,4 +172,92 @@ import { DEFAULT_RESUME_MESSAGE } from "../plugins/relay/scripts/lib/worker/reco
       assert.deepEqual(readJob(ctx, id).capacityRetries.map(entry => entry.kind), [work ? "continuation" : "resend"]);
     });
   }
+}
+
+// Candidate Grok wordings, not recordings of real Grok capacity failures. Exercise the
+// private text matcher through runWorker, supplying TurnResults at the backend boundary
+// rather than inheriting the fake Grok's invented "capacity exhausted" rejection.
+// docs/design.md: Codex also supplies capacity:true for protocol error kinds; usage
+// quotas do not retry. docs/backends.md and docs/kimi.md: ZCode/Kimi set retryable:false
+// because they retry model calls themselves (Kimi includes 429 and 5xx).
+const capacityWordings = [
+  { message: "429", retry: true, missed: true },
+  { message: "HTTP 429: Too Many Requests", retry: true, missed: true },
+  { message: "rate limit exceeded", retry: true, missed: true },
+  { message: "rate-limit exceeded", retry: true, missed: true },
+  { message: "rate_limit_exceeded", retry: true, missed: true },
+  { message: "request quota exceeded: requests per minute", retry: true, missed: true },
+  { message: "resource exhausted", retry: true, missed: true },
+  { message: "resource-exhausted", retry: true, missed: true },
+  { message: "RESOURCE_EXHAUSTED", retry: true, missed: true },
+  { message: "server overloaded", retry: true },
+  { message: "capacity exhausted", retry: true },
+  { message: "Service is AT CAPACITY", retry: true },
+  { message: "Prompt rejected\n{\"detail\":\"capacity exhausted\"}", retry: true },
+  { message: "Rate limit reached for requests", retry: true },
+  { message: "RATE LIMIT REACHED FOR REQUESTS", retry: true },
+  // Error-kind names alone are text candidates, distinct from Codex's capacity flag.
+  { message: "serverOverloaded", retry: true },
+  { message: "rateLimitExceeded", retry: true, missed: true },
+  { backend: "codex", message: "Request rejected", flags: { capacity: true }, retry: true },
+  { backend: "codex", message: "usageLimitExceeded: usage quota resets in hours", retry: false },
+  { message: "monthly usage quota exceeded", retry: false },
+  { message: "permission denied", retry: false },
+  { message: "authentication failed: HTTP 401", retry: false },
+  { message: "invalid model: HTTP 400", retry: false },
+  { message: "connection closed unexpectedly", retry: false },
+  { message: "tool exited with code 1", retry: false },
+  { message: "Connection error.", retry: false }, // docs/kimi.md's recorded failure text
+  { message: null, retry: false },
+  { backend: "zcode", message: "capacity exhausted", flags: { retryable: false }, retry: false },
+  { backend: "kimi", message: "capacity exhausted", flags: { retryable: false }, retry: false },
+  { backend: "kimi", message: "HTTP 429: Too Many Requests", flags: { retryable: false }, retry: false },
+  { backend: "kimi", message: "HTTP 503: Service Unavailable", flags: { retryable: false }, retry: false }
+];
+
+for (const { backend = "grok", message, flags = {}, retry, missed } of capacityWordings) {
+  const label = `${backend}: ${message ?? "no error"}${flags.capacity ? " (capacity flag)" : ""}${flags.retryable === false ? " (backend retries)" : ""}`;
+  test(`worker capacity wording: ${label}`, {
+    ...(missed ? { todo: `Worker text matching misses transient capacity wording: ${message}` } : {})
+  }, async t => {
+    const root = makeTempDir("relay-capacity-wording-");
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const work = path.join(root, "work");
+    fs.mkdirSync(work);
+    const env = { RELAY_JOBS_HOME: path.join(root, "jobs"), RELAY_JOBS_CAPACITY_DELAYS_MS: "1" };
+    const { jobDir: dir } = createJobDir(work, "job-wording", env);
+    const brief = "Inspect the wording.";
+    fs.writeFileSync(jobPaths(dir).brief, brief);
+    writeJob(dir, {
+      id: "job-wording", kind: "task", state: "starting", createdAt: new Date().toISOString(),
+      request: buildLaunchRequest({ backend, model: "default", effort: "default", cd: work }),
+      pendingFirstTurn: true, attempts: []
+    });
+    const prompts = [];
+    let closed = false;
+    // No capacity flag on the text-only rows: only the worker's matcher can retry them.
+    t.mock.method(backendNamed(backend), "connect", async () => ({
+      server: { exitInfo: null },
+      open: async () => ({ sessionId: "wording-session" }),
+      delivered: () => false,
+      controlsReady: () => false,
+      async run({ prompt, onTurnId }) {
+        prompts.push(prompt);
+        onTurnId(`turn-${prompts.length}`);
+        return prompts.length === 1
+          ? { turnStatus: "failed", finalMessage: "", error: message === null ? null : { message }, ...flags }
+          : { turnStatus: "completed", finalMessage: "Recovered." };
+      },
+      close: async () => { closed = true; }
+    }));
+    const delays = [];
+    const job = await runWorker(dir, { env, sleep: async ms => { delays.push(ms); } });
+    assert.equal(closed, true);
+    assert.equal(readLease(dir), null);
+    assert.deepEqual(prompts, retry ? [brief, brief] : [brief], label);
+    assert.deepEqual(delays, retry ? [1] : [], label);
+    assert.deepEqual((job.capacityRetries ?? []).map(entry => [entry.kind, entry.error]), retry ? [["resend", message]] : [], label);
+    assert.equal(job.state, retry ? "completed" : "failed", label);
+    assert.equal(job.attempts.length, 1);
+  });
 }

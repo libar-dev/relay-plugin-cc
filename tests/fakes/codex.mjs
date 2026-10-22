@@ -481,8 +481,15 @@ rl.on("line", (line) => {
           break;
         }
         const status = BEHAVIOR.slice("turn-order-collab-".length);
+        // Deliberately malformed peer for the unknown-status rejection test. All other
+        // replies follow the pinned app-server schema in fixtures/codex-app-server-schema.
         const turn = buildTurn(state.lastTurnStart.turnId, status === "unknown-status" ? "waiting" : ["failed", "interrupted", "inProgress"].includes(status) ? status : "completed", status === "failed" ? { message: "read found failure" } : null);
-        const response = { id: message.id, result: { thread: { ...buildThread(ensureThread(state, message.params.threadId)), turns: [buildTurn("unrelated", "completed"), ...(status === "missing" ? [] : [turn])] } } };
+        const response = { id: message.id, result: { thread: {
+          ...buildThread(ensureThread(state, message.params.threadId)),
+          projectId: null,
+          sessionId: message.params.threadId,
+          turns: message.params.includeTurns ? [buildTurn("unrelated", "completed"), ...(status === "missing" ? [] : [turn])] : []
+        } } };
         // read-race: the reply goes once the steer is answered, so it is in flight while the steer
         // lands, however slowly the steer comes.
         if (status === "read-race" && !steerArrived) repliesAwaitingSteer.push(response);
