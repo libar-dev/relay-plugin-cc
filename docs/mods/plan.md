@@ -1,7 +1,8 @@
 # Relay and Claude Code Mods: the plan
 
-Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. It combines three
-independent plans in this directory:
+Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. Phase 1 is done in relay
+2.3.0, and the later phases were reviewed in its light ([After Phase 1](#after-phase-1-what-held-and-what-changed)).
+It combines three independent plans in this directory:
 
 - [claude-opus-5-5.md](claude-opus-5-5.md) (Opus 5.5, high)
 - [gpt-6.1-sol.md](gpt-6.1-sol.md) (GPT-6.1 Sol, xhigh)
@@ -54,7 +55,8 @@ the transcripts and the line numbers in the declarations.
   `SendMessage` fired at 51 ms and doesn't see `$.session.send` (Opus §2). The receiver's `session.receive`
   fires only at its next tool round, 25.9 s later in the experiment.
 - **`$.agent.list()` lists the session's agents with their ids.** `session.send`'s `to` can be a name or an id,
-  so the module can resolve either.
+  so the module can resolve either. It lists no Workflow agent (2.1.308 declarations), and SendMessage reaches
+  those by id.
 - **`agent.spawn` fires for the Agent tool and for a Workflow script's `agent()`.** It can deny a spawn with a
   reason, and the caller gets that reason as an error.
 - **The Mod API has no event for an agent being stopped.** `TaskStop` is a tool call, so a command hook sees it.
@@ -90,11 +92,12 @@ The waiting is the slow part: up to 120 seconds between the send and the guard.
 **What changes.** The module's `session.send` hook sees the message as it leaves the sender. It resolves `to` to
 an agent id and runs `companion wake --agent <id>`. When that agent is a relay whose job is running, the companion
 writes a wake marker into the job directory. The relay's `wait` sees the marker within a second and returns. The
-guard delivers the message on the same path as before. This is the most complete option, for three reasons:
+guard delivers the message on the same path as before. This is the most complete option, for
+three reasons:
 
 - One trigger covers every sender: the main thread, an orchestrator subagent, a teammate, and the board's buttons,
   which use `$.session.send`.
-- It draws nothing, so it works in Agent SDK hosts too (tested). Whether it works in T3 is untested; Phase 1's live suite will check it.
+- It draws nothing, so it works in Agent SDK hosts too (tested).
 - Delivery keeps one path, the guard's ledger. Nothing else posts a message, so nothing can deliver it twice.
 
 The plans' alternatives were weaker. Sol and Astra planned separate direct steer commands with their own
@@ -106,37 +109,89 @@ grows to 540 seconds, inside the Bash tool's 600-second maximum. A long job then
 quarter of the model calls it costs today, and steering stays as fast. The backend still decides what a steer
 means: Kimi runs it as the next turn, and the board and the docs say so.
 
-## Phase 1: the module, and steer wake (one PR)
+## Phase 1: the module, and steer wake (done: relay 2.3.0)
 
-- `hooks/hooks.json`: add `"modules": ["./mod/register.js"]` beside `"hooks"`. Opus verified that the two load
-  together and that `claude plugin validate` passes.
-- `hooks/mod/register.js`: one `session.send` hook. It awaits `next(e)`. When the send was delivered, it resolves
-  `e.to` through `$.agent.list()` and runs `$.process.run(['node', $.plugin.root + '/scripts/companion.mjs',
-  'wake', '--agent', id])`. It returns what `next` returned, and it never refuses or rewrites a message.
-- `cli/wake.mjs` (new): finds the relay pointer for the agent (`readRelayPointer`, `lib/harness/relay.mjs:292`;
-  `findRelayJob`, `:312`) and writes `<jobDir>/relay-wake.json` when the job is not terminal. Otherwise it exits 0
-  and writes nothing.
-- A wake stays pending until a guard check covers it. The guard records the time it read the transcript
-  (`<jobDir>/relay-wake-checked.json`) before it delivers. `cli/wait.mjs:41-68`, under `--exit-zero-while-running`,
-  leaves with the "still running" line while a marker is newer than the last check. The wait's own start time
-  plays no part. A message sent between the guard's read and the next `wait` keeps its marker pending, and that
-  wait returns at once instead of running out its bound. `lib/jobs/store.mjs:93` `jobPaths` gets both paths.
-- Floor: README, CHANGELOG and design.md move to Claude Code 2.1.307. Design.md's "The relay needs no Claude Code
-  mod" is replaced by what the module does.
-- **On the branch only:** the 120-second wait. The PR's last commit raises it to 540 seconds (the guard sets the
-  wait and Bash timeouts) and replaces "within about two minutes" in the README, `agents/job.md` and design.md.
+What shipped:
 
-Acceptance, all on the Fedora machine:
-- Unit: `wake` writes the marker for a running job's relay, and writes nothing for an unknown agent, a terminal
-  job or a missing jobs home. `wait` returns within 2 s of a marker newer than the last guard check, waits on
-  through one the guard has covered, and ignores markers without the flag. A marker written after the guard's
-  read but before the next `wait` starts makes that wait return at once. This test must pass before the wait
-  grows to 540 seconds.
-- Mod test kit: the hook calls `next` once and returns its result unchanged. It resolves a name through
-  `$.agent.list()`. A thrown `process.run` doesn't change the send's result.
-- Live suite, in the terminal and in T3: for each backend, a steer of a running job reaches `inbox/relay/` within
-  10 s of the `SendMessage` call, three times out of three. That includes a send from a Workflow subagent, and a
-  `$.session.send` from a test module. A continue after the hand-back works as before.
+- `hooks/hooks.json` lists `"modules": ["./mod/register.js"]` beside `"hooks"`. `hooks/mod/register.js` has one
+  `session.send` hook. It awaits `next(e)` once and returns its result unchanged. When the send was delivered, it
+  resolves `e.to` through `$.agent.list()` (an id, then a name, else `e.to` as given, since a Workflow's agents
+  are not listed) and runs `companion wake --agent <id>` with a 10-second timeout. Errors are caught.
+- `companion wake` reads only the relay pointer, never the scan over every job, since it runs on every
+  `SendMessage`. It writes `<jobDir>/relay-wake.json` when the agent is the job's current relay and the job has not
+  ended.
+- **A marker counts against the boundary the wait came after, not against a guard check.** Claude Code puts a
+  queued message into the relay's conversation only after every tool call of an assistant message has returned.
+  The rule planned here (a marker is covered once the guard has read the transcript after it) missed a message
+  sent after that boundary while the relay's model wrote its next `wait`: its marker is older than the guard's
+  read, and the message is not in the transcript yet. A first fix, the wait removing the marker whenever it
+  returned, failed review in three cases: a leftover wait of an earlier relay took the current relay's marker,
+  two waits in one assistant message let the second run its bound, and a message queued as the job ended found no
+  marker. Now the guard reads the boundary from the transcript (the latest timestamp before the assistant message
+  that holds the `wait`) and passes it as `wait --wake-after <time>`. The wait returns on a marker newer than
+  that. Nothing removes markers, and `wake` marks a job that has ended too, since a message can continue it.
+- **The guard delivers messages from other agents.** The live check found that a `SendMessage` from a subagent
+  or a Workflow agent reaches a relay with origin kind `peer` (a `queued_command`, or after the hand-back a `user`
+  entry), its text in `origin.body`. The guard took only the coordinator's, so such a message was dropped with no
+  record, in 2.2.0 too. The fixture is cut from that run.
+- The relay waits 540 s with a 600 s Bash timeout. The floor is Claude Code 2.1.307.
+- Tests: unit tests for `wake`, `wait` and the boundary, 7 Mod tests (`claude plugin test`; the kit runs only `*.test.ts`),
+  parser and end-to-end tests for peer messages. CI installs a pinned Claude Code to run `claude plugin validate`
+  and `claude plugin test`.
+- Dev tools: `scripts/smoke/` (a tmux pane an agent drives, and an install of a build into one directory),
+  `scripts/live/steer-wake.mjs` (the live steer check below).
+
+Live results on the Fedora machine, Claude Code 2.1.308 (`scripts/live/steer-wake.mjs` and its analyzer, Sonnet
+lead). The last terminal run and the T3 run used the final rule and relay 2.3.0:
+
+| Surface | Sender | Backends | Delivered to `inbox/relay/` after the send |
+|---|---|---|---|
+| Terminal | Main thread `SendMessage`, three rounds, three runs | Codex, Grok, ZCode, Kimi | 36 of 36, 1.5 to 4.0 s |
+| Terminal | A plugin's `$.session.send` (a probe module's command) | Codex | 4.0 s |
+| Terminal | A Workflow agent's `SendMessage`, by agent id | Codex | 2.8 s, and 2.9 s on the installed build (before the peer fix: never) |
+| Terminal | Main thread `SendMessage` after the hand-back (continue) | Codex | runs as a new turn, as before |
+| T3 Code (Agent SDK host) | Main thread `SendMessage`, three rounds | Codex, Grok, ZCode, Kimi | 12 of 12, 1.5 to 6.7 s |
+
+Kimi took each steer as a next turn, as documented. The release smoke test (`relay-plugin-cc-smoke`) passed on
+the installed 2.3.0 build: the workflow's five agents, the plain fan-out with its refused header, and a steer
+from the lead and from a Workflow agent.
+
+## After Phase 1: what held and what changed
+
+Assumptions that held:
+
+- `session.send` fires for every sender the plan named, before the receiver's next tool round, and `$.process.run`
+  of the companion costs 75 to 90 ms per send. One trigger covers the main thread, other agents and plugins.
+- Delivery keeps one path. The wake posts nothing, and every live delivery went through the guard's ledger.
+- A plugin's `$.session.send` reaches a relay as the coordinator's message, with the plugin's name beside it, so
+  the board's buttons (Phase 4) need nothing new from the guard.
+- `claude plugin validate` and the Mod test kit run without a sign-in, so CI can hold every later phase's Mod tests.
+
+What changed, and where:
+
+- **The wake rule** (Phase 1, above): a marker counts against the boundary read from the transcript. Nothing
+  later depends on the planned guard check.
+- **Other agents' messages** were never delivered before 2.3.0. An orchestrator subagent steering a relay, which
+  the steering table counts on, works only from 2.3.0.
+- **Phase 4's Steer and Continue** must not depend on `$.agent.list()`. The declarations say the list holds no
+  Workflow agent, and drops a subagent some time after it ends, which is when Continue is needed. The buttons
+  send to the agent id the job records (`relay.agentId`, `relay.json` after an adoption) with
+  `$.session.send({ to: { agentId } })`, and show the send's `reason` when it is refused. Phase 4 must check
+  live that a send from the lead's session reaches a Workflow relay by id; Phase 1 checked a Workflow agent's
+  send to the lead's relay.
+- **Phase 5 starts from Phase 1's tools.** `scripts/live/steer-wake.mjs` writes the record the suite needs
+  (backend, model, relay version, Claude Code version, surface, timings, pass). A terminal check runs in a tmux
+  pane (`scripts/smoke/pane.sh`) with `--plugin-dir`, so it does not touch the session that starts it. An
+  installed build, for the release smoke test and for T3, goes into one directory at local scope
+  (`scripts/smoke/install-local.sh`), so the machine's other sessions keep the released plugin. The lead in a
+  scripted session must wait with a Monitor until-loop: Claude Code blocks a standalone `sleep`.
+- **Phase 6** has its receiving half: a relay now takes a message from any agent of the session. The question
+  left is the sending half, from a job back to its parent or a peer.
+- Loading a plugin folder with `--plugin-dir` makes Claude Code write declarations into it
+  (`.claude-plugin/types/`, `tsconfig.json`). Both are ignored by git and left out of a `--worktree` install.
+
+Phases 2 and 3 are unchanged. Their hooks go into the same `register.js`, and their Mod tests into
+`register.test.ts`.
 
 ## Phase 2: commands that answer without a model turn (one PR)
 
@@ -195,8 +250,9 @@ needs. If it doesn't, record what it does name and how the hook maps it.
    `$.session.surfaces()` is non-empty, with one read in flight.
 2. **Board pane** `/relay:board`. It lists the jobs, their backend, state, attempt, owed messages and hand-back
    state, and shows the selected job's report in a `Markdown` element. Its actions are:
-   - **Steer** and **Continue** call `$.session.send` to the job's relay agent, the same path as the lead's
-     `SendMessage`. They are offered only when `$.agent.list()` holds that relay. The label follows the backend:
+   - **Steer** and **Continue** call `$.session.send({ to: { agentId } })` with the agent id the job records,
+     the same path as the lead's `SendMessage`. A refused send shows its `reason`. `$.agent.list()` does not
+     decide whether they are offered: it holds no Workflow agent. The label follows the backend:
      "Queue next turn" for Kimi.
    - **Cancel** runs the same `companion cancel` as `/relay:cancel`, and names the job and attempt again when
      pressed.
@@ -307,8 +363,11 @@ The funding principles ([funding.md](funding.md)) add no product feature. Four p
 
 ## T3 Code
 
-In Agent SDK runs, the module's hooks and commands work, so Phases 1 to 3 are expected to work in T3 as well.
-No plan has tested this in T3 yet; Phase 1's and Phase 2's live suites will. Phase 4 needs two things
+The module's `session.send` hook works in T3: Phase 1's live check ran in a T3 thread on all four backends (see
+Phase 1). T3 loads a plugin installed at local scope in the thread's project directory, which is how an unreleased
+build is checked there without reaching other threads. A Monitor the lead arms does not start a new turn in a T3
+thread once its turn has ended, so a scripted T3 check is driven by messages to the thread. Phases 2 and 3 are
+expected to work in T3 too; Phase 2's live suite checks it. Phase 4 needs two things
 from T3: it has to render the `ui_*` messages, and it has to attach a surface. The module refreshes the status
 line only while `$.session.surfaces()` is non-empty. [t3-code.md](t3-code.md) explains what relay would need from T3 and why relay complements T3's
 own delegates. It is the article to link from a post to the T3 community.
@@ -319,5 +378,6 @@ own delegates. It is the article to link from a post to the T3 community.
    Is that what you want?
 2. **Desktop:** Fedora can't run Claude Desktop. Is the test kit's `desktop` mount enough, plus one manual pass on
    a Mac before each release that changes the board?
-3. **Wait bound:** 540 seconds once the wake is proven, or another value under the Bash tool's 600-second
-   maximum?
+3. **Wait bound:** 2.3.0 waits 540 seconds, as this plan proposed, now that the wake is proven. It is one
+   constant (`RELAY_WAIT_SECONDS`, with the Bash timeout beside it). Say if you want another value under the
+   Bash tool's 600-second maximum.
