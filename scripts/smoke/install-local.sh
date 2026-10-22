@@ -5,6 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: install-local.sh DIR [--ref REF] [--repo PATH] [--worktree]
 Install relay@relay-smoke for DIR only. REF defaults to HEAD.
+DIR must be a git work tree root or outside any git work tree.
 The default build uses git archive and excludes uncommitted edits.
 --worktree copies plugins/relay, including uncommitted edits, except the declarations Claude Code
            writes there (.claude-plugin/types/ and tsconfig.json).
@@ -33,18 +34,26 @@ done
 [[ $worktree == false || $ref_set == false ]] || die '--ref and --worktree cannot be combined.'
 [[ -d $dir ]] || die "Directory does not exist: $dir"
 dir=$(cd -- "$dir" && pwd -P)
+if top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null); then
+  top=$(cd -- "$top" && pwd -P)
+  [[ $dir == "$top" ]] || die "DIR must be the git work tree top level: $top"
+fi
+# Resolve once, before changing cwd, including when the override is relative.
+CLAUDE_CONFIG_DIR=$(node -e 'const p = require("node:path"), fs = require("node:fs"); const dir = p.resolve(process.env.CLAUDE_CONFIG_DIR || p.join(require("node:os").homedir(), ".claude")); console.log(fs.existsSync(dir) ? fs.realpathSync(dir) : dir)')
+export CLAUDE_CONFIG_DIR
 node - "$dir" <<'NODE'
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const dir = process.argv[2], home = fs.realpathSync(os.homedir());
-const config = path.join(home, '.claude');
+const config = process.env.CLAUDE_CONFIG_DIR;
 const read = file => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 if (dir === home || dir === (fs.existsSync(config) ? fs.realpathSync(config) : config)) {
-  throw new Error('Refusing to install in HOME or ~/.claude.');
+  throw new Error('Refusing to install in HOME or the Claude config directory.');
 }
 const entries = read(path.join(config, 'plugins/installed_plugins.json')).plugins?.['relay@relay-smoke'] ?? [];
 const settings = read(path.join(dir, '.claude/settings.local.json'));
 if (entries.some(e => e.projectPath && path.resolve(e.projectPath) === dir) ||
     Object.hasOwn(settings.enabledPlugins ?? {}, 'relay@relay-smoke') ||
+    Object.hasOwn(settings.extraKnownMarketplaces ?? {}, 'relay-smoke') ||
     fs.existsSync(path.join(dir, '.claude/relay-smoke-local.json'))) {
   throw new Error('relay@relay-smoke is already installed here. Run uninstall-local.sh first.');
 }
@@ -70,11 +79,20 @@ fs.writeFileSync(path.join(mkt, '.claude-plugin/marketplace.json'), JSON.stringi
   name: 'relay-smoke', owner: { name: 'Relay smoke test' }, metadata: { version: plugin.version },
   plugins: [{ name: 'relay', version: plugin.version, source: './relay' }]
 }, null, 2) + '\n');
+const createdClaudeDirectory = !fs.existsSync(path.join(dir, '.claude'));
 fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
 const file = path.join(dir, '.claude/settings.local.json');
 const settings = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 fs.writeFileSync(path.join(dir, '.claude/relay-smoke-local.json'), JSON.stringify({
-  marketplace: mkt, previousRelay: settings.enabledPlugins?.['relay@libar-relay'] ?? null
+  tool: 'relay-plugin-cc/scripts/smoke/install-local.sh',
+  config: process.env.CLAUDE_CONFIG_DIR,
+  marketplace: mkt, createdMarketplace: true,
+  cacheExisted: fs.existsSync(path.join(process.env.CLAUDE_CONFIG_DIR, 'plugins/cache/relay-smoke')),
+  createdCache: false,
+  createdSettingsFile: !fs.existsSync(file), createdClaudeDirectory,
+  hadPreviousRelay: Object.hasOwn(settings.enabledPlugins ?? {}, 'relay@libar-relay'),
+  previousRelay: settings.enabledPlugins?.['relay@libar-relay'] ?? null,
+  addedMarketplace: false, installedPlugin: false, disabledRelay: false
 }, null, 2) + '\n');
 console.log(`Exported relay ${plugin.version} to ${mkt}`);
 NODE
@@ -86,7 +104,38 @@ else
 fi
 printf 'Undo: %q %q\n' "$script_dir/uninstall-local.sh" "$dir"
 cd -- "$dir"
+record_step() {
+  node - "$dir/.claude/relay-smoke-local.json" "$1" <<'NODE'
+const fs = require('node:fs');
+const [file, step] = process.argv.slice(2);
+const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+saved[step] = true;
+if (step === 'createdCache') {
+  saved.createdCache = !saved.cacheExisted && fs.existsSync(require('node:path').join(saved.config, 'plugins/cache/relay-smoke'));
+}
+fs.writeFileSync(file, JSON.stringify(saved, null, 2) + '\n');
+NODE
+}
 claude plugin marketplace add "$mkt" --scope local
-claude plugin install relay@relay-smoke --scope local
-claude plugin disable relay@libar-relay --scope local
+record_step addedMarketplace
+if claude plugin install relay@relay-smoke --scope local; then
+  record_step installedPlugin
+  record_step createdCache
+else
+  status=$?
+  # A failed install may still have populated the cache.
+  record_step createdCache
+  exit "$status"
+fi
+if output=$(claude plugin disable relay@libar-relay --scope local 2>&1); then
+  record_step disabledRelay
+  printf '%s\n' "$output"
+else
+  status=$?
+  printf '%s\n' "$output" >&2
+  case "$output" in
+    *'Plugin "relay@libar-relay" is already disabled at local scope'*|*'Plugin "relay@libar-relay" is not installed'*|*'Plugin "relay@libar-relay" not found in installed plugins'*) ;;
+    *) exit "$status" ;;
+  esac
+fi
 printf 'Installed relay@relay-smoke locally in %s\n' "$dir"
