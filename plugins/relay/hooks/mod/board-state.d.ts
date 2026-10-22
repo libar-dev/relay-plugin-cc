@@ -1,6 +1,6 @@
 // The board's values in `$.state`, which the engine checks the module's reads and writes against.
-// plugin.json names this file as the plugin's `types`. Rows and views are the companion's JSON
-// (docs/design.md, "JSON for programs"), kept as it printed them.
+// plugin.json names this file as the plugin's `types`. Rows are the companion's JSON (docs/design.md,
+// "JSON for programs") cut to what the board draws; views are kept as it printed them.
 
 export type RelayBoardJob = {
   id: string;
@@ -9,8 +9,7 @@ export type RelayBoardJob = {
   model: string | null;
   effort: string | null;
   attempts: number;
-  updatedAt: string | null;
-  claudeSessionId: string | null;
+  completedAt: string | null;
   reportPath: string | null;
   relay: {
     agentId: string | null;
@@ -18,6 +17,8 @@ export type RelayBoardJob = {
     label: string | null;
     lastToolAt: string | null;
   } | null;
+  // A running job whose relay had not called for 15 minutes when the list was read.
+  isRelayLost: boolean;
   notHandedBack: boolean;
   undeliveredCount: number;
   relayViolationCount: number;
@@ -27,7 +28,8 @@ export type RelayBoardJob = {
 export type RelayBoardList = {
   jobs: RelayBoardJob[];
   nextCursor: string | null;
-  readAt: number | null;
+  // Whether a read has succeeded; until one has, there is nothing to list.
+  isRead: boolean;
   // A busy answer kept the last read.
   isBusy: boolean;
   error: string | null;
@@ -37,6 +39,9 @@ export type RelayBoardMessage = {
   kind: string;
   preview: string;
   stage: string;
+  createdAt: string | null;
+  // The relay's record of handing the message to the job; null for a message sent to it directly.
+  relay: { entry: string; at: string | null } | null;
   outcome: { action: string } | null;
 };
 
@@ -44,21 +49,40 @@ export type RelayBoardDetail = {
   id: string;
   // The row's facts the view was read at; null to read it again.
   mark: string | null;
+  // After a failed read, the time before which it is not read again unless its row is pressed.
+  retryAt: number | null;
+  // Whether a read has succeeded.
+  isRead: boolean;
   messages: RelayBoardMessage[];
   report: string | null;
   isBusy: boolean;
   error: string | null;
 };
 
+// A send the relay refused, for the person to send to the job directly: its text, its kind, and
+// the attempt count it was meant for.
+export type RelayBoardRetry = {
+  text: string;
+  kind: "steer" | "continue";
+  attempts: number;
+};
+
 declare module "claude-code" {
   interface PluginState {
     relay: {
       boardList: RelayBoardList | null;
-      boardLimit: number;
+      // The rows listed, and the cursor of the page they start at (null for the newest).
+      boardWindow: { limit: number; cursor: string | null };
       boardSelected: string | null;
       boardDetail: RelayBoardDetail | null;
-      // The last send's or cancel's line for a job, and a refused send's text to send directly.
-      boardNote: { id: string; line: string; retry: string | null } | null;
+      // The last send's or cancel's line for a job, a refused send to send directly, and for a send
+      // the relay took, the line once the job's messages show one it handed over since `since`.
+      boardNote: {
+        id: string;
+        line: string;
+        retry: RelayBoardRetry | null;
+        delivered: { since: number; line: string } | null;
+      } | null;
       boardConfirm: { id: string; attempt: number } | null;
     };
   }
