@@ -11,9 +11,10 @@ guide comes with a later docs PR.
 
 ## pre.1
 
-`release/3.0` as of 22 October 2026, the code of 3.0.0-dev.4: a message reaches a running job within seconds, the
-four commands answer without a model turn, a bad header fails at the launch, and TaskStop cancels the job. The
-status line and the board are not in it yet. Its known issues, each fixed in pre.2 or later:
+Version `3.0.0-pre.1`, tag `v3.0.0-pre.1` (217adc8, 22 October 2026), installed by libar-infra on the M3 and the
+ThinkPad. It is `release/3.0` with the code of 3.0.0-dev.4: a message reaches a running job within seconds, the four
+commands answer without a model turn, a bad header fails at the launch, and TaskStop cancels the job. The status line
+and the board are not in it yet. Its known issues, each fixed in pre.2 or later:
 
 - **A message typed into an agent's own view is lost.** In the terminal's agent view (`↓`, `Enter`, then type), the
   message never reaches the job, while it runs or after it ends. Send messages through Claude.
@@ -29,15 +30,15 @@ status line and the board are not in it yet. Its known issues, each fixed in pre
 
 libar-infra installs each cut. To install one yourself, pick a quiet moment: no relay job running on the machine
 (`/relay:status --all` lists none `starting` or `running`). On the ThinkPad, other threads load the cut in their next
-session too, so ask the coordinator first. Use the cut's tag, `v3.0.0-pre.N`:
+session too, so ask the coordinator first. Use the cut's tag, here pre.1's:
 
 ```bash
 claude plugin marketplace remove libar-relay
-claude plugin marketplace add 'libar-dev/relay-plugin-cc#v3.0.0-pre.N'
+claude plugin marketplace add 'libar-dev/relay-plugin-cc#v3.0.0-pre.1'
 claude plugin install relay@libar-relay
 ```
 
-- `claude plugin list` shows `relay@libar-relay` with the cut's version.
+- `claude plugin list` shows `relay@libar-relay` with the cut's version, `3.0.0-pre.1` for pre.1.
 - New sessions load the cut. An open session keeps its version until `/reload-plugins`, and a running job finishes on
   the version that started it.
 - Your jobs and relay's settings are in `~/.relay-jobs`; a reinstall leaves them alone.
@@ -48,7 +49,7 @@ claude plugin install relay@libar-relay
 
 In a new session, in any repository:
 
-1. `/relay:status`. At once, with no model turn; its `relay-version:` line names the cut you installed.
+1. `/relay:status`. At once, with no model turn; its `relay-version:` line names the cut (`3.0.0-pre.1`).
 2. `/relay:setup`. Every backend you use is `ready: yes`.
 3. Paste: `Launch one relay:job agent in the background with this prompt: "backend: codex", "model: default",
    "effort: low", "---", "Run sleep 60 once. In your final answer, quote every message you received while you worked.
