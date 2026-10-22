@@ -14,7 +14,7 @@ export default {
       `\nCall the probe tool directly exactly once per backend, with these exact calls. Wait for every tool result. Do not send any extra messages.\n${calls.join('\n')}\n\n` + ending('LIVE-PLUGIN-STEER-DONE');
   },
   analyze(input) {
-    return analyzeCheck(input, { source: 'plugin', messages: backend => [`steer from a plugin for ${backend}`] });
+    return analyzeCheck(input, { scope: this.scope, source: 'plugin', messages: backend => [`steer from a plugin for ${backend}`] });
   },
   cell: steerCell
 };

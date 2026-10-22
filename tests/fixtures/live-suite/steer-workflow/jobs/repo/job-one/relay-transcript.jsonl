@@ -1,1 +1,1 @@
-{"type": "attachment", "uuid": "send-entry", "attachment": {"type": "queued_command", "origin": {"kind": "peer", "from": "sender"}}}
+{"type": "attachment", "uuid": "send-entry", "attachment": {"type": "queued_command", "origin": {"kind": "peer", "from": "sender", "body": "steer from a workflow agent for codex"}, "prompt": "<agent-message from=\"sender\">\nsteer from a workflow agent for codex\n</agent-message>"}}

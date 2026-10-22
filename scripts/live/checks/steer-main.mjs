@@ -63,7 +63,7 @@ export default {
       `\nNow execute the three rounds below. Use each name exactly as shown. If name resolution fails, use only the corresponding saved agentId and report that failure. Do not send any extra messages.\n${rounds.join('\n\n')}\n\nAfter round 3, ` + ending('LIVE-STEER-DONE').replace(/^Then w/, 'w');
   },
   analyze(input) {
-    return analyzeCheck(input, { messages: backend => [1, 2, 3].map(round => `steer ${round} for ${backend}`) });
+    return analyzeCheck(input, { scope: this.scope, messages: backend => [1, 2, 3].map(round => `steer ${round} for ${backend}`) });
   },
   cell: steerCell
 };

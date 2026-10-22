@@ -145,10 +145,12 @@ keeps its records, failures included; a run whose setup failed writes none.
 
 ### D20. The capability table shows a cell only when its latest record passed (Phase 5 thread)
 
-Latest by `finishedAt`, per check, surface and backend; an older pass behind a newer failure is a dash. Kimi's
+Latest per check, surface and backend (by `finishedAt`, else `startedAt`, else the time in the run id); an older
+pass behind a newer failure is a dash. Kimi's
 steer cell says "as the next turn" because the steer checks require it: a send passes only when the job's outcome
 for the message is `steered` (into the running turn) on Codex, Grok and ZCode, and `turn-started` (a turn of its
-own) on Kimi. The semantics the table states are measured, not written by hand.
+own) on Kimi, after the turn that was running at the send ended. The semantics the table states are measured,
+not written by hand.
 
 ### D21. A probe Mod sends from a tool the model calls (Phase 5 thread)
 
@@ -223,6 +225,6 @@ backends whose shown records carry it, and nothing when no record passed.
 
 Claude Code records the answer per folder in `~/.claude.json`, so each terminal run adds an entry for a `/tmp` work
 folder that is gone after the run. This is the one stored choice the tooling makes, as in Phase 1 (`pane.sh trust`),
-and only for a folder the runner created; a folder the caller names must already be a git work tree, and the
-runner never initializes one. D13's rule holds for every other dialog. Reopen if Claude Code gets a per-session
+and only for a folder the runner created. A folder the caller names must already be a git work tree, which the
+runner never initializes, and already trusted: when Claude Code asks, the run stops. D13's rule holds for every other dialog. Reopen if Claude Code gets a per-session
 trust flag.

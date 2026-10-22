@@ -343,7 +343,8 @@ The later phases, in this light:
 
 - **Phase 2.** Its live checks show each command's output with no model reply, in the terminal and in T3, and
   `claude -p "/relay:status" --output-format stream-json` reporting `num_turns: 0`. The `-p` check is a
-  `runTerminal` check with no pane. The pane and T3 checks send a slash command, which cannot carry the prompt's
+  `runTerminal` check with no pane; such a session records `entrypoint: sdk-cli`, and a check names the
+  entrypoints it accepts and how its entries are scoped (`entrypoints`, `scope`). The pane and T3 checks send a slash command, which cannot carry the prompt's
   first line, `Live suite run <id>.`, by which `analyze` finds a T3 transcript. Phase 2 adds a way: a first
   message that carries the run line before the command, or a transcript named to `analyze`. Whether T3 passes a
   slash command to Claude Code as a command is the first thing to check. These records have no delivery, and
@@ -358,7 +359,7 @@ The later phases, in this light:
 - **Phase 6** has nothing to measure yet. Messages from a job to its parent or a peer stay out of the table until
   a check proves them.
 - **The release** runs `suite.mjs run all` and every T3 check on the release head, commits the records,
-  regenerates the table, and puts it in the README. The table's text is written to be included as it is.
+  regenerates the table, and puts it in the README with its links adapted (they are relative to `docs/live/`).
 
 ## Phase 6: messages from a job (investigation, no code yet)
 

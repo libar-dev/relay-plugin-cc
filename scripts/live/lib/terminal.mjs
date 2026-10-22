@@ -54,7 +54,14 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
   const deadline = Date.now() + ctx.timeoutMinutes * 60000;
   try {
     started = true;
-    drive(paneStartArgs(ctx, name, sessionId));
+    let startup;
+    try { startup = drive(paneStartArgs(ctx, name, sessionId)); }
+    catch (error) { startup = error.stdout; throw error; }
+    finally {
+      run.removedEnvironment = [...new Set(String(startup ?? '').split('\n')
+        .flatMap(line => line.match(/^RELAY_LIVE_UNSET ([A-Za-z_][A-Za-z0-9_]*)$/)?.slice(1) ?? []))].sort();
+      save();
+    }
     startSucceeded = true;
     log(drive(['attach-command', name]).trim());
     let trusted = false, ready = false;
@@ -66,6 +73,7 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
         throw new Error('The bypass-permissions dialog appeared; it is not answered here, since that changes the user\'s settings.');
       }
       if (!trusted && screen.includes('Yes, I trust this folder')) {
+        if (!ctx.workDirCreated) throw new Error(`${ctx.workDir} is not trusted by Claude Code; open it in Claude Code once, or let the runner create the work folder.`);
         drive(['trust', name]); trusted = true;
         await pause(1000); continue;
       }
@@ -92,7 +100,7 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
       fs.writeFileSync(path.join(ctx.evidenceDir, 'screen.txt'), screen);
       run.transcript = findTranscript(ctx.workDir, debugLog, configDir, readers.readTranscript);
       if (run.transcript) {
-        const entries = readers.scopeToRun(readers.readTranscript(run.transcript), run.runId);
+        const entries = (check.scope ?? readers.scopeToRun)(readers.readTranscript(run.transcript), run.runId);
         done = check.completed ? check.completed(entries) : Boolean(check.marker && screen.includes(check.marker) && readers.hasMarker(entries, check.marker));
         if (done) break;
       }

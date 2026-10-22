@@ -501,14 +501,17 @@ for (const target of ['.claude', '.claude/settings.local.json']) {
 for (const mode of ['inherited', 'server-only', 'no-server', 'empty']) {
   test(`pane start scrubs Claude session variables and preserves other variables: ${mode}`, t => {
     const { dir, env } = fakeCli(t);
-    const reserved = name => /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT)$|^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|RELAY_COMPANION_)/.test(name);
+    const reserved = name => /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|MESSAGING_SOCKET|MESSAGING_TOKEN|CHILD_SESSION|SESSION_ATTENDED|EXECPATH))$|^(CLAUDE_AGENT_SDK_|RELAY_COMPANION_)/.test(name);
     for (const name of Object.keys(env)) if (reserved(name)) delete env[name];
     const polluted = { CLAUDECODE: '1', CLAUDE_PID: '123', CLAUDE_EFFORT: 'high', CLAUDE_CODE_ENTRYPOINT: 'sdk-ts',
       CLAUDE_CODE_SESSION_ID: 'parent', CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/socket', CLAUDE_CODE_MESSAGING_TOKEN: 'test-token',
       CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ATTENDED: '0', CLAUDE_CODE_EXECPATH: '/tmp/claude',
       CLAUDE_AGENT_SDK_VERSION: 'test', CLAUDE_AGENT_SDK_FUTURE: 'future', RELAY_COMPANION_FUTURE: 'future' };
     if (mode === 'inherited' || mode === 'no-server') Object.assign(env, polluted);
-    const globals = mode === 'inherited' || mode === 'server-only' ? { ...polluted, CLAUDE_CODE_SERVER_ONLY: 'sdk',
+    const config = { CLAUDE_CODE_OAUTH_TOKEN: 'kept-token', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_USE_VERTEX: '1',
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '4096', CLAUDE_CODE_GIT_BASH_PATH: '/some/bash', CLAUDE_CODE_FUTURE_SETTING: 'keep' };
+    Object.assign(env, config);
+    const globals = mode === 'inherited' || mode === 'server-only' ? { ...polluted, ...config, CLAUDE_CODE_SERVER_ONLY: 'sdk',
       CLAUDE_CODE_REMOVED: null, SERVER_KEEP: 'retained', CLAUDE_CONFIG_DIR: path.join(dir, 'server config') } : {};
     Object.assign(env, { SMOKE_TMUX_GLOBALS: JSON.stringify(globals), SMOKE_TMUX_LOG: path.join(dir, 'tmux.jsonl'),
       XDG_RUNTIME_DIR: path.join(dir, 'runtime'), ORDINARY_VARIABLE: 'keep me' });
@@ -525,6 +528,10 @@ for (const mode of ['inherited', 'server-only', 'no-server', 'empty']) {
     assert.deepEqual(Object.keys(child).filter(reserved), []);
     assert.equal(child.CLAUDE_CONFIG_DIR, globals.CLAUDE_CONFIG_DIR ?? env.CLAUDE_CONFIG_DIR);
     assert.equal(child.ORDINARY_VARIABLE, 'keep me');
+    for (const [name, value] of Object.entries(config)) assert.equal(child[name], value, name);
+    if (globals.CLAUDE_CODE_SERVER_ONLY) assert.equal(child.CLAUDE_CODE_SERVER_ONLY, 'sdk');
+    const removed = result.stdout.trim().split('\n').filter(Boolean).map(line => line.replace(/^RELAY_LIVE_UNSET /, ''));
+    assert.ok(removed.every(reserved));
     if (mode !== 'empty') assert.equal(child.RELAY_JOBS_HOME, '/tmp/jobs with spaces');
     if (globals.SERVER_KEEP) assert.equal(child.SERVER_KEEP, 'retained');
     const calls = fs.readFileSync(env.SMOKE_TMUX_LOG, 'utf8').trim().split('\n').map(JSON.parse);
@@ -533,6 +540,7 @@ for (const mode of ['inherited', 'server-only', 'no-server', 'empty']) {
     assert.equal(command[0], 'env');
     for (const name of Object.keys({ ...(mode === 'inherited' || mode === 'no-server' ? polluted : {}), ...globals }).filter(reserved)) {
       assert.ok(command.some((value, i) => value === name && command[i - 1] === '-u'), name);
+      assert.ok(removed.includes(name), name);
     }
     assert.deepEqual(command.slice(-4), [process.execPath, '-e', code, output]);
   });

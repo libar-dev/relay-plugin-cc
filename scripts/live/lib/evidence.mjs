@@ -34,10 +34,14 @@ export function promptText(entry) {
   return pasted ? pasted[2].replace(/^(?:[\t ]*\r?\n)*/, '') : text;
 }
 
+export function runLine(runId) {
+  return `Live suite run ${runId}.`;
+}
+
 export function scopeToRun(entries, runId) {
   const isRun = entry => entry && !entry.isSidechain && entry.type === 'user';
   const firstLine = entry => promptText(entry).split('\n')[0];
-  const start = entries.findIndex(entry => isRun(entry) && firstLine(entry) === `Live suite run ${runId}.`);
+  const start = entries.findIndex(entry => isRun(entry) && firstLine(entry) === runLine(runId));
   if (start < 0) return [];
   const next = entries.findIndex((entry, index) => index > start && isRun(entry) && /^Live suite run \S+\.$/.test(firstLine(entry)));
   return entries.slice(start, next < 0 ? undefined : next);
@@ -69,7 +73,7 @@ export function hasMarker(entries, marker) {
 
 export function runSpan(entries, runId, marker) {
   const start = entries.findIndex(entry => entry && !entry.isSidechain && entry.type === 'user' &&
-    hasLine(textContent(entry.message?.content), `Live suite run ${runId}.`));
+    promptText(entry).split('\n')[0] === runLine(runId));
   const finish = start < 0 ? null : entries.slice(start + 1).find(entry => hasMarker([entry], marker));
   return { startedAt: start < 0 ? null : entries[start].timestamp ?? null,
     finishedAt: finish?.timestamp ?? entries.findLast(entry => entry?.timestamp)?.timestamp ?? null };
@@ -101,7 +105,7 @@ export function toolCalls(entries, sidechain = false) {
 export function transcriptCalls(entries) {
   const calls = toolCalls(entries);
   const byId = new Map(calls.map(call => [call.id, call]));
-  const names = new Map(), agents = new Map();
+  const names = new Map(), agents = new Map(), spawns = [], seenSpawns = new Set();
   for (const entry of entries) {
     if (!entry || entry.isSidechain) continue;
     for (const block of content(entry)) {
@@ -111,16 +115,20 @@ export function transcriptCalls(entries) {
       const result = entry.toolUseResult;
       const agentId = result?.agentId ?? textContent(block.content).match(/\bagentId:\s*([\w.-]+)/)?.[1];
       if (typeof agentId !== 'string' || !agentId) continue;
+      if (seenSpawns.has(call.id)) continue;
+      seenSpawns.add(call.id);
       const input = call.input ?? {};
       for (const name of [input.name, result?.name, input.description, result?.description]) {
         if (name) names.set(name, agentId);
       }
       const prompt = input.prompt ?? result?.prompt ?? '';
-      agents.set(agentId, { backend: prompt.match(/^backend:\s*(\S+)/m)?.[1] ?? 'codex',
-        model: prompt.match(/^model:\s*(\S+)/m)?.[1] ?? null, name: input.name ?? null });
+      const agent = { backend: prompt.match(/^backend:\s*(\S+)/m)?.[1] ?? 'codex',
+        model: prompt.match(/^model:\s*(\S+)/m)?.[1] ?? null, name: input.name ?? result?.name ?? null };
+      agents.set(agentId, agent);
+      spawns.push({ ...agent, agentId, toolUseId: call.id });
     }
   }
-  return { calls, agents, names, sends: calls.filter(call => call.name === 'SendMessage').map(call => sendOf(call, names, agents)) };
+  return { calls, agents, names, spawns, sends: calls.filter(call => call.name === 'SendMessage').map(call => sendOf(call, names, agents)) };
 }
 
 function sendOf(call, names, agents, plugin = false) {
@@ -229,18 +237,36 @@ function requireSenderResult(send, source) {
   }
 }
 
-function requireOrigin(entries, record, send, source, kind) {
+function deliveryEntry(entries, record) {
   const uuid = path.basename(record.file, '.json');
   const entry = entries.find(entry => entry?.uuid === uuid);
   if (!entry) throw new Error(`No relay transcript entry with ledger uuid ${uuid}.`);
+  return entry;
+}
+
+function deliveryText(entry, source, kind) {
+  if (kind === 'continue') {
+    if (entry?.type !== 'user') return null;
+    const text = textContent(entry.message?.content);
+    const lead = 'The coordinator sent a message while you were working:\n';
+    const tail = '\n\nAddress this before completing your current task.';
+    return text.startsWith(lead) && text.endsWith(tail) ? text.slice(lead.length, -tail.length) : null;
+  }
+  if (entry?.type !== 'attachment' || entry.attachment?.type !== 'queued_command') return null;
+  return source === 'workflow' ? entry.attachment.origin?.body ?? null : entry.attachment.prompt ?? null;
+}
+
+function requireOrigin(entries, record, send, source, kind) {
+  const entry = deliveryEntry(entries, record);
   const origin = kind === 'continue' && entry.type === 'user' ? entry.origin :
     entry.type === 'attachment' && entry.attachment?.type === 'queued_command' ? entry.attachment.origin : null;
   const matches = source === 'workflow' ? origin?.kind === 'peer' && origin.from === send.senderAgentId :
     origin?.kind === 'coordinator' && (source === 'plugin' ? origin.plugin === 'wake-probe' : !Object.hasOwn(origin, 'plugin'));
   if (!matches) throw new Error(`Relay transcript origin does not match the ${source} sender.`);
+  if (deliveryText(entry, source, kind) !== send.message) throw new Error('Relay transcript text does not match the send.');
 }
 
-export function analyzeCheck(input, { source = 'main', messages, kind = 'steer' }) {
+export function analyzeCheck(input, { source = 'main', messages, kind = 'steer', scope = scopeToRun }) {
   const details = [], evidence = { transcripts: [], agents: [] };
   const jobs = new Map();
   let parsed, sends = [], readError = null;
@@ -260,7 +286,7 @@ export function analyzeCheck(input, { source = 'main', messages, kind = 'steer' 
     return jobs.get(jobDir);
   };
   try {
-    const entries = scopeToRun(readTranscript(input.transcript), input.runId);
+    const entries = scope(readTranscript(input.transcript), input.runId);
     evidence.transcripts.push(path.resolve(input.transcript));
     parsed = transcriptCalls(entries);
     if (source === 'workflow') {
@@ -286,13 +312,16 @@ export function analyzeCheck(input, { source = 'main', messages, kind = 'steer' 
     try { load(agentId); } catch { /* The send below reports missing job evidence. */ }
   }
   for (const send of sends) {
-    const row = { ...send, backend: send.agent?.backend ?? null, model: null, relayVersion: null,
+    const row = { ...send, backend: input.backends.find(backend => messages(backend).includes(send.message)) ?? send.agent?.backend ?? null, model: null, relayVersion: null,
       deliveredAt: null, deliveredSeconds: null, readAt: null, readSeconds: null, completedSeconds: null, delivery: null, pass: false };
     const prefix = kind === 'continue' ? 'continue-' : 'steer-';
     row.backend ??= input.backends.find(backend => send.recipient === `${prefix}${backend}`) ?? null;
-    row.backend ??= input.backends.find(backend => messages(backend).includes(send.message)) ?? null;
     try {
-      if (!send.agent) throw new Error('Recipient was not spawned in this run.');
+      if (!send.agent) throw new Error(`Recipient was not spawned in this run: ${send.agentId ?? 'missing'}.`);
+      const spawned = parsed.spawns.filter(agent => agent.backend === row.backend);
+      if (spawned.length === 1 && send.agentId !== spawned[0].agentId) {
+        throw new Error(`Send targets relay ${send.agentId}, not ${row.backend}'s relay ${spawned[0].agentId}.`);
+      }
       const loaded = load(send.agentId);
       const { job, used, jobDir } = loaded;
       row.jobDir = jobDir;
@@ -302,13 +331,21 @@ export function analyzeCheck(input, { source = 'main', messages, kind = 'steer' 
       const active = activeAttempt(job, send.sentAt);
       row.relayVersion = active?.relayVersion ?? null;
       loaded.ledger ??= recordsFor(jobDir);
+      if (!loaded.transcript || !fs.existsSync(loaded.transcript)) throw new Error('Missing relay transcript.');
+      loaded.entries ??= readTranscript(loaded.transcript);
       const candidates = loaded.ledger.filter(item => !used.has(item));
-      const record = candidates.find(item => typeof send.message === 'string' && item.message === send.message) ??
-        candidates.find(item => item.message === null);
-      if (!record) throw new Error('No matching delivery record.');
+      const record = candidates.find(item => typeof send.message === 'string' &&
+        (item.message === null || item.message === send.message) &&
+        deliveryText(loaded.entries.find(entry => entry?.uuid === path.basename(item.file, '.json')), source, kind) === send.message);
+      if (!record) {
+        // A known ledger text can explain the failure, but can never substitute for the entry's text.
+        const known = candidates.find(item => typeof send.message === 'string' && item.message === send.message);
+        if (known) requireOrigin(loaded.entries, known, send, source, kind);
+        throw new Error('No matching delivery record with the send text in the relay transcript.');
+      }
       used.add(record);
       Object.assign(row, { deliveryRecord: record.file, kind: record.kind ?? null, status: record.status ?? null,
-        matchedBy: record.message === null ? 'order' : 'text', deliveredAt: record.postedAt ?? null, readAt: record.at ?? null });
+        matchedBy: 'text', deliveredAt: record.postedAt ?? null, readAt: record.at ?? null });
       const sentMs = Date.parse(send.sentAt), deliveredMs = Date.parse(record.postedAt), readMs = Date.parse(record.at);
       if (Number.isFinite(sentMs) && Number.isFinite(deliveredMs)) row.deliveredSeconds = (deliveredMs - sentMs) / 1000;
       if (Number.isFinite(sentMs) && Number.isFinite(readMs)) row.readSeconds = (readMs - sentMs) / 1000;
@@ -339,8 +376,6 @@ export function analyzeCheck(input, { source = 'main', messages, kind = 'steer' 
       if (!outcome) throw new Error('Missing delivery outcome.');
       if (outcome.messageId !== record.messageId) throw new Error('Outcome messageId does not match the delivery record.');
       requireSenderResult(send, source);
-      if (!loaded.transcript || !fs.existsSync(loaded.transcript)) throw new Error('Missing relay transcript.');
-      loaded.entries ??= readTranscript(loaded.transcript);
       requireOrigin(loaded.entries, record, send, source, kind);
       if (kind === 'continue') {
         if (active.state !== 'completed' || !(Date.parse(active.endedAt) <= sentMs)) {
@@ -390,11 +425,17 @@ export function analyzeCheck(input, { source = 'main', messages, kind = 'steer' 
   const results = input.backends.map(backend => {
     const rows = details.filter(row => row.backend === backend);
     const expected = messages(backend);
-    const agentId = [...(parsed?.agents ?? [])].find(([, agent]) => agent.backend === backend)?.[0];
+    const spawned = (parsed?.spawns ?? []).filter(agent => agent.backend === backend);
+    const agentId = spawned[0]?.agentId;
     const knownJob = evidence.agents.find(agent => agent.agentId === agentId);
     const job = knownJob ? jobs.get(knownJob.jobDir)?.job : null;
     const unassigned = details.find(row => !row.backend && !row.pass);
     let reason = readError ?? (unassigned ? `Send ${JSON.stringify(unassigned.message)}: ${unassigned.error}` : null);
+    if (!reason && spawned.length !== 1) {
+      reason = `Expected exactly one relay for ${backend}, found ${spawned.length}${spawned.length ? ` (${spawned.map(agent => agent.agentId).join(', ')})` : ''}.`;
+    }
+    const name = `${kind === 'continue' ? 'continue' : 'steer'}-${backend}`;
+    if (!reason && spawned[0].name !== name) reason = `Relay ${agentId} is named ${JSON.stringify(spawned[0].name)}, expected ${name}.`;
     if (!reason) {
       for (const message of expected) {
         const count = rows.filter(row => row.message === message).length;
@@ -402,6 +443,7 @@ export function analyzeCheck(input, { source = 'main', messages, kind = 'steer' 
       }
     }
     if (!reason && rows.length !== expected.length) reason = `Expected ${expected.length} sends for ${backend}, found ${rows.length}.`;
+    if (!reason && new Set(rows.map(row => row.jobDir).filter(Boolean)).size > 1) reason = `Sends for ${backend} reached different jobs.`;
     const failed = rows.find(row => !row.pass);
     if (!reason && failed) reason = `Send ${JSON.stringify(failed.message)}: ${failed.error}`;
     const deliveries = new Set(rows.map(row => row.delivery));

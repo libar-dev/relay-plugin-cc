@@ -17,7 +17,7 @@ export default {
       ending('LIVE-CONTINUE-DONE', "every agent's second completion notice");
   },
   analyze(input) {
-    return analyzeCheck(input, { kind: 'continue', messages: backend => [`continue for ${backend}: reply with exactly one line: second turn for ${backend}`] });
+    return analyzeCheck(input, { scope: this.scope, kind: 'continue', messages: backend => [`continue for ${backend}: reply with exactly one line: second turn for ${backend}`] });
   },
   cell(record) {
     return `a new turn of the job, delivered in ${formatSeconds(record.timings.deliveredSeconds ?? [])}`;

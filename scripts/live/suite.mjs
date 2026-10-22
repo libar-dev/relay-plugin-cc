@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { analyzeRun, configDirectory, createRun, evidenceRoot, pluginCommit, pluginVersion, readJson,
+import { analyzeRun, cancelUnfinishedJobs, configDirectory, createRun, evidenceRoot, pluginCommit, pluginVersion, readJson,
   runDirectory, settingsGuard, smokeInstall, writeJson } from './lib/runs.mjs';
 import { runTerminal } from './lib/terminal.mjs';
 import { writeTable } from './lib/table.mjs';
@@ -100,7 +100,7 @@ function requireWorkTree(workDir) {
 }
 
 export async function runChecks(options, registry, readers, { env = process.env, log = console.log,
-  warn = console.error, driver = runTerminal } = {}) {
+  warn = console.error, driver = runTerminal, commitOf = pluginCommit, cancelJobs = cancelUnfinishedJobs } = {}) {
   if (options.workDir) requireWorkTree(options.workDir);
   let status = 0;
   for (const id of options.checks) {
@@ -113,17 +113,19 @@ export async function runChecks(options, registry, readers, { env = process.env,
     fs.mkdirSync(jobsHome, { recursive: true });
     const { run, evidenceDir } = createRun(evidenceRoot(env), check, { surface: 'terminal',
       backends: readers.BACKENDS.filter(backend => options.backends.includes(backend)), workDir: fs.realpathSync(workDir),
-      jobsHome: fs.realpathSync(jobsHome), pluginDir, relayVersion, relayCommit: pluginCommit(pluginDir), model: options.model,
+      jobsHome: fs.realpathSync(jobsHome), workDirCreated: !options.workDir, jobsHomeCreated: !options.jobsHome,
+      pluginDir, relayVersion, relayCommit: commitOf(pluginDir), model: options.model,
       timeoutMinutes: options.timeoutMinutes ?? check.timeoutMinutes,
       probeDirs: check.probes.map(probe => path.join(repository, 'scripts/live/probes', probe)) });
     const save = () => writeJson(path.join(evidenceDir, 'run.json'), run);
     const guard = settingsGuard(configDirectory(env));
     log(`Run: ${run.runId}\nEvidence: ${evidenceDir}`);
     const ctx = { runId: run.runId, backends: run.backends, pluginDir, probeDirs: run.probeDirs, workDir: run.workDir,
-      jobsHome: run.jobsHome, evidenceDir, model: run.model, timeoutMinutes: run.timeoutMinutes, run, save, readers,
+      jobsHome: run.jobsHome, workDirCreated: run.workDirCreated, jobsHomeCreated: run.jobsHomeCreated, evidenceDir,
+      model: run.model, timeoutMinutes: run.timeoutMinutes, run, save, readers,
       paneDriver: (input = ctx, selected = check, overrides = {}) => driver(input, selected,
         { run, save, readers, keep: options.keep, env, log, warn, ...overrides }) };
-    let analysis;
+    let analysis, sessionFailed = false;
     try {
       if (check.runTerminal) {
         analysis = await check.runTerminal(ctx);
@@ -133,9 +135,25 @@ export async function runChecks(options, registry, readers, { env = process.env,
       } else await driver(ctx, check, { run, save, readers, keep: options.keep, env, log, warn });
     } catch (error) {
       run.error = error.message;
+      sessionFailed = true;
       status = 1;
       warn(error.message);
     } finally {
+      const after = commitOf(pluginDir);
+      if (run.relayCommit && after !== run.relayCommit) run.relayCommit = run.relayCommit.replace(/-dirty$/, '') + '-dirty';
+      if (run.promptSentAt && run.jobsHomeCreated && (sessionFailed || run.interrupted || run.completed === false)) {
+        try {
+          const cancellations = await cancelJobs(run, { env });
+          for (const item of cancellations.filter(item => item.status === 'failed')) {
+            warn(`Could not cancel ${item.jobId}: ${item.error}`);
+            status = 1;
+          }
+        } catch (error) {
+          run.cancellationError = error.message;
+          warn(error.message);
+          status = 1;
+        }
+      }
       if (guard(run, evidenceDir, warn)) status = 1;
       save();
     }
@@ -192,10 +210,10 @@ export async function main(args, registry, readers, dependencies = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const { checks, getCheck } = await import('./checks/index.mjs');
-    const { readTranscript, claudeCodeVersionOf, leadModelOf, hasMarker, runSpan, scopeToRun, BACKENDS, BACKEND_NAMES } = await import('./lib/evidence.mjs');
+    const { readTranscript, claudeCodeVersionOf, leadModelOf, hasMarker, runSpan, scopeToRun, promptText, BACKENDS, BACKEND_NAMES } = await import('./lib/evidence.mjs');
     const registry = checks.map(check => getCheck(check.id));
     process.exitCode = await main(process.argv.slice(2), registry,
-      { readTranscript, claudeCodeVersionOf, leadModelOf, hasMarker, runSpan, scopeToRun, BACKENDS, BACKEND_NAMES });
+      { readTranscript, claudeCodeVersionOf, leadModelOf, hasMarker, runSpan, scopeToRun, promptText, BACKENDS, BACKEND_NAMES });
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

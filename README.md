@@ -305,7 +305,7 @@ files under one `relay-test-run-*` directory in the temp directory, which `TMPDI
 removes it at exit once no test process runs from it. A directory whose run was killed by a signal
 is removed by the next run once its recorded owner is gone. `RELAY_TEST_KEEP_TMP=1 npm test` keeps
 the directory of a file that failed; no later run removes it, so delete it yourself. `npm run check`
-type-checks every script with TypeScript, without an installed Codex CLI.
+type-checks the plugin's scripts (`plugins/relay/scripts/`) with TypeScript, without an installed Codex CLI.
 
 A build is tried before a release in an independent Claude Code session on the test machine, while
 every other session there, the one that starts the test included, keeps the released plugin:

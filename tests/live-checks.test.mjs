@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeCheck, BACKENDS, BACKEND_NAMES, MODELS, STEER_DELIVERY, JOBS_HOME_EXPR,
   readTranscript, transcriptCalls, runSpan, hasMarker, claudeCodeVersionOf, leadModelOf,
-  formatSeconds, readJob, scopeToRun, promptText } from '../scripts/live/lib/evidence.mjs';
+  formatSeconds, readJob, scopeToRun, promptText, runLine } from '../scripts/live/lib/evidence.mjs';
 import { checks, getCheck } from '../scripts/live/checks/index.mjs';
 import { workflowScript } from '../scripts/live/checks/steer-workflow.mjs';
 
@@ -70,7 +70,7 @@ function mainFixture(t, backends = BACKENDS) {
         attempt, startedAt: `2026-10-22T10:04:0${attempt - 2}.000Z`, relayVersion: '3.0.0-test'
       })) : [])], messages: backend === 'kimi' ? [1, 2, 3].map(round => ({ id: `message-${round}`, action: 'queued-next-turn' })) : [] });
     lines(path.join(dir, `jobs/repo/${backend}-job/relay-transcript.jsonl`), [1, 2, 3].map(round => ({
-      type: 'attachment', uuid: String(round), attachment: { type: 'queued_command', origin: { kind: 'coordinator' } }
+      type: 'attachment', uuid: String(round), attachment: { type: 'queued_command', prompt: `steer ${round} for ${backend}`, origin: { kind: 'coordinator' } }
     })));
   }
   for (const [round, sent, delivered] of [[1, '00:30', '00:32'], [2, '01:00', '01:03'], [3, '01:30', '01:34']]) {
@@ -103,7 +103,7 @@ test('old analyzer cases resolve names and ids, current and legacy sends, and us
   const analyzed = legacy();
   assert.deepEqual(analyzed.details.map(row => row.deliveredSeconds), [2, 10, 31]);
   assert.deepEqual(analyzed.details.map(row => row.pass), [true, true, false]);
-  assert.deepEqual(analyzed.details.map(row => row.matchedBy), ['text', 'text', 'order']);
+  assert.deepEqual(analyzed.details.map(row => row.matchedBy), ['text', 'text', 'text']);
   assert.deepEqual(analyzed.results.map(row => row.result), ['fail', 'pass']);
   assert.deepEqual(analyzed.results[0].timings, { deliveredSeconds: [2, 31], readSeconds: [2, 31] });
   assert.equal(analyzed.results[0].relayVersion, '2.2.0-test');
@@ -123,7 +123,7 @@ test('duplicate progress snapshots do not add sends or lose timestamps', t => {
   assert.deepEqual(legacy(dir).details.map(row => row.deliveredSeconds), [2, 10, 31]);
 });
 
-test('text matching takes precedence over order and a record is never reused', t => {
+test('relay entry text matching ignores ledger order and a record is never reused', t => {
   const dir = copy(t);
   edit(dir, first, row => { row.postedAt = row.at = '2026-10-22T10:01:02.000Z'; });
   edit(dir, 'jobs/repo/codex-job/inbox/relay/three.json', row => { row.text = 'steer 2 for codex'; row.postedAt = row.at = '2026-10-22T10:00:33.000Z'; });
@@ -246,7 +246,7 @@ for (const failure of ['missing round', 'repeated round', 'backend without relay
     const rows = getCheck('steer-main').analyze(input(dir, failure === 'backend without relay' ? ['codex', 'kimi'] : ['codex'])).results;
     const row = rows.at(-1);
     assert.equal(row.result, 'fail');
-    assert.match(row.reason, /expected exactly one send, found [02]/);
+    assert.match(row.reason, failure === 'backend without relay' ? /exactly one relay for kimi, found 0/ : /expected exactly one send, found [02]/);
     if (failure === 'backend without relay') {
       assert.equal(rows[0].result, 'pass');
       assert.equal(row.backend, 'kimi');
@@ -694,8 +694,8 @@ for (const name of ['steer-main', 'steer-workflow', 'steer-plugin', 'continue'])
     lines(file, [entries[1], entries[2], entries[0], ...entries.slice(3)]);
     const analyzed = getCheck(name).analyze(input(dir));
     assert.equal(analyzed.results[0].result, 'fail');
-    assert.match(analyzed.results[0].reason, /Recipient was not spawned in this run/);
-    assert.equal(analyzed.details[0].error, 'Recipient was not spawned in this run.');
+    assert.match(analyzed.results[0].reason, /exactly one relay for codex, found 0/);
+    assert.equal(analyzed.details[0].error, `Recipient was not spawned in this run: ${name === 'steer-main' ? 'steer-codex' : name === 'continue' ? 'continue-codex' : name === 'steer-plugin' ? 'steer-codex' : 'relay-one'}.`);
     assert.deepEqual(analyzed.evidence.agents, []);
   });
 }
@@ -1053,4 +1053,187 @@ test('an unspawned raw-id recipient fails its backend, and an unassigned extra s
   entries.push(callEntry('extra-send', 'SendMessage', { to: 'foreign-agent-id', message: 'unrelated extra send' }, '2026-10-22T10:02:00.000Z'));
   lines(file, entries);
   assert.match(getCheck('steer-main').analyze(input(dir)).results[0].reason, /Recipient was not spawned in this run/);
+});
+
+for (const name of ['steer-main', 'steer-workflow', 'steer-plugin', 'continue']) {
+  test(`${name} rejects a second relay even when it receives no sends`, t => {
+    const dir = name === 'steer-main' ? mainFixture(t, ['codex']) : copy(t, name);
+    const file = path.join(dir, 'transcript.jsonl'), entries = readTranscript(file);
+    const spawn = structuredClone(entries[1]), result = structuredClone(entries[2]);
+    spawn.message.content[0].id = 'extra-spawn';
+    result.message.content[0].tool_use_id = 'extra-spawn';
+    result.toolUseResult.agentId = 'extra-relay';
+    lines(file, [...entries, spawn, result]);
+    const row = getCheck(name).analyze(input(dir)).results[0];
+    assert.equal(row.result, 'fail');
+    assert.match(row.reason, /exactly one relay for codex, found 2 \(.*extra-relay\)/);
+  });
+
+  test(`${name} requires the backend's exact relay name`, t => {
+    const dir = name === 'steer-main' ? mainFixture(t, ['codex']) : copy(t, name);
+    const file = path.join(dir, 'transcript.jsonl'), entries = readTranscript(file);
+    entries[1].message.content[0].input.name = 'other-relay';
+    const parsed = transcriptCalls(entries);
+    assert.equal(parsed.spawns.length, 1);
+    lines(file, entries);
+    const row = getCheck(name).analyze(input(dir)).results[0];
+    assert.equal(row.result, 'fail');
+    assert.match(row.reason, /named "other-relay", expected (steer|continue)-codex/);
+  });
+
+  test(`${name} uses its own scope for analyzer evidence`, t => {
+    const dir = name === 'steer-main' ? mainFixture(t, ['codex']) : copy(t, name);
+    const file = path.join(dir, 'transcript.jsonl'), entries = readTranscript(file);
+    entries[0].message.content = '/command-without-a-run-line';
+    lines(file, entries);
+    assert.equal(getCheck(name).analyze(input(dir)).results[0].result, 'fail');
+    let called = 0;
+    const check = { ...getCheck(name), scope(all, runId) {
+      called++;
+      assert.equal(runId, 'synthetic-run');
+      assert.deepEqual(all, entries);
+      return all;
+    } };
+    assert.equal(check.analyze(input(dir)).results[0].result, 'pass');
+    assert.equal(called, 1);
+    check.scope = () => [];
+    assert.equal(check.analyze(input(dir)).results[0].result, 'fail');
+  });
+
+  for (const failure of ['missing', 'unrelated', 'substring']) {
+    test(`${name} requires exact receiver text: ${failure}`, t => {
+      const dir = name === 'steer-main' ? mainFixture(t, ['codex']) : copy(t, name);
+      const file = path.join(dir, name === 'steer-main' ? 'jobs/repo/codex-job/relay-transcript.jsonl' : 'jobs/repo/job-one/relay-transcript.jsonl');
+      const entries = readTranscript(file);
+      const holder = name === 'continue' ? entries[0].message : name === 'steer-workflow' ? entries[0].attachment.origin : entries[0].attachment;
+      const key = name === 'continue' ? 'content' : name === 'steer-workflow' ? 'body' : 'prompt';
+      if (failure === 'missing') delete holder[key];
+      if (failure === 'unrelated') holder[key] = 'something else entirely';
+      if (failure === 'substring') holder[key] = holder[key].replace('for codex', 'for codex plus extra text');
+      lines(file, entries);
+      const row = getCheck(name).analyze(input(dir)).results[0];
+      assert.equal(row.result, 'fail');
+      assert.match(row.reason, /Relay transcript text does not match the send/);
+    });
+  }
+}
+
+test('three valid jobs cannot supply the three rounds of one backend', t => {
+  const dir = mainFixture(t, ['codex']), file = path.join(dir, 'transcript.jsonl'), entries = readTranscript(file);
+  const original = path.join(dir, 'jobs/repo/codex-job');
+  entries[3].message.content[0].input.to = 'agent-codex';
+  for (const round of [2, 3]) {
+    const agentId = `agent-codex-${round}`, jobDir = `repo/codex-job-${round}`;
+    fs.cpSync(original, path.join(dir, 'jobs', jobDir), { recursive: true });
+    write(path.join(dir, `jobs/relays/${agentId}.json`), { agentId, jobDir, transcriptPath: `${jobDir}/relay-transcript.jsonl` });
+    const spawn = structuredClone(entries[1]), result = structuredClone(entries[2]);
+    spawn.message.content[0].id = `spawn-${round}`;
+    result.message.content[0].tool_use_id = `spawn-${round}`;
+    result.toolUseResult.agentId = agentId;
+    entries.push(spawn, result);
+    const send = entries.find(entry => entry.message?.content?.[0]?.id === `send-codex-${round}`);
+    send.message.content[0].input.to = agentId;
+  }
+  lines(file, entries);
+  const analyzed = getCheck('steer-main').analyze(input(dir));
+  assert.ok(analyzed.details.every(row => row.pass));
+  assert.equal(new Set(analyzed.details.map(row => row.jobDir)).size, 3);
+  assert.equal(analyzed.results[0].result, 'fail');
+  assert.equal(analyzed.results[0].reason, 'Expected exactly one relay for codex, found 3 (agent-codex, agent-codex-2, agent-codex-3).');
+});
+
+test('a send to another backend relay names both relays and fails the intended backend', t => {
+  const dir = mainFixture(t, ['codex', 'grok']), file = path.join(dir, 'transcript.jsonl'), entries = readTranscript(file);
+  const send = entries.find(entry => entry.message?.content?.[0]?.id === 'send-codex-1');
+  send.message.content[0].input.to = 'agent-grok';
+  lines(file, entries);
+  const analyzed = getCheck('steer-main').analyze(input(dir, ['codex', 'grok']));
+  assert.deepEqual(analyzed.results.map(row => row.result), ['fail', 'pass']);
+  assert.match(analyzed.results[0].reason, /Send targets relay agent-grok, not codex's relay agent-codex/);
+});
+
+test('a raw recipient id outside the run is named in the failure', t => {
+  const dir = mainFixture(t, ['codex']), file = path.join(dir, 'transcript.jsonl'), entries = readTranscript(file);
+  entries[3].message.content[0].input.to = 'another-relay';
+  lines(file, entries);
+  assert.match(getCheck('steer-main').analyze(input(dir)).results[0].reason, /not spawned in this run: another-relay/);
+});
+
+test('spawn counting requires a successful Agent result with an id and ignores repeated snapshots', t => {
+  const dir = mainFixture(t, ['codex']), file = path.join(dir, 'transcript.jsonl'), entries = readTranscript(file);
+  lines(file, [...entries, structuredClone(entries[2])]);
+  assert.equal(getCheck('steer-main').analyze(input(dir)).results[0].result, 'pass');
+  for (const failure of ['missing id', 'failed result', 'no result']) {
+    const changed = structuredClone(entries);
+    if (failure === 'missing id') { delete changed[2].toolUseResult.agentId; changed[2].message.content[0].content = 'No id.'; }
+    if (failure === 'failed result') changed[2].message.content[0].is_error = true;
+    if (failure === 'no result') changed.splice(2, 1);
+    lines(file, changed);
+    const row = getCheck('steer-main').analyze(input(dir)).results[0];
+    assert.equal(row.result, 'fail', failure);
+    assert.match(row.reason, /exactly one relay for codex, found 0/);
+  }
+});
+
+test('ledger entries with no stored message still match by receiver text, never by order', t => {
+  const dir = mainFixture(t, ['codex']);
+  for (const round of [1, 2, 3]) {
+    edit(dir, `jobs/repo/codex-job/inbox/relay/${round}.json`, row => {
+      delete row.text;
+      row.at = `2026-10-22T10:02:0${4 - round}.000Z`;
+    });
+  }
+  const analyze = () => getCheck('steer-main').analyze(input(dir));
+  const passed = analyze();
+  assert.equal(passed.results[0].result, 'pass');
+  assert.deepEqual(passed.details.map(row => row.matchedBy), ['text', 'text', 'text']);
+  assert.deepEqual(passed.results[0].timings.deliveredSeconds, [2, 3, 4]);
+  const file = path.join(dir, 'jobs/repo/codex-job/relay-transcript.jsonl'), entries = readTranscript(file);
+  entries[0].attachment.prompt = 'unrelated';
+  lines(file, entries);
+  assert.equal(analyze().results[0].result, 'fail');
+  assert.match(analyze().results[0].reason, /No matching delivery record.*relay transcript/);
+});
+
+test('Workflow matches origin.body even though the queued prompt carries an agent-message envelope', t => {
+  const dir = copy(t, 'steer-workflow');
+  const file = path.join(dir, 'jobs/repo/job-one/relay-transcript.jsonl'), entries = readTranscript(file);
+  assert.equal(entries[0].attachment.prompt, '<agent-message from="sender">\nsteer from a workflow agent for codex\n</agent-message>');
+  assert.equal(getCheck('steer-workflow').analyze(input(dir)).results[0].result, 'pass');
+  delete entries[0].attachment.origin.body;
+  lines(file, entries);
+  assert.equal(getCheck('steer-workflow').analyze(input(dir)).results[0].result, 'fail');
+});
+
+test('continue extracts the exact message from its coordinator envelope as a string or text blocks', t => {
+  const dir = copy(t, 'continue');
+  const file = path.join(dir, 'jobs/repo/job-one/relay-transcript.jsonl'), entries = readTranscript(file);
+  const text = entries[0].message.content;
+  entries[0].message.content = text.split('\n').map(text => ({ type: 'text', text }));
+  lines(file, entries);
+  assert.equal(getCheck('continue').analyze(input(dir)).results[0].result, 'pass');
+  for (const content of [text.replace('The coordinator sent a message while you were working:\n', ''),
+    text.replace('\n\nAddress this before completing your current task.', ''),
+    text.replace('second turn for codex', 'second turn for codex\nextra message text')]) {
+    entries[0].message.content = content;
+    lines(file, entries);
+    assert.equal(getCheck('continue').analyze(input(dir)).results[0].result, 'fail');
+  }
+});
+
+test('run span uses the same normalized first prompt line as scoping', () => {
+  assert.equal(runLine('wanted'), 'Live suite run wanted.');
+  const prompt = 'Live suite run wanted.\nprompt';
+  const finish = textEntry('assistant', 'DONE', 'finish');
+  for (const content of [prompt, `\n\n${prompt}`, `\n\n<pasted_content id="paste">\n${prompt}\n</pasted_content id="paste">\n`,
+    [{ type: 'text', text: '\n\nLive suite run wanted.' }, { type: 'text', text: 'prompt' }]]) {
+    const start = { type: 'user', timestamp: 'start', message: { content } };
+    assert.deepEqual(runSpan([start, finish], 'wanted', 'DONE'), { startedAt: 'start', finishedAt: 'finish' });
+    assert.deepEqual(scopeToRun([start, finish], 'wanted'), [start, finish]);
+  }
+  for (const content of [`quoted\n${prompt}`, `<pasted_content id="paste">\n${prompt}\n</pasted_content id="paste">\nReview this.`]) {
+    const quoted = textEntry('user', content, 'wrong');
+    assert.equal(runSpan([quoted, finish], 'wanted', 'DONE').startedAt, null);
+    assert.deepEqual(scopeToRun([quoted, finish], 'wanted'), []);
+  }
 });

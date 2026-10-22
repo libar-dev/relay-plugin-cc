@@ -1,1 +1,1 @@
-{"type": "attachment", "uuid": "send-entry", "attachment": {"type": "queued_command", "origin": {"kind": "coordinator", "plugin": "wake-probe"}}}
+{"type": "attachment", "uuid": "send-entry", "attachment": {"type": "queued_command", "origin": {"kind": "coordinator", "plugin": "wake-probe"}, "prompt": "steer from a plugin for codex"}}

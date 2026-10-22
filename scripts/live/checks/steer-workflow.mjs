@@ -17,7 +17,7 @@ export default {
       ending('LIVE-WORKFLOW-STEER-DONE', "the Workflow's result and every relay's completion notice");
   },
   analyze(input) {
-    return analyzeCheck(input, { source: 'workflow', messages: backend => [`steer from a workflow agent for ${backend}`] });
+    return analyzeCheck(input, { scope: this.scope, source: 'workflow', messages: backend => [`steer from a workflow agent for ${backend}`] });
   },
   cell: steerCell
 };

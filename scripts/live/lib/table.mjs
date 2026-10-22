@@ -64,7 +64,7 @@ export function renderTable(records, registry, { BACKENDS, BACKEND_NAMES }, rela
     if (!backends.length) continue;
     const names = backends.map(backend => BACKEND_NAMES[backend]).join(', ');
     if (delivery === 'in-turn') lines.push(`- **Into the running turn**: ${names}. The backend added the message to the turn it was running.`);
-    if (delivery === 'next-turn') lines.push(`- **As the next turn**: ${names}. The message reached the job as fast, waited for the running turn to end, and ran as a turn of its own; the running turn did not see it.${backends.includes('kimi') ? " (Kimi's ACP has no steer.)" : ''}`);
+    if (delivery === 'next-turn') lines.push(`- **As the next turn**: ${names}. The message reached the job as fast, waited for the running turn to end, and then ran as a turn of its own.`);
     if (delivery === 'new-turn') lines.push(`- **A new turn of the job**: ${names}. A message sent after the job ended ran as a new turn.`);
   }
   if (!shown.length) lines.push('No check has passed yet.');
