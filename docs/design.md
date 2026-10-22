@@ -112,6 +112,7 @@ words of the request.
 |---|---|
 | Relay agent (`relay:job`) | an agent id and a transcript for the job; three commands |
 | Hooks | the prompt, the messages and the report; the relay's allowlist; session exports; the stop gate |
+| Hooks module (`hooks/mod/register.js`) | waking a waiting relay when a message is sent to it |
 | Companion (`scripts/companion.mjs`) | the command line: creating jobs, posting messages, reading views |
 | Worker | one job's `job.json`, its turns and its backend server |
 | Backend server | the backend session while a worker or a review runs |
@@ -335,8 +336,10 @@ received message not yet delivered, in order: steered while the job runs, contin
 
 - A message is recognised by its entry type and origin, never by its text: a `queued_command`
   attachment from the coordinator (a `SendMessage` while the relay works), a `user` entry from the
-  coordinator (a message after the hand-back, taken out of the harness's fixed wrapper), or a plain
-  `user` turn after the prompt that is neither metadata (`isMeta`) nor a tool result.
+  coordinator (a message after the hand-back, taken out of the harness's fixed wrapper), either of
+  the two from a peer (another agent's `SendMessage`: a subagent's or a Workflow agent's; the text
+  is the origin's `body`, without the harness's envelope), or a plain `user` turn after the prompt
+  that is neither metadata (`isMeta`) nor a tool result.
 - A message that arrives before the job exists is delivered by `start` once the job exists.
 - Each delivery is recorded in `inbox/relay/<transcript entry uuid>.json` under the relay lock, with
   the inbox message id chosen before posting. A hook cut off half way posts again under the same
@@ -346,6 +349,35 @@ received message not yet delivered, in order: steered while the job runs, contin
 - A `cancel` counts as delivered once the job is terminal. A failed try is a `relay-violation:` and
   stays pending while the job runs, with later messages waiting behind it. A try counts when it
   starts, and three started tries close it as failed.
+
+### The wake
+
+Claude Code puts a message queued for a subagent into its conversation only between two tool
+calls. A relay spends nearly all its time inside one tool call, `wait`, so a message would wait for
+the wait to end. The plugin's hooks module, `hooks/mod/register.js` (listed under `modules` in
+`hooks/hooks.json`), ends it sooner. Its one hook, on `session.send`, runs for every message that
+leaves the conversation: a `SendMessage` from the main thread or from any subagent, and a plugin's
+`$.session.send`. Once Claude Code reports the message queued at the recipient, the hook resolves
+the recipient through `$.agent.list()` (an id, else a name; a Workflow's agents are not listed and
+are addressed by id) and runs `companion wake --agent <id>`. It never refuses, rewrites or holds a
+message, and an error in it leaves the send as it was.
+
+`wake` reads the relay pointer for that agent id and nothing else, since it runs on every message
+a session sends. When the agent is the job's current relay and the job has not ended, it writes
+`relay-wake.json` in the job directory. A relay's `wait` (the hook adds `--exit-zero-while-running`)
+looks for that file at every poll, once a second, and returns as a timeout would, with `still
+running: …`. The relay runs `wait` again, and the guard delivers the message at that call through
+the ledger above. The wake posts nothing, so a message still has one way to the job.
+
+The wait removes the marker whenever it returns. Every message queued before the wait returned
+enters the relay's conversation at that boundary, so the marker is spent. A message sent after the
+boundary, while the relay's model writes its next `wait` call, leaves a marker that makes that wait
+return at once. Comparing the marker with the time of the guard's last transcript read would miss
+it, because the message is not in the transcript yet when the guard reads it. A marker whose message
+is already in costs one extra wait call, and a marker ends at most one wait.
+
+The module draws nothing, so it runs wherever the plugin loads: the terminal, Desktop, `claude -p`
+and Agent SDK hosts.
 
 ### The report
 
@@ -764,9 +796,11 @@ only.
 
 The relay reads two things Claude Code does not publish as an interface: the agent transcript and
 the Workflow tool's run journal ([what it reads](#what-the-relay-reads-from-claude-code)). Its
-markers were read from Claude Code 2.1.287 and 2.1.288, and its hooks need `SubagentHandback`, so
-the floor is Claude Code 2.1.271. A Claude Code update can break any of it. The relay needs no
-Claude Code mod. It runs on command hooks and the transcript.
+markers were read from Claude Code 2.1.287 and 2.1.288, and its hooks need `SubagentHandback`. Its
+hooks module needs the Mod API's `session.send` event, `$.agent.list()` and `$.process.run`, as
+Claude Code 2.1.307 declares them, so the floor is 2.1.307. A Claude Code update can break any of
+it. Delivery runs on command hooks and the transcript; the module only wakes a waiting relay
+([The wake](#the-wake)).
 
 The Workflow journal has a second storage mode, behind a feature flag and off on 2.1.288, that
 keeps no `journal.jsonl` on disk. Under it a relay finds no key, so a resumed run's relay starts a
@@ -778,8 +812,9 @@ After a Claude Code update:
    the job must record the call's key as `relay.journalKey` (`job.json`, or `relay.json` after an
    adoption).
 2. Steer one running `relay:job` agent with `SendMessage`, and send it one message after it hands
-   back. The state block must show no `relay-violation:` line, and the second message must run as a
-   new turn.
+   back. The steer must be recorded in the job's `inbox/relay/` within seconds of the send, the
+   state block must show no `relay-violation:` line, and the second message must run as a new turn.
+   `scripts/live/steer-wake.mjs` runs the steer on every backend and times it.
 3. If either fails, `scripts/hook-probe.mjs` logs what the hooks receive. Register it for
    PreToolUse, PostToolUse and SubagentStop in a throwaway project, repeat the steps, and compare
    the log with what `lib/harness/` expects.

@@ -322,11 +322,11 @@ test("README carries the first hour, stop gate, Claude Code dependency and devel
   for (const source of [readme, internals]) {
     assert.ok(source.includes("The relay reads two things Claude Code does not publish as an interface: the agent transcript and the Workflow tool's run journal"));
     assert.match(source, /Claude Code 2\.1\.287 and 2\.1\.288/);
-    assert.match(source, /`SubagentHandback`, so the floor is Claude Code 2\.1\.271/);
+    assert.match(source, /the `session\.send` event of the Mod API, so the floor is Claude Code 2\.1\.307/);
     assert.match(source, /A Claude Code update can break it\./);
     assert.ok(source.includes("the job's `job.json` must hold the call's key as `relay.journalKey`"));
     assert.ok(source.includes("once another relay has adopted the job, its `relay.json` holds the binding"));
-    assert.match(source, /works with no Claude Code mod loaded/);
+    assert.match(source, /The module only wakes a waiting relay: delivery runs on command hooks and the transcript/);
   }
   assert.ok(internals.includes("stores that key as `relay.journalKey` in the job's `job.json`"));
   assert.doesNotMatch(internals, /binds the job to that key in the job's `relay\.json`/);
