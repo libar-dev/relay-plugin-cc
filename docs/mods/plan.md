@@ -94,7 +94,7 @@ guard delivers the message on the same path as before. This is the most complete
 
 - One trigger covers every sender: the main thread, an orchestrator subagent, a teammate, and the board's buttons,
   which use `$.session.send`.
-- It draws nothing, so it works in Agent SDK hosts too (tested). Phase 1's live suite confirms it in T3.
+- It draws nothing, so it works in Agent SDK hosts too (tested). Whether it works in T3 is untested; Phase 1's live suite will check it.
 - Delivery keeps one path, the guard's ledger. Nothing else posts a message, so nothing can deliver it twice.
 
 The plans' alternatives were weaker. Sol and Astra planned separate direct steer commands with their own
@@ -308,7 +308,7 @@ The funding principles ([funding.md](funding.md)) add no product feature. Four p
 ## T3 Code
 
 In Agent SDK runs, the module's hooks and commands work, so Phases 1 to 3 are expected to work in T3 as well.
-Phase 1's and Phase 2's live suites confirm that in T3 itself; no plan tested it there. Phase 4 needs two things
+No plan has tested this in T3 yet; Phase 1's and Phase 2's live suites will. Phase 4 needs two things
 from T3: it has to render the `ui_*` messages, and it has to attach a surface. The module refreshes the status
 line only while `$.session.surfaces()` is non-empty. [t3-code.md](t3-code.md) explains what relay would need from T3 and why relay complements T3's
 own delegates. It is the article to link from a post to the T3 community.
