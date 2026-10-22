@@ -514,6 +514,7 @@ test('typed evidence copy replays after the original transcripts and jobs are re
 
 function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['codex'], afterA2 = () => {}, queuedA1 } = {}) {
   const { dir, input } = setup(t), calls = [];
+  const interjection = queuedA1?.action === 'interject-queued';
   const main = readers.readTranscript(input.transcript);
   for (const backend of backends.filter(value => ['grok', 'zcode'].includes(value))) {
     const replace = text => text.replaceAll('codex', backend).replaceAll(readers.MODELS.codex, readers.MODELS[backend]);
@@ -526,7 +527,8 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
   }
   const saved = Object.fromEntries(backends.map((backend, i) => {
     const jobDir = path.join(dir, `jobs/repo/job-a-${backend}`);
-    const offset = i * 120000 + (queuedA1 ? 120000 : 0);
+    const queuedOffset = queuedA1 ? (interjection ? 300000 : 120000) : 0;
+    const offset = i * 120000 + queuedOffset;
     const shift = value => JSON.parse(JSON.stringify(value).replace(/2026-10-22T[\d:.]+Z/g,
       at => new Date(Date.parse(at) + offset).toISOString()));
     for (const file of readers.filesUnder(jobDir, file => /\.(json|jsonl)$/.test(file))) {
@@ -547,7 +549,19 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
     if (queuedA1) {
       job.attempts[0].startedAt = '2026-10-22T10:00:10.000Z';
       job.attempts[0].endedAt = '2026-10-22T10:03:00.000Z';
-      job.messages.push({ id: outcome.messageId, action: 'queued-next-turn' });
+      if (interjection) {
+        job.attempts.splice(1, 1);
+        job.attempts[0].endedAt = '2026-10-22T10:05:46.000Z';
+        job.attempts[1].attempt = 2;
+        Object.assign(outcome, { action: 'steered', attempt: 1, turnId: job.attempts[0].turnId, at: job.attempts[0].endedAt });
+        edit(jobDir, `inbox/outcomes/msg-A2-${backend}.json`, row => { row.attempt = 2; });
+        handbacks.forEach(row => { row.attempts--; });
+        handbacks[0].at = job.attempts[0].endedAt;
+        for (const row of main) if (row.message?.content?.includes?.(`<task-id>agent-a-${backend}</task-id>`)) {
+          row.message.content = row.message.content.replace(/attempts: ([23])/g, (_, n) => `attempts: ${Number(n) - 1}`);
+          if (row.message.content.includes('attempts: 1')) row.timestamp = handbacks[0].at;
+        }
+      } else job.messages.push({ id: outcome.messageId, action: 'queued-next-turn' });
       Object.assign(ledger[0].value, { kind: 'steer', at: '2026-10-22T10:00:46.000Z', postedAt: '2026-10-22T10:00:46.000Z' });
       relay[0].timestamp = ledger[0].value.at;
       edit(jobDir, `inbox/claimed/msg-A1-${backend}.json`, row => { row.kind = 'steer'; });
@@ -562,7 +576,7 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
       other[scenario] = { file, job: json(file) };
       write(file, running(other[scenario].job));
     }
-    return [backend, { jobDir, job, handbacks, relayFile, relay, ledger, other, offset, outcomeFile, outcome }];
+    return [backend, { jobDir, job, handbacks, relayFile, relay, ledger, other, offset, queuedOffset, outcomeFile, outcome }];
   }));
   let time = Date.parse('2026-10-22T10:00:25Z'), screens = [], visit = 0, stage = null, current, sent, lastScreen;
   const visits = ['B1', 'C1', 'A1'].flatMap(line => backends.map(backend => ({ line, backend })));
@@ -585,9 +599,14 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
     if (stage === 'queued') {
       if (queuedA1.finish !== 'running' && time >= Date.parse(job.attempts[0].endedAt)) {
         write(path.join(jobDir, 'job.json'), { ...job, attempts: job.attempts.slice(0, 1) });
-        if (queuedA1.finish === 'started' && time >= Date.parse(job.attempts[1].startedAt)) {
-          write(path.join(jobDir, 'job.json'), { ...job, attempts: job.attempts.slice(0, 2) });
+        if (queuedA1.finish === 'started' && time >= Date.parse(interjection ? job.attempts[0].endedAt : job.attempts[1].startedAt)) {
+          write(path.join(jobDir, 'job.json'), { ...job, attempts: job.attempts.slice(0, interjection ? 1 : 2) });
           write(outcomeFile, outcome); stage = 'handback';
+          if (interjection) {
+            lines(path.join(jobDir, 'relay-handbacks.jsonl'), handbacks.slice(0, 1));
+            lines(input.transcript, main.filter(row => Date.parse(row.timestamp) <= time));
+            stage = 'idle';
+          }
         }
       }
       return;
@@ -629,7 +648,7 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
           let idle = fs.readFileSync(path.join(fixture, 'screen-a-idle.txt'), 'utf8');
           if (failure === 'unfocused-a-prompt') idle = idle.replace('  ◯ main', '❯ ◯ main');
           screens.splice(9, 0, screens[8], failure === 'lost-a-view' ? screens[0] : idle, screens[8]);
-          time = Math.max(time, Date.parse('2026-10-22T10:00:45Z') + saved[backend].offset - (queuedA1 ? 120000 : 0));
+          time = Math.max(time, Date.parse('2026-10-22T10:00:45Z') + saved[backend].offset - saved[backend].queuedOffset);
           if (failure === 'a-completed') write(path.join(saved[backend].jobDir, 'job.json'), saved[backend].job);
         }
         screens = screens.map(screen => screen.replaceAll('codex', backend));
@@ -744,7 +763,7 @@ for (const failure of ['wrong B outcome', 'wrong final result', 'missing final h
     const ledgerAt = Date.parse(json(path.join(dir, A, 'inbox/relay/entry-A2-codex.json')).at);
     const elapsed = dependencies.now() - ledgerAt;
     assert.ok(elapsed <= 120000);
-    assert.equal(elapsed, failure === 'missing final notice' ? 120000 : 8000);
+    assert.equal(elapsed, failure === 'missing final notice' ? 120000 : failure === 'wrong B outcome' ? 28000 : 8000);
     assert.equal(ctx.run.completed, true);
     assert.equal(ctx.run.error, undefined);
     assert.ok(ctx.run.checkFinishedAt);
@@ -1176,6 +1195,85 @@ for (const [backend, action, finish] of [
       Date.parse('2026-10-22T10:03:00Z') + 120000);
   }
 });
+
+for (const finish of ['started', 'missing', 'running', 'wrong turn']) {
+  test(`typed terminal waits for Grok A1 interject-queued at its original attempt: ${finish}`, async t => {
+    const { ctx, dependencies, dir } = terminal(t, { backends: ['grok'], pendingB: false, pendingC: false,
+      queuedA1: { action: 'interject-queued', finish: finish === 'wrong turn' ? 'started' : finish } });
+    const initial = dependencies.now();
+    const jobDir = path.join(dir, 'jobs/repo/job-a-grok');
+    if (finish === 'wrong turn') {
+      const sleep = dependencies.sleep;
+      dependencies.sleep = async ms => {
+        await sleep(ms);
+        edit(jobDir, 'inbox/outcomes/msg-A1-grok.json', row => {
+          if (row.action === 'steered') row.turnId = 'another-turn';
+        });
+      };
+    }
+    if (finish === 'started') {
+      const result = await typed.runTerminal(ctx, dependencies);
+      assert.equal(result.results[0].result, 'pass', result.results[0].reason);
+      const ledger = json(path.join(jobDir, 'inbox/relay/entry-A1-grok.json'));
+      const outcome = json(path.join(jobDir, 'inbox/outcomes/msg-A1-grok.json'));
+      const job = json(path.join(jobDir, 'job.json'));
+      assert.equal(Date.parse(outcome.at) - Date.parse(ledger.at), 300000);
+      assert.equal(outcome.action, 'steered'); assert.equal(outcome.turnId, job.attempts[0].turnId);
+      assert.equal(outcome.at, job.attempts[0].endedAt);
+      assert.equal(job.attempts.length, 2);
+      assert.equal(typed.analyze({ ...ctx, backends: ['grok'] }).results[0].result, 'pass');
+    } else {
+      const message = finish === 'wrong turn' ? 'Expected in-turn steer for A1.' : 'Pending interject-queued outcome for A1.';
+      await assert.rejects(typed.runTerminal(ctx, dependencies), { message });
+      assert.equal(ctx.run.error, message);
+      assert.equal(dependencies.now(), finish === 'running' ? initial + ctx.timeoutMinutes * 60000 :
+        Date.parse('2026-10-22T10:05:46Z') + 20000);
+    }
+  });
+}
+
+for (const line of ['B1', 'C1']) for (const finish of ['steered', 'pending']) {
+  test(`typed terminal settles Grok ${line} interject-queued after its sleep with ledger latency: ${finish}`, async t => {
+    const { ctx, dependencies, dir } = terminal(t, { backends: ['grok'] });
+    const jobDir = path.join(dir, `jobs/repo/job-${line[0].toLowerCase()}-grok`);
+    const outcomeFile = path.join(jobDir, `inbox/outcomes/msg-${line}-grok.json`);
+    const outcome = json(outcomeFile), sleep = dependencies.sleep;
+    const ended = Date.parse('2026-10-22T10:04:10Z');
+    let confirmedAt;
+    write(outcomeFile, { ...outcome, action: 'interject-queued' });
+    edit(jobDir, `inbox/relay/entry-${line}-grok.json`, row => {
+      row.at = row.postedAt = line === 'B1' ? '2026-10-22T10:00:55Z' : '2026-10-22T10:01:04Z';
+    });
+    dependencies.sleep = async ms => {
+      await sleep(ms);
+      if (dependencies.now() >= ended) {
+        edit(jobDir, 'job.json', job => {
+          job.state = 'completed'; job.attempts[0].state = 'completed';
+          job.attempts[0].endedAt = new Date(ended).toISOString();
+        });
+        if (finish === 'steered' && !confirmedAt && dependencies.now() >= ended + 3000) {
+          confirmedAt = dependencies.now();
+          write(outcomeFile, { ...outcome, at: new Date(confirmedAt).toISOString() });
+        }
+      }
+    };
+    const result = await typed.runTerminal(ctx, dependencies);
+    const row = result.results[0];
+    if (finish === 'steered') {
+      assert.equal(row.result, 'pass', row.reason);
+      assert.equal(confirmedAt, ended + 3000);
+      assert.deepEqual(row.timings[line === 'B1' ? 'b1WakeSeconds' : 'c1Seconds'], [29]);
+      assert.ok(confirmedAt - Date.parse(ctx.run.typed.grok[line].sentAt) > 30000);
+      assert.equal(typed.analyze({ ...ctx, backends: ['grok'] }).results[0].result, 'pass');
+    } else {
+      assert.equal(row.result, 'fail');
+      assert.equal(row.reason, `Pending interject-queued outcome for ${line}.`);
+      assert.equal(ctx.run.typed.grok[line].settleError, row.reason);
+      assert.equal(dependencies.now(), ended + 20000);
+      assert.equal(typed.analyze({ ...ctx, backends: ['grok'] }).results[0].reason, row.reason);
+    }
+  });
+}
 
 for (const line of ['A1', 'A2']) for (const delay of line === 'A1' ? [1000, 20000, null] : [1000, 20000, 120000, null]) {
   test(`typed terminal retries done ${line} delivery when its attempt ${delay === null ? 'never appears' : `appears after ${delay} ms`}`, async t => {

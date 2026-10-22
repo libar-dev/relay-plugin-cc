@@ -142,6 +142,7 @@ function delivery(input, loaded, receipt, line, backend) {
   if (line === 'C1' && record.kind !== 'steer') throw new Error('C1 was not a steer.');
   const outcome = readJson(path.join(jobDir, 'inbox/outcomes', `${path.basename(record.messageId)}.json`));
   if (outcome.messageId !== record.messageId) throw new Error(`Outcome does not match ${line}.`);
+  if (outcome.action === 'interject-queued') throw new Error(`Pending interject-queued outcome for ${line}.`);
   const active = record.kind === 'steer' ? runningAt(job, record.at, input.relayVersion) : null;
   const expected = record.kind === 'continue' ? 'new-turn' : STEER_DELIVERY[backend];
   if (expected === 'in-turn') {
@@ -332,11 +333,12 @@ export default {
       }
     };
     const lineRecords = (item, line) => {
+      const loaded = item[line[0]];
       const text = run.typed[item.backend][line].text;
-      const file = path.resolve(ctx.jobsHome, item.A.job.relay.transcriptPath);
+      const file = path.resolve(ctx.jobsHome, loaded.job.relay.transcriptPath);
       const uuids = new Set((fs.existsSync(file) ? readTranscript(file) : [])
         .filter(entry => humanText(entry) === text).map(entry => entry.uuid));
-      return recordsFor(item.A.jobDir).filter(record => record.message === text || uuids.has(path.basename(record.file, '.json')));
+      return recordsFor(loaded.jobDir).filter(record => record.message === text || uuids.has(path.basename(record.file, '.json')));
     };
     const ledgerPending = (item, line) => {
       const records = lineRecords(item, line);
@@ -348,30 +350,31 @@ export default {
       // The ledger, inbox outcome and job attempts are written by different processes.
       const started = now();
       let bound = Math.min(deadline, started + 120000);
-      let nextTurn = false;
+      let nextTurn = false, interjectQueued = false;
       while (true) {
         signal?.throwIfAborted();
         if (run.interrupted) throw new Error('Interrupted.');
         try {
           const records = lineRecords(item, line);
-          if (!nextTurn && records.length && records.every(record => record.kind === 'steer') && STEER_DELIVERY[item.backend] === 'in-turn') {
+          if (!nextTurn && !interjectQueued && records.length && records.every(record => record.kind === 'steer') && STEER_DELIVERY[item.backend] === 'in-turn') {
             bound = Math.min(deadline, started + 20000);
           }
-          item.A = relayJob(input(), evidence, item.a.agentId);
+          const loaded = item[line[0]] = relayJob(input(), evidence, item[line[0].toLowerCase()].agentId);
           if (records.length === 1 && records[0].kind === 'steer') {
             const record = records[0];
-            nextTurn ||= STEER_DELIVERY[item.backend] === 'next-turn' ||
-              readJson(path.join(item.A.jobDir, 'inbox/outcomes', `${path.basename(record.messageId)}.json`), true)?.action === 'queued-next-turn';
-            if (nextTurn) {
-              // A queued steer cannot start its turn until the current attempt has ended.
+            const outcome = readJson(path.join(loaded.jobDir, 'inbox/outcomes', `${path.basename(record.messageId)}.json`), true);
+            nextTurn ||= STEER_DELIVERY[item.backend] === 'next-turn' || outcome?.action === 'queued-next-turn';
+            interjectQueued ||= outcome?.action === 'interject-queued';
+            if (nextTurn || interjectQueued) {
+              // Queued steers can await the running tool before their final outcome is written.
               bound = deadline;
-              const active = runningAt(item.A.job, record.at, run.relayVersion);
+              const active = runningAt(loaded.job, record.at, run.relayVersion);
               const ended = Date.parse(active.endedAt);
-              if (!Number.isFinite(ended) || now() < ended) throw new Error(`Current attempt has not ended before next-turn ${line}.`);
-              bound = Math.min(deadline, ended + 120000);
+              if (Number.isFinite(ended) && now() >= ended) bound = Math.min(deadline, ended + (nextTurn ? 120000 : 20000));
+              else if (nextTurn) throw new Error(`Current attempt has not ended before next-turn ${line}.`);
             }
           }
-          return delivery(input(), item.A, run.typed[item.backend][line], line, item.backend);
+          return delivery(input(), loaded, run.typed[item.backend][line], line, item.backend);
         } catch (error) {
           if (now() >= bound) throw error;
         }
@@ -444,6 +447,11 @@ export default {
         const diagnostic = await waitFor(() => handbackPending(item, item.a2.postedAt), Date.parse(item.a2.at) + 120000,
           `${item.a.name}-A2-handback`, false);
         if (diagnostic) { run.typed[item.backend].A2.settleError = diagnostic; ctx.save(); }
+      }
+      // Settle B and C after the visits so their running tools do not delay typing A1.
+      for (const item of jobs) for (const line of ['B1', 'C1']) {
+        try { await waitDelivery(item, line); }
+        catch (error) { run.typed[item.backend][line].settleError = error.message; ctx.save(); }
       }
       signal?.throwIfAborted();
       if (run.interrupted) throw new Error('Interrupted.');
@@ -526,7 +534,7 @@ export default {
         if (parsed.sends.some(send => send.agentId === agent.agentId)) throw new Error(`Lead sent a message to ${agent.name}.`);
       }
       const receipt = run.typed?.[backend];
-      if (receipt?.A2?.settleError) throw new Error(receipt.A2.settleError);
+      for (const line of ['A2', 'B1', 'C1']) if (receipt?.[line]?.settleError) throw new Error(receipt[line].settleError);
       const a1 = delivery(input, A, receipt?.A1, 'A1', backend);
       const a2 = delivery(input, A, receipt?.A2, 'A2', backend);
       const b1 = delivery(input, B, receipt?.B1, 'B1', backend);
