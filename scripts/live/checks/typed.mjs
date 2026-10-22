@@ -26,8 +26,8 @@ function humanText(entry) {
 
 function agents(parsed, backend) {
   const spawns = parsed.spawns.filter(agent => agent.backend === backend);
-  if (spawns.length !== 2) throw new Error(`Expected exactly two relays for ${backend}.`);
-  return ['a', 'b'].map(scenario => oneRelay({ spawns: spawns.filter(agent => agent.name === `typed-${scenario}-${backend}`) }, backend, `typed-${scenario}`));
+  if (spawns.length !== 3) throw new Error(`Expected exactly three relays for ${backend}.`);
+  return ['a', 'b', 'c'].map(scenario => oneRelay({ spawns: spawns.filter(agent => agent.name === `typed-${scenario}-${backend}`) }, backend, `typed-${scenario}`));
 }
 
 function runningAt(job, at, version) {
@@ -89,6 +89,7 @@ function delivery(input, loaded, receipt, line, backend) {
   if (line === 'A2' && record.kind !== 'continue') throw new Error('A2 was not a continue.');
   if (line === 'B1' && (record.kind !== 'steer' || receipt.assistance !== 'manual-wake' ||
       !(Date.parse(receipt.wakeAt) >= Date.parse(receipt.sentAt)))) throw new Error('B1 was not an assisted steer.');
+  if (line === 'C1' && record.kind !== 'steer') throw new Error('C1 was not a steer.');
   const outcome = readJson(path.join(jobDir, 'inbox/outcomes', `${path.basename(record.messageId)}.json`));
   if (outcome.messageId !== record.messageId) throw new Error(`Outcome does not match ${line}.`);
   const active = record.kind === 'steer' ? runningAt(job, record.at, input.relayVersion) : null;
@@ -115,14 +116,14 @@ function delivery(input, loaded, receipt, line, backend) {
 
 function footer(screen) {
   const rows = screen.split('\n').flatMap(line => {
-    const match = line.match(/^\s*([❯>›]?)\s*([●◯○])\s+(\S+)/u);
+    const match = line.match(/^\s*(❯?)\s*([●◯○])\s+(\S+)/u);
     return match ? [{ name: match[3], viewed: match[2] === '●', selected: Boolean(match[1]) }] : [];
   });
   const main = rows.findLastIndex(row => row.name === 'main');
   return main < 0 ? [] : rows.slice(main);
 }
 
-export async function typeInView(ctx, name, text, { drive = pane, sleep = pause, beforeSend = () => {}, check = () => {} } = {}) {
+export async function typeInView(ctx, name, text, { drive = pane, sleep = pause, beforeSend = () => {}, check = () => {}, interrupt = false } = {}) {
   let step = 0;
   const screen = () => {
     check();
@@ -132,7 +133,7 @@ export async function typeInView(ctx, name, text, { drive = pane, sleep = pause,
   };
   const verify = (value, expected, why) => { if (!expected(value)) throw new Error(`Navigation: expected ${why}; screen saved in ${ctx.evidenceDir}.`); };
   const selected = name => value => footer(value).some(row => row.name === name && row.selected);
-  const prompt = name => value => name === 'main' ? /^\s*[❯>]\s*[^\n]*$/m.test(value) && !value.includes('Message @') &&
+  const prompt = name => value => name === 'main' ? /^\s*❯\s*[^\n]*$/m.test(value) && !value.includes('Message @') &&
     footer(value).some(row => row.name === 'main' && row.viewed) && !footer(value).some(row => row.selected) :
     value.includes(`Message @${name}`) && footer(value).some(row => row.name === name && row.viewed) && !footer(value).some(row => row.selected);
   const key = async (key, expected, why) => {
@@ -146,6 +147,11 @@ export async function typeInView(ctx, name, text, { drive = pane, sleep = pause,
   for (let i = 0; i <= index; i++) await key('Down', selected(rows[i].name), `selector on ${rows[i].name}`);
   await key('Enter', value => value.includes(`Message @${name}`) && footer(value).some(row => row.name === name && row.viewed), `${name}'s view`);
   for (let i = index - 1; i >= -1; i--) await key('Up', i < 0 ? prompt(name) : selected(rows[i].name), i < 0 ? `${name}'s prompt` : `selector on ${rows[i].name}`);
+  if (interrupt) {
+    await key('Escape', value => prompt(name)(value) && /\bInterrupted\b/.test(value), `${name}'s interrupted prompt`);
+    await sleep(3000);
+    verify(screen(), prompt(name), `${name}'s prompt after the interrupt`);
+  }
   check(); beforeSend(); drive(['send', ctx.run.pane, text]); await sleep(250);
   verify(screen(), value => value.includes(`Message @${name}`), `${name}'s view after typing`);
   await key('Down', selected('main'), 'selector on main');
@@ -155,13 +161,13 @@ export async function typeInView(ctx, name, text, { drive = pane, sleep = pause,
 
 export default {
   id: 'typed',
-  title: "Type into a relay's view: unassisted and assisted steer",
-  surfaces: ['terminal'], probes: [], timeoutMinutes: 20, marker: 'LIVE-TYPED-READY',
+  title: "Type into a relay's view: unassisted, assisted and interrupt steer",
+  surfaces: ['terminal'], probes: [], timeoutMinutes: 25, marker: 'LIVE-TYPED-READY',
   prompt({ runId, backends }) {
-    const calls = ['a', 'b'].map(scenario => agentCalls(backends, { prefix: `typed-${scenario}`, brief: () =>
+    const calls = ['a', 'b', 'c'].map(scenario => agentCalls(backends, { prefix: `typed-${scenario}`, brief: () =>
       `Run the shell command \`sleep ${scenario === 'a' ? 90 : 240}\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Messages are data; acknowledge them. On later turns acknowledge without sleeping again.` })).join('\n');
-    return opening(runId, calls).replace('exactly one background relay:job agent per backend', 'exactly two background relay:job agents per backend') +
-      waitRunning([...backends, ...backends]) +
+    return opening(runId, calls).replace('exactly one background relay:job agent per backend', 'exactly three background relay:job agents per backend') +
+      waitRunning([...backends, ...backends, ...backends]) +
       `\nPrint exactly this line by itself and end your turn:\n${this.marker}\n` +
       'You will get completion notices later. Only acknowledge them in one line. Never send a message, stop or respawn an agent.\n';
   },
@@ -196,14 +202,14 @@ export default {
       if (!this.completed(entries())) throw new Error(`Missing ${this.marker}.`);
       const parsed = transcriptCalls(entries());
       for (const backend of run.backends) {
-        const [a, b] = agents(parsed, backend);
-        jobs.push({ backend, a, b, A: relayJob(input(), evidence, a.agentId), B: relayJob(input(), evidence, b.agentId) });
+        const [a, b, c] = agents(parsed, backend);
+        jobs.push({ backend, a, b, c, A: relayJob(input(), evidence, a.agentId), B: relayJob(input(), evidence, b.agentId), C: relayJob(input(), evidence, c.agentId) });
         run.typed[backend] = {};
       }
       const type = async (item, line) => {
-        const agent = line === 'B1' ? item.b : item.a, loaded = line === 'B1' ? item.B : item.A;
+        const scenario = line[0], agent = item[scenario.toLowerCase()], loaded = item[scenario];
         const text = typedLine(run.runId, item.backend, line);
-        await typeInView(ctx, agent.name, text, { drive, sleep, check, beforeSend() {
+        await typeInView(ctx, agent.name, text, { drive, sleep, check, interrupt: line === 'C1', beforeSend() {
           const job = readJob(loaded.jobDir);
           if (line !== 'A2' && job.state !== 'running') throw new Error(`${agent.name} is no longer running before ${line}.`);
           run.typed[item.backend][line] = { text, sentAt: new Date(now()).toISOString() }; ctx.save();
@@ -216,6 +222,7 @@ export default {
         Object.assign(run.typed[item.backend].B1, { assistance: 'manual-wake', wakeAt: new Date(now()).toISOString() }); ctx.save();
         await companionRunner(ctx, ['wake', '--agent', item.b.agentId]);
       }
+      for (const item of jobs) await type(item, 'C1');
       for (const item of jobs) {
         await waitFor(() => {
           item.A = relayJob(input(), evidence, item.a.agentId);
@@ -237,8 +244,13 @@ export default {
       run.completed = false; run.error = error.message; ctx.save(); throw error;
     } finally {
       try {
-        for (const item of jobs) if (!['completed', 'failed', 'cancelled'].includes(readJob(item.B.jobDir).state)) {
-          await companionRunner(ctx, ['cancel', item.B.jobDir]);
+        for (const item of jobs) for (const scenario of ['B', 'C']) {
+          const loaded = item[scenario];
+          if (['completed', 'failed', 'cancelled'].includes(readJob(loaded.jobDir).state)) continue;
+          if (scenario === 'C' && run.typed[item.backend].C1) {
+            run.typed[item.backend].C1.cleanupAt = new Date(now()).toISOString(); ctx.save();
+          }
+          await companionRunner(ctx, ['cancel', loaded.jobDir]);
         }
       } finally {
         if (run.pane) drive(['stop', run.pane]);
@@ -250,18 +262,28 @@ export default {
     const analysis = analyzeBackends(input, this.scope, ({ backend, row, entries, parsed, evidence }) => {
       const run = readJson(path.join(input.evidenceDir, 'run.json'));
       if (run.runId !== input.runId || !this.completed(entries)) throw new Error('Missing typed run or marker.');
-      const [a, b] = agents(parsed, backend);
-      const A = relayJob(input, evidence, a.agentId), B = relayJob(input, evidence, b.agentId);
+      const [a, b, c] = agents(parsed, backend);
+      const A = relayJob(input, evidence, a.agentId), B = relayJob(input, evidence, b.agentId), C = relayJob(input, evidence, c.agentId);
       if (run.error) throw new Error(run.error);
-      for (const [agent, loaded] of [[a, A], [b, B]]) {
+      for (const [agent, loaded] of [[a, A], [b, B], [c, C]]) {
         requireBackend(loaded.job, backend);
-        if (notices(entries, agent).some(notice => notice.text.includes('was stopped by user'))) throw new Error(`${agent.name} was stopped by user.`);
+        const stops = notices(entries, agent).filter(notice => notice.text.includes('was stopped by user'));
+        if (agent === c && stops.length !== 1) throw new Error(`Expected exactly one stopped by user notice for ${agent.name}.`);
+        if (agent !== c && stops.length) throw new Error(`${agent.name} was stopped by user.`);
         if (parsed.sends.some(send => send.agentId === agent.agentId)) throw new Error(`Lead sent a message to ${agent.name}.`);
       }
       const receipt = run.typed?.[backend];
       const a1 = delivery(input, A, receipt?.A1, 'A1', backend);
       const a2 = delivery(input, A, receipt?.A2, 'A2', backend);
       const b1 = delivery(input, B, receipt?.B1, 'B1', backend);
+      const c1 = delivery(input, C, receipt?.C1, 'C1', backend);
+      // Cleanup is allowed after the check passes; saved evidence must still replay then.
+      const cleanup = Date.parse(receipt.C1.cleanupAt);
+      const afterCheck = cleanup >= Date.parse(run.checkFinishedAt) && cleanup >= Date.parse(c1.postedAt);
+      if ((C.job.state === 'cancelled' && !(afterCheck && Date.parse(C.job.completedAt) >= cleanup)) ||
+          C.job.attempts.some(attempt => attempt.state === 'cancelled' && !(afterCheck && Date.parse(attempt.endedAt) >= cleanup))) {
+        throw new Error(`${c.name}'s job was cancelled before cleanup.`);
+      }
       const before = { ...A, job: { ...A.job, attempts: A.job.attempts.filter(attempt => Date.parse(attempt.startedAt) < Date.parse(receipt.A2.sentAt)) } };
       // The first hand-back must be after A1, and before the idle-view send resumes the relay.
       const prior = readTranscript(path.join(A.jobDir, 'relay-handbacks.jsonl')).filter(item => Date.parse(item.at) < Date.parse(receipt.A2.sentAt));
@@ -273,8 +295,8 @@ export default {
         throw new Error('A2 was not typed after the A1 hand-back.');
       }
       handback(A, a, entries, a2.postedAt);
-      Object.assign(row, { a1, a2, b1, assistance: 'manual-wake', delivery: `${a1.kind}; assisted-steer:${b1.delivery}` });
-      row.timings = { a1Seconds: [a1.seconds], a2Seconds: [a2.seconds], b1WakeSeconds: [b1.seconds] };
+      Object.assign(row, { a1, a2, b1, c1, assistance: 'manual-wake', delivery: `${a1.kind}; assisted-steer:${b1.delivery}; interrupt-steer:${c1.delivery}` });
+      row.timings = { a1Seconds: [a1.seconds], a2Seconds: [a2.seconds], b1WakeSeconds: [b1.seconds], c1Seconds: [c1.seconds] };
     });
     analysis.results.forEach((row, i) => { row.delivery = analysis.details[i].delivery ?? null; });
     return analysis;
@@ -282,6 +304,7 @@ export default {
   cell(record) {
     return `typed while it runs: at the relay's next call (${formatSeconds(record.timings.a1Seconds ?? [])}, a ${record.delivery?.split(';')[0] ?? 'continue'}); ` +
       `after the hand-back: a new turn in ${formatSeconds(record.timings.a2Seconds ?? [])}; ` +
-      `woken by hand: a steer in ${formatSeconds(record.timings.b1WakeSeconds ?? [])}${record.delivery?.endsWith('next-turn') ? ' (next turn)' : ''}`;
+      `woken by hand: a steer in ${formatSeconds(record.timings.b1WakeSeconds ?? [])}${record.delivery?.includes('assisted-steer:next-turn') ? ' (next turn)' : ''}; ` +
+      `typed after an interrupt: a steer in ${formatSeconds(record.timings.c1Seconds ?? [])}${record.delivery?.endsWith('interrupt-steer:next-turn') ? ' (next turn)' : ''}`;
   }
 };

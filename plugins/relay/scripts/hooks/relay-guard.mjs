@@ -73,6 +73,13 @@ function trimEnd(text) {
   return String(text ?? "").replace(/\s+$/, "");
 }
 
+function withoutOuterFence(text, expected) {
+  // A relay may fence the result; only its outer envelope may differ.
+  if (/^(?:[ \t]*\r?\n)*`{3,}/.test(String(expected ?? ""))) return text;
+  const fenced = /^(?:[ \t]*\r?\n)*(`{3,})[^`\r\n]*\r?\n([\s\S]*?)\r?\n\1$/.exec(trimEnd(text));
+  return fenced ? fenced[2] : text;
+}
+
 // A string-return relay retypes the state block, and a small model drops a line that only restates
 // the request, most often its own `relay:` line. Its text passes when every line it holds is a line
 // of the block and no outcome line is missing. A line added or changed still fails, and so does a
@@ -389,7 +396,7 @@ async function handleSubagentStop(input, env = process.env) {
   const lastToolAt = guard.raw.lastToolAt ?? "";
   const current = jobDir ? jobViewOrBusy(jobDir) : null;
   if (guard.handback && lastToolAt <= guard.handback.at &&
-      sync?.readable && sync.received.every((uuid) => (guard.handback.receivedUuids ?? guard.handback.messageUuids).includes(uuid)) &&
+      (!jobDir || (sync.readable && sync.received.every((uuid) => (guard.handback.receivedUuids ?? guard.handback.messageUuids).includes(uuid)))) &&
       !sync?.busy && !sync?.undelivered?.length &&
       (!current || (isTerminalView(current) && current.undelivered.length === 0))) {
     // The report already went out through SubagentHandback, rewritten by the hook, and the
@@ -425,11 +432,11 @@ async function handleSubagentStop(input, env = process.env) {
       else expected = renderResultText(done);
     }
   }
-  const matches = stateBlock ? matchesStateBlock(input.last_assistant_message, expected) : trimEnd(input.last_assistant_message) === trimEnd(expected);
+  const matches = stateBlock ? matchesStateBlock(input.last_assistant_message, expected) : trimEnd(withoutOuterFence(input.last_assistant_message, expected)) === trimEnd(expected);
   if (expected != null && !matches) {
     problems.push({
       kind: "final-message",
-      reason: `Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else:\n${expected}`
+      reason: `Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else${stateBlock ? "" : ", with no code fence around it"}:\n${expected}`
     });
   }
   if (problems.length === 0) {

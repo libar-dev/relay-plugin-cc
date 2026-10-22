@@ -567,7 +567,7 @@ test('registry keeps the prompt checks\' interface, with the command checks betw
     assert.equal(typeof check.cell, 'function');
     assert.ok(Array.isArray(check.surfaces));
     assert.ok(Array.isArray(check.probes));
-    assert.equal(check.timeoutMinutes, ['steer-main', 'typed'].includes(check.id) ? 20 : 15);
+    assert.equal(check.timeoutMinutes, check.id === 'typed' ? 25 : check.id === 'steer-main' ? 20 : 15);
     assert.deepEqual(check.surfaces, ['steer-plugin', 'session-end', 'typed'].includes(check.id) ? ['terminal'] : ['terminal', 't3']);
     assert.deepEqual(check.probes, check.id === 'steer-plugin' ? ['wake-probe'] : []);
     assert.equal(getCheck(check.id), check);

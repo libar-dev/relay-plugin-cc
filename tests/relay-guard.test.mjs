@@ -493,10 +493,7 @@ test("a start that cannot read its prompt does not start, and the hand-back carr
   const failed = await relayStart(bad);
   assert.match(failed.started.stdout, /^state: not started\nerror: effort is required/);
   assert.equal(updated(await pre(bad, "SubagentHandback", { message: "x" })).message, failed.started.stdout);
-  const blocked = await stop(bad, "x");
-  assert.equal(blocked?.decision, "block");
-  assert.equal(expectedFromReason(blocked.reason), failed.started.stdout);
-  assert.equal(await stop(bad, failed.started.stdout), null);
+  assert.equal(await stop(bad, "x"), null);
 });
 
 test("the guard protects the job the relay started, found by agent id, never one the relay names", async () => {

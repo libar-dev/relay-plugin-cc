@@ -10,7 +10,7 @@ import {
   updated, waitFor, workflowEntry
 } from "./support/relay-fixture.mjs";
 import {
-  parseRelayTranscript, readGuardState, readLedger, syncRelayMessages, writeGuardState
+  parseRelayTranscript, readGuardState, readLedger, syncRelayMessages, writeGuardState, writeRelayPointer
 } from "../plugins/relay/scripts/lib/harness/relay.mjs";
 import { appendRelayViolation, readRelayViolations } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 
@@ -43,6 +43,20 @@ test("human fixture: both real typed entries deliver exact text and uuids with s
   ]);
   assert.deepEqual(parsed.problems, []);
   assert.deepEqual(parsed.received, [during.uuid, resumed.uuid]);
+});
+
+test("human fixture: only the typed line after an interrupt is delivered and received", () => {
+  const entries = ["interruptToolResult", "interruptNote", "humanAfterInterrupt"].map(humanEntry);
+  const parsed = withPrompt(...entries);
+  assert.deepEqual(parsed.messages, [{
+    uuid: entries[2].uuid, text: "after the interrupt: redirect the job", shape: "human"
+  }]);
+  assert.deepEqual(parsed.received, [entries[2].uuid]);
+  assert.deepEqual(parsed.problems, []);
+  const interrupted = withPrompt(...entries.slice(0, 2));
+  assert.deepEqual(interrupted.messages, []);
+  assert.deepEqual(interrupted.received, []);
+  assert.deepEqual(interrupted.problems, []);
 });
 
 test("human fixture: the api-request-blob is ignored before and after the prompt", () => {
@@ -231,7 +245,7 @@ async function handedBack(ctx) {
 
 function assertExactResultBlock(output, ctx, jobId) {
   assert.equal(output?.decision, "block");
-  assert.equal(output.reason, "Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else:\n" + companion(ctx, ["result", jobId]).stdout);
+  assert.equal(output.reason, "Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n" + companion(ctx, ["result", jobId]).stdout);
 }
 
 test("a hand-back followed by its SubagentStop is exempt", async () => {
@@ -317,4 +331,55 @@ test("a guard state without receivedUuids still exempts a stop with no new messa
   writeGuardState(ctx.env, ctx.agentId, dir, { handback });
   assert.deepEqual(handback.messageUuids, [entry.uuid]);
   assert.equal(await stop(ctx, "Report delivered."), null);
+});
+
+test("without SubagentHandback, only one whole-message fence may surround the exact result", async (t) => {
+  const ctx = relayContext("job", { turnMs: 100 });
+  ctx.append(ctx.prompt(QUICK));
+  const { jobId, started } = await relayStart(ctx);
+  assert.ok(jobId, started.stdout + started.stderr);
+  assert.equal(companion(ctx, ["wait", jobId, "--timeout-seconds", "15"]).status, 0);
+  const dir = jobDirOf(ctx, jobId);
+  const result = () => companion(ctx, ["result", jobId]).stdout;
+  const fence = (text, opening = "```", closing = "```") => `${opening}\n${text.trimEnd()}\n${closing}`;
+  await t.test("a real result in three backticks passes and records the hand-back", async () => {
+    assert.equal(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt, null);
+    assert.equal(await stop(ctx, fence(result())), null);
+    assert.ok(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt);
+  });
+  await t.test("a text info string and whitespace outside the fence pass", async () => {
+    assert.equal(await stop(ctx, `\n \t\n${fence(result(), "```text")}\n \t`), null);
+  });
+  await t.test("four backticks around a result containing a three-backtick block pass", async () => {
+    fs.writeFileSync(path.join(dir, "report.md"), "A report with code:\n```\nexact code\n```\n");
+    assert.match(result(), /```\nexact code\n```/);
+    assert.equal(await stop(ctx, fence(result(), "````", "````")), null);
+  });
+  const cases = [
+    ["an unclosed fence fails", (text) => `\`\`\`\n${text}`],
+    ["a fence with a changed line fails", (text) => fence(text.replace("state: completed", "state: cancelled"))],
+    ["a fence with an added line fails", (text) => fence(`${text}\nAdded line.`)],
+    ["a fence with a missing line fails", (text) => fence(text.replace(/^state:.*\n/, ""))],
+    ["a fence around only part of the result fails", (text) => text.replace(/^state: completed\n/, "```\nstate: completed\n```\n")],
+    ["different opening and closing runs fail", (text) => fence(text, "````", "```")],
+    ["two enclosing fences fail", (text) => fence(fence(text), "````", "````")]
+  ];
+  for (const [name, wrap] of cases) {
+    await t.test(name, async () => {
+      assertExactResultBlock(await stop(ctx, wrap(result())), ctx, jobId);
+      assert.equal(await stop(ctx, result()), null);
+    });
+  }
+  assert.deepEqual(readRelayViolations(dir), []);
+});
+
+test("a start error beginning with a fence keeps its own fence", async () => {
+  const ctx = relayContext();
+  const error = "```text\nThe start failed.\n```\n";
+  writeRelayPointer(ctx.env, { agentId: ctx.agentId, startError: error });
+  const blocked = await stop(ctx, `\`\`\`\`\n${error}\`\`\`\``);
+  assert.equal(blocked?.decision, "block");
+  assert.match(blocked.reason, /with no code fence around it:/);
+  assert.equal((await stop(ctx, "The start failed."))?.decision, "block");
+  assert.equal(await stop(ctx, error), null);
 });

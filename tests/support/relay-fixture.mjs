@@ -239,6 +239,10 @@ export function relayContext(behavior = "job", options = {}) {
         entry.message.content = entry.message.content.replace("typed two: after the hand-back", () => text);
       }, humanEntry);
     },
+    interrupted() {
+      return ["interruptToolResult", "interruptNote", "humanAfterInterrupt"].map((name) =>
+        fresh(name, agentId, () => {}, humanEntry));
+    },
     userTurn(text) {
       return { parentUuid: null, isSidechain: true, agentId, type: "user", message: { role: "user", content: text }, uuid: randomUUID(), timestamp: new Date().toISOString() };
     },

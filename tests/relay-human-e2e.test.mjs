@@ -8,7 +8,7 @@ import {
   codexReceived, companion, hookInput, jobDirOf, readJobJson, relayContext,
   RELAY_CMD, runBash, runHookProcess, waitFor
 } from "./support/relay-fixture.mjs";
-import { readLedger } from "../plugins/relay/scripts/lib/harness/relay.mjs";
+import { readGuardState, readLedger, syncRelayMessages } from "../plugins/relay/scripts/lib/harness/relay.mjs";
 
 async function relayCall(ctx, toolName, toolInput) {
   if (toolName === "Bash") ctx.append(ctx.toolUse(toolInput.command));
@@ -101,3 +101,36 @@ test("end to end: typed cancel while the job runs cancels it at the relay's next
   assert.equal(handback.input.message, companion(ctx, ["result", jobId]).stdout);
   assertLedger(ctx, jobId, [cancel]);
 });
+
+for (const ended of [false, true]) {
+  test(`end to end: typed text after an interrupt without hand-back is a ${ended ? "continue after the job ends" : "steer while the job runs"}`, async (t) => {
+    const ctx = relayContext("job", { turnMs: 100 });
+    const jobId = await startHeld(ctx, t);
+    const dir = jobDirOf(ctx, jobId);
+    const entries = ctx.interrupted();
+    ctx.append(...entries.slice(0, 2));
+    if (ended) {
+      fs.writeFileSync(ctx.env.FAKE_CODEX_RELEASE_FILE, "");
+      await waitFor(() => readJobJson(ctx, jobId).state === "completed");
+    }
+    assert.equal(readGuardState(ctx.env, ctx.agentId, dir).handback, null);
+    ctx.append(entries[2]);
+    await relayCall(ctx, "Bash", { command: `${RELAY_CMD} status ${jobId}` });
+    const text = "after the interrupt: redirect the job";
+    const received = await waitFor(() => {
+      const state = codexReceived(ctx);
+      return (ended ? state.turns : state.steers).includes(text) && state;
+    });
+    assert.deepEqual(received.steers, ended ? [] : [text]);
+    assert.deepEqual(received.turns, ended ? ["[held] Typed-message brief.", text] : ["[held] Typed-message brief."]);
+    assert.equal(readLedger(dir, entries[2].uuid).kind, ended ? "continue" : "steer");
+    if (!ended) fs.writeFileSync(ctx.env.FAKE_CODEX_RELEASE_FILE, "");
+    await waitJob(ctx, jobId);
+    const sync = await syncRelayMessages(ctx.base, dir, { env: ctx.env });
+    assert.deepEqual(sync.received, [entries[2].uuid]);
+    assert.deepEqual(sync.messages, [{ uuid: entries[2].uuid, text, shape: "human" }]);
+    assert.equal(readLedger(dir, entries[0].uuid), null);
+    assert.equal(readLedger(dir, entries[1].uuid), null);
+    assertLedger(ctx, jobId, [entries[2]]);
+  });
+}

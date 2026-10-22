@@ -15,6 +15,10 @@
         "sentAt": "2026-10-22T10:00:25.000Z",
         "wakeAt": "2026-10-22T10:00:26.000Z",
         "assistance": "manual-wake"
+      },
+      "C1": {
+        "text": "typed C1 for codex in synthetic-run",
+        "sentAt": "2026-10-22T10:00:35.000Z"
       }
     },
     "kimi": {
@@ -31,6 +35,10 @@
         "sentAt": "2026-10-22T10:00:25.000Z",
         "wakeAt": "2026-10-22T10:00:26.000Z",
         "assistance": "manual-wake"
+      },
+      "C1": {
+        "text": "typed C1 for kimi in synthetic-run",
+        "sentAt": "2026-10-22T10:00:35.000Z"
       }
     }
   }
