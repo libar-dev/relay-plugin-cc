@@ -402,10 +402,21 @@ export function jobViewJson(view) {
   };
 }
 
+// Every string a row holds is cut to this many characters, so one row stays small whatever a request or a
+// record holds, and a page of rows stays under its byte budget. One job's full view keeps every value.
+const ROW_STRING_LIMIT = 300;
+
+function cutStrings(value) {
+  if (typeof value === "string") return value.length > ROW_STRING_LIMIT ? Array.from(value).slice(0, ROW_STRING_LIMIT).join("") : value;
+  if (Array.isArray(value)) return value.map(cutStrings);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, cutStrings(entry)]));
+  return value;
+}
+
 export function jobRowJson(view) {
   const { attemptRecords, server, messages, ...row } = jobViewJson(view);
   const relay = row.relay;
-  return {
+  return cutStrings({
     ...row,
     errorMessage: firstLine(row.errorMessage) ? Array.from(firstLine(row.errorMessage)).slice(0, 200).join("") : null,
     relay: relay ? {
@@ -422,7 +433,7 @@ export function jobRowJson(view) {
       at: entry.at ?? null, kind: entry.kind ?? null,
       reason: entry.reason == null ? null : Array.from(String(entry.reason).split(/\r?\n/)[0]).slice(0, 200).join("")
     }))
-  };
+  });
 }
 
 export function sortViewsNewestFirst(views) {

@@ -480,8 +480,9 @@ a second interface); schema names per form, which would name the arguments, not 
 The status line and the board read listings through `$.process.run`, which keeps 4 MiB of stdout. A full row is
 mostly attempt records with server stderr tails (1.29 MB for 473 jobs), so a row leaves out `attemptRecords`, the
 server and the messages, cuts the relay binding and the errors to what a list shows, and keeps a few entries of each
-list (owed, dropped, recovered, violations) with its full count; Sol's review built 6.2 MB of rows from 300 dropped
-messages a job, and a page also ends before 2 MiB: 50 rows of a 300-job home
+list (owed, dropped, recovered, violations) with its full count, and every string in a row is cut to 300
+characters; Sol's reviews built 6.2 MB of rows from 300 dropped messages a job, then a 5 MiB row from one long model
+name. A page also ends before 2 MiB: 50 rows of a 300-job home
 with large attempt records came to 50 KB, read in 0.16 s. Pages are 50 rows by default and at most 200, newest
 first by `createdAt`, then job id, and a cursor names the last row's key, so a job created between pages never
 shifts them. `--active` keeps the jobs that are starting, running or dead, or owe messages; it skips a job whose
@@ -491,16 +492,27 @@ stored state has ended and whose inbox owes nothing without viewing it. `--limit
 ### D57. `cancel --attempt` cancels only while that attempt is current (Phase 4 thread)
 
 The board's Cancel names a job and an attempt, and a continue or an automatic recovery can begin the next attempt
-between the press and the cancel. `cancel --attempt N` checks before it posts, its message carries N and the worker
-answers `no-op` to one for another attempt (the window between `cancel`'s check and the worker taking the message),
-and `cancel` checks again before it kills after the grace and under the lease for a dead worker. A starting job's
-first attempt counts as 1. Once attempt N is stopped (the worker took the cancel, or `cancel` killed it), a newer
-attempt a message starts runs on and `cancel` succeeds, saying so. Both reviewers (GPT-6.1 Sol and Opus 5.5) found
-the first version's edges: a check after the kill that left a recovery running, a missing check that cancelled a
-recovery after a worker died by itself, a cancel that had worked reported as `attempt-changed`, and a sweep that could
-kill a worker that had begun the next attempt. The root of the first two was a recovery racing the cancel, so
-automatic recovery no longer resumes a job with an open cancel, with or without `--attempt`. Without `--attempt`
-nothing else changes; `/relay:cancel` and the TaskStop hook pass none.
+between the press and the cancel. `cancel --attempt N` checks before it posts; its message carries N, and the worker
+answers `no-op` to one for another attempt, which closes the window between that check and the worker taking the
+message. A starting job's first attempt counts as 1. Once attempt N is stopped, a newer attempt a message starts runs
+on and `cancel` succeeds, saying so.
+
+Two review rounds by GPT-6.1 Sol and Opus 5.5 found the same kind of defect each time: `cancel` reading the job and
+then acting on it outside the worker, which can begin an attempt between the two. The first version re-checked the
+attempt at more points, and each round found a window between a check and a signal or a lease. The rules that hold by
+construction:
+
+- When the worker took the cancel, `cancel` never signals the worker's process. The worker answered, closes its own
+  server, and may begin a newer attempt at any moment; `cancel` sweeps only attempt N's other processes.
+- `cancel` kills a worker only when it has not taken the cancel within the grace and the attempt is still N.
+- Recovery waits while a `cancel` command runs on the job (each records its process in `cancelling/`), instead of
+  `cancel` guessing whether a new worker is a recovery or a message's. A worker that died during a cancel, or that the
+  cancel killed, is not resumed, and a relay's `wait` sees the job end `cancelled`, not `dead`. This holds for every
+  cancel. A first version classified the cancel messages (`hasOpenCancel`) and was wrong both ways in round 2.
+- The worker writes the terminal state before the cancel messages' outcomes, so no reader sees a closed cancel on a
+  job that is not cancelled.
+
+Without `--attempt` nothing else changes; `/relay:cancel` and the TaskStop hook pass none.
 
 ### D58. A TaskStop that cancelled a job records its hand-back (Phase 4 thread)
 

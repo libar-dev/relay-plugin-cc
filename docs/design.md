@@ -141,7 +141,8 @@ has no value, and every job names its `backend`, Codex included. The status line
 - **A listing** (`status`, `status --all`, `status --workflow <run>`) is bounded: slim rows (the full view without
   `attemptRecords`, the server and the messages, with a short relay binding, one-line errors, and the lists of
   owed, dropped, recovered and violation entries cut to a few, each with its full count), newest first by creation
-  time and job id, 50 a page by default and at most 200 (`--limit`), and a page ends before 2 MiB. `nextCursor` names the last row, and
+  time and job id, 50 a page by default and at most 200 (`--limit`). Every string in a row is cut to 300
+  characters, so one row stays small, and a page ends before 2 MiB. `nextCursor` names the last row, and
   `--cursor` lists the rows after it, so a job created meanwhile never shifts a page. `--active` lists only the jobs
   that are starting, running or dead, or that owe messages. The text listing is unchanged. Before 3.0 the JSON
   listing held every field of every job: 1.29 MB for 473 jobs, past what a hooks module's process call keeps
@@ -301,7 +302,10 @@ starts beside an old one, and queued work stays owed for a later worker.
   resume message, in the same attempt. A second end in that attempt fails it, naming both ends.
 - **The worker dies.** The relay's `wait` (the hook adds `--auto-resume`) takes the lease as
   `recovery`, stops the dead worker's servers, posts the automatic resume message and starts a new
-  worker. A direct `wait` resumes only when it is given `--auto-resume`.
+  worker. A direct `wait` resumes only when it is given `--auto-resume`. While a `cancel` command runs on the
+  job (it records its process in `cancelling/`), recovery waits and takes no lease, so a worker that died
+  during a cancel, or that the cancel killed, is never resumed for the cancel to meet again; the relay's
+  `wait` sees the job end `cancelled`.
 - **One shared allowance.** Both paths spend one allowance per stretch of user work: the start, each user
   continue and each delivered user message begin a new stretch, and automatic messages do not. Each
   recovery is recorded in `automaticResumes` with its cause, `app-server` or `worker`, and printed
@@ -349,14 +353,18 @@ jobs started within one second, one failed on a request-rate limit after Codex's
 - **An expected attempt.** `cancel --attempt N` cancels the job only while attempt N is its current attempt (a
   starting job's first attempt counts as 1), so a cancel pressed on one attempt never stops a newer one that a
   continue or an automatic recovery started meanwhile. It checks before it posts its message, which carries N; the
-  worker takes it only while it runs attempt N and answers any other with `no-op`; `cancel` checks again before it
-  kills the worker after the grace, and under the lease for a dead worker. A refusal says `attempt-changed` and stops
-  nothing (a refused message stays on record with its `no-op`). Once attempt N is stopped, by the worker taking the
-  cancel or by `cancel`'s kill, a newer attempt that a message starts is not this cancel's: it runs on, and `cancel`
-  says so and succeeds. Without `--attempt` nothing changes.
-- **No recovery under a cancel.** Automatic recovery never resumes a job that has an open cancel: one posted since
-  its latest attempt began whose outcome is missing or only says the interrupt was sent. A worker that dies while a
-  cancel is under way, or that the cancel kills, is not brought back for the cancel to meet again.
+  worker takes it only while it runs attempt N and answers any other with `no-op`. A refusal says
+  `attempt-changed` and stops nothing (a refused message stays on record with its `no-op`).
+  - When the worker takes the cancel, `cancel` never signals the worker's process: the worker answered, closes its
+    own server, and may begin a newer attempt for a message at any moment. `cancel` sweeps only attempt N's other
+    processes, and a worker still closing is left to finish.
+  - When the worker has not taken it within the grace, `cancel` checks the attempt again and kills the worker only
+    while it is still N. A new worker that then holds the lease came for a message (recovery waits while a cancel
+    runs): a cancel still waiting in the inbox reaches it and ends the job, and a newer attempt it began runs on.
+  - Once attempt N is stopped, a newer attempt a message starts is not this cancel's: it runs on, and `cancel`
+    says so and succeeds. A message still waiting when the cancel ends the job is dropped and reported, as for any
+    cancel. Without `--attempt` nothing changes but the wait below.
+- **No recovery during a cancel.** See [Automatic recovery, once](#automatic-recovery-once).
 - **TaskStop on a relay.** A `PostToolUse` hook on `TaskStop` (`scripts/hooks/relay-stop.mjs`)
   takes the stopped agent's id from the tool's result, since the caller may have named the agent by
   its name, and finds the job through that id's relay pointer. When the agent is the job's current

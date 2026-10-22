@@ -407,28 +407,42 @@ test("200 rows with 300 dropped messages each bound histories and strings below 
   }
 });
 
-test("status pages stop at the serialized byte budget and resume at the omitted row", t => {
+test("a row cuts every string, and a page of the largest rows stops at its byte budget and resumes after it", t => {
   const ctx = setup(t);
-  for (let index = 0; index < 3; index += 1) fixture(ctx, `job-${index}`, { request: { model: "😀".repeat(200000) } });
-  const first = listing(t, ctx);
-  assert.deepEqual(first.jobs.map(row => row.id), ["job-2", "job-1"]);
-  assert.ok(Buffer.byteLength(JSON.stringify(first.jobs, null, 2)) <= 2 * 1024 * 1024);
-  assert.deepEqual(JSON.parse(Buffer.from(first.nextCursor, "base64url")), [AT, "job-1"]);
-  const second = listing(t, ctx, ["--cursor", first.nextCursor]);
-  assert.deepEqual(second.jobs.map(row => row.id), ["job-0"]);
-  assert.equal(second.nextCursor, null);
-});
-
-test("status returns at least one row when that row exceeds the page byte budget", t => {
-  const ctx = setup(t);
-  fixture(ctx, "job-small");
-  fixture(ctx, "job-large", { createdAt: END, request: { model: "m".repeat(2 * 1024 * 1024) } });
-  const first = listing(t, ctx);
-  assert.deepEqual(first.jobs.map(row => row.id), ["job-large"]);
+  const long = "😀".repeat(5000);
+  const reason = "😀".repeat(5000);
+  const violations = Array.from({ length: 8 }, (_, index) => JSON.stringify({ at: AT, kind: `kind-${index}-${long}`, reason })).join("\n");
+  const ids = [];
+  for (let index = 0; index < 200; index += 1) {
+    const id = `job-${String(index).padStart(3, "0")}`;
+    ids.unshift(id);
+    const dir = fixture(ctx, id, {
+      summary: long, errorMessage: long,
+      request: { model: long, effort: long, mode: long, cwd: long, webSearch: long },
+      relay: { agentId: `agent-${index}`, label: long, phase: long, workflowRunId: long },
+      automaticResumes: Array.from({ length: 8 }, (_, entry) => ({ id: `${long}-${entry}`, at: AT, reason }))
+    });
+    fs.writeFileSync(path.join(dir, "relay-violations.jsonl"), violations);
+    for (let entry = 0; entry < 8; entry += 1) message(dir, `dropped-${entry}-${"x".repeat(200)}`, "steer", { outcome: { action: "dropped", reason } });
+  }
+  const first = listing(t, ctx, ["--limit", "200"]);
+  const rowBytes = rows => Buffer.byteLength(JSON.stringify(rows, null, 2));
+  assert.ok(first.jobs.length > 0 && first.jobs.length < 200, `${first.jobs.length} rows`);
+  assert.ok(rowBytes(first.jobs) <= 2 * 1024 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(first, null, 2)) < 4 * 1024 * 1024);
+  for (const row of first.jobs) {
+    assert.ok(rowBytes(row) < 64 * 1024, `${row.id} is ${rowBytes(row)} bytes`);
+    assert.equal(Array.from(row.request?.model ?? row.model).length <= 300, true);
+  }
   assert.ok(first.nextCursor);
-  const second = listing(t, ctx, ["--cursor", first.nextCursor]);
-  assert.deepEqual(second.jobs.map(row => row.id), ["job-small"]);
-  assert.equal(second.nextCursor, null);
+  const rest = [];
+  let cursor = first.nextCursor;
+  while (cursor) {
+    const page = listing(t, ctx, ["--limit", "200", "--cursor", cursor]);
+    rest.push(...page.jobs);
+    cursor = page.nextCursor;
+  }
+  assert.deepEqual([...first.jobs, ...rest].map(row => row.id), ids);
 });
 
 test("default listing limits 200 large job records to 50 slim rows below 400 KB", t => {
