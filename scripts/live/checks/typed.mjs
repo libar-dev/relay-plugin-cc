@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { analyzeBackends, formatSeconds, hasMarker, inboxMessages, lastActiveAttempt, oneRelay,
+import { analyzeBackends, formatSeconds, hasMarker, inboxMessages, lastActiveAttempt, LIMIT_SECONDS, oneRelay,
   readJson, readJob, readTranscript, recordsFor, relayJob, requireBackend, requireVersion,
   scopeToRun, STEER_DELIVERY, textContent, transcriptCalls } from '../lib/evidence.mjs';
 import { pane } from '../lib/terminal.mjs';
@@ -132,6 +132,9 @@ function delivery(input, loaded, receipt, line, backend) {
   const seconds = (Date.parse(record.at) - Date.parse(start)) / 1000;
   if (!Number.isFinite(seconds) || seconds < 0 || !(Date.parse(record.at) >= Date.parse(receipt.sentAt)) ||
       !(Date.parse(record.postedAt) >= Date.parse(record.at))) throw new Error(`Invalid ledger timing for ${line}.`);
+  // A1 waits for the relay's next call, which can be the wait's end or the job's end.
+  const limit = line === 'A1' ? Infinity : LIMIT_SECONDS[line === 'A2' ? 'continue' : 'steer'];
+  if (seconds > limit) throw new Error(`${line} delivery took ${seconds} seconds, exceeding the ${limit} second limit.`);
   if (line !== 'A2') runningAt(job, receipt.sentAt, input.relayVersion);
   if (line === 'A2' && record.kind !== 'continue') throw new Error('A2 was not a continue.');
   if (line === 'B1' && (record.kind !== 'steer' || receipt.assistance !== 'manual-wake' ||

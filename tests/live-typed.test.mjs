@@ -319,6 +319,36 @@ test('typed analysis proves exact delivery, both backend steer outcomes, hand-ba
   assert.match(typed.cell(analysis.results[1]), /\(next turn\)$/);
 });
 
+for (const backend of ['codex', 'kimi']) for (const [line, delays, limit, timing] of [
+  ['B1', [29, 30, 180], 30, 'b1WakeSeconds'],
+  ['C1', [29, 30, 180], 30, 'c1Seconds'],
+  ['A2', [59, 60, 61], 60, 'a2Seconds']
+]) for (const seconds of delays) {
+  test(`typed analysis ${seconds > limit ? 'rejects' : 'accepts'} ${backend} ${line} delivery at ${seconds} seconds (limit ${limit})`, t => {
+    const { dir, input } = setup(t);
+    const scenario = line[0].toLowerCase(), jobDir = path.join(dir, `jobs/repo/job-${scenario}-${backend}`);
+    const receipt = json(path.join(dir, 'run.json')).typed[backend][line];
+    const record = json(path.join(jobDir, `inbox/relay/entry-${line}-${backend}.json`));
+    const start = Date.parse(line === 'B1' ? receipt.wakeAt : receipt.sentAt);
+    const boundary = Date.parse(record.at), delay = start + seconds * 1000 - boundary;
+    // Move delivery and its later evidence together so only the delivery deadline can fail.
+    const shift = text => text.replace(/2026-10-22T[\d:.]+Z/g, at =>
+      Date.parse(at) >= boundary ? new Date(Date.parse(at) + delay).toISOString() : at);
+    for (const file of readers.filesUnder(jobDir, file => /\.(json|jsonl)$/.test(file))) {
+      fs.writeFileSync(file, shift(fs.readFileSync(file, 'utf8')));
+    }
+    editLines(dir, 'transcript.jsonl', rows => {
+      for (const row of rows) if (row.message?.content?.includes?.(`<task-id>agent-${scenario}-${backend}</task-id>`)) {
+        row.timestamp = shift(row.timestamp);
+      }
+    });
+    const row = typed.analyze({ ...input, backends: [backend] }).results[0];
+    assert.equal(row.result, seconds > limit ? 'fail' : 'pass', row.reason);
+    if (seconds > limit) assert.equal(row.reason, `${line} delivery took ${seconds} seconds, exceeding the ${limit} second limit.`);
+    else assert.deepEqual(row.timings[timing], [seconds]);
+  });
+}
+
 test('typed C analysis proves an interrupt steer in the running or next turn without a hand-back', t => {
   const { input } = setup(t), analysis = typed.analyze(input);
   for (const [i, delivery] of ['in-turn', 'next-turn'].entries()) {
@@ -416,14 +446,15 @@ for (const [label, mutate, reason] of failures) test(`typed analysis rejects ${l
   assert.equal(row.result, 'fail'); assert.match(row.reason, reason);
 });
 
-test('typed analysis accepts A1 as an unassisted steer and matches text independently of record order', t => {
+test('typed analysis accepts A1 as an unassisted steer after 40 seconds and matches text independently of record order', t => {
   const { dir, input } = setup(t);
-  edit(dir, `${A}/inbox/relay/entry-A1-codex.json`, row => { row.kind = 'steer'; row.at = '2026-10-22T10:00:30Z'; row.postedAt = '2026-10-22T10:00:31Z'; });
+  edit(dir, `${A}/inbox/relay/entry-A1-codex.json`, row => { row.kind = 'steer'; row.at = '2026-10-22T10:01:00Z'; row.postedAt = '2026-10-22T10:01:01Z'; });
   edit(dir, `${A}/inbox/claimed/msg-A1-codex.json`, row => { row.kind = 'steer'; });
   edit(dir, `${A}/inbox/outcomes/msg-A1-codex.json`, row => { row.action = 'steered'; row.turnId = 'turn-a-codex-1'; delete row.attempt; });
   editLines(dir, 'transcript/subagents/agent-a-codex.jsonl', rows => rows.reverse());
   const row = typed.analyze(input).results[0];
   assert.equal(row.result, 'pass'); assert.match(row.delivery, /^steer;/);
+  assert.deepEqual(row.timings.a1Seconds, [40]);
 });
 
 test('typed analysis accepts the last of four A jobs steering A1 after the 540 second wait and continuing A2', t => {
