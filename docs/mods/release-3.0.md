@@ -55,7 +55,7 @@ Phase 4's `--json` and the typed-message fix merge, and more as Phase 4 lands an
 8. **The screenshots, the walkthrough and the guide.** Screenshots of every user-facing feature, in the CLI and
    in Desktop, taken on the M3 (D54, D60), with the status line and the board once built (the CLI in a narrow and
    a wide terminal, and Desktop); they stay local. T3 screenshots for the post to the T3 community. One feature
-   walkthrough, which feeds the owner's manual test script (each step with its expected result) and the user
+   walkthrough, which feeds the owner's pre-release guide (D93; it took the manual test script's place) and the user
    guide (with screenshots that explain the features). A screenshot that is published, in the T3 post or the
    user guide, shows no account or session names.
 9. **The release PR**, `release/3.0` into `main`.
@@ -100,8 +100,8 @@ and dropped the demo recording: feature screenshots and the user guide replace i
 - D3's checks of the board: its Mod tests on the test kit's `desktop` mount, which `claude plugin test` runs on
   Fedora, and the manual Desktop pass on the M3 (D54).
 - The screenshots of every user-facing feature, in the CLI and in Desktop, the status line and the board included.
-- The feature walkthrough done, the user guide in the release, the owner's manual test script ready, and the
-  pre-release guide built from it (the owner's checklist for each cut).
+- The feature walkthrough done, the user guide in the release, and the owner's pre-release guide current, which
+  took the manual test script's place (D93).
 - The reviews of step 7 done, and their fixes merged: the skills review with Opus 5.5's skill updates, the
   coverage review, the review of the whole branch, and the UX and UI review.
 - The texts that promise for every relay what holds only for a relay started with the Agent tool, fixed:

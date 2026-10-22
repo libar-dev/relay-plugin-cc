@@ -624,6 +624,47 @@ How D95's cuts are made.
   gave the same `result` output as pre.1's. It also listed and read the seven completed jobs pre.1 had written in
   the ThinkPad's jobs home. Not checked: a running job, `continue` across versions, a `cancel --attempt` record.
 
+### D90. One walkthrough, two documents (guide lead)
+
+The guide lead writes one feature walkthrough. It covers every user-facing feature of 3.0 in the order a user meets
+it: what the user does and sees, the backend limits, and the proof. Two documents come from it: the user guide,
+`docs/guide.md`, linked from the README, and the owner's pre-release guide, `docs/mods/pre-release-3.0.md`, beside
+`release-3.0.md`. The walkthrough stays in the lead's working folder. Both documents carry its content, and a third
+copy would drift. Where the guide meets the README or `docs/desktop.md`, it links. Reopen if the walkthrough is
+wanted in the repository as the record behind the manual checks.
+
+### D91. A pre-release cut installs from the marketplace, pinned to its tag (guide lead)
+
+A cut goes on a machine at user scope with `claude plugin marketplace add 'libar-dev/relay-plugin-cc#v3.0.0-pre.N'`
+and `claude plugin install relay@libar-relay`. That is the path users take, so the marketplace's own manifest is
+used too. Going back pins `#v2.2.0`. A pinned marketplace does not move on `claude plugin marketplace update`, so
+each switch is a remove, an add and an install. This was checked on the ThinkPad on 22 October, in a throwaway
+`HOME` with Claude Code 2.1.308: a branch pin and the `v2.2.0` pin both installed, and `marketplace remove` kept the
+old version's cache. Since the owner's ruling of 22 October, libar-infra runs every switch and keeps each machine's
+pin, so the pre-release guide gives the commands for reference only.
+
+### D92. Screenshot places in the docs are HTML comments with stable ids (guide lead)
+
+The user guide marks where each explanatory screenshot goes with a comment such as `<!-- screenshot G7: … -->`,
+numbered G1 to G25, and the guide lead's list pairs each one with the proof it rests on. A comment does not render
+on GitHub, so a guide can merge before the public-assets pass. That pass replaces each comment with its image, taken
+in a clean demo setup. The proofs taken on the M3 show the account and stay local. The same device marks lines that
+wait on later work.
+
+### D93. The pre-release guide is for daily use, not a test matrix (guide lead)
+
+After the owner chose pre-release cuts (D95), the manual test script became the owner's pre-release guide. It holds:
+- each cut and its known issues, with what to do meanwhile;
+- a short check after each install;
+- what should happen while working;
+- a note template a lead can act on;
+- how a machine is switched.
+
+The cuts are tested by the end-to-end suite, the live suite and libar-infra's thread tests, which find issues. Under
+D97 none of them gates a cut, and the guide holds no backend-by-surface matrix of its own. Every cut updates the
+known-issues list, which is part of the go/no-go. The first draft's step-by-step script stays in the guide lead's
+working folder.
+
 ### D95. Pre-release cuts before 3.0.0, on the M3 and the ThinkPad (owner, 22 October 2026; amended by D97)
 
 The owner, in four messages that day:
