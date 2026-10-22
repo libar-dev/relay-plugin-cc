@@ -455,11 +455,12 @@ attempts. `C steer` and `C continue` already reach a job without its relay. The 
 ### D54. Where D3's manual Desktop pass runs (owner, 22 October 2026)
 
 D3 holds: the board is checked with the test kit's `desktop` mount on Fedora, plus one manual pass before the
-release. That pass runs in the Claude desktop app on the M1 or the M3, through an SSH session from the app to the
-ThinkPad, on a smoke folder with the release build installed locally (`scripts/smoke/install-local.sh`). The app has
-no Fedora build (its Linux beta is for Debian 12+ and Ubuntu 22.04+), and an SSH session reads the ThinkPad's
-`~/.claude`, so the plugins and MCP servers there load as in the terminal. The app's own Claude Code (2.1.308 on both
-Macs) is above relay's floor.
+release. That pass, and every Desktop test and screenshot, runs on the M3 itself: the Claude desktop app's Code tab
+on the M3, a local session in a folder on the M3 with the build installed there by `scripts/smoke/install-local.sh`,
+and a T3 thread on the M3 that drives the app through Cua Driver and keeps the screenshots there. The app has no
+Fedora build (its Linux beta is for Debian 12+ and Ubuntu 22.04+), and the M3 cannot reach the ThinkPad over SSH
+(its key is not authorized there), so an SSH session from the app is not the route. The app's own Claude Code
+(2.1.308 on both Macs) is above relay's floor.
 
 ### D55. The companion's JSON: one object per command that names its shape (Phase 4 thread)
 
