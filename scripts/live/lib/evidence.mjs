@@ -47,6 +47,13 @@ function hasLine(text, line) {
   return typeof text === 'string' && text.split('\n').some(value => value.replace(/[\t \r]+$/, '') === line);
 }
 
+// A backend's model writes the requested line in its own way ("Second turn for zcode.", in a live
+// run); the words decide, not their case or a closing full stop.
+function hasReportLine(text, line) {
+  const words = value => value.trim().replace(/[.!]+$/, '').toLowerCase();
+  return typeof text === 'string' && text.split('\n').some(value => words(value) === words(line));
+}
+
 export function claudeCodeVersionOf(entries) {
   return entries.find(entry => entry && !entry.isSidechain && entry.version)?.version ?? null;
 }
@@ -355,7 +362,7 @@ export function analyzeCheck(input, { source = 'main', messages, kind = 'steer' 
         let report;
         try { report = fs.readFileSync(path.join(jobDir, reportFile), 'utf8'); }
         catch { throw new Error(`Cannot read ${reportFile}.`); }
-        if (!hasLine(report, `second turn for ${backend}`)) throw new Error(`Report is missing the line second turn for ${backend}.`);
+        if (!hasReportLine(report, `second turn for ${backend}`)) throw new Error(`Report is missing the line second turn for ${backend}.`);
       } else {
         if (!(active.endedAt == null || Date.parse(active.endedAt) > sentMs)) throw new Error('The attempt active at the send was not running.');
         if (row.delivery !== STEER_DELIVERY[backend]) {

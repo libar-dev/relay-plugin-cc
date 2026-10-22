@@ -370,7 +370,7 @@ for (const [label, file, change, error] of [
 }
 
 for (const report of [null, 'prefix second turn for codex', 'second turn for codex suffix', 'first turn for codex']) {
-  test(`continue requires the exact report line: ${report}`, t => {
+  test(`continue requires the report line itself: ${report}`, t => {
     const dir = copy(t, 'continue'), file = path.join(dir, 'jobs/repo/job-one/report.md');
     if (report === null) fs.rmSync(file);
     else fs.writeFileSync(file, report + '\n');
@@ -378,6 +378,14 @@ for (const report of [null, 'prefix second turn for codex', 'second turn for cod
     assert.equal(row.result, 'fail');
     assert.deepEqual(row.timings, { deliveredSeconds: [2], readSeconds: [2], completedSeconds: [5] });
     assert.match(row.reason, /report|Report/);
+  });
+}
+
+for (const report of ['Second turn for codex.', 'second turn for codex!', '  second turn for codex  ']) {
+  test(`continue takes the report line in the model's own case and closing stop: ${report}`, t => {
+    const dir = copy(t, 'continue');
+    fs.writeFileSync(path.join(dir, 'jobs/repo/job-one/report.md'), report + '\n');
+    assert.equal(getCheck('continue').analyze(input(dir)).results[0].result, 'pass');
   });
 }
 
