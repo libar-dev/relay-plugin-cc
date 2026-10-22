@@ -49,6 +49,8 @@ export type RelayBoardDetail = {
   id: string;
   // The row's facts the view was read at; null to read it again.
   mark: string | null;
+  // When the last read that succeeded started; a live job's view is read again 30 s after it.
+  readAt: number | null;
   // After a failed read, the time before which it is not read again unless its row is pressed.
   retryAt: number | null;
   // Whether a read has succeeded.
@@ -76,12 +78,13 @@ declare module "claude-code" {
       boardSelected: string | null;
       boardDetail: RelayBoardDetail | null;
       // The last send's or cancel's line for a job, a refused send to send directly, and for a send
-      // the relay took, the line once the job's messages show one it handed over since `since`.
+      // the relay took, the line once the job's messages show it handed over: a message the relay
+      // carried, created since `since`, whose preview is the sent text's `preview`.
       boardNote: {
         id: string;
         line: string;
         retry: RelayBoardRetry | null;
-        delivered: { since: number; line: string } | null;
+        delivered: { since: number; preview: string; line: string } | null;
       } | null;
       boardConfirm: { id: string; attempt: number } | null;
     };

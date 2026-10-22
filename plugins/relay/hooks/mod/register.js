@@ -25,9 +25,10 @@
 //
 // /relay-board opens the board, a pane of the repository's jobs, where a job is steered, continued
 // or cancelled. It draws only from `$.state`, which a three-second read of `companion status
-// --json` fills while the pane is placed and a surface draws, and the selected job's `result --json`.
-// The timer starts when the board opens and stops when its pane closes. A press runs its process
-// from the handler, never from a drawing, and a send reads the job first and routes on that.
+// --json` fills while the pane is shown, placed and drawn by a surface, and the selected job's
+// `result --json`. The timer starts when the board opens (where nothing draws, when a surface
+// attaches) and stops when its pane closes. A press runs its process from the handler, never from
+// a drawing, and a send reads the job first and routes on that.
 
 import { atom, read, update } from "claude-code";
 
@@ -94,17 +95,31 @@ function companionText(e, { stdout, stderr }) {
   if (!verbatim.endsWith("\n")) {
     verbatim += "\n";
   }
-  // A loop, not a spread: a large output can hold more backtick runs than a call takes arguments.
-  const longest = (verbatim.match(/`+/g) ?? []).reduce((most, run) => Math.max(most, run.length), 0);
-  const fence = "`".repeat(Math.max(3, longest + 1));
+  const fence = fenceFor(verbatim, 3);
   const tail = at === -1 ? "" : lines[at] === "---" ? "---\n" + lines.slice(at + 1).join("\n") : lines.slice(at).join("\n");
   return commandLine(e) + "\n" + fence + "text\n" + verbatim + fence + "\n" + tail;
 }
 
-// How a person runs the same command by hand, named in every error text.
+// A run of backticks longer than any in the text, and at least `least` long, to fence it in.
+// A loop, not a spread: a large output can hold more backtick runs than a call takes arguments.
+function fenceFor(text, least) {
+  const longest = (text.match(/`+/g) ?? []).reduce((most, run) => Math.max(most, run.length), 0);
+  return "`".repeat(Math.max(least, longest + 1));
+}
+
+// One POSIX shell word that the shell takes as written: nothing in single quotes runs.
+function shellWord(text) {
+  return "'" + text.replace(/'/g, "'\\''") + "'";
+}
+
+// How a person runs the same command by hand, named in every error text. The typed text is one
+// word, as the module passes it, so the companion splits it as it splits "$ARGUMENTS", and a
+// quote, `$(…)` or backtick in it runs nothing.
 function companionShell($, sub, args) {
-  const typed = typeof args === "string" && /\S/.test(args) ? " " + args : "";
-  return "`node \"" + $.plugin.root + "/scripts/companion.mjs\" " + sub + typed + "`";
+  const typed = typeof args === "string" && /\S/.test(args) ? " " + shellWord(args) : "";
+  const shell = "node " + shellWord($.plugin.root + "/scripts/companion.mjs") + " " + sub + typed;
+  const fence = fenceFor(shell, 1);
+  return fence + shell + fence;
 }
 
 // An error text: the command line, then a paragraph of the module's own words.
@@ -318,6 +333,10 @@ const MOST_ROWS = 200;
 const RELAY_QUIET_MS = 15 * 60 * 1000;
 // A view that failed is read again no sooner than this, unless its row is pressed.
 const RETRY_MS = 10000;
+const TICK_MS = 3000;
+// A live job's view is read again at least this often: a message created and taken between two
+// reads leaves every fact of its row as it was (openMessages goes from 0 to 0).
+const LIVE_VIEW_MS = 30000;
 const ENDED = ["completed", "failed", "cancelled"];
 const LIVE_AGENT = ["pending", "running", "waiting"];
 
@@ -434,14 +453,14 @@ function detailMark(job) {
   return [job.state, job.attempts, job.openMessages, job.undeliveredCount, job.reportPath, job.completedAt, job.relay?.lastToolAt ?? null].join("|");
 }
 
-// Whether the selected job's view is read at this read: a new job, or a stale view that is not
-// waiting out a failure.
+// Whether the selected job's view is read at this read: a new job, a stale view that is not
+// waiting out a failure, or a live job's view at the last tick within LIVE_VIEW_MS of its read.
 function isDetailDue(detail, job, at) {
   if (detail?.id !== job.id) {
     return true;
   }
   if (detail.mark === detailMark(job)) {
-    return false;
+    return isLive(job) && at !== null && at - (detail.readAt ?? 0) > LIVE_VIEW_MS - TICK_MS;
   }
   return detail.retryAt === null || (at !== null && at >= detail.retryAt);
 }
@@ -456,9 +475,9 @@ async function boardPane($) {
   return (await $.ui.panes()).find((one) => one.id === BOARD_PANE);
 }
 
-// Whether a surface draws the pane now.
+// Whether a surface draws the pane now: placed, and shown rather than a tab behind another pane.
 async function isDrawn($, pane) {
-  return pane?.isPlaced === true && (await $.session.surfaces()).length > 0;
+  return pane?.isPlaced === true && pane.isShown === true && (await $.session.surfaces()).length > 0;
 }
 
 function stopBoard(board) {
@@ -473,11 +492,16 @@ async function boardTick($, board) {
     return;
   }
   board.isReading = true;
+  // A close and a reopen while this tick's pane read is out start another timer, which the
+  // read's stale "no pane" must not stop.
+  const timer = board.timer;
   try {
     const pane = await boardPane($);
     if (pane === undefined) {
       // Closed: an unload, or a drawing that threw, closes the pane without the ui.close hook.
-      stopBoard(board);
+      if (board.timer === timer) {
+        stopBoard(board);
+      }
     } else if (await isDrawn($, pane)) {
       await readBoard($);
     }
@@ -517,24 +541,25 @@ async function readBoard($) {
   const selected = await read($, boardSelected);
   const job = list.jobs.find((one) => one.id === selected);
   if (job !== undefined && isDetailDue(await read($, boardDetail), job, at)) {
-    await readDetail($, job);
+    await readDetail($, job, at);
   }
 }
 
-async function readDetail($, job) {
+// `at` is the time the read starts, which a live job's next read is counted from.
+async function readDetail($, job, at) {
   const ran = await companionJson($, ["result", job.id, "--json"], 30000);
   const last = await read($, boardDetail);
-  const kept = last?.id === job.id ? last : { id: job.id, mark: null, retryAt: null, isRead: false, messages: [], report: null, isBusy: false, error: null };
+  const kept = last?.id === job.id ? last : { id: job.id, mark: null, readAt: null, retryAt: null, isRead: false, messages: [], report: null, isBusy: false, error: null };
   let detail;
   if (isBusy(ran)) {
     // The mark stays stale, so the next tick reads again.
     detail = { ...kept, retryAt: null, isBusy: true, error: null };
   } else if (failureOf(ran) !== null) {
-    const at = await now($);
-    detail = { ...kept, mark: null, retryAt: at === null ? null : at + RETRY_MS, isBusy: false, error: failureOf(ran) };
+    const failedAt = await now($);
+    detail = { ...kept, mark: null, retryAt: failedAt === null ? null : failedAt + RETRY_MS, isBusy: false, error: failureOf(ran) };
   } else {
     const { messages, report } = ran.answer;
-    detail = { id: job.id, mark: detailMark(job), retryAt: null, isRead: true, messages, report, isBusy: false, error: null };
+    detail = { id: job.id, mark: detailMark(job), readAt: at, retryAt: null, isRead: true, messages, report, isBusy: false, error: null };
   }
   if (!isSame(detail, last)) {
     await update($, boardDetail, () => detail);
@@ -570,7 +595,9 @@ async function moveWindow($, board, move) {
 // the list; the lead's SendMessage resumes it for a continue (D17).
 async function isByRelay($, job) {
   const relay = job.relay;
-  if (relay?.agentId == null || relay.workflowRunId != null || job.claudeSessionId !== (await $.session.id())) {
+  // A Workflow relay never goes by the relay (D53): one with a run id, or a string-return relay
+  // recorded with none.
+  if (relay?.agentId == null || relay.workflowRunId != null || relay.stringReturn || job.claudeSessionId !== (await $.session.id())) {
     return false;
   }
   if (!isLive(job)) {
@@ -587,6 +614,13 @@ function noteOf(id, line, more = {}) {
   return { id, line, retry: null, delivered: null, ...more };
 }
 
+// A text as the job's messages preview it (readJobMessages, scripts/lib/jobs/messages.mjs): its
+// first line that is not blank, its spaces folded, cut to 120 characters.
+function previewOf(text) {
+  const line = text.split(/\r?\n/).find((one) => one.trim()) ?? "";
+  return Array.from(line.replace(/\s+/g, " ").trim()).slice(0, 120).join("");
+}
+
 // One send per press. `kind` is what the field's label offered, or a refused send's kind when the
 // person pressed "Send to the job directly" (`retry`). A press while one for the job still runs
 // is dropped, and the board never sends again by itself.
@@ -596,6 +630,8 @@ async function sendFromBoard($, board, id, text, kind, retry) {
   }
   board.sending.add(id);
   try {
+    // At once: the job's read takes up to 10 s, and a press the guard drops meanwhile shows why.
+    await update($, boardNote, () => noteOf(id, "Reading the job…"));
     // Only the reads before a send can throw.
     const note = await sendOnce($, id, text, kind, retry).catch((error) => noteOf(id, "Nothing was sent: " + (error?.message ?? String(error)) + ".", { retry }));
     await update($, boardNote, () => note);
@@ -644,8 +680,9 @@ async function sendByRelay($, job, text, kind) {
   }
   // The module's own session.send hook does not see the board's send.
   await wake($, job.relay.agentId).catch(() => {});
-  // Pending until the job's messages show one the relay handed over since the send.
-  const delivered = at === null ? null : { since: at, line: by + "sent, and the relay delivered it." };
+  // Pending until the job's messages show this one handed over by the relay: created since the
+  // send, with this text's preview. Another message the relay delivers first is not this one.
+  const delivered = at === null ? null : { since: at, preview: previewOf(text), line: by + "sent, and the relay delivered it." };
   return noteOf(job.id, by + "sent, pending until the relay delivers it.", { delivered });
 }
 
@@ -656,44 +693,58 @@ async function askCancel($, id) {
   }
 }
 
-// Yes on the question: the attempt it named, so a newer attempt is never cancelled.
+// Yes on the question: the attempt it named, so a newer attempt is never cancelled. A Yes while a
+// cancel of the job still runs is dropped; the note says it runs.
 async function cancelFromBoard($, board, confirm) {
   await update($, boardConfirm, () => null);
-  const args = ["cancel", confirm.id, "--attempt", String(confirm.attempt), "--json"];
-  const ran = await companionJson($, args, await cancelTimeoutMs($));
-  const of = "Cancel of attempt " + confirm.attempt + ": ";
-  let line;
-  if (ran.failure !== undefined) {
-    line = of + unread(ran) + "; it may have gone through, and the list shows the job's state.";
-  } else if (ran.answer.error?.kind === "attempt-changed") {
-    line = of + ran.answer.error.message + " The job moved on: press Cancel again to cancel the new attempt.";
-  } else if (ran.answer.error != null) {
-    line = of + ran.answer.error.message;
-  } else {
-    // Exit 4: the cancel went to the job's worker, which has not ended the job yet.
-    const state = ran.exitCode === 4 ? "the job still runs, and the cancel is with its worker" : "the job is " + ran.answer.state;
-    const actions = Array.isArray(ran.answer.actions) && ran.answer.actions.length > 0 ? " (" + ran.answer.actions.join("; ") + ")" : "";
-    line = of + state + actions + ".";
+  if (board.cancelling.has(confirm.id)) {
+    return;
   }
-  await update($, boardNote, () => noteOf(confirm.id, line));
+  board.cancelling.add(confirm.id);
+  try {
+    const of = "Cancel of attempt " + confirm.attempt + ": ";
+    await update($, boardNote, () => noteOf(confirm.id, "Cancelling attempt " + confirm.attempt + "…"));
+    const args = ["cancel", confirm.id, "--attempt", String(confirm.attempt), "--json"];
+    const ran = await companionJson($, args, await cancelTimeoutMs($));
+    let line;
+    if (ran.failure !== undefined) {
+      line = of + unread(ran) + "; it may have gone through, and the list shows the job's state.";
+    } else if (ran.answer.error?.kind === "attempt-changed") {
+      line = of + ran.answer.error.message + " The job moved on: press Cancel again to cancel the new attempt.";
+    } else if (ran.answer.error != null) {
+      line = of + ran.answer.error.message;
+    } else {
+      // Exit 4: the cancel went to the job's worker, which has not ended the job yet.
+      const state = ran.exitCode === 4 ? "the job still runs, and the cancel is with its worker" : "the job is " + ran.answer.state;
+      const actions = Array.isArray(ran.answer.actions) && ran.answer.actions.length > 0 ? " (" + ran.answer.actions.join("; ") + ")" : "";
+      line = of + state + actions + ".";
+    }
+    await update($, boardNote, () => noteOf(confirm.id, line));
+  } finally {
+    board.cancelling.delete(confirm.id);
+  }
   await readAgain($, board, confirm.id);
 }
 
 // The board reads every three seconds from its open until its pane closes.
 function startBoard($, board) {
-  board.timer ??= $.clock.every(3000, () => {
+  board.timer ??= $.clock.every(TICK_MS, () => {
     boardTick($, board).catch(() => {});
   });
 }
 
 async function openBoard($, board) {
   const opened = await $.ui.open({ id: BOARD_PANE, title: "Relay jobs", focus: true });
+  // With no surface the pane waits for one, and its timer waits for session.attach.
+  if (!opened.isPlaced && opened.reason.startsWith("no-surface")) {
+    return { text: NO_SURFACE };
+  }
   startBoard($, board);
   if (opened.isPlaced) {
     await boardTick($, board);
     return { text: "Opened the relay board." };
   }
-  return { text: opened.reason.startsWith("no-surface") ? NO_SURFACE : "The relay board is open but not drawn: " + opened.reason };
+  return { text: "The relay board is open but not drawn: " + opened.reason };
 }
 
 // The pane, from `$.state` alone. The handlers run the board's processes when pressed.
@@ -760,8 +811,8 @@ async function drawJob($, { Box, Text, Button, Input, Markdown }, job, board) {
   const view = detail?.id === job.id ? detail : null;
   const note = await read($, boardNote);
   if (note?.id === job.id) {
-    const isDelivered = note.delivered !== null && view !== null &&
-      view.messages.some((message) => message.relay != null && Date.parse(message.createdAt ?? "") >= note.delivered.since);
+    const isDelivered = note.delivered !== null && view !== null && view.messages.some((message) =>
+      message.relay != null && message.preview === note.delivered.preview && Date.parse(message.createdAt ?? "") >= note.delivered.since);
     nodes.push(h(Text, null, isDelivered ? note.delivered.line : note.line));
     const retry = note.retry;
     if (retry !== null) {
@@ -804,8 +855,8 @@ export function register(on) {
   // One timer and one read in flight per load of the module. `fastUntil` is the last tick of the
   // every-tick reads a relay event (a relay:job spawn, a wake, one of the commands below) asks for.
   const poller = { timer: null, ticks: 0, isReading: false, isCleared: false, readTick: 0, fastUntil: 0 };
-  // `sending` holds the jobs a press is sending to.
-  const board = { timer: null, isReading: false, sending: new Set() };
+  // `sending` holds the jobs a press is sending to, `cancelling` those a Yes is cancelling.
+  const board = { timer: null, isReading: false, sending: new Set(), cancelling: new Set() };
   on("session.start", async ($, e, next) => {
     // session.start fires again without a reload (an enable, another plugin's engine.create),
     // and this copy's timers are still running then.
@@ -824,6 +875,19 @@ export function register(on) {
     // A command the module registers can run mid-turn; a plugin's markdown command cannot.
     await $.command.register(BOARD_COMMAND);
     return next(e);
+  });
+
+  // A board opened where nothing drew starts reading once a surface attaches to draw it.
+  on("session.attach", async ($, e, next) => {
+    const attached = await next(e);
+    try {
+      if ((await boardPane($)) !== undefined) {
+        startBoard($, board);
+      }
+    } catch {
+      // The next /relay-board starts it.
+    }
+    return attached;
   });
 
   // A registered command is declared "for this session", and /clear, /resume and a fork go on

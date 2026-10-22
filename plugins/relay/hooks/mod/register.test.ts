@@ -393,7 +393,7 @@ const companionArgv = (sub: string, ...args: string[]) => [
 ]
 
 // The `<shell>` of the error texts, the plugin's folder left open.
-const shell = (sub: string) => new RegExp('Run `node "/[^"]*/scripts/companion\\.mjs" ' + sub + '` in a shell')
+const shell = (sub: string) => new RegExp("Run `node '/[^']*/scripts/companion\\.mjs' " + sub + '` in a shell')
 
 const GRACE = 'env RELAY_JOBS_CANCEL_GRACE_MS'
 
@@ -607,7 +607,7 @@ test('a run with no exit code shows none of its output', async ($, on) => {
 
   expect(seen.runs.map((r) => r.argv)).toEqual([companionArgv('status', '--all')])
   expect(result).toEqual({
-    text: '/relay:status --all\n\nEnded without an exit code. Run `node "' + seen.runs[0].argv[1] + '" status --all` in a shell to see its output.',
+    text: "/relay:status --all\n\nEnded without an exit code. Run `node '" + seen.runs[0].argv[1] + "' status '--all'` in a shell to see its output.",
     exitCode: 1,
   })
 })
@@ -636,7 +636,7 @@ test('a truncated stream shows none of the output and names the stream', async (
   results.forEach((result, i) => {
     expect(result.exitCode).toBe(1)
     expect(result.text).toBe(
-      '/relay:status\n\nPrinted more than 4 MiB on ' + streams[i] + ', more than Claude Code passes to a plugin, so none of it is shown. Run `node "' + seen.runs[i].argv[1] + '" status` in a shell to read it.',
+      '/relay:status\n\nPrinted more than 4 MiB on ' + streams[i] + ", more than Claude Code passes to a plugin, so none of it is shown. Run `node '" + seen.runs[i].argv[1] + "' status` in a shell to read it.",
     )
     expect(result.text).not.toContain('No jobs')
     expect(result.text).not.toContain('partial')
@@ -674,14 +674,36 @@ test('a run that does not finish answers an error text; only a cancel cut off by
 
   expect(seen.runs.map((r) => r.argv)).toEqual([companionArgv('status'), companionArgv('cancel', 'j-1'), companionArgv('cancel', 'j-2')])
   expect(status.exitCode).toBe(1)
-  expect(status.text).toMatch(/^\/relay:status\n\nDid not finish: .*timed out after 30000 ms.*\. Run `node "[^"]*" status` in a shell to see its output\.$/)
+  expect(status.text).toMatch(/^\/relay:status\n\nDid not finish: .*timed out after 30000 ms.*\. Run `node '[^']*' status` in a shell to see its output\.$/)
   expect(cancel.exitCode).toBe(1)
   expect(cancel.text).toMatch(
-    /^\/relay:cancel j-1\n\nDid not finish: .*timed out after 60000 ms.*\. Run `node "[^"]*" cancel j-1` in a shell to see its output\. The cancel may have gone through anyway; \/relay:status shows the job's state\.$/,
+    /^\/relay:cancel j-1\n\nDid not finish: .*timed out after 60000 ms.*\. Run `node '[^']*' cancel 'j-1'` in a shell to see its output\. The cancel may have gone through anyway; \/relay:status shows the job's state\.$/,
   )
   // A process that could not start cancelled nothing.
   expect(unstarted.exitCode).toBe(1)
-  expect(unstarted.text).toMatch(/^\/relay:cancel j-2\n\nDid not finish: .*spawn node ENOENT.*\. Run `node "[^"]*" cancel j-2` in a shell to see its output\.$/)
+  expect(unstarted.text).toMatch(/^\/relay:cancel j-2\n\nDid not finish: .*spawn node ENOENT.*\. Run `node '[^']*' cancel 'j-2'` in a shell to see its output\.$/)
+})
+
+// The module passes the typed text as one argv element, so the shell line passes it as one word:
+// in single quotes, where nothing runs, each quote in it closed, escaped and reopened.
+test('the shell line quotes the plugin path and the typed text as one word each, so nothing typed runs', async ($, on) => {
+  const seen = companion(on, { run: () => ({ value: printed('', '', 0) }) })
+  const typed = `j-1 $(touch x) --source "/tmp/it's here.jsonl"`
+  const ticked = 'j-2 `touch y`'
+
+  const quoted: any = await $.command.run(command('relay:transfer', typed))
+  const fenced: any = await $.command.run(command('relay:result', ticked))
+  const blank: any = await $.command.run(command('relay:status', ' \t '))
+
+  expect(seen.runs.map((r) => r.argv)).toEqual([companionArgv('transfer', typed), companionArgv('result', ticked), companionArgv('status')])
+  const root = seen.runs[0].argv[1]
+  expect(quoted.text).toBe(
+    `/relay:transfer ${typed}\n\nPrinted nothing (exit 0). Run \`node '${root}' transfer 'j-1 $(touch x) --source "/tmp/it'\\''s here.jsonl"'\` in a shell to see its output.`,
+  )
+  // A backtick in the line takes a longer fence, so the code span shows the line whole.
+  expect(fenced.text).toBe(`/relay:result ${ticked}\n\nPrinted nothing (exit 0). Run \`\`node '${root}' result 'j-2 \`touch y\`'\`\` in a shell to see its output.`)
+  // Blank text is no word at all.
+  expect(blank.text).toBe(`/relay:status\n\nPrinted nothing (exit 0). Run \`node '${root}' status\` in a shell to see its output.`)
 })
 
 test('a session directory or id that cannot be read answers an error text and runs nothing', async ($, on) => {
@@ -699,9 +721,9 @@ test('a session directory or id that cannot be read answers an error text and ru
   expect(seen.runs).toHaveLength(0)
   expect(cancel.exitCode).toBe(1)
   // The cancel never started, so the text does not say it may have gone through.
-  expect(cancel.text).toMatch(/^\/relay:cancel j-1\n\nDid not finish: .*no session directory.*\. Run `node "[^"]*" cancel j-1` in a shell to see its output\.$/)
+  expect(cancel.text).toMatch(/^\/relay:cancel j-1\n\nDid not finish: .*no session directory.*\. Run `node '[^']*' cancel 'j-1'` in a shell to see its output\.$/)
   expect(transfer.exitCode).toBe(1)
-  expect(transfer.text).toMatch(/^\/relay:transfer\n\nDid not finish: .*no session id.*\. Run `node "[^"]*" transfer` in a shell to see its output\.$/)
+  expect(transfer.text).toMatch(/^\/relay:transfer\n\nDid not finish: .*no session id.*\. Run `node '[^']*' transfer` in a shell to see its output\.$/)
 })
 
 test('a hook that fails is answered by its .catch, never by the markdown command', async ($, on) => {
@@ -712,7 +734,7 @@ test('a hook that fails is answered by its .catch, never by the markdown command
 
   expect(seen.runs.map((r) => r.argv)).toEqual([companionArgv('result', 'j-1')])
   expect(result.exitCode).toBe(1)
-  expect(result.text).toMatch(/^\/relay:result j-1\n\nThe relay module failed while answering it: .+\. Run `node "[^"]*" result j-1` in a shell to see its output\.$/)
+  expect(result.text).toMatch(/^\/relay:result j-1\n\nThe relay module failed while answering it: .+\. Run `node '[^']*' result 'j-1'` in a shell to see its output\.$/)
 })
 
 // The status line. Its timer starts at session.start on the kit's mocked clock, so a test raises
@@ -1368,6 +1390,99 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
+  test(`the note says delivered only for the sent message, not for another the relay delivers first (${surface})`, async ($, on) => {
+    const at = new Date(NOW).toISOString()
+    const byRelay = (preview: string, createdAt: string) => ({ kind: 'steer', preview, stage: 'claimed', createdAt, relay: { entry: 'u-' + preview.length, at: null }, outcome: { action: 'steered' } })
+    let messages: any[] = []
+    await boardEngine($, on, { jobs: () => [row('j-1')], result: (id) => ({ value: answer('result', { id, messages, report: null }) }) })
+    const { ui } = await openBoard($, surface)
+    await ui.press({ key: 'job:j-1' })
+    const pending = 'By the relay worker-j-1: sent, pending until the relay delivers it.'
+
+    // Spaces and a tab, and longer than a preview's 120 characters.
+    await ui.input({ key: 'message:j-1', text: '  stop   after\tthe tests, ' + 'then lint '.repeat(12) })
+    expect(await shows(ui, pending)).toBe(true)
+
+    // The lead's own SendMessage, which the relay delivered first.
+    messages = [byRelay('run the linter', at)]
+    await ui.press({ key: 'job:j-1' })
+    expect(await shows(ui, pending)).toBe(true)
+    // The same text sent before this send.
+    const preview = ('stop after the tests, ' + 'then lint '.repeat(12)).slice(0, 120)
+    messages = [...messages, byRelay(preview, ago(5))]
+    await ui.press({ key: 'job:j-1' })
+    expect(await shows(ui, pending)).toBe(true)
+    // The same text sent directly, with no relay record.
+    messages = [...messages, { ...byRelay(preview, at), relay: null }]
+    await ui.press({ key: 'job:j-1' })
+    expect(await shows(ui, pending)).toBe(true)
+
+    // This send, its preview as the job's messages cut it.
+    messages = [...messages, byRelay(preview, at)]
+    await ui.press({ key: 'job:j-1' })
+    expect(await shows(ui, 'By the relay worker-j-1: sent, and the relay delivered it.')).toBe(true)
+    await ui.unmount()
+  })
+
+  test(`the route comes from the job read at the press, never from the list's row (${surface})`, async ($, on) => {
+    const listed: Record<string, any> = {
+      // The list shows a live Agent tool relay that called a minute ago.
+      'j-4': row('j-4'),
+      'j-3': row('j-3'),
+      // The list shows a Workflow relay, and a relay quiet for 20 minutes.
+      'j-2': row('j-2', { relay: relayOf(row('j-2'), { workflowRunId: 'wf_7f3a' }) }),
+      'j-1': row('j-1', { relay: relayOf(row('j-1'), { lastToolAt: ago(20) }) }),
+    }
+    const fresh: Record<string, any> = {
+      'j-4': row('j-4', { relay: relayOf(row('j-4'), { workflowRunId: 'wf_7f3a' }) }),
+      'j-3': row('j-3', { relay: relayOf(row('j-3'), { lastToolAt: ago(16) }) }),
+      'j-2': row('j-2'),
+      'j-1': row('j-1'),
+    }
+    const seen = await boardEngine($, on, {
+      jobs: () => Object.values(listed),
+      view: (id) => ({ value: answer('status', { ...fresh[id], messages: [] }) }),
+    })
+    const { ui } = await openBoard($, surface)
+
+    for (const id of Object.keys(listed)) {
+      await ui.press({ key: 'job:' + id })
+      await ui.input({ key: 'message:' + id, text: 'hello ' + id })
+    }
+
+    expect(seen.acts().map((r: any) => r.argv)).toEqual([
+      companionArgv('steer', 'j-4', '--message', 'hello j-4', '--json'),
+      companionArgv('steer', 'j-3', '--message', 'hello j-3', '--json'),
+    ])
+    expect(seen.sends.map((send: any) => [send.to, send.text])).toEqual([
+      ['a-j-2', 'hello j-2'],
+      ['a-j-1', 'hello j-1'],
+    ])
+    await ui.unmount()
+  })
+
+  test(`a string-return Workflow relay, recorded with no run id, is sent to directly, live or ended (${surface})`, async ($, on) => {
+    const jobs = [
+      row('j-2', { relay: relayOf(row('j-2'), { stringReturn: true }) }),
+      row('j-1', { state: 'completed', relay: relayOf(row('j-1'), { stringReturn: true, lastToolAt: ago(90) }) }),
+    ]
+    // The agent list holds both relays, so only stringReturn keeps them off the relay route.
+    const seen = await boardEngine($, on, { jobs: () => jobs })
+    const { ui } = await openBoard($, surface)
+
+    for (const job of jobs) {
+      await ui.press({ key: 'job:' + job.id })
+      await ui.input({ key: 'message:' + job.id, text: 'hello' })
+    }
+
+    expect(seen.sends).toEqual([])
+    expect(seen.acts().map((r: any) => r.argv)).toEqual([
+      companionArgv('steer', 'j-2', '--message', 'hello', '--json'),
+      companionArgv('continue', 'j-1', '--message', 'hello', '--json'),
+    ])
+    await ui.unmount()
+  })
+
   test(`a running job's relay listed as waiting between its steps still takes the steer (${surface})`, async ($, on) => {
     const seen = await boardEngine($, on, { jobs: () => [row('j-1')], agents: () => [relayAgent('a-j-1', 'waiting')] })
     const { ui } = await openBoard($, surface)
@@ -1530,14 +1645,14 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
-  test(`a double press of "Send to the job directly" sends once (${surface})`, async ($, on) => {
+  test(`"Send to the job directly" goes at its press, and a press while that send runs sends nothing more (${surface})`, async ($, on) => {
     let release: () => void = () => {}
     const held = new Promise<void>((resolve) => (release = resolve))
     let isHeld = false
     const seen = await boardEngine($, on, {
       jobs: () => [row('j-1')],
       sent: () => ({ isDelivered: false, reason: 'no agent with id a-j-1' }),
-      // The job's read at the press is slow, so the button is still drawn for the second press.
+      // The job's read at the press is slow.
       view: () => {
         const view = { value: answer('status', { ...row('j-1'), messages: [] }) }
         return isHeld ? held.then(() => view) : view
@@ -1550,12 +1665,41 @@ for (const surface of SURFACES) {
     isHeld = true
     const first = ui.press({ key: 'direct' })
     await seen.clock.settle()
-    const second = ui.press({ key: 'direct' })
+    // While the job is read the note says so, and the button is gone, so it cannot be pressed twice.
+    expect(await shows(ui, 'Reading the job…')).toBe(true)
+    expect(await ui.find({ key: 'direct' })).toBeUndefined()
+    // The field's press for the job meanwhile is dropped: it would go by the relay.
+    const second = ui.input({ key: 'message:j-1', text: 'and lint' })
     await seen.clock.settle()
+    expect(await shows(ui, 'Reading the job…')).toBe(true)
     release()
     await Promise.all([first, second])
 
+    expect(seen.runs.filter((r: any) => r.argv[2] === 'status' && r.argv[3] === 'j-1')).toHaveLength(2)
+    expect(seen.sends).toHaveLength(1)
     expect(seen.acts().map((r: any) => r.argv)).toEqual([companionArgv('steer', 'j-1', '--message', 'check the tests', '--json')])
+    await ui.unmount()
+  })
+
+  test(`a send from the field says it is reading the job from its press (${surface})`, async ($, on) => {
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const seen = await boardEngine($, on, {
+      jobs: () => [row('j-1')],
+      view: () => held.then(() => ({ value: answer('status', { ...row('j-1'), messages: [] }) })),
+    })
+    const { ui } = await openBoard($, surface)
+    await ui.press({ key: 'job:j-1' })
+
+    const pressed = ui.input({ key: 'message:j-1', text: 'stop after the tests' })
+    await seen.clock.settle()
+    expect(seen.sends).toEqual([])
+    expect(await shows(ui, 'Reading the job…')).toBe(true)
+    release()
+    await pressed
+
+    expect(seen.sends.map((send: any) => send.text)).toEqual(['stop after the tests'])
+    expect(await shows(ui, 'By the relay worker-j-1: sent, pending until the relay delivers it.')).toBe(true)
     await ui.unmount()
   })
 
@@ -1694,6 +1838,34 @@ for (const surface of SURFACES) {
     expect(
       await shows(ui, 'Cancel of attempt 2: the job still runs, and the cancel is with its worker (the job is still running; the cancel is with its worker (pid 41)).'),
     ).toBe(true)
+    await ui.unmount()
+  })
+
+  test(`Cancel says it is cancelling while it runs, and a second Yes meanwhile runs no second cancel (${surface})`, async ($, on) => {
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const seen = await boardEngine($, on, {
+      jobs: () => [row('j-1', { attempts: 2 })],
+      act: () => held.then(() => ({ value: answer('cancel', { id: 'j-1', state: 'cancelled', actions: [] }) })),
+    })
+    const { ui } = await openBoard($, surface)
+    await ui.press({ key: 'job:j-1' })
+    await ui.press({ key: 'cancel' })
+
+    const first = ui.press({ key: 'cancel-yes' })
+    await seen.clock.settle()
+    expect(await shows(ui, 'Cancelling attempt 2…')).toBe(true)
+    const again = ui.press({ key: 'cancel' })
+    await seen.clock.settle()
+    const second = ui.press({ key: 'cancel-yes' })
+    await seen.clock.settle()
+    expect(await ui.find({ key: 'cancel-yes' })).toBeUndefined()
+    expect(await shows(ui, 'Cancelling attempt 2…')).toBe(true)
+    release()
+    await Promise.all([first, again, second])
+
+    expect(seen.runs.filter((r: any) => r.argv[2] === 'cancel').map((r: any) => r.argv)).toEqual([companionArgv('cancel', 'j-1', '--attempt', '2', '--json')])
+    expect(await shows(ui, 'Cancel of attempt 2: the job is cancelled.')).toBe(true)
     await ui.unmount()
   })
 
@@ -1838,6 +2010,77 @@ test('the board reads only while its pane is placed and a surface draws, from it
   expect(seen.subs()).toEqual(['status', 'status'])
 })
 
+// A steer from a shell or another board, posted and taken between two reads, leaves the row's
+// facts as they were: openMessages goes from 0 to 0.
+test("a live job's view is read again at least every 30 s, so a message taken between two reads shows", async ($, on) => {
+  let messages: any[] = []
+  const seen = await boardEngine($, on, {
+    jobs: () => [row('j-2'), row('j-1', { state: 'completed', reportPath: '/jobs/j-1/report.md' })],
+    result: (id) => ({ value: answer('result', { id, messages, report: null }) }),
+  })
+  const { ui } = await openBoard($, 'terminal')
+  const reads = () => seen.subs().filter((sub: string) => sub === 'result').length
+  await ui.press({ key: 'job:j-2' })
+  expect(reads()).toBe(1)
+
+  await seen.clock.advance(3000)
+  messages = [{ kind: 'steer', preview: 'and lint', stage: 'claimed', createdAt: ago(0), relay: null, outcome: { action: 'steered' } }]
+  // Not at every tick: the read 30 s after the last.
+  await seen.clock.advance(24000)
+  expect(reads()).toBe(1)
+  await seen.clock.advance(3000)
+  expect(reads()).toBe(2)
+  expect(await shows(ui, '- steer · and lint · directly · steered')).toBe(true)
+  await seen.clock.advance(27000)
+  expect(reads()).toBe(2)
+  await seen.clock.advance(3000)
+  expect(reads()).toBe(3)
+
+  // An ended job's view is read again only when its row changes or is pressed.
+  await ui.press({ key: 'job:j-1' })
+  expect(reads()).toBe(4)
+  await seen.clock.advance(90000)
+  expect(reads()).toBe(4)
+  await ui.unmount()
+})
+
+test('a pane behind another pane reads nothing, and one hidden during the listing starts no read of the selected job', async ($, on) => {
+  const listed = row('j-1')
+  let isShown = true
+  let isHeld = false
+  let answer$: (value: unknown) => void = () => {}
+  const listed$ = () => ({ value: answer('status', { jobs: [{ ...listed }], nextCursor: null }) })
+  const seen = await boardEngine($, on, {
+    jobs: () => [listed],
+    // Placed all along: only isShown changes, as when another pane is shown over it.
+    panes: () => [{ ...PANE, isShown, isFocused: isShown }],
+    status: () => (isHeld ? new Promise((resolve) => (answer$ = resolve)).then(listed$) : listed$()),
+  })
+  const { ui } = await openBoard($, 'terminal')
+  await ui.press({ key: 'job:j-1' })
+  expect(seen.subs()).toEqual(['status', 'status', 'result'])
+
+  // The row changes, so the next read would read its view; the pane is hidden during the list read.
+  listed.openMessages = 1
+  isHeld = true
+  await seen.clock.advance(3000)
+  isShown = false
+  isHeld = false
+  answer$(undefined)
+  await seen.clock.settle()
+  expect(seen.subs()).toEqual(['status', 'status', 'result', 'status'])
+
+  // Behind another pane, its ticks read nothing.
+  await seen.clock.advance(9000)
+  expect(seen.subs()).toEqual(['status', 'status', 'result', 'status'])
+
+  // Shown again, the same timer reads the list and the changed view.
+  isShown = true
+  await seen.clock.advance(3000)
+  expect(seen.subs()).toEqual(['status', 'status', 'result', 'status', 'status', 'result'])
+  await ui.unmount()
+})
+
 test('a pane closed during the listing starts no read of the selected job', async ($, on) => {
   let isOpen = true
   let answer$: (value: unknown) => void = () => {}
@@ -1881,6 +2124,38 @@ test('ticks whose pane reads are slow still run one read at a time', async ($, o
   expect(seen.subs()).toEqual(['status', 'status'])
 })
 
+// A read whose pane read is out while the board closes and opens again answers "no pane", stale by
+// then. A test cannot raise ui.close, which stops the timer at a close; the tick that finds the
+// pane gone stops it here, and the stale read is a press's.
+test('a read that saw the pane closed does not stop the timer of the board opened again since', async ($, on) => {
+  let isOpen = true
+  let isSlow = false
+  let answer$: (value: unknown[]) => void = () => {}
+  const seen = await boardEngine($, on, {
+    jobs: () => [row('j-1')],
+    panes: () => (isSlow ? new Promise<unknown[]>((resolve) => (answer$ = resolve)) : isOpen ? [PANE] : []),
+  })
+  const { ui } = await openBoard($, 'terminal')
+  isOpen = false
+  await seen.clock.advance(3000)
+  expect(seen.subs()).toEqual(['status'])
+
+  // A press whose pane read is slow, and the board opened again before it answers.
+  isSlow = true
+  const pressed = ui.press({ key: 'job:j-1' })
+  await seen.clock.settle()
+  isSlow = false
+  isOpen = true
+  await $.command.run(command('relay-board'))
+  answer$([])
+  await pressed
+
+  // The board opened again still reads at every tick.
+  await seen.clock.advance(6000)
+  expect(seen.subs()).toEqual(['status', 'status', 'result', 'status'])
+  await ui.unmount()
+})
+
 test('a reload while the pane is open starts the board timer again', async ($, on) => {
   // The fresh copy's session.start finds the pane the old copy left open.
   const seen = await boardEngine($, on, { jobs: () => [row('j-1')], panes: () => [PANE] })
@@ -1902,16 +2177,37 @@ test('/relay-board is declared again after /clear, /resume and a fork, which go 
   expect(seen.registers).toEqual(['relay-board', 'relay-board', 'relay-board', 'relay-board'])
 })
 
-test('where nothing draws, /relay-board says where the board draws and names /relay:status', async ($, on) => {
+test("where nothing draws, /relay-board says where the board draws, names /relay:status, and reads from a surface's attach", async ($, on) => {
+  let surfaces: string[] = []
+  let isOpen = false
+  let isPlaced = false
+  on('session.attach', (_: unknown, e: any) => ({ clientId: e.clientId }))
   const seen = await boardEngine($, on, {
-    surfaces: () => [],
+    surfaces: () => surfaces,
+    // With no surface an open pane is listed unplaced, unshown and unfocused.
+    panes: () => (isOpen ? [{ ...PANE, isShown: isPlaced, isFocused: false, isPlaced }] : []),
     opened: () => ({ isPlaced: false, reason: 'no-surface: no surface is attached' }),
+    jobs: () => [row('j-1')],
   })
 
+  isOpen = true
   const result = await $.command.run(command('relay-board'))
 
   expect(result).toMatchObject({
     text: "The relay board draws in the terminal and the desktop app, and nothing draws here. /relay:status lists this repository's jobs.",
   })
+  // No timer: nothing reads, not even the pane list.
+  const paneReads = seen.paneReads()
+  await seen.clock.advance(30000)
+  expect(seen.paneReads()).toBe(paneReads)
   expect(seen.runs).toEqual([])
+
+  // A surface attaches and places the pane: the board reads from the next tick.
+  surfaces = ['desktop']
+  isPlaced = true
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  await seen.clock.advance(3000)
+  expect(seen.subs()).toEqual(['status'])
+  await seen.clock.advance(3000)
+  expect(seen.subs()).toEqual(['status', 'status'])
 })
