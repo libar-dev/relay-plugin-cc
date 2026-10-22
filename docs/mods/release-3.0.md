@@ -16,7 +16,7 @@ it: where the work goes, what each step must pass, and how the work was done in 
 ## Sequence
 
 1. **Phase 1, steer wake.** Done (PR #7).
-2. **Phase 5's suite runner** (`mods/phase-5-suite`). `scripts/live/suite.mjs`: one runner, a registry of
+2. **Phase 5's suite runner** (PR #8, `mods/phase-5-suite`). `scripts/live/suite.mjs`: one runner, a registry of
    checks, one record per check and backend in `docs/live/records/`, the terminal and T3 as surfaces, and the
    capability table `docs/live/capabilities.md` generated from the records. Every later phase adds its checks to
    `scripts/live/checks/`.

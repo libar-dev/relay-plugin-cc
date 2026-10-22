@@ -633,7 +633,7 @@ test('runTerminal override receives the contract context and skips the pane driv
   assert.equal(readRecords(ctx.recordsDir)[0].result, 'pass');
 });
 
-for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', 'SIGHUP', 'partial-start', 'stop-error', 'custom-completion', 'caller-trust', 'custom-scope', 'timeout']) {
+for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', 'SIGHUP', 'partial-start', 'stop-error', 'custom-completion', 'caller-trust', 'custom-scope', 'timeout', 'partial-line']) {
   test(`terminal driver with a fake pane: ${mode}`, async t => {
     const ctx = scratch(t);
     const created = createRun(ctx.env.RELAY_LIVE_HOME, registry[1], { surface: 'terminal', backends: ['codex'],
@@ -643,7 +643,7 @@ for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', '
     const calls = [];
     let now = Date.now();
     if (mode === 'timeout') t.mock.method(Date, 'now', () => now);
-    let polls = 0, transcript;
+    let polls = 0, fullReads = 0, transcript;
     const drive = (args, prompt) => {
       calls.push(args);
       if (args[0] === 'stop' && mode === 'stop-error') throw new Error('Stop failed.');
@@ -665,8 +665,11 @@ for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', '
       if (args[0] === 'send') {
         assert.equal(prompt, check.prompt({ runId: input.runId, backends: ['codex'] }));
         writeTranscript(transcript, mode === 'custom-scope' ? [{ type: 'system', observed: 'done' }] : entries(input.runId, mode === 'timeout' ? 'unfinished' : check.marker));
+        // A line Claude Code has only begun to write: the poll must wait for it, not fail.
+        if (mode === 'partial-line') fs.appendFileSync(transcript, '{"type":"assistant","message":{"content":[{"ty');
         if (mode.startsWith('SIG')) process.emit(mode);
       }
+      if (args[0] === 'read' && mode === 'partial-line' && ++fullReads === 2) writeTranscript(transcript, entries(input.runId, check.marker));
       if (args[0] === 'read') return 'FAKE-DONE';
       return args[0] === 'start' ? 'RELAY_LIVE_UNSET CLAUDECODE\nRELAY_LIVE_UNSET RELAY_COMPANION_TEST\nRELAY_LIVE_UNSET CLAUDECODE\n' : 'pane command';
     };
@@ -674,7 +677,7 @@ for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', '
     const selected = mode === 'custom-scope' ? { ...registry[1], scope: entries => entries, completed: entries => entries.some(entry => entry.observed === 'done') } : mode === 'custom-completion' ? { ...registry[1], marker: undefined, completed: entries => entries.some(entry => entry.type === 'assistant') } : registry[1];
     const action = runTerminal(input, selected, { run: created.run, save() {}, readers, env: ctx.env, drive,
       pause: async () => { if (mode === 'timeout' && created.run.promptSentAt) now += 60001; }, log() {}, warn() {}, keep: mode.startsWith('SIG') || mode === 'partial-start' });
-    if (['complete', 'custom-completion', 'custom-scope'].includes(mode)) await action;
+    if (['complete', 'custom-completion', 'custom-scope', 'partial-line'].includes(mode)) await action;
     else await assert.rejects(action, mode === 'caller-trust' ? { message: `${ctx.workDir} is not trusted by Claude Code; open it in Claude Code once, or let the runner create the work folder.` } : mode === 'partial-start' ? /Start failed/ : mode === 'stop-error' ? /Could not stop/ : mode === 'bypass' ? /bypass-permissions dialog/ : mode === 'module-error' ? /wake-probe hooks module failed/ : mode === 'timeout' ? /Timed out waiting/ : /Interrupted/);
     assert.equal(calls.filter(args => args[0] === 'stop').length, 1);
     assert.equal(calls.filter(args => args[0] === 'send').length, ['bypass', 'module-error', 'partial-start', 'caller-trust'].includes(mode) ? 0 : 1);

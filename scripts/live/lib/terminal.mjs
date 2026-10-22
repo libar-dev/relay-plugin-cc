@@ -99,8 +99,15 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
       const screen = drive(['read', name, '2000']);
       fs.writeFileSync(path.join(ctx.evidenceDir, 'screen.txt'), screen);
       run.transcript = findTranscript(ctx.workDir, debugLog, configDir, readers.readTranscript);
-      if (run.transcript) {
-        const entries = (check.scope ?? readers.scopeToRun)(readers.readTranscript(run.transcript), run.runId);
+      let all = null;
+      try { all = run.transcript ? readers.readTranscript(run.transcript) : null; }
+      catch (error) {
+        // Claude Code may be writing the last line; the next poll reads it whole. The analysis
+        // after the run reads the file again and reports a line that stays broken.
+        if (!String(error?.message).startsWith('Invalid JSON at ')) throw error;
+      }
+      if (all) {
+        const entries = (check.scope ?? readers.scopeToRun)(all, run.runId);
         done = check.completed ? check.completed(entries) : Boolean(check.marker && screen.includes(check.marker) && readers.hasMarker(entries, check.marker));
         if (done) break;
       }
