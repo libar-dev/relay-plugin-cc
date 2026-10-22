@@ -64,7 +64,6 @@ export function loadJobView(jobDir, options = {}) {
     const account = messageAccount(jobDir);
     const relayViolations = readRelayViolations(jobDir);
     const handbacks = readRelayHandbacks(jobDir);
-    const messages = readJobMessages(jobDir);
     const lastToolAt = readJsonOrNull(path.join(jobDir, "relay-guard.json"))?.lastToolAt ?? null;
     const again = readJob(jobDir);
     if (!again || jobVersion(again) !== jobVersion(job)) {
@@ -80,7 +79,9 @@ export function loadJobView(jobDir, options = {}) {
     const undelivered = workerLive ? [] : account.undelivered;
     return {
       job, jobDir, paths, ...view, hasReport, report: hasReport ? read.text : null, reportPath: hasReport ? read.path : null,
-      undelivered, dropped: account.dropped, relayViolations, handbacks, ...messages, lastToolAt
+      // Open: every work message not yet closed, a live worker's included (the account's list before
+      // it is cut to what no worker will run).
+      undelivered, dropped: account.dropped, relayViolations, handbacks, openMessages: account.undelivered.length, lastToolAt
     };
   }
 }
@@ -355,7 +356,9 @@ export function renderJobList(views, options = {}) {
   return `jobs: ${views.length}\n\n${[renderRow(header), separator, ...rows.map(renderRow)].join("\n")}\n`;
 }
 
-export function jobViewJson(view) {
+// One job's full view. The messages are read here, for a full view only: a listing row and a
+// polling wait never pay for reading every message and outcome file.
+export function jobViewJson(view, { messages = true } = {}) {
   return {
     id: view.job.id,
     kind: view.job.kind ?? "task",
@@ -390,7 +393,7 @@ export function jobViewJson(view) {
     handedBackAt: view.job.relay ? handedBackAt(view) : null,
     notHandedBack: notHandedBack(view),
     openMessages: view.openMessages ?? 0,
-    messages: view.messages ?? [],
+    messages: messages ? readJobMessages(view.jobDir).messages : [],
     automaticResumes: view.job.automaticResumes ?? [],
     automaticResumeCount: view.job.automaticResumes?.length ?? 0,
     attemptRecords: view.job.attempts ?? [],
@@ -414,7 +417,7 @@ function cutStrings(value) {
 }
 
 export function jobRowJson(view) {
-  const { attemptRecords, server, messages, ...row } = jobViewJson(view);
+  const { attemptRecords, server, messages, ...row } = jobViewJson(view, { messages: false });
   const relay = row.relay;
   return cutStrings({
     ...row,
