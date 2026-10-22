@@ -203,12 +203,12 @@ test("start --from-relay is rewritten to carry the transcript and agent id, and 
   assert.equal(parseCompanionCommand(`${RELAY_CMD} wait ${jobId}; rm -rf /tmp/x`), null);
 });
 
-test("the relay's wait is rewritten to 120 s on its own job, with a 180 s Bash timeout", async () => {
+test("the relay's wait is rewritten to 540 s on its own job, with a 600 s Bash timeout", async () => {
   const ctx = relayContext("job", { turnMs: 200 });
   const jobId = await startedRelay(ctx, QUICK);
   const input = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 240` }));
-  assert.equal(input.timeout, 180000);
-  assert.ok(input.command.endsWith(`wait '${jobId}' --auto-resume --exit-zero-while-running --timeout-seconds 120`), input.command);
+  assert.equal(input.timeout, 600000);
+  assert.ok(input.command.endsWith(`wait '${jobId}' --auto-resume --exit-zero-while-running --timeout-seconds 540`), input.command);
 });
 
 // ---------------------------------------------------------------------------------------
@@ -228,7 +228,7 @@ test("a message during a run is steered into the running turn before the relay's
   const jobId = await startedRelay(ctx);
   await waitFor(() => readJobJson(ctx, jobId).turnId);
   ctx.append(ctx.queued("Also check the tests."));
-  assert.equal(decision(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 120` })), "allow");
+  assert.equal(decision(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` })), "allow");
   assert.deepEqual(codexReceived(ctx).steers, ["Also check the tests."]);
   assert.match(waitJob(ctx, jobId).stdout, /Steered with: Also check the tests\./);
 });
@@ -299,7 +299,7 @@ test("the hand-back is denied while the job runs and rewritten to the result whe
   const jobId = await startedRelay(ctx);
   const early = await pre(ctx, "SubagentHandback", { message: "17 times 23 is 391" });
   assert.equal(decision(early), "deny");
-  assert.match(reason(early), new RegExp(`still (starting|running).*wait ${jobId} --timeout-seconds 120`));
+  assert.match(reason(early), new RegExp(`still (starting|running).*wait ${jobId} --timeout-seconds 540`));
   assert.equal(waitJob(ctx, jobId).status, 0);
   assert.equal(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt, null);
   const done = await pre(ctx, "SubagentHandback", { message: "state: completed\n---\nReport for: Review this.\n17 times 23 is 391" });
@@ -338,7 +338,7 @@ test("while the job is busy, the hand-back and the stop are refused, and the blo
   assert.equal(waitJob(ctx, jobId).status, 0);
   const dir = jobDirOf(ctx, jobId);
   const busy = `Job ${jobId} is busy: its record changed during each of 8 reads. Try again.`;
-  const wait = `${RELAY_CMD} wait ${jobId} --timeout-seconds 120`;
+  const wait = `${RELAY_CMD} wait ${jobId} --timeout-seconds 540`;
   const restore = busyViews(dir);
   try {
     const handback = await pre(ctx, "SubagentHandback", { message: "x" });
@@ -613,10 +613,10 @@ test("Codex gets the unframed brief; the return is the state block, held by Suba
   // While the job runs, a stop is blocked and names the wait.
   const running = await stop(ctx, "I can answer that myself.");
   assert.equal(running?.decision, "block");
-  assert.match(running.reason, new RegExp(`wait ${jobId} --timeout-seconds 120`));
+  assert.match(running.reason, new RegExp(`wait ${jobId} --timeout-seconds 540`));
   // wait and result are rewritten with --state-only: the relay never sees the report.
-  const waitInput = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 120` }));
-  assert.ok(waitInput.command.endsWith(`wait '${jobId}' --auto-resume --exit-zero-while-running --timeout-seconds 120 --state-only`), waitInput.command);
+  const waitInput = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` }));
+  assert.ok(waitInput.command.endsWith(`wait '${jobId}' --auto-resume --exit-zero-while-running --timeout-seconds 540 --state-only`), waitInput.command);
   assert.equal(waitJob(ctx, jobId).status, 0);
   assert.deepEqual(codexReceived(ctx).turns, [WORKFLOW_BRIEF]);
   const report = fs.readFileSync(path.join(jobDirOf(ctx, jobId), "report.md"), "utf8");
@@ -752,7 +752,7 @@ test("the user request never reaches Codex; a later message arrives once", async
   assert.ok(jobId, `start failed: ${started.stdout}`);
   await waitFor(() => readJobJson(ctx, jobId).turnId);
   ctx.append(ctx.queued("Later: one more line."), ctx.userRequest());
-  assert.equal(decision(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 120` })), "allow");
+  assert.equal(decision(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` })), "allow");
   assert.equal(waitJob(ctx, jobId).status, 0);
   const received = codexReceived(ctx);
   const all = [...received.turns, ...received.steers];
@@ -888,7 +888,7 @@ test("later checks read the transcript recorded at start, even when an earlier c
   const decoy = ctx.userTurn("Decoy: must never reach Codex.");
   fs.writeFileSync(ctx.shallow, transcriptText([ctx.prompt(QUICK), decoy]));
   ctx.append(ctx.queued("Real: from the recorded transcript."));
-  assert.equal(decision(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 120` })), "allow");
+  assert.equal(decision(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` })), "allow");
   assert.equal(waitJob(ctx, jobId).status, 0);
   const received = codexReceived(ctx);
   const all = [...received.turns, ...received.steers];
@@ -1077,8 +1077,8 @@ test("a relay started over in the same run with the call's key takes over the ru
   assert.equal(findRelayJob(first.env, first.agentId), jobDirOf(first, jobId));
 
   // The new relay's commands are rewritten to that job, state-only; a second start is denied.
-  const waitInput = updated(await pre(retry, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 120` }));
-  assert.ok(waitInput.command.endsWith(`wait '${jobId}' --auto-resume --exit-zero-while-running --timeout-seconds 120 --state-only`), waitInput.command);
+  const waitInput = updated(await pre(retry, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` }));
+  assert.ok(waitInput.command.endsWith(`wait '${jobId}' --auto-resume --exit-zero-while-running --timeout-seconds 540 --state-only`), waitInput.command);
   assert.equal(decision(await pre(retry, "Bash", { command: `${RELAY_CMD} start --from-relay` })), "deny");
   assert.equal((await stop(retry, "I am done."))?.decision, "block", "the job still runs");
   assert.equal(waitJob(retry, jobId).status, 0);
@@ -1123,7 +1123,7 @@ test("a retry after the job finished returns that job's block at once; a third r
   const second = await relayStart(retry);
   assert.equal(second.jobId, jobId, second.started.stdout);
   assert.match(second.started.stdout, /^state: completed$/m);
-  const waited = runBash(retry, updated(await pre(retry, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 120` })));
+  const waited = runBash(retry, updated(await pre(retry, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` })));
   assert.equal(waited.status, 0, waited.stdout);
   assertNoReport(waited.stdout, "the adopted wait");
   const block = companion(retry, ["result", jobId, "--state-only"]).stdout;

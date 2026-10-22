@@ -15,7 +15,7 @@ the [README](../README.md) installation and the commands, and the `relay:jobs` s
 |---|---|
 | `Agent({subagent_type, description, prompt})`, run in the background | `Agent({subagent_type: "relay:job", description, prompt})`, the same |
 | The completion notice carries the agent's final message | The completion notice carries a state block and the job's report, verbatim |
-| `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within about two minutes; a turn that cannot take it, or has just ended, gets it as the next turn |
+| `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within seconds; a turn that cannot take it, or has just ended, gets it as the next turn |
 | `SendMessage` after it ends continues it with its context | `SendMessage` after it ends starts a new turn on the same backend session and returns the new report |
 | `TaskStop` stops it | The message `cancel`, or `companion cancel <job>`, cancels the job. `TaskStop` stops only the agent, and the job keeps running |
 | The Agent tool's `model` picks the model | `model:` and `effort:` in the header pick the job's model; the Agent tool's `model` picks the relay's own |
@@ -118,7 +118,7 @@ words of the request.
 | Backend server | the backend session while a worker or a review runs |
 
 **The relay agent.** `agents/job.md` runs on Haiku with the Bash tool only, and runs three
-commands: `start --from-relay`, then `wait <id> --timeout-seconds 120` while the output starts with
+commands: `start --from-relay`, then `wait <id> --timeout-seconds 540` while the output starts with
 `still running` or a message arrives, then `result <id>`, whose output it hands back. It exists
 because only a Claude subagent gets a background run, a completion notice, `SendMessage` and a
 Workflow `agent()` slot. It carries no content. In live trials a small model dropped a message,
@@ -392,13 +392,15 @@ owed, or the relay's final text differs from the result. A message after the han
 the relay; the hook delivers it at the next tool call, as a continue, and the next hand-back is
 rewritten the same way.
 
-### Two-minute waits, never trapped
+### Long waits, never trapped
 
-The hook sets every relay `wait` to 120 seconds with a Bash timeout of 180 seconds, so a message
-reaches the job within about two minutes. It also adds `--exit-zero-while-running`, so a wait that
-times out on a running job prints `still running: not an error. Run the same wait again.` first and
-exits 0. The Bash tool marks every non-zero exit as an error, and the `/workflows` view showed each
-two-minute wait of a long job as a failure. A direct `wait` keeps exit 4. Claude Code's stall timer
+The hook sets every relay `wait` to 540 seconds with a Bash timeout of 600 seconds, the Bash tool's
+maximum. A message does not wait for the bound: the wake ends the wait ([The wake](#the-wake)), so
+the bound only caps one tool call, and a long job costs its relay a model call about every nine
+minutes. It was 120 seconds before the wake, the time a message then took to arrive. The hook also
+adds `--exit-zero-while-running`, so a wait that times out on a running job prints `still running:
+not an error. Run the same wait again.` first and exits 0. The Bash tool marks every non-zero exit
+as an error, and the `/workflows` view showed each wait of a long job as a failure. A direct `wait` keeps exit 4. Claude Code's stall timer
 is off during a tool call, so it can fire on a waiting relay only when the relay's own model call
 stalls.
 

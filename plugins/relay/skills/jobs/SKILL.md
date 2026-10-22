@@ -183,7 +183,7 @@ A failed cancel stays pending while the job runs and tries remain. A terminal jo
 | `SendMessage` with exactly `cancel` | interrupts the turn; if the job has not ended 10 s later, kills the worker | nothing |
 | `TaskStop` on the agent | stops only the wrapper; the job keeps running | nothing |
 
-A message reaches the job within about two minutes, when the relay's current wait ends. The job survives the wrapper and the end of the Claude session. A dead or failed job continues on a message or `C resume <job>`.
+A message reaches the job within seconds: the plugin's hooks module ends the relay's current wait when the message is sent, and the relay's hook delivers it. The job survives the wrapper and the end of the Claude session. A dead or failed job continues on a message or `C resume <job>`.
 
 ## Inside a workflow script
 

@@ -133,9 +133,9 @@ relay: <the relay's agent id>
 
 `completed` means the job finished its answer, not that its commands passed. Read the report.
 
-**Talk to it.** A message reaches the job within about two minutes. The relay agent waits on the
-job in two-minute steps, so Claude Code's stall timer never fires on a long job, and its hook
-delivers a message at the next step. Send the agent "Also check the retry path in
+**Talk to it.** A message reaches the job within seconds. The relay agent waits on the job in steps
+of up to nine minutes, so Claude Code's stall timer never fires on a long job. A message sent to it
+ends the current step, and its hook delivers the message at the next. Send the agent "Also check the retry path in
 src/net/client.mjs." with `SendMessage` while the job runs, and Codex gets it inside the running
 turn. Sent after the job has ended, the same message starts a new turn on the same session, and the
 agent returns the new report. The message `cancel` cancels the job.

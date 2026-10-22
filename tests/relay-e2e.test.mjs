@@ -79,13 +79,13 @@ test("end to end: prompt, messages before, during and after the run, and every h
   ctx.append(during);
   const tooEarly = await relayCall(ctx, "SubagentHandback", { message: "I can answer that myself." });
   assert.equal(tooEarly.decision, "deny");
-  assert.match(tooEarly.reason, new RegExp(`wait ${jobId} --timeout-seconds 120`));
+  assert.match(tooEarly.reason, new RegExp(`wait ${jobId} --timeout-seconds 540`));
 
   // 3. The wait loop, as the agent writes it, until the job ends.
   let waited;
   for (let round = 0; round < 10; round += 1) {
-    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 120").replace("<id>", jobId), timeout: 180000 });
-    assert.equal(waited.input.timeout, 180000);
+    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 540").replace("<id>", jobId), timeout: 600000 });
+    assert.equal(waited.input.timeout, 600000);
     if (!stillRunning(waited)) {
       break;
     }
@@ -109,7 +109,7 @@ test("end to end: prompt, messages before, during and after the run, and every h
   const after = ctx.afterHandback("[quick] After: one more line, please.");
   ctx.append(after);
   for (let round = 0; round < 10; round += 1) {
-    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 120").replace("<id>", jobId), timeout: 180000 });
+    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 540").replace("<id>", jobId), timeout: 600000 });
     if (!stillRunning(waited)) {
       break;
     }
@@ -152,7 +152,7 @@ test("end to end: a message from another agent steers the running job, and one a
   ctx.append(during);
   let waited;
   for (let round = 0; round < 10; round += 1) {
-    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 120").replace("<id>", jobId), timeout: 180000 });
+    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 540").replace("<id>", jobId), timeout: 600000 });
     if (!stillRunning(waited)) break;
   }
   assert.equal(waited.result.status, 0, waited.result.stdout);
@@ -164,7 +164,7 @@ test("end to end: a message from another agent steers the running job, and one a
   const after = ctx.peerAfterHandback("[quick] Peer after: one more line, please.");
   ctx.append(after);
   for (let round = 0; round < 10; round += 1) {
-    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 120").replace("<id>", jobId), timeout: 180000 });
+    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 540").replace("<id>", jobId), timeout: 600000 });
     if (!stillRunning(waited)) break;
   }
   assert.equal(waited.result.status, 0, waited.result.stdout);
@@ -203,7 +203,7 @@ test("end to end under the Workflow harness: the computed task is the prompt, th
   // 3. The wait loop until the job ends. The relay never sees the report.
   let waited;
   for (let round = 0; round < 10; round += 1) {
-    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 120").replace("<id>", jobId), timeout: 180000 });
+    waited = await relayCall(ctx, "Bash", { command: agentCommand("wait <id> --timeout-seconds 540").replace("<id>", jobId), timeout: 600000 });
     assert.doesNotMatch(waited.result.stdout, /^---$/m);
     if (!stillRunning(waited)) {
       break;
@@ -279,7 +279,7 @@ test("end to end under the Workflow harness: a relay the harness re-spawned take
   retry.append(retry.toolUse(adopted.input.command));
   let waited;
   for (let round = 0; round < 10; round += 1) {
-    waited = await relayCall(retry, "Bash", { command: agentCommand("wait <id> --timeout-seconds 120").replace("<id>", jobId), timeout: 180000 });
+    waited = await relayCall(retry, "Bash", { command: agentCommand("wait <id> --timeout-seconds 540").replace("<id>", jobId), timeout: 600000 });
     if (!stillRunning(waited)) {
       break;
     }

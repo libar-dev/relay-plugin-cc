@@ -27,8 +27,10 @@ import { isTerminalView, JobViewBusy, loadJobView } from "../jobs/view.mjs";
 import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
 import { classifyHarnessEntry, unframeComputedTask, WORKFLOW_SYSTEM_NOTES } from "./workflow.mjs";
 
-export const RELAY_WAIT_SECONDS = 120;
-export const RELAY_BASH_TIMEOUT_MS = 180000;
+// The wake (the hooks module's session.send hook) ends a wait when a message is sent to the relay,
+// so the bound only caps a tool call. 600 s is the Bash tool's maximum.
+export const RELAY_WAIT_SECONDS = 540;
+export const RELAY_BASH_TIMEOUT_MS = 600000;
 // The guard lets a relay go, with a recorded violation, only after this many consecutive blocks.
 export const RELAY_BLOCK_BUDGET = 8;
 

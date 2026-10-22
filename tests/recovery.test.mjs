@@ -55,9 +55,9 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
   }
 
   async function waitInput(ctx, id) {
-    const input = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${id} --timeout-seconds 120` }));
+    const input = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${id} --timeout-seconds 540` }));
     // Keep mutation runs bounded when a broken retry loops forever.
-    return { ...input, command: input.command.replace("--timeout-seconds 120", "--timeout-seconds 10") };
+    return { ...input, command: input.command.replace("--timeout-seconds 540", "--timeout-seconds 10") };
   }
 
   // Run the hook's rewritten wait asynchronously, so the test can kill a worker during it.

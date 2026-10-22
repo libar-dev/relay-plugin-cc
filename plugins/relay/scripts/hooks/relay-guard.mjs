@@ -8,7 +8,7 @@
 //   - Bash: only the companion's start, wait, result, status and cancel. `start --from-relay`
 //     is rewritten to carry the relay's transcript path and agent id; wait, result, status
 //     and cancel are rewritten to the job the relay started (found by agent id), wait with a
-//     120 s timeout and `--exit-zero-while-running` (a timeout on a running job exits 0 with a
+//     540 s timeout and `--exit-zero-while-running` (a timeout on a running job exits 0 with a
 //     first line `still running: …`, so the Bash tool does not show it as an error);
 //   - SubagentHandback: denied while the job runs or messages are owed, even on a
 //     completed job: received but not delivered, or delivered but not run;
