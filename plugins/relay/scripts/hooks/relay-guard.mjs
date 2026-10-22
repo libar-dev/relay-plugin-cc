@@ -20,8 +20,9 @@
 //     sentence;
 //   - anything else is denied with a reason that restates the relay's job.
 // SubagentStop:
-//   - deliver as above; when the relay handed back through SubagentHandback, nothing else;
-//   - otherwise (modes without SubagentHandback) block while the job runs, a message is
+//   - deliver as above; a hand-back exempts the stop only while the readable transcript
+//     shows no new inbound message and the relay has not acted since;
+//   - otherwise block while the job runs, a message is
 //     owed, even on a completed job, or the final message differs from `result <job>`.
 //     Owed means received but not delivered, or delivered but not run. For a string-return
 //     relay (under the Workflow tool) that is `result <job> --state-only`: the state block,
@@ -302,7 +303,7 @@ function handleHandback(input, env, jobDir, pointer, sync) {
   const rewrite = (text, reason) => {
     writeGuardState(env, agentId, jobDir, {
       consecutiveBlocks: 0,
-      handback: { at: new Date().toISOString(), messageUuids: (sync?.messages ?? []).map((message) => message.uuid) }
+      handback: { at: new Date().toISOString(), messageUuids: (sync?.messages ?? []).map((message) => message.uuid), receivedUuids: sync?.received ?? [] }
     });
     return allow(reason, { ...toolInput, message: text });
   };
@@ -388,11 +389,12 @@ async function handleSubagentStop(input, env = process.env) {
   const lastToolAt = guard.raw.lastToolAt ?? "";
   const current = jobDir ? jobViewOrBusy(jobDir) : null;
   if (guard.handback && lastToolAt <= guard.handback.at &&
+      sync?.readable && sync.received.every((uuid) => (guard.handback.receivedUuids ?? guard.handback.messageUuids).includes(uuid)) &&
       !sync?.busy && !sync?.undelivered?.length &&
       (!current || (isTerminalView(current) && current.undelivered.length === 0))) {
     // The report already went out through SubagentHandback, rewritten by the hook, and the
-    // relay has not acted since. A message that came after it was delivered above; it
-    // resumes the relay, whose next hand-back is rewritten the same way.
+    // relay has neither acted nor received a message since. A resumed relay must
+    // return the current result or hand back again for the hook to rewrite it.
     return null;
   }
   const problems = [];

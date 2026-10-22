@@ -28,6 +28,12 @@ const WORKFLOW_FIXTURE = JSON.parse(fs.readFileSync(path.join(ROOT, "tests", "fi
 
 const PEER_FIXTURE = JSON.parse(fs.readFileSync(path.join(ROOT, "tests", "fixtures", "relay-transcript-peer-entries.json"), "utf8")).entries;
 
+const HUMAN_FIXTURE = JSON.parse(fs.readFileSync(path.join(ROOT, "tests", "fixtures", "relay-transcript-human-entries.json"), "utf8")).entries;
+
+export function humanEntry(name) {
+  return structuredClone(HUMAN_FIXTURE[name].entry);
+}
+
 export function realEntry(name) {
   return structuredClone(FIXTURE[name].entry);
 }
@@ -222,6 +228,16 @@ export function relayContext(behavior = "job", options = {}) {
         entry.message.content = entry.message.content.replace(/<agent-message from="[^"]*">\n[\s\S]*?\n<\/agent-message>/, `<agent-message from="${from}">\n${text}\n</agent-message>`);
         entry.origin = { ...entry.origin, from, senderTaskId: from, name: from, body: text };
       }, peerEntry);
+    },
+    humanQueued(text) {
+      return fresh("humanQueuedDuringRun", agentId, (entry) => {
+        entry.attachment.prompt = text;
+      }, humanEntry);
+    },
+    humanAfterHandback(text) {
+      return fresh("humanAfterHandback", agentId, (entry) => {
+        entry.message.content = entry.message.content.replace("typed two: after the hand-back", () => text);
+      }, humanEntry);
     },
     userTurn(text) {
       return { parentUuid: null, isSidechain: true, agentId, type: "user", message: { role: "user", content: text }, uuid: randomUUID(), timestamp: new Date().toISOString() };

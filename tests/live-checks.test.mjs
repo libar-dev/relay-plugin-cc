@@ -554,8 +554,8 @@ test('formatSeconds uses one decimal and an en dash for a range', () => {
 });
 
 test('registry keeps the prompt checks\' interface, with the command checks between continue and stop', () => {
-  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless', 'stop', 'session-end', 'spawn-check']);
-  assert.equal(new Set(checks.map(check => check.id)).size, 10);
+  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless', 'stop', 'session-end', 'spawn-check', 'typed']);
+  assert.equal(new Set(checks.map(check => check.id)).size, 11);
   for (const check of checks.filter(check => !['commands', 'transfer', 'headless'].includes(check.id))) {
     assert.match(check.id, /^[a-z0-9-]+$/);
     assert.equal(typeof check.title, 'string');
@@ -567,8 +567,8 @@ test('registry keeps the prompt checks\' interface, with the command checks betw
     assert.equal(typeof check.cell, 'function');
     assert.ok(Array.isArray(check.surfaces));
     assert.ok(Array.isArray(check.probes));
-    assert.equal(check.timeoutMinutes, check.id === 'steer-main' ? 20 : 15);
-    assert.deepEqual(check.surfaces, ['steer-plugin', 'session-end'].includes(check.id) ? ['terminal'] : ['terminal', 't3']);
+    assert.equal(check.timeoutMinutes, ['steer-main', 'typed'].includes(check.id) ? 20 : 15);
+    assert.deepEqual(check.surfaces, ['steer-plugin', 'session-end', 'typed'].includes(check.id) ? ['terminal'] : ['terminal', 't3']);
     assert.deepEqual(check.probes, check.id === 'steer-plugin' ? ['wake-probe'] : []);
     assert.equal(getCheck(check.id), check);
     if (check.probes.length) assert.deepEqual(check.surfaces, ['terminal']);

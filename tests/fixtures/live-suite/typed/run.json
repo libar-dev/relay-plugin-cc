@@ -1,0 +1,37 @@
+{
+  "runId": "synthetic-run",
+  "typed": {
+    "codex": {
+      "A1": {
+        "text": "typed A1 for codex in synthetic-run",
+        "sentAt": "2026-10-22T10:00:20.000Z"
+      },
+      "A2": {
+        "text": "typed A2 for codex in synthetic-run",
+        "sentAt": "2026-10-22T10:01:50.000Z"
+      },
+      "B1": {
+        "text": "typed B1 for codex in synthetic-run",
+        "sentAt": "2026-10-22T10:00:25.000Z",
+        "wakeAt": "2026-10-22T10:00:26.000Z",
+        "assistance": "manual-wake"
+      }
+    },
+    "kimi": {
+      "A1": {
+        "text": "typed A1 for kimi in synthetic-run",
+        "sentAt": "2026-10-22T10:00:20.000Z"
+      },
+      "A2": {
+        "text": "typed A2 for kimi in synthetic-run",
+        "sentAt": "2026-10-22T10:01:50.000Z"
+      },
+      "B1": {
+        "text": "typed B1 for kimi in synthetic-run",
+        "sentAt": "2026-10-22T10:00:25.000Z",
+        "wakeAt": "2026-10-22T10:00:26.000Z",
+        "assistance": "manual-wake"
+      }
+    }
+  }
+}

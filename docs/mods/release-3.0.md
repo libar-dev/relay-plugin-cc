@@ -134,3 +134,21 @@ What worked in Phase 1:
 - A module's `$.session.send` always sends as the main conversation, from any loop.
 - The guard reads the transcript a job recorded at start. After a Workflow agent forks, Claude Code can write
   later entries to `subagents/agent-<id>.jsonl` instead.
+
+## What the typed-message fix learned about the tools
+
+- A line typed into an agent's own view (↓ in the footer, Enter, the prompt `Message @<agent>…`) raises no
+  `session.send`, `prompt.submit`, `UserPromptSubmit` or `session.receive`. Only `prompt.edit` (a paste) and
+  `prompt.change {kind: "clear"}` fire, and they name neither the view nor the agent. The line reaches the agent's
+  transcript when its tool call returns, as origin `human`; typed after the agent ended, it resumes the agent at
+  once (`SubagentStart`; the main thread's queue gets "Agent X was resumed by the user").
+- The view in force reaches a module only through a drawn site: the `AbovePrompt` band and a `Pane` get
+  `e.props.view.agentId`, and a switch re-runs their hook. A band hook that passes draws nothing and still re-runs.
+  `$.ui.status` gets no view.
+- Keys in the terminal: from the main prompt, `Down` moves into the agent list and `Up` from `main` gives the prompt
+  back; `Enter` on a row opens that agent's view, and `Up` as many times as `Down` reaches its prompt. Esc in a
+  running agent's view stops the agent, and `x` on its row in the list stops it too; both end its turn with
+  `turn.complete {reason: "aborted"}`, list it as `killed`, and fire no `SubagentStop`. Esc in the main view
+  interrupts the main turn. Drive the view without Esc.
+- `$.ui.log` writes a line into the main transcript (kept as `system`/`informational`, not sent to the model);
+  `$.ui.toast` is drawn on the notification bar, also over an agent's view; `$.ui.notify` had no channel on Fedora.

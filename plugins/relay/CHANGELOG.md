@@ -70,6 +70,25 @@ Phase 3, spawn and stop like a Claude agent:
 - The live suite has three more checks: `stop` (TaskStop cancels the job within 15 s), `session-end`
   (the job runs on after the Claude session ends, terminal only) and `spawn-check`.
 
+Messages typed into a relay's own view (a fix found by the Desktop and CLI passes):
+
+- **A line the user types into a `relay:job` agent's view reaches the job.** Claude Code lets a person
+  open a running agent's view (↓ in the footer, then Enter) and type at `Message @<agent>…`. Claude Code
+  marks such a line as origin `human`, and the guard took only the main thread's and other agents'
+  messages, so it dropped the line without a record. After the hand-back the line resumed the relay, the
+  job got no turn, and the relay could say it had passed the message on. Now the line is delivered like
+  any message: steered while the job runs, a new turn once it has ended, and `cancel` cancels the job.
+  No hook names a typed line's recipient, so there is no wake: a line typed while the relay waits
+  reaches the job at the relay's next step, at most nine minutes later, or as a new turn when the job
+  ends first. A line typed after the hand-back arrives at once. A relay that lives through the update
+  delivers the lines it received before, since none of them has a delivery record.
+- A relay that a message resumed after its hand-back must hand back the job's result again; it can no
+  longer end with words of its own.
+- A message of an origin the guard does not know is recorded as a `relay-violation:` line instead of
+  being dropped in silence (the harness's own `task-notification` notices are skipped), and the same
+  transcript problem is recorded once, not again at every hook call.
+- The live suite has a check `typed` (terminal only: T3 Code draws no agent view).
+
 Phase 5, the live suite (development tooling; the plugin itself does not change):
 
 - `scripts/live/suite.mjs` runs live checks against the real backends, in the terminal and in T3 Code, and

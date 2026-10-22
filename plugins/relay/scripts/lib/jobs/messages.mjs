@@ -91,9 +91,10 @@ export function appendRelayViolation(jobDir, violation) {
   const file = path.join(jobDir, "relay-violations.jsonl");
   const record = { at: nowIso(), ...violation };
   const existing = readRelayViolations(jobDir);
-  const last = existing.at(-1);
-  if (last && last.kind === record.kind && last.reason === record.reason) {
-    return last;
+  const duplicate = (record.kind === "transcript" ? existing : existing.slice(-1))
+    .find((entry) => entry.kind === record.kind && entry.reason === record.reason);
+  if (duplicate) {
+    return duplicate;
   }
   fs.appendFileSync(file, `${JSON.stringify(record)}\n`, "utf8");
   return record;

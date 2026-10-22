@@ -1,0 +1,81 @@
+{
+  "_source": "cut from relay-typed-codex.jsonl, Claude Code 2.1.308, 2026-10-22, lines 27, 30 and 41; only the working directory replaced with a neutral one",
+  "entries": {
+    "humanQueuedDuringRun": {
+      "why": "line 27: typed while the relay waited, a queued_command with origin human; the text is attachment.prompt",
+      "entry": {
+        "parentUuid": "defa8ac2-6a48-4c63-95a6-aa5880135448",
+        "isSidechain": true,
+        "agentId": "a2f2c9b77854a7db3",
+        "attachment": {
+          "type": "queued_command",
+          "prompt": "typed one: hello from the agent view",
+          "source_uuid": "557f1a00-4c4b-4b2c-a048-35dcecea6127",
+          "origin": {
+            "kind": "human"
+          },
+          "isMeta": true
+        },
+        "type": "attachment",
+        "uuid": "bbc8cc31-7071-4e64-8c5a-cd6218d5a866",
+        "timestamp": "2026-10-22T18:29:33.895Z",
+        "rendered": [
+          {
+            "content": "<system-reminder>\nThe user sent a new message while you were working:\ntyped one: hello from the agent view\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.\n</system-reminder>"
+          }
+        ],
+        "renderedRole": "system",
+        "userType": "external",
+        "entrypoint": "cli",
+        "cwd": "/home/example/dev-example/example-project",
+        "sessionId": "7cd1d3f6-95b3-4a62-a11d-c81f64b7f639",
+        "version": "2.1.308",
+        "gitBranch": "master"
+      }
+    },
+    "apiRequestBlob": {
+      "why": "line 30: an api-request-blob with system content, not a user entry or an inbound message",
+      "entry": {
+        "type": "api-request-blob",
+        "sessionId": "7cd1d3f6-95b3-4a62-a11d-c81f64b7f639",
+        "agentId": "a2f2c9b77854a7db3",
+        "hash": "744f08acd212a84fb5a374b1774b56788bee9ec1c44a98b1d09e2c68a6509ba8",
+        "message": {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "The user sent a new message while you were working:\ntyped one: hello from the agent view\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.\n\n<total_tokens>14992561 tokens left</total_tokens>"
+            }
+          ]
+        }
+      }
+    },
+    "humanAfterHandback": {
+      "why": "line 41: typed after the hand-back, a user entry with isMeta and origin human in the fixed typed-message wrapper",
+      "entry": {
+        "parentUuid": "eda2fb01-11ea-44e1-a5a8-24827c1546b2",
+        "isSidechain": true,
+        "promptId": "dec9dcb8-d604-483f-9086-992b8d58878c",
+        "agentId": "a2f2c9b77854a7db3",
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": "The user sent a new message while you were working:\ntyped two: after the hand-back\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn."
+        },
+        "isMeta": true,
+        "uuid": "72123b68-febc-4e9d-9323-61fceb668b14",
+        "timestamp": "2026-10-22T18:31:16.980Z",
+        "origin": {
+          "kind": "human"
+        },
+        "userType": "external",
+        "entrypoint": "cli",
+        "cwd": "/home/example/dev-example/example-project",
+        "sessionId": "7cd1d3f6-95b3-4a62-a11d-c81f64b7f639",
+        "version": "2.1.308",
+        "gitBranch": "master"
+      }
+    }
+  }
+}
