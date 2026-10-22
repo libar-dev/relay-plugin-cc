@@ -591,3 +591,11 @@ The parts:
     that explain the features.
 12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
     owner decides.
+
+### D64. After the pre-release cuts, a phase PR raises no version (Phase 4 thread)
+
+D6 had each phase PR raise `3.0.0-dev.N`. Since PR #16 the branch carries `3.0.0-pre.1`, and the release lead cuts
+each later `3.0.0-pre.N` (the coordination plan: pre.2 after this PR and the fix lead's PR A). A phase PR that raised
+`dev.N` now would go backwards (`3.0.0-dev.5` sorts below `3.0.0-pre.1`), and one that set `pre.N` would take the
+release lead's cut. So a phase PR keeps the branch's version, and its builds are told apart by their commit, which a
+smoke install stamps and `status` names (D28, D37). This PR's live records, run before the cut, name `3.0.0-dev.5`.
