@@ -79,17 +79,31 @@ function companionText(e, { stdout, stderr }) {
   if (!verbatim.endsWith("\n")) {
     verbatim += "\n";
   }
-  // A loop, not a spread: a large output can hold more backtick runs than a call takes arguments.
-  const longest = (verbatim.match(/`+/g) ?? []).reduce((most, run) => Math.max(most, run.length), 0);
-  const fence = "`".repeat(Math.max(3, longest + 1));
+  const fence = fenceFor(verbatim, 3);
   const tail = at === -1 ? "" : lines[at] === "---" ? "---\n" + lines.slice(at + 1).join("\n") : lines.slice(at).join("\n");
   return commandLine(e) + "\n" + fence + "text\n" + verbatim + fence + "\n" + tail;
 }
 
-// How a person runs the same command by hand, named in every error text.
+// A run of backticks longer than any in the text, and at least `least` long, to fence it in.
+// A loop, not a spread: a large output can hold more backtick runs than a call takes arguments.
+function fenceFor(text, least) {
+  const longest = (text.match(/`+/g) ?? []).reduce((most, run) => Math.max(most, run.length), 0);
+  return "`".repeat(Math.max(least, longest + 1));
+}
+
+// One POSIX shell word that the shell takes as written: nothing in single quotes runs.
+function shellWord(text) {
+  return "'" + text.replace(/'/g, "'\\''") + "'";
+}
+
+// How a person runs the same command by hand, named in every error text. The typed text is one
+// word, as the module passes it, so the companion splits it as it splits "$ARGUMENTS", and a
+// quote, `$(…)` or backtick in it runs nothing.
 function companionShell($, sub, args) {
-  const typed = typeof args === "string" && /\S/.test(args) ? " " + args : "";
-  return "`node \"" + $.plugin.root + "/scripts/companion.mjs\" " + sub + typed + "`";
+  const typed = typeof args === "string" && /\S/.test(args) ? " " + shellWord(args) : "";
+  const shell = "node " + shellWord($.plugin.root + "/scripts/companion.mjs") + " " + sub + typed;
+  const fence = fenceFor(shell, 1);
+  return fence + shell + fence;
 }
 
 // An error text: the command line, then a paragraph of the module's own words.
