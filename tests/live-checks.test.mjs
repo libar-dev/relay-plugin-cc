@@ -1659,6 +1659,7 @@ test('session-end runTerminal records pid before stop, closes even under keep, w
   assert.equal(result.results[0].result, 'pass', result.results[0].reason);
   assert.equal(ctx.run.sessionEndedAt, at('00:30.000'));
   assert.deepEqual(ctx.run.afterEnd, { 'agent-codex': { at: at('00:50.000'), state: 'running' } });
+  assert.ok(Date.parse(ctx.run.checkFinishedAt) >= Date.parse(ctx.run.afterEnd['agent-codex'].at));
   assert.equal(state().paneCalls, 1); assert.equal(state().polls, 5); assert.equal(state().statusCalls, 3);
   assert.ok(state().saves.some(saved => saved.afterEnd?.['agent-codex']?.state === 'running'));
   assert.deepEqual(read(path.join(ctx.evidenceDir, 'run.json')), ctx.run);

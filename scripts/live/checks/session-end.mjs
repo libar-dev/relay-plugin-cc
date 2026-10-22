@@ -129,6 +129,8 @@ export default {
         ctx.save();
         if (pending.size) await wait(Math.min(1000, waitDeadline - now()));
       }
+      // The check goes on after the session's last entry; its record ends when the jobs did.
+      run.checkFinishedAt = new Date(now()).toISOString();
       ctx.save();
       const analysis = this.analyze(input);
       checkAbort();

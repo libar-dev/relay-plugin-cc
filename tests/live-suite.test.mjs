@@ -231,6 +231,15 @@ test('records have the exact keys, canonical backend order and no paths', () => 
   assert.equal(makeRecords(run, check, result, [], readers)[0].durationSeconds, null);
 });
 
+test('a record of a check that goes on after its session ends when the check recorded it finished', () => {
+  const later = new Date(Date.parse(finish) + 120000).toISOString();
+  const [row] = makeRecords(baseRun({ checkFinishedAt: later }), check, analyzed(), entries(), readers);
+  assert.equal(row.startedAt, start);
+  assert.equal(row.finishedAt, later);
+  assert.equal(row.durationSeconds, 123.5);
+  assert.equal(makeRecords(baseRun({ checkFinishedAt: 'never' }), check, analyzed(), entries(), readers)[0].finishedAt, finish);
+});
+
 test('a missing marker fails every backend and keeps each check reason', () => {
   const result = analyzed();
   result.results[0].result = 'fail';

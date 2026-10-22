@@ -227,6 +227,8 @@ export function makeRecords(run, check, analysis, entries, readers, root = evide
   entries = (check.scope ?? readers.scopeToRun)(entries, run.runId);
   const span = readers.runSpan(entries, run.runId, check.marker);
   if (check.commands) span.finishedAt = entries.findLast(entry => entry?.timestamp)?.timestamp ?? span.finishedAt;
+  // A check that goes on after its session (session-end follows the jobs) records when it finished.
+  if (Number.isFinite(Date.parse(run.checkFinishedAt))) span.finishedAt = run.checkFinishedAt;
   // A command-only scope need not contain a Live suite prompt.
   if (check.scope) span.startedAt ??= entries.find(entry => entry.timestamp)?.timestamp ?? null;
   const duration = span.startedAt && span.finishedAt ? (Date.parse(span.finishedAt) - Date.parse(span.startedAt)) / 1000 : null;
