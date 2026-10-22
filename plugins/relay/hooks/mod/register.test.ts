@@ -755,6 +755,9 @@ async function statusEngine($: any, on: any, options: StatusOptions = {}) {
     lines.push(e.text)
     return { value: undefined }
   })
+  // The board's part of session.start, and its closed pane, whose ticks read no surface.
+  on('command.register', (_: unknown, e: any) => ({ value: { command: e.name } }))
+  on('ui.panes', () => ({ value: [] }))
   const clock = mock.clock(on)
   await $.session.start({ cwd: CWD, ...(options.start ?? { surface: 'terminal', isInteractive: true }) })
   return { runs, lines, clock, surfaceReads: () => surfaceReads }
@@ -1039,4 +1042,382 @@ test('each of the relay commands makes every tick read for thirty seconds while 
   }
   // The commands' own runs are not listing reads.
   expect(seen.runs.filter((r) => !r.argv.includes('--active'))).toHaveLength(4)
+})
+
+// The board. Each test runs once per surface that draws it, so each surface starts from a fresh
+// session. The engine beneath answers the session, the pane's open and its record, the listing,
+// the selected job's view and every send; nothing beneath draws, so every element is the module's.
+
+const SURFACES = ['terminal', 'desktop'] as const
+const NOW = Date.parse('2026-10-22T12:00:00.000Z')
+const ago = (minutes: number) => new Date(NOW - minutes * 60000).toISOString()
+
+const BOARD = {
+  plugin: 'relay',
+  component: 'Pane',
+  requestId: 'relay-board',
+  props: {
+    title: 'Relay jobs',
+    isFocused: true,
+    bodyColumns: 100,
+    placement: 'dock',
+    scroll: { offset: 0, bodyRows: 60 },
+    view: {},
+  },
+} as const
+
+// A listing's row, cut to the fields the board reads; by default a running Codex job of this
+// session whose Agent tool relay called a minute ago.
+const row = (id: string, patch: Record<string, unknown> = {}) => ({
+  id,
+  state: 'running',
+  backend: 'codex',
+  model: 'gpt-6.1-sol',
+  effort: 'low',
+  attempts: 1,
+  updatedAt: ago(1),
+  claudeSessionId: SESSION,
+  reportPath: null,
+  relay: { agentId: 'a-' + id, workflowRunId: null, label: 'worker-' + id, phase: null, adopted: 0, lastToolAt: ago(1) },
+  notHandedBack: false,
+  undeliveredCount: 0,
+  relayViolationCount: 0,
+  openMessages: 0,
+  ...patch,
+})
+
+const relayOf = (job: any, patch: Record<string, unknown>) => ({ ...job.relay, ...patch })
+
+const answer = (sub: string, body: object, exitCode = 0) =>
+  printed(JSON.stringify({ schema: `relay.${sub}/1`, relayVersion: '3.0.0', relayBuild: null, ...body }), '', exitCode)
+
+type BoardOptions = {
+  jobs?: () => object[]
+  nextCursor?: string | null
+  status?: () => unknown
+  result?: (id: string) => unknown
+  // The companion's answer to a steer, continue or cancel.
+  act?: (e: any) => unknown
+  sent?: () => unknown
+  surfaces?: () => string[]
+  isOpen?: () => boolean
+  opened?: () => unknown
+}
+
+// The engine beneath the plugin for the board, each part recording what reached it.
+async function boardEngine($: any, on: any, options: BoardOptions = {}) {
+  const runs: any[] = []
+  const sends: any[] = []
+  let isOpen = false
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('session.cwd', () => ({ value: CWD }))
+  on('session.id', () => ({ value: SESSION }))
+  on('session.surfaces', () => ({ value: options.surfaces ? options.surfaces() : ['terminal'] }))
+  on('command.register', (_: unknown, e: any) => ({ value: { command: e.name } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.open', () => {
+    isOpen = true
+    return { value: options.opened ? options.opened() : { isPlaced: true } }
+  })
+  on('ui.panes', () => ({
+    value: (options.isOpen ? options.isOpen() : isOpen)
+      ? [{ id: 'relay-board', title: 'Relay jobs', isShown: true, isFocused: true, isPlaced: true }]
+      : [],
+  }))
+  on('agent.list', () => ({ value: AGENTS }))
+  on('process.run', (_: unknown, e: any) => {
+    // The status line's own read, every five seconds.
+    if (e.argv.includes('--active')) {
+      return { value: listing([]) }
+    }
+    runs.push(e)
+    const sub = e.argv[2]
+    if (sub === 'status') {
+      return options.status ? options.status() : { value: answer('status', { jobs: options.jobs ? options.jobs() : [], nextCursor: options.nextCursor ?? null }) }
+    }
+    if (sub === 'result') {
+      return options.result ? options.result(e.argv[3]) : { value: answer('result', { id: e.argv[3], messages: [], report: '# Done\n' }) }
+    }
+    if (sub === 'wake') {
+      return { value: RAN }
+    }
+    return options.act ? options.act(e) : { value: answer(sub, { job: e.argv[3], outcome: { action: 'steered' }, state: 'running' }) }
+  })
+  on('session.send', (_: unknown, e: unknown) => {
+    sends.push(e)
+    return options.sent ? options.sent() : { isDelivered: true }
+  })
+  mock.env(on, {})
+  const clock = mock.clock(on, { now: NOW })
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  const subs = () => runs.map((r) => r.argv[2])
+  return { runs, sends, clock, subs }
+}
+
+// Opens the board as the person's command does, and mounts it on the surface.
+async function openBoard($: any, surface: (typeof SURFACES)[number]) {
+  const opened = await $.command.run({ command: 'relay-board' })
+  const ui = await $.ui.mount({ ...BOARD, surface })
+  return { opened, ui }
+}
+
+const rowText = async (ui: any, id: string) => (await ui.find({ key: 'job:' + id }))?.text
+
+for (const surface of SURFACES) {
+  test(`/relay-board opens the pane and lists the jobs, one row each with its flags (${surface})`, async ($, on) => {
+    const seen = await boardEngine($, on, {
+      jobs: () => [
+        row('j-5', { backend: 'kimi', attempts: 0, state: 'starting' }),
+        // Its relay last called 20 minutes ago: lost.
+        row('j-4', { relay: { agentId: 'a-4', workflowRunId: null, label: 'w', lastToolAt: ago(20) } }),
+        // A running job whose relay never called is lost too.
+        row('j-3', { relay: { agentId: 'a-3', workflowRunId: null, label: 'w', lastToolAt: null }, relayViolationCount: 2 }),
+        row('j-2', { state: 'dead', attempts: 2, undeliveredCount: 3, relayViolationCount: 1 }),
+        row('j-1', { state: 'completed', notHandedBack: true }),
+      ],
+      nextCursor: 'WyJ4Il0',
+    })
+
+    const { opened, ui } = await openBoard($, surface)
+
+    expect(opened).toMatchObject({ text: 'Opened the relay board.' })
+    // The open read the listing at once, 20 a page, in the session's directory.
+    expect(seen.runs).toEqual([{ argv: companionArgv('status', '--json', '--limit', '20'), init: { cwd: CWD, timeoutMs: 10000 } }])
+    expect(await rowText(ui, 'j-5')).toBe('  j-5 · kimi · starting · attempt 1')
+    expect(await rowText(ui, 'j-4')).toBe('  j-4 · codex · running · attempt 1 · relay lost')
+    expect(await rowText(ui, 'j-3')).toBe('  j-3 · codex · running · attempt 1 · relay lost · 2 violations')
+    expect(await rowText(ui, 'j-2')).toBe('  j-2 · codex · dead · attempt 2 · 3 owed · 1 violation')
+    expect(await rowText(ui, 'j-1')).toBe('  j-1 · codex · completed · attempt 1 · not handed back')
+    expect((await ui.findAll({ type: 'Button' })).map((b: any) => b.key)).toEqual(['job:j-5', 'job:j-4', 'job:j-3', 'job:j-2', 'job:j-1', 'more'])
+
+    // More reads a page more.
+    await ui.press({ key: 'more' })
+    expect(seen.runs.at(-1).argv).toEqual(companionArgv('status', '--json', '--limit', '40'))
+    await ui.unmount()
+  })
+
+  test(`selecting a row reads the job and draws its model, relay, messages and report (${surface})`, async ($, on) => {
+    const workflow = row('j-1', { relay: { agentId: 'wf-agent', workflowRunId: 'wf_7f3a', label: 'review', lastToolAt: ago(1) } })
+    const seen = await boardEngine($, on, {
+      jobs: () => [workflow],
+      result: (id) => ({
+        value: answer('result', {
+          id,
+          messages: [
+            { kind: 'steer', preview: 'stop after the tests', stage: 'claimed', outcome: { action: 'steered' } },
+            { kind: 'steer', preview: 'and lint', stage: 'inbox', outcome: null },
+          ],
+          report: '# Findings\n\nAll good.\n',
+        }),
+      }),
+    })
+    const { ui } = await openBoard($, surface)
+
+    await ui.press({ key: 'job:j-1' })
+
+    expect(seen.runs.at(-1)).toEqual({ argv: companionArgv('result', 'j-1', '--json'), init: { cwd: CWD, timeoutMs: 30000 } })
+    expect(await rowText(ui, 'j-1')).toMatch(/^> j-1/)
+    expect(await ui.find({ type: 'Text', text: 'model gpt-6.1-sol · effort low' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'relay review · Workflow run wf_7f3a' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '- steer · stop after the tests · steered' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '- steer · and lint · pending (inbox)' })).toBeDefined()
+    expect((await ui.find({ type: 'Markdown' }))?.props.text).toBe('# Findings\n\nAll good.\n')
+    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Steer: ')
+
+    // The view is read again only when the row's facts change.
+    const reads = () => seen.subs().filter((sub: string) => sub === 'result').length
+    await seen.clock.advance(6000)
+    expect(reads()).toBe(1)
+    workflow.updatedAt = ago(0)
+    await seen.clock.advance(3000)
+    expect(reads()).toBe(2)
+    await ui.unmount()
+  })
+
+  test(`a steer to this session's Agent tool relay goes as the lead's SendMessage to its agent id (${surface})`, async ($, on) => {
+    const seen = await boardEngine($, on, { jobs: () => [row('j-1')] })
+    const { ui } = await openBoard($, surface)
+    await ui.press({ key: 'job:j-1' })
+    const before = seen.runs.length
+
+    await ui.input({ key: 'message', text: 'stop after the tests' })
+
+    expect(seen.sends).toEqual([{ to: 'a-j-1', text: 'stop after the tests', origin: { kind: 'plugin', name: 'relay' } }])
+    // No companion send: the wake for the relay, then the board's reads.
+    expect(seen.subs().slice(before)).toEqual(['wake', 'status', 'result'])
+    expect(seen.runs[before]).toEqual({ argv: wakeArgv('a-j-1'), init: { timeoutMs: 10000 } })
+    expect(await ui.find({ type: 'Text', text: 'By the relay worker-j-1: sent, pending until the relay delivers it.' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test(`a continue of an ended job of this session goes by its relay too (${surface})`, async ($, on) => {
+    const seen = await boardEngine($, on, { jobs: () => [row('j-1', { state: 'completed', relay: relayOf(row('j-1'), { lastToolAt: ago(90) }) })] })
+    const { ui } = await openBoard($, surface)
+    await ui.press({ key: 'job:j-1' })
+
+    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Continue: ')
+    await ui.input({ key: 'message', text: 'now the docs' })
+
+    expect(seen.sends).toEqual([{ to: 'a-j-1', text: 'now the docs', origin: { kind: 'plugin', name: 'relay' } }])
+    expect(seen.subs()).not.toContain('continue')
+    await ui.unmount()
+  })
+
+  test(`a Workflow job, another session's job, a job with no relay and a silent relay go to the job directly (${surface})`, async ($, on) => {
+    const base = row('j-0')
+    const jobs = [
+      row('j-wf', { relay: relayOf(base, { workflowRunId: 'wf_7f3a' }) }),
+      row('j-other', { claudeSessionId: 'another-session' }),
+      row('j-none', { relay: null }),
+      row('j-quiet', { relay: relayOf(base, { lastToolAt: ago(16) }) }),
+      row('j-ended', { state: 'failed', relay: null }),
+    ]
+    const seen = await boardEngine($, on, { jobs: () => jobs })
+    const { ui } = await openBoard($, surface)
+
+    for (const job of jobs) {
+      await ui.press({ key: 'job:' + job.id })
+      await ui.input({ key: 'message', text: 'hello ' + job.id })
+    }
+
+    expect(seen.sends).toEqual([])
+    const acts = seen.runs.filter((r: any) => r.argv[2] === 'steer' || r.argv[2] === 'continue')
+    expect(acts).toEqual([
+      ...['j-wf', 'j-other', 'j-none', 'j-quiet'].map((id) => ({
+        argv: companionArgv('steer', id, '--message', 'hello ' + id, '--json'),
+        init: { cwd: CWD, timeoutMs: 75000 },
+      })),
+      { argv: companionArgv('continue', 'j-ended', '--message', 'hello j-ended', '--json'), init: { cwd: CWD, timeoutMs: 75000 } },
+    ])
+    expect(await ui.find({ type: 'Text', text: 'To the job directly (continue): steered.' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test(`a send the relay refuses shows its reason and sends to the job directly only when pressed (${surface})`, async ($, on) => {
+    const seen = await boardEngine($, on, {
+      jobs: () => [row('j-1')],
+      sent: () => ({ isDelivered: false, reason: 'no agent with id a-j-1' }),
+      act: () => ({ value: answer('steer', { job: 'j-1', outcome: null, state: 'running' }, 3) }),
+    })
+    const { ui } = await openBoard($, surface)
+    await ui.press({ key: 'job:j-1' })
+
+    await ui.input({ key: 'message', text: 'check the tests' })
+
+    expect(seen.sends).toHaveLength(1)
+    expect(seen.subs()).not.toContain('steer')
+    expect(await ui.find({ type: 'Text', text: 'By the relay worker-j-1: refused: no agent with id a-j-1' })).toBeDefined()
+
+    await ui.press({ key: 'direct' })
+
+    expect(seen.sends).toHaveLength(1)
+    expect(seen.runs.filter((r: any) => r.argv[2] === 'steer').map((r: any) => r.argv)).toEqual([
+      companionArgv('steer', 'j-1', '--message', 'check the tests', '--json'),
+    ])
+    // An accepted send no worker has taken yet shows as pending, and the button is gone.
+    expect(await ui.find({ type: 'Text', text: 'To the job directly (steer): pending, no worker has taken it yet.' })).toBeDefined()
+    expect(await ui.find({ key: 'direct' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`a running Kimi job's send is labelled Queue next turn (${surface})`, async ($, on) => {
+    await boardEngine($, on, { jobs: () => [row('j-2', { backend: 'kimi' }), row('j-1', { backend: 'kimi', state: 'starting' })] })
+    const { ui } = await openBoard($, surface)
+
+    await ui.press({ key: 'job:j-2' })
+    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Queue next turn: ')
+    await ui.press({ key: 'job:j-1' })
+    expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Steer: ')
+    await ui.unmount()
+  })
+
+  test(`Cancel asks again with the job and its attempt, and Yes cancels that attempt (${surface})`, async ($, on) => {
+    let cancelled = 0
+    const seen = await boardEngine($, on, {
+      jobs: () => [row('j-1', { attempts: 2 }), row('j-0', { state: 'cancelled' })],
+      act: () =>
+        cancelled++ === 0
+          ? { value: answer('cancel', { error: { kind: 'attempt-changed', message: 'Job j-1 is at attempt 3, not 2: nothing was cancelled.' } }, 1) }
+          : { value: answer('cancel', { id: 'j-1', state: 'cancelled' }) },
+    })
+    const { ui } = await openBoard($, surface)
+    await ui.press({ key: 'job:j-0' })
+    expect(await ui.find({ key: 'cancel' })).toBeUndefined()
+    await ui.press({ key: 'job:j-1' })
+
+    await ui.press({ key: 'cancel' })
+    expect(await ui.find({ type: 'Text', text: 'Cancel job j-1, attempt 2?' })).toBeDefined()
+    await ui.press({ key: 'cancel-no' })
+    expect(seen.subs()).not.toContain('cancel')
+    expect(await ui.find({ key: 'cancel-yes' })).toBeUndefined()
+
+    await ui.press({ key: 'cancel' })
+    await ui.press({ key: 'cancel-yes' })
+    // Twice the companion's 10 s grace, and 40 s more.
+    expect(seen.runs.filter((r: any) => r.argv[2] === 'cancel')).toEqual([
+      { argv: companionArgv('cancel', 'j-1', '--attempt', '2', '--json'), init: { cwd: CWD, timeoutMs: 60000 } },
+    ])
+    expect(
+      await ui.find({ type: 'Text', text: 'Cancel of attempt 2: Job j-1 is at attempt 3, not 2: nothing was cancelled. The job moved on: press Cancel again to cancel the new attempt.' }),
+    ).toBeDefined()
+
+    await ui.press({ key: 'cancel' })
+    await ui.press({ key: 'cancel-yes' })
+    expect(await ui.find({ type: 'Text', text: 'Cancel of attempt 2: the job is cancelled.' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test(`a busy listing keeps the rows, and another failure shows its message above them (${surface})`, async ($, on) => {
+    const answers: Array<() => unknown> = [
+      () => ({ value: answer('status', { jobs: [row('j-1')], nextCursor: null }) }),
+      () => ({ value: answer('status', { error: { kind: 'busy', message: 'busy' } }, 4) }),
+      () => ({ deny: 'timed out after 10000 ms' }),
+    ]
+    let next = 0
+    const seen = await boardEngine($, on, { status: () => answers[next++]() })
+    const { ui } = await openBoard($, surface)
+
+    await seen.clock.advance(3000)
+    expect(await ui.find({ type: 'Text', text: "A job's record was changing: this is the last read." })).toBeDefined()
+    expect(await rowText(ui, 'j-1')).toBeDefined()
+
+    await seen.clock.advance(3000)
+    expect(await ui.find({ type: 'Text', text: /^The jobs could not be read: .*timed out after 10000 ms.*\.$/ })).toBeDefined()
+    expect(await rowText(ui, 'j-1')).toBeDefined()
+    await ui.unmount()
+  })
+}
+
+test('no process runs while no surface draws or the pane is closed', async ($, on) => {
+  let surfaces: string[] = []
+  let isOpen = false
+  const seen = await boardEngine($, on, { surfaces: () => surfaces, isOpen: () => isOpen, jobs: () => [row('j-1')] })
+
+  // Closed, with a surface.
+  surfaces = ['terminal']
+  await seen.clock.advance(9000)
+  // Open, with none.
+  isOpen = true
+  surfaces = []
+  await seen.clock.advance(9000)
+  expect(seen.runs).toEqual([])
+
+  // The same timer reads every 3 s once both hold.
+  surfaces = ['desktop']
+  await seen.clock.advance(6000)
+  expect(seen.subs()).toEqual(['status', 'status'])
+})
+
+test('where nothing draws, /relay-board says where the board draws and names /relay:status', async ($, on) => {
+  const seen = await boardEngine($, on, {
+    surfaces: () => [],
+    opened: () => ({ isPlaced: false, reason: 'no-surface: no surface is attached' }),
+  })
+
+  const result = await $.command.run({ command: 'relay-board' })
+
+  expect(result).toMatchObject({
+    text: "The relay board draws in the terminal and the desktop app, and nothing draws here. /relay:status lists this repository's jobs.",
+  })
+  expect(seen.runs).toEqual([])
 })

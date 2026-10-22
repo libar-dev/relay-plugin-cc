@@ -4,5 +4,6 @@
   "description": "Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents.",
   "author": {
     "name": "Libar"
-  }
+  },
+  "types": "./hooks/mod/board-state.d.ts"
 }

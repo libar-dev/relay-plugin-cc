@@ -22,6 +22,13 @@
 // the module sees. Under an Agent SDK host (T3) nothing draws, so status polling starts no process
 // there. The timer starts at session.start, which fires again in the fresh copy after a reload
 // ends the old copy's timers.
+//
+// /relay-board opens the board, a pane of the repository's jobs, where a job is steered, continued
+// or cancelled. It draws only from `$.state`, which a three-second read of `companion status
+// --json` fills while the pane is open and a surface draws, and the selected job's `result --json`.
+// A press runs its process from the handler, never from a drawing.
+
+import { atom, read, update } from "claude-code";
 
 // A line that is `---`, trailing spaces or tabs allowed: the line parseHeaderPrompt (in
 // scripts/lib/jobs/request.mjs) ends a header with. Its two patterns, `---` before a line break
@@ -185,6 +192,11 @@ async function answerCommand($, e, sub, timeoutMs, withSessionId = false) {
   return answer;
 }
 
+// Ends the wait of the relay with this agent id, so it delivers a message queued for it now.
+async function wake($, id) {
+  await $.process.run(["node", $.plugin.root + "/scripts/companion.mjs", "wake", "--agent", id], { timeoutMs: 10000 });
+}
+
 // A hook that threw or ran past its budget would otherwise be skipped, and the markdown body
 // would run in its place. The handler has a one-second grace, so it makes no call on `$`.
 function moduleFailed($, e, next, sub) {
@@ -281,17 +293,356 @@ async function poll($, poller, tick) {
   }
 }
 
+const BOARD_PANE = "relay-board";
+const PAGE = 20;
+// A relay quiet for longer may be gone: a waiting relay calls about every nine minutes, and the
+// gap can pass ten.
+const RELAY_QUIET_MS = 15 * 60 * 1000;
+// The companion waits up to 60 s for the worker to take a steer or a continue.
+const SEND_TIMEOUT_MS = 75000;
+const ENDED = ["completed", "failed", "cancelled"];
+
+const boardList = atom({ plugin: "relay", key: "boardList" }, null);
+const boardLimit = atom({ plugin: "relay", key: "boardLimit" }, PAGE);
+const boardSelected = atom({ plugin: "relay", key: "boardSelected" }, null);
+const boardDetail = atom({ plugin: "relay", key: "boardDetail" }, null);
+const boardNote = atom({ plugin: "relay", key: "boardNote" }, null);
+const boardConfirm = atom({ plugin: "relay", key: "boardConfirm" }, null);
+
+const NO_SURFACE = "The relay board draws in the terminal and the desktop app, and nothing draws here. /relay:status lists this repository's jobs.";
+
+// One companion run that prints a `relay.<sub>/1` object: `{ answer, exitCode }`, or `{ failure }`
+// when it did not finish or printed nothing the board can read.
+async function companionJson($, args, timeoutMs) {
+  try {
+    const argv = ["node", $.plugin.root + "/scripts/companion.mjs", ...args];
+    const ran = await $.process.run(argv, { cwd: await $.session.cwd(), timeoutMs });
+    if (ran.isStdoutTruncated) {
+      return { failure: "it printed more than Claude Code passes to a plugin" };
+    }
+    const answer = JSON.parse(ran.stdout);
+    if (answer?.schema !== "relay." + args[0] + "/1") {
+      return { failure: "it did not answer relay." + args[0] + "/1" };
+    }
+    return { answer, exitCode: ran.exitCode };
+  } catch (error) {
+    return { failure: error?.message ?? String(error) };
+  }
+}
+
+// A busy answer only means a job's record was changing, so the board keeps what it last read.
+function isBusy(ran) {
+  return ran.answer?.error?.kind === "busy" && ran.exitCode === 4;
+}
+
+// What failed, or null for an answer to draw.
+function failureOf(ran) {
+  return ran.failure ?? ran.answer.error?.message ?? null;
+}
+
+function isLive(job) {
+  return job.state === "starting" || job.state === "running";
+}
+
+// A starting job's first attempt counts as 1, as `cancel --attempt` counts it.
+function attemptOf(job) {
+  return Math.max(1, job.attempts);
+}
+
+function isRelayQuiet(job, at) {
+  const last = Date.parse(job.relay?.lastToolAt ?? "");
+  return at === null || Number.isNaN(last) || at - last > RELAY_QUIET_MS;
+}
+
+function sendLabel(job) {
+  if (!isLive(job)) {
+    return "Continue";
+  }
+  return job.backend === "kimi" && job.state === "running" ? "Queue next turn" : "Steer";
+}
+
+function rowText(job, readAt) {
+  const parts = [job.id, job.backend, job.state, "attempt " + attemptOf(job)];
+  if (job.undeliveredCount > 0) {
+    parts.push(job.undeliveredCount + " owed");
+  }
+  if (job.notHandedBack) {
+    parts.push("not handed back");
+  }
+  if (job.state === "running" && job.relay !== null && isRelayQuiet(job, readAt)) {
+    parts.push("relay lost");
+  }
+  if (job.relayViolationCount > 0) {
+    parts.push(job.relayViolationCount + (job.relayViolationCount === 1 ? " violation" : " violations"));
+  }
+  return parts.join(" · ");
+}
+
+// What tells the board the selected job's full view is out of date. Its open messages count too,
+// so a send's outcome shows once the job takes it.
+function detailMark(job) {
+  return [job.updatedAt, job.state, job.attempts, job.openMessages].join("|");
+}
+
+// One read: only while the board is open, a surface draws it and no read is in flight.
+async function boardTick($, board) {
+  if (board.isReading || !(await $.ui.panes()).some((pane) => pane.id === BOARD_PANE)) {
+    return;
+  }
+  if ((await $.session.surfaces()).length === 0) {
+    return;
+  }
+  board.isReading = true;
+  try {
+    await readBoard($);
+  } finally {
+    board.isReading = false;
+  }
+}
+
+// The listing, then the selected job's full view when it is new or its row changed.
+async function readBoard($) {
+  const ran = await companionJson($, ["status", "--json", "--limit", String(await read($, boardLimit))], 10000);
+  const last = (await read($, boardList)) ?? { jobs: [], nextCursor: null, readAt: null };
+  let list;
+  if (isBusy(ran)) {
+    list = { ...last, isBusy: true, error: null };
+  } else if (failureOf(ran) !== null || !Array.isArray(ran.answer.jobs)) {
+    list = { ...last, isBusy: false, error: "The jobs could not be read: " + (failureOf(ran) ?? "the answer lists none") + "." };
+  } else {
+    list = { jobs: ran.answer.jobs, nextCursor: ran.answer.nextCursor ?? null, readAt: await now($), isBusy: false, error: null };
+  }
+  await update($, boardList, () => list);
+  const selected = await read($, boardSelected);
+  const job = list.jobs.find((one) => one.id === selected);
+  const detail = await read($, boardDetail);
+  if (job !== undefined && (detail?.id !== job.id || detail.mark !== detailMark(job))) {
+    await readDetail($, job);
+  }
+}
+
+async function readDetail($, job) {
+  const ran = await companionJson($, ["result", job.id, "--json"], 30000);
+  const last = await read($, boardDetail);
+  const kept = last?.id === job.id ? last : { id: job.id, mark: null, messages: [], report: null };
+  let detail;
+  if (isBusy(ran)) {
+    // The mark stays, so the next tick reads again.
+    detail = { ...kept, isBusy: true, error: null };
+  } else if (failureOf(ran) !== null) {
+    detail = { ...kept, mark: detailMark(job), isBusy: false, error: failureOf(ran) };
+  } else {
+    const { messages, report } = ran.answer;
+    detail = { id: job.id, mark: detailMark(job), messages, report, isBusy: false, error: null };
+  }
+  await update($, boardDetail, () => detail);
+}
+
+// After a send or a cancel the selected job is read again at once.
+async function readAgain($, board) {
+  await update($, boardDetail, (detail) => detail && { ...detail, mark: null });
+  await boardTick($, board);
+}
+
+async function selectJob($, board, id) {
+  await update($, boardSelected, () => id);
+  await boardTick($, board);
+}
+
+async function moreJobs($, board) {
+  await update($, boardLimit, (limit) => Math.min(200, limit + PAGE));
+  await boardTick($, board);
+}
+
+// The relay route (D61): the job's current relay is this session's Agent tool agent, and a running
+// job's relay has called lately. Everything else goes to the job directly.
+async function isByRelay($, job) {
+  if (job.relay?.agentId == null || job.relay.workflowRunId != null) {
+    return false;
+  }
+  if (job.claudeSessionId !== (await $.session.id())) {
+    return false;
+  }
+  return job.state !== "running" || !isRelayQuiet(job, await now($));
+}
+
+// One send, by the route the job's facts choose at the press, or to the job directly when the
+// person pressed that after a refusal. The board never sends again by itself.
+async function sendFromBoard($, board, id, text, isDirect) {
+  const job = (await read($, boardList))?.jobs.find((one) => one.id === id);
+  if (job === undefined || text.trim() === "") {
+    return;
+  }
+  const kind = isLive(job) ? "steer" : "continue";
+  let line;
+  let retry = null;
+  if (!isDirect && (await isByRelay($, job))) {
+    const by = "By the relay " + (job.relay.label ?? job.relay.agentId) + ": ";
+    try {
+      const sent = await $.session.send({ to: { agentId: job.relay.agentId }, text });
+      if (sent.isDelivered) {
+        line = by + "sent, pending until the relay delivers it.";
+        // The module's own session.send hook does not see the board's send.
+        await wake($, job.relay.agentId).catch(() => {});
+      } else {
+        line = by + "refused: " + sent.reason;
+        retry = text;
+      }
+    } catch (error) {
+      line = by + "the send did not finish (" + (error?.message ?? String(error)) + "); it may have gone through.";
+    }
+  } else {
+    const ran = await companionJson($, [kind, job.id, "--message", text, "--json"], SEND_TIMEOUT_MS);
+    const to = "To the job directly (" + kind + "): ";
+    if (ran.failure !== undefined) {
+      line = to + "did not finish (" + ran.failure + "); it may have reached the job.";
+    } else if (ran.answer.error != null) {
+      line = to + ran.answer.error.message;
+    } else {
+      line = to + (ran.answer.outcome?.action ?? "pending, no worker has taken it yet") + ".";
+    }
+  }
+  await update($, boardNote, () => ({ id: job.id, line, retry }));
+  await readAgain($, board);
+}
+
+async function askCancel($, id) {
+  const job = (await read($, boardList))?.jobs.find((one) => one.id === id);
+  if (job !== undefined) {
+    await update($, boardConfirm, () => ({ id, attempt: attemptOf(job) }));
+  }
+}
+
+// Yes on the question: the attempt it named, so a newer attempt is never cancelled.
+async function cancelFromBoard($, board, confirm) {
+  await update($, boardConfirm, () => null);
+  const args = ["cancel", confirm.id, "--attempt", String(confirm.attempt), "--json"];
+  const ran = await companionJson($, args, await cancelTimeoutMs($));
+  const of = "Cancel of attempt " + confirm.attempt + ": ";
+  let line;
+  if (ran.failure !== undefined) {
+    line = of + "did not finish (" + ran.failure + "); it may have gone through, and the list shows the job's state.";
+  } else if (ran.answer.error?.kind === "attempt-changed") {
+    line = of + ran.answer.error.message + " The job moved on: press Cancel again to cancel the new attempt.";
+  } else if (ran.answer.error != null) {
+    line = of + ran.answer.error.message;
+  } else {
+    line = of + "the job is " + ran.answer.state + ".";
+  }
+  await update($, boardNote, () => ({ id: confirm.id, line, retry: null }));
+  await readAgain($, board);
+}
+
+async function openBoard($, board) {
+  const opened = await $.ui.open({ id: BOARD_PANE, title: "Relay jobs", focus: true });
+  if (opened.isPlaced) {
+    await boardTick($, board);
+    return { text: "Opened the relay board." };
+  }
+  return { text: opened.reason.startsWith("no-surface") ? NO_SURFACE : "The relay board is open but not drawn: " + opened.reason };
+}
+
+// The pane, from `$.state` alone. The handlers run the board's processes when pressed.
+async function drawBoard($, e, board) {
+  const elements = $.ui.resolve(e);
+  const { Box, Text, Button } = elements;
+  const list = await read($, boardList);
+  if (list === null) {
+    return h(Text, { dimColor: true }, "Reading this repository's jobs...");
+  }
+  const selected = await read($, boardSelected);
+  const nodes = [];
+  if (list.error !== null) {
+    nodes.push(h(Text, { color: "error" }, list.error));
+  }
+  if (list.isBusy) {
+    nodes.push(h(Text, { dimColor: true }, "A job's record was changing: this is the last read."));
+  }
+  if (list.jobs.length === 0) {
+    nodes.push(h(Text, { dimColor: true }, "No jobs in this repository."));
+  }
+  for (const job of list.jobs) {
+    const mark = job.id === selected ? "> " : "  ";
+    nodes.push(h(Button, { key: "job:" + job.id, plain: true, onPress: () => selectJob($, board, job.id) }, mark + rowText(job, list.readAt)));
+  }
+  if (list.nextCursor !== null && (await read($, boardLimit)) < 200) {
+    nodes.push(h(Button, { key: "more", label: "More", onPress: () => moreJobs($, board) }));
+  }
+  const job = list.jobs.find((one) => one.id === selected);
+  if (job !== undefined) {
+    nodes.push(await drawJob($, elements, job, board));
+  }
+  return h(Box, { flexDirection: "column" }, ...nodes);
+}
+
+async function drawJob($, { Box, Text, Button, Input, Markdown }, job, board) {
+  const relay = job.relay;
+  const nodes = [
+    h(Text, { bold: true }, job.id + " · " + job.backend + " · " + job.state + " · attempt " + attemptOf(job)),
+    h(Text, null, "model " + (job.model ?? "default") + " · effort " + (job.effort ?? "default")),
+    h(Text, null, relay === null ? "no relay" : "relay " + (relay.label ?? relay.agentId) + (relay.workflowRunId === null ? "" : " · Workflow run " + relay.workflowRunId)),
+  ];
+  // The mobile app draws no text field.
+  if (Input !== undefined) {
+    const onSubmit = (text) => sendFromBoard($, board, job.id, text, false);
+    nodes.push(h(Input, { key: "message", label: sendLabel(job) + ": ", submitLabel: "send", onSubmit }));
+  }
+  const note = await read($, boardNote);
+  if (note?.id === job.id) {
+    nodes.push(h(Text, null, note.line));
+    if (note.retry !== null) {
+      nodes.push(h(Button, { key: "direct", label: "Send to the job directly", onPress: () => sendFromBoard($, board, job.id, note.retry, true) }));
+    }
+  }
+  const confirm = await read($, boardConfirm);
+  if (confirm?.id === job.id) {
+    nodes.push(h(Box, { flexDirection: "row", gap: 1 },
+      h(Text, null, "Cancel job " + job.id + ", attempt " + confirm.attempt + "?"),
+      h(Button, { key: "cancel-yes", label: "Yes", onPress: () => cancelFromBoard($, board, confirm) }),
+      h(Button, { key: "cancel-no", label: "No", onPress: () => update($, boardConfirm, () => null) })));
+  } else if (!ENDED.includes(job.state)) {
+    nodes.push(h(Button, { key: "cancel", label: "Cancel", onPress: () => askCancel($, job.id) }));
+  }
+  const detail = await read($, boardDetail);
+  if (detail?.id !== job.id) {
+    nodes.push(h(Text, { dimColor: true }, "Reading the job..."));
+    return h(Box, { flexDirection: "column", marginTop: 1 }, ...nodes);
+  }
+  if (detail.isBusy) {
+    nodes.push(h(Text, { dimColor: true }, "The job's record was changing: this is the last read."));
+  }
+  for (const message of detail.messages) {
+    const taken = message.outcome?.action ?? "pending (" + message.stage + ")";
+    nodes.push(h(Text, null, "- " + message.kind + " · " + message.preview + " · " + taken));
+  }
+  if (detail.error !== null) {
+    const where = job.reportPath === null ? "" : " The report is " + job.reportPath + ";";
+    nodes.push(h(Text, { color: "error" }, "The job could not be read: " + detail.error + "." + where + " /relay:result " + job.id + " shows it."));
+  } else if (detail.report !== null) {
+    nodes.push(h(Markdown, { text: detail.report }));
+  } else {
+    nodes.push(h(Text, { dimColor: true }, "No report yet."));
+  }
+  return h(Box, { flexDirection: "column", marginTop: 1 }, ...nodes);
+}
+
 export function register(on) {
   // One timer and one read in flight per load of the module. `fastUntil` is the last tick of the
   // every-tick reads a relay event (a relay:job spawn, a wake, one of the commands below) asks for.
   const poller = { timer: null, ticks: 0, isReading: false, isCleared: false, readTick: 0, fastUntil: 0 };
-  on("session.start", ($, e, next) => {
+  const board = { timer: null, isReading: false };
+  on("session.start", async ($, e, next) => {
     // session.start fires again without a reload (an enable, another plugin's engine.create),
-    // and this copy's timer is still running then.
+    // and this copy's timers are still running then.
     poller.timer ??= $.clock.every(5000, () => {
       // A tick that failed leaves the line as it is; the next one reads again.
       poll($, poller, ++poller.ticks).catch(() => {});
     });
+    board.timer ??= $.clock.every(3000, () => {
+      boardTick($, board).catch(() => {});
+    });
+    // A command the module registers can run mid-turn; a plugin's markdown command cannot.
+    await $.command.register({ name: "relay-board", description: "Show this repository's relay jobs in a pane, to steer, continue or cancel them", immediate: true });
     return next(e);
   });
 
@@ -333,7 +684,7 @@ export function register(on) {
       const ids = matches.length > 0 ? matches.filter((a) => a.type === "relay:job").map((a) => a.id) : [e.to];
       for (const id of ids) {
         poller.fastUntil = poller.ticks + CLEARED_TICKS;
-        await $.process.run(["node", $.plugin.root + "/scripts/companion.mjs", "wake", "--agent", id], { timeoutMs: 10000 });
+        await wake($, id);
       }
     } catch {
       // The message is already queued. Without a wake the relay still reads it when its wait
@@ -356,4 +707,6 @@ export function register(on) {
     .catch(($, e, next) => moduleFailed($, e, next, "cancel"));
   on("command.run", { command: "relay:transfer" }, ($, e) => answerCommand($, e, "transfer", 180000, true).finally(marked))
     .catch(($, e, next) => moduleFailed($, e, next, "transfer"));
+  on("command.run", { command: "relay-board" }, ($) => openBoard($, board));
+  on("ui.render", { component: "Pane", requestId: BOARD_PANE }, ($, e) => drawBoard($, e, board));
 }
