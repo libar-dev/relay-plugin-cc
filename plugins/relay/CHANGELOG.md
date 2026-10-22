@@ -29,7 +29,8 @@ Phase 2, commands answered by the module:
   shows its output: the command as typed (Claude Code shows such a command without its arguments),
   the companion's own lines in a code block, exactly as printed, then a job's report as Markdown or
   the job list as a table. Until now a model ran the command and retold its output. A headless
-  `claude -p "/relay:result <job>"` exits with the companion's exit code.
+  `claude -p "/relay:result <job>"` exits with the companion's exit code (not under
+  `--output-format stream-json`, where Claude Code exits 0).
 - `C status` prints the job list as a Markdown table with a header row (job, state, kind, backend,
   model/effort, duration, summary, relay); every row names its backend, Codex included. It replaces
   the two-space-separated lines, and is the list `/relay:status` shows. Its header names the relay

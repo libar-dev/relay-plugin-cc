@@ -8,10 +8,17 @@ import { configDirectory } from '../lib/runs.mjs';
 import { sessionEnvironment } from '../lib/terminal.mjs';
 import { setupJobs, setupJob, setupEvidence, commandResult, requireCommand, requireResult, requireStatus, requireBuild } from './commands.mjs';
 
+// Claude Code 2.1.308 exits with a command's exitCode under `--output-format text` or `json`, and
+// always 0 under `stream-json`; only the stream has the init event that names the plugin's path. So
+// the results run as json, to check their exit codes, and the status as a stream, to check the build.
 export function headlessCommands(run) {
-  return [...run.backends.map(backend => ({ text: `/relay:result ${run.setup?.jobs[backend]?.done?.id}`, backend })),
-    { text: `/relay:result ${run.setup?.decoys?.running?.id}`, backend: null, running: true },
-    { text: '/relay:status', backend: null }];
+  return [...run.backends.map(backend => ({ text: `/relay:result ${run.setup?.jobs[backend]?.done?.id}`, backend, format: 'json' })),
+    { text: `/relay:result ${run.setup?.decoys?.running?.id}`, backend: null, running: true, format: 'json' },
+    { text: '/relay:status', backend: null, format: 'stream-json' }];
+}
+
+function formatArgs(format) {
+  return format === 'stream-json' ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json'];
 }
 
 export async function runHeadless(ctx, { env = process.env, execute = promisify(execFile), uuid = randomUUID } = {}) {
@@ -29,7 +36,7 @@ export async function runHeadless(ctx, { env = process.env, execute = promisify(
     ctx.save();
     let output;
     try {
-      output = await execute('claude', ['-p', command.text, '--output-format', 'stream-json', '--verbose',
+      output = await execute('claude', ['-p', command.text, ...formatArgs(command.format),
         '--plugin-dir', ctx.pluginDir, '--session-id', sessionId, '--model', 'sonnet'],
       { cwd: ctx.workDir, env: { ...clean.env, RELAY_JOBS_HOME: ctx.jobsHome }, timeout: 120000,
         encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
@@ -83,7 +90,7 @@ export default {
         if (commands.length !== 1) throw new Error(`Missing or repeated command input for ${command.text}.`);
         const parsed = requireCommand(commands[0], command.text);
         const events = readTranscript(stream);
-        if (!events.some(event => event.type === 'system' && event.subtype === 'init' &&
+        if (command.format === 'stream-json' && !events.some(event => event.type === 'system' && event.subtype === 'init' &&
           event.plugins?.some(plugin => plugin.name === 'relay' && plugin.path === input.run.pluginDir))) {
           throw new Error('Headless init does not list relay at the run pluginDir.');
         }
@@ -91,7 +98,8 @@ export default {
         if (results.length !== 1) throw new Error('Missing or repeated result event.');
         const result = results[0];
         if (result.num_turns !== 0 || result.total_cost_usd !== 0 || result.is_error !== false) throw new Error('Headless result requires num_turns 0, total_cost_usd 0 and is_error false.');
-        if (receipt.exitCode !== (command.running ? 4 : 0)) throw new Error(`Headless exit code is ${receipt.exitCode}.`);
+        // A stream run exits 0 whatever the command's code (see headlessCommands).
+        if (receipt.exitCode !== (command.running && command.format !== 'stream-json' ? 4 : 0)) throw new Error(`Headless exit code is ${receipt.exitCode}.`);
         if (result.session_id !== receipt.sessionId || entries.some(entry => entry.sessionId && entry.sessionId !== receipt.sessionId)) throw new Error('Headless session id does not match its receipt.');
         if (events.some(event => event.type === 'assistant' && event.message?.model !== '<synthetic>')) throw new Error('Model reply in headless stream.');
         const streamed = moduleText(result.result);

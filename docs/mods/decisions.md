@@ -279,7 +279,8 @@ One way to find the session, from both callers.
 `command.run` answers may carry `exitCode`, which only a headless run (`claude -p "/relay:result <job>"`) uses. The
 module passes the companion's own code (0 completed, 3 ended without a report, 4 running or busy, 5 cancelled, 1
 usage), and 1 with its own error texts, so a script that ran `C result` can run the slash command instead and read
-the same code. An interactive session ignores it.
+the same code. An interactive session ignores it, and so does `--output-format stream-json` (measured on 2.1.308:
+`text` and `json` exit with the code, `stream-json` exits 0).
 
 ### D36. The command checks send the run line first and the commands after it (Phase 2 thread)
 

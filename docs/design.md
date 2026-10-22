@@ -409,7 +409,7 @@ gets them. So the answer's first line is the command as typed, which the person 
 after them, up to the first line that is `---` or starts with `|`. After a `---` comes the job's report, which the
 backend wrote as Markdown; after a `|` comes the job table, drawn as a table. The model reads the same text. In a
 headless run the command exits with the companion's exit code (the table under [The state block](#the-state-block)
-for `result`). `status` names the relay version in its header (`relay-version:`), the build that answers.
+for `result`), except under `--output-format stream-json`, where Claude Code exits 0. `status` names the relay version in its header (`relay-version:`), the build that answers.
 
 Each call has a timeout above its command's own deadline: 30 seconds for `status` and `result`, which read in under
 a second, twice `RELAY_JOBS_CANCEL_GRACE_MS` (10 s by default) and 40 seconds more for `cancel`, which can wait the

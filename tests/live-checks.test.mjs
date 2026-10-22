@@ -1555,7 +1555,10 @@ for (const fail of [false, true]) {
     await runHeadless(ctx, { env, uuid: () => `session-${calls.length}`, execute: async (command, args, options) => {
       calls.push(args);
       assert.equal(command, 'claude');
-      assert.deepEqual(args, ['-p', headlessCommands(run)[calls.length - 1].text, '--output-format', 'stream-json', '--verbose',
+      const planned = headlessCommands(run)[calls.length - 1];
+      // The results run as json, whose exit code is the command's; the status as a stream, for its init event.
+      assert.equal(planned.format, planned.text === '/relay:status' ? 'stream-json' : 'json');
+      assert.deepEqual(args, ['-p', planned.text, ...(planned.format === 'stream-json' ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json']),
         '--plugin-dir', ctx.pluginDir, '--session-id', `session-${calls.length - 1}`, '--model', 'sonnet']);
       assert.deepEqual(options.env, { PATH: '/bin', KEEP_ME: 'yes', RELAY_JOBS_HOME: ctx.jobsHome });
       assert.equal(options.cwd, ctx.workDir);
@@ -1664,7 +1667,9 @@ for (const name of ['commands', 'transfer', 'headless']) {
 for (const failure of ['no init', 'no relay', 'wrong path', 'running exit', 'running state', 'running job', 'running echo']) {
   test(`headless proves plugin loading and the running decoy (${failure})`, t => {
     const ctx = commandsFixture(t, 'headless');
-    const receipt = ctx.run.headless.find(row => row.running), events = readTranscript(receipt.stream);
+    // Only the status run is a stream with an init event; the running decoy's result runs as json.
+    const initFailure = ['no init', 'no relay', 'wrong path'].includes(failure);
+    const receipt = ctx.run.headless.find(row => initFailure ? row.format === 'stream-json' : row.running), events = readTranscript(receipt.stream);
     const init = events.find(event => event.subtype === 'init');
     if (failure === 'no init') events.splice(events.indexOf(init), 1);
     if (failure === 'no relay') init.plugins = [{ name: 'other', path: ctx.run.pluginDir }];
