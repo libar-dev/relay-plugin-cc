@@ -276,9 +276,11 @@ test("the hand-back is denied while the job runs and rewritten to the result whe
   assert.equal(decision(early), "deny");
   assert.match(reason(early), new RegExp(`still (starting|running).*wait ${jobId} --timeout-seconds 120`));
   assert.equal(waitJob(ctx, jobId).status, 0);
+  assert.equal(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt, null);
   const done = await pre(ctx, "SubagentHandback", { message: "state: completed\n---\nReport for: Review this.\n17 times 23 is 391" });
   assert.equal(decision(done), "allow");
   assert.equal(updated(done).message, resultOf(ctx, jobId), "a hand-back that differs from the result is replaced");
+  assert.ok(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt, "the hand-back is recorded on the job");
   assert.equal(await stop(ctx, "Report delivered."), null, "after a hand-back, SubagentStop does not block on last_assistant_message");
 });
 
@@ -630,6 +632,16 @@ test("only the block itself passes; trailing whitespace is ignored; eight blocks
   assert.equal((await stop(ctx, `Here is the result:\n${block}`))?.decision, "block", "a lead-in line");
   assert.equal((await stop(ctx, `${block}\nDone.`))?.decision, "block", "a closing line");
   assert.equal(await stop(ctx, `${block}\n\n`), null, "trailing whitespace is ignored");
+  // A retyped block may leave out a line that restates the request, never an outcome line, and
+  // may change none.
+  const without = (key) => block.split("\n").filter((line) => !line.startsWith(`${key}: `)).join("\n");
+  assert.match(block, /^relay: /m);
+  assert.equal(await stop(ctx, without("relay")), null, "the relay's own line left out");
+  assert.equal(await stop(ctx, `\`\`\`\n${without("mode")}\n\`\`\``), null, "fenced, a mode line left out");
+  assert.equal((await stop(ctx, without("state")))?.decision, "block", "the state line left out");
+  assert.equal((await stop(ctx, without("report")))?.decision, "block", "the report line left out");
+  assert.equal((await stop(ctx, block.replace("state: completed", "state: failed")))?.decision, "block", "a changed line");
+  assert.equal(await stop(ctx, block), null);
   // Eight consecutive blocks, then the ninth stop lets the relay go and records it.
   for (let index = 0; index < RELAY_BLOCK_BUDGET; index += 1) {
     const blocked = await stop(ctx, "wrong", { stop_hook_active: index > 0 });
@@ -638,6 +650,45 @@ test("only the block itself passes; trailing whitespace is ignored; eight blocks
   assert.doesNotMatch(resultOf(ctx, jobId), /relay-violation/);
   assert.equal(await stop(ctx, "wrong", { stop_hook_active: true }), null);
   assert.match(resultOf(ctx, jobId), /^relay-violation: final-message: the relay was let go after 8 blocks/m);
+});
+
+test("a result between tries at the final message does not renew the block budget", async () => {
+  const ctx = relayContext("job", { workflow: WORKFLOW, turnMs: 100 });
+  ctx.append(ctx.userRequest(), ctx.workflowPrompt(), ctx.environment(), ctx.snapshot("string"));
+  const { jobId, started } = await relayStart(ctx);
+  assert.ok(jobId, `start failed: ${started.stdout}`);
+  assert.equal(waitJob(ctx, jobId).status, 0);
+  for (let index = 0; index < RELAY_BLOCK_BUDGET; index += 1) {
+    assert.ok(updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} result ${jobId}` })).command.includes("--state-only"));
+    assert.equal((await stop(ctx, "wrong", { stop_hook_active: index > 0 }))?.decision, "block", `block ${index + 1}`);
+  }
+  await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId}` });
+  assert.equal(await stop(ctx, "wrong", { stop_hook_active: true }), null, "a wait on an ended job renews nothing either");
+  assert.match(resultOf(ctx, jobId), /^relay-violation: final-message: the relay was let go after 8 blocks/m);
+});
+
+test("status --workflow lists the jobs of one Workflow run and no other", async () => {
+  const ctx = relayContext("job", { workflow: WORKFLOW, turnMs: 100 });
+  ctx.append(ctx.userRequest(), ctx.workflowPrompt(), ctx.environment(), ctx.snapshot("string"));
+  const { jobId, started } = await relayStart(ctx);
+  assert.ok(jobId, `start failed: ${started.stdout}`);
+  const listed = JSON.parse(companion(ctx, ["status", "--workflow", WORKFLOW, "--json"]).stdout);
+  assert.deepEqual(listed.jobs.map((job) => job.id), [jobId]);
+  assert.deepEqual(JSON.parse(companion(ctx, ["status", "--workflow", "wf_other", "--json"]).stdout).jobs, []);
+  assert.match(companion(ctx, ["status", "--workflow", "wf_other"]).stdout, /^No jobs for workflow wf_other\.$/m);
+  assert.equal(waitJob(ctx, jobId).status, 0);
+  // Ended and not yet handed back: the listing says so, until the relay's final text passes.
+  assert.match(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /  not handed back/);
+  assert.equal(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt, null);
+  assert.equal(await stop(ctx, companion(ctx, ["result", jobId, "--state-only"]).stdout), null);
+  assert.doesNotMatch(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /not handed back/);
+  assert.ok(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt);
+  // An attempt from before hand-backs were recorded carries no version, and is never marked.
+  fs.rmSync(path.join(jobDirOf(ctx, jobId), "relay-handbacks.jsonl"));
+  assert.match(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /not handed back/);
+  const record = readJobJson(ctx, jobId);
+  fs.writeFileSync(path.join(jobDirOf(ctx, jobId), "job.json"), JSON.stringify({ ...record, attempts: record.attempts.map(({ relayVersion, ...attempt }) => attempt) }));
+  assert.doesNotMatch(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /not handed back/);
 });
 
 test("wait exits 0 completed, 4 running, 5 cancelled, 3 failed", async () => {
@@ -691,7 +742,7 @@ test("the state block prints dir: and where a relay job came from, labels on one
   const bareResult = resultOf(bare, bareId);
   assert.match(bareResult, new RegExp(`^report: .*\\ndir: ${escape(jobDirOf(bare, bareId))}$`, "m"));
   assert.match(bareResult, new RegExp(`^relay: ${bare.agentId}$`, "m"));
-  assert.match(companion(bare, ["status"]).stdout, new RegExp(`  relay:${bare.agentId}$`, "m"));
+  assert.match(companion(bare, ["status"]).stdout, new RegExp(`  relay:${bare.agentId}  not handed back$`, "m"));
 
   // An Agent-tool relay with its meta file: the description is its label, on one line, cut to 80.
   const plain = relayContext("job", { turnMs: 100 });
@@ -701,7 +752,7 @@ test("the state block prints dir: and where a relay job came from, labels on one
   const plainId = await startedRelay(plain, QUICK);
   assert.equal(waitJob(plain, plainId).status, 0);
   assert.match(resultOf(plain, plainId), new RegExp(`^relay: ${plain.agentId} "${label}"$`, "m"));
-  assert.match(companion(plain, ["status"]).stdout, new RegExp(`  relay:${plain.agentId}/${label}$`, "m"));
+  assert.match(companion(plain, ["status"]).stdout, new RegExp(`  relay:${plain.agentId}/${label}  not handed back$`, "m"));
 
   // Leading, trailing and inner whitespace (a newline among it) become single spaces, trimmed.
   const spaced = relayContext("job", { turnMs: 100 });
@@ -709,7 +760,7 @@ test("the state block prints dir: and where a relay job came from, labels on one
   const spacedId = await startedRelay(spaced, QUICK);
   assert.equal(waitJob(spaced, spacedId).status, 0);
   assert.match(resultOf(spaced, spacedId), new RegExp(`^relay: ${spaced.agentId} "Spaced label"$`, "m"));
-  assert.match(companion(spaced, ["status"]).stdout, new RegExp(`  relay:${spaced.agentId}/Spaced label$`, "m"));
+  assert.match(companion(spaced, ["status"]).stdout, new RegExp(`  relay:${spaced.agentId}/Spaced label  not handed back$`, "m"));
 
   // 81 characters outside the BMP: cut to 80 characters, not 80 UTF-16 units.
   const wide = relayContext("job", { turnMs: 100 });
@@ -717,14 +768,14 @@ test("the state block prints dir: and where a relay job came from, labels on one
   const wideId = await startedRelay(wide, QUICK);
   assert.equal(waitJob(wide, wideId).status, 0);
   assert.match(resultOf(wide, wideId), new RegExp(`^relay: ${wide.agentId} "${"\u{1F600}".repeat(80)}"$`, "m"));
-  assert.match(companion(wide, ["status"]).stdout, new RegExp(`  relay:${wide.agentId}/${"\u{1F600}".repeat(80)}$`, "m"));
+  assert.match(companion(wide, ["status"]).stdout, new RegExp(`  relay:${wide.agentId}/${"\u{1F600}".repeat(80)}(?:  not handed back)?$`, "m"));
 
   const ctx = relayContext("job", { workflow: WORKFLOW, turnMs: 100 });
   ctx.append(ctx.userRequest(), ctx.workflowPrompt(), ctx.environment(), ctx.snapshot("string"));
   const { jobId } = await relayStart(ctx);
   assert.equal(waitJob(ctx, jobId).status, 0);
   assert.match(resultOf(ctx, jobId), new RegExp(`^relay: ${ctx.agentId} workflow ${WORKFLOW} "relay-test"$`, "m"));
-  assert.match(companion(ctx, ["status"]).stdout, new RegExp(`  workflow:${WORKFLOW}/relay-test$`, "m"));
+  assert.match(companion(ctx, ["status"]).stdout, new RegExp(`  workflow:${WORKFLOW}/relay-test(?:  not handed back)?$`, "m"));
   const view = JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout);
   assert.equal(view.id, jobId);
   assert.deepEqual(view.relay, {

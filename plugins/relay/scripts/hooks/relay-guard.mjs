@@ -23,7 +23,8 @@
 //     owed, even on a completed job, or the final message differs from `result <job>`.
 //     Owed means received but not delivered, or delivered but not run. For a string-return
 //     relay (under the Workflow tool) that is `result <job> --state-only`: the state block,
-//     no report, and `wait` and `result` are rewritten with `--state-only` too.
+//     no report, and `wait` and `result` are rewritten with `--state-only` too. Its retyped
+//     block may leave out lines that restate the request (see matchesStateBlock).
 // The guard counts its own consecutive blocks per relay. After eight, it lets the relay go
 // and records a relay violation that `result` and `status` print.
 
@@ -32,9 +33,9 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { appendRelayViolation } from "../lib/jobs/messages.mjs";
+import { appendRelayHandback, appendRelayViolation } from "../lib/jobs/messages.mjs";
 import { absoluteJobsHomeEnv, JOBS_HOME_ENV, readJob } from "../lib/jobs/store.mjs";
-import { isTerminalView, JobViewBusy, loadJobViewSettled, renderJobBlock, renderResultText } from "../lib/jobs/view.mjs";
+import { isTerminalView, JobViewBusy, loadJobViewSettled, OUTCOME_KEYS, renderJobBlock, renderResultText } from "../lib/jobs/view.mjs";
 
 // A view of the job, or, while its record keeps changing, a marker that it is busy: not a state,
 // and never terminal, so the relay waits.
@@ -66,6 +67,21 @@ const SHOWN = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs"';
 
 function trimEnd(text) {
   return String(text ?? "").replace(/\s+$/, "");
+}
+
+// A string-return relay retypes the state block, and a small model drops a line that only restates
+// the request, most often its own `relay:` line. Its text passes when every line it holds is a line
+// of the block and no outcome line is missing. A line added or changed still fails, and so does a
+// missing state, error or undelivered line. Blank lines and code fences are not counted.
+export function matchesStateBlock(text, expected) {
+  const lines = (value) => String(value ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("```"));
+  const remaining = lines(expected);
+  for (const line of lines(text)) {
+    const index = remaining.indexOf(line);
+    if (index === -1) return false;
+    remaining.splice(index, 1);
+  }
+  return remaining.every((line) => !OUTCOME_KEYS.has(line.slice(0, line.indexOf(":"))));
 }
 
 function shellQuote(value) {
@@ -216,7 +232,11 @@ function handleBash(input, env, jobDir, pointer) {
     return deny(`You have not started the job yet. Run: ${SHOWN} start --from-relay`);
   }
   const jobId = readJobId(jobDir);
-  resetBlocks(env, input.agent_id, jobDir);
+  // A wait on a job that has not ended is progress. A result between two tries at the final
+  // message is not, so those blocks keep counting toward the budget.
+  if (parsed.subcommand === "wait" && !isTerminalView(jobViewOrBusy(jobDir))) {
+    resetBlocks(env, input.agent_id, jobDir);
+  }
   const stateOnly = isStringReturn(jobDir) ? ["--state-only"] : [];
   if (parsed.subcommand === "wait") {
     return allow(
@@ -234,6 +254,10 @@ function handleBash(input, env, jobDir, pointer) {
 // return value. It sees and returns the state block only; the report stays in `report:`.
 function isStringReturn(jobDir) {
   return Boolean(jobDir && readJob(jobDir)?.relay?.stringReturn);
+}
+
+function recordHandback(jobDir, agentId, view) {
+  appendRelayHandback(jobDir, { agentId, attempts: Array.isArray(view.job.attempts) ? view.job.attempts.length : 0, state: view.state });
 }
 
 function readJobId(jobDir) {
@@ -290,6 +314,7 @@ function handleHandback(input, env, jobDir, pointer, sync) {
   // is never released with a result it does not have.
   const result = jobViewOrBusy(jobDir);
   if (result.busy) return deny(`${result.busy} Run: ${waitCommandShown(jobId)}`);
+  recordHandback(jobDir, agentId, result);
   return rewrite(renderResultText(result), "relay:job relay hand-back, rewritten to the job's result.");
 }
 
@@ -337,6 +362,8 @@ async function handleSubagentStop(input, env = process.env) {
   }
   const problems = [];
   let expected = null;
+  let done = null;
+  let stateBlock = false;
   if (!jobDir) {
     if (pointer.startError) {
       expected = pointer.startError;
@@ -355,18 +382,21 @@ async function handleSubagentStop(input, env = process.env) {
       problems.push({ kind: "undelivered", reason: `Messages are owed to the job: received but not delivered, or delivered but not run. Do not stop, even on a completed job. Run: ${waitCommandShown(jobId)}` });
     }
     if (problems.length === 0) {
-      const done = jobViewOrBusy(jobDir);
+      done = jobViewOrBusy(jobDir);
       if (done.busy) problems.push({ kind: "running", reason: `${done.busy} Do not stop. Run: ${waitCommandShown(jobId)}` });
-      else expected = isStringReturn(jobDir) ? renderJobBlock(done) : renderResultText(done);
+      else if (isStringReturn(jobDir)) { expected = renderJobBlock(done); stateBlock = true; }
+      else expected = renderResultText(done);
     }
   }
-  if (expected != null && trimEnd(input.last_assistant_message) !== trimEnd(expected)) {
+  const matches = stateBlock ? matchesStateBlock(input.last_assistant_message, expected) : trimEnd(input.last_assistant_message) === trimEnd(expected);
+  if (expected != null && !matches) {
     problems.push({
       kind: "final-message",
       reason: `Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else:\n${expected}`
     });
   }
   if (problems.length === 0) {
+    if (jobDir && done && !done.busy) recordHandback(jobDir, agentId, done);
     resetBlocks(env, agentId, jobDir);
     return null;
   }

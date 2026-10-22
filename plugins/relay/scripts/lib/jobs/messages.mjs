@@ -122,6 +122,34 @@ export function readRelayViolations(jobDir) {
 }
 
 
+// Each result a relay handed back to its caller, appended and never rewritten. A relay job that
+// ended with no hand-back for its last attempt was never collected: its caller died or gave up,
+// and only `status` or `result` shows the report.
+export function appendRelayHandback(jobDir, handback) {
+  const file = path.join(jobDir, "relay-handbacks.jsonl");
+  const last = readRelayHandbacks(jobDir).at(-1);
+  if (last && last.agentId === handback.agentId && last.attempts === handback.attempts && last.state === handback.state) {
+    return last;
+  }
+  const record = { at: nowIso(), ...handback };
+  fs.appendFileSync(file, `${JSON.stringify(record)}\n`, "utf8");
+  return record;
+}
+
+
+export function readRelayHandbacks(jobDir) {
+  let text = "";
+  try {
+    text = fs.readFileSync(path.join(jobDir, "relay-handbacks.jsonl"), "utf8");
+  } catch {
+    return [];
+  }
+  return text.split("\n").filter((line) => line.trim()).flatMap((line) => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+}
+
+
 export function readOutcome(jobDir, messageId) {
   return readJsonOrNull(path.join(jobPaths(jobDir).outcomes, `${messageId}.json`));
 }
