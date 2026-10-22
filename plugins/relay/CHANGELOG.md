@@ -16,6 +16,9 @@ most of them run by Workflow scripts ([docs/thread-surveys.md](../../docs/thread
   return. A line that restates the request or only informs may now be left out; an outcome line may
   not, and no line may change. Only a `wait` on a job that has not ended, by its view (a dead job has ended), renews the
   budget.
+- A relay that never runs `start` gets its job started by the hook at its first other command, its
+  hand-back or its stop. In the 2.2.0 smoke test a relay read the brief's "Do not run any command"
+  as its own instruction, answered "Hi." itself, and no job ever existed.
 - On Linux, a worker started from a unit of the user's systemd runs in a scope of its own
   (`systemd-run --user --scope`). T3 Code's server runs as `t3code.service` with `KillMode=mixed`,
   so every T3 restart killed the workers it had started, and their jobs spent their one automatic

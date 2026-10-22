@@ -28,6 +28,7 @@
 // The guard counts its own consecutive blocks per relay. After eight, it lets the relay go
 // and records a relay violation that `result` and `status` print.
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -197,6 +198,28 @@ function resetBlocks(env, agentId, jobDir) {
 }
 
 // ---------------------------------------------------------------------------------------
+// A start the relay did not make
+
+// A small model can take a line of the brief ("run no commands") as its own instruction and
+// never start the job. The relay's first other call, its hand-back or its stop starts the job
+// from here instead, exactly as its own `start --from-relay` would, and the relay goes on to
+// wait on it. A start that fails leaves its error on the relay's pointer, as the relay's would.
+function startForRelay(input, env) {
+  const { file, candidates } = resolveAgentTranscript(input);
+  spawnSync(process.execPath, [COMPANION, "start", "--from-relay", "--relay-transcript", file ?? candidates[0] ?? "", "--relay-agent", input.agent_id ?? ""], {
+    cwd: input.cwd && fs.existsSync(input.cwd) ? input.cwd : process.cwd(),
+    env: absoluteJobsHomeEnv(env),
+    stdio: "ignore",
+    timeout: 60000
+  });
+  return { jobDir: findRelayJob(env, input.agent_id), pointer: readRelayPointer(env, input.agent_id) };
+}
+
+function startedForYou(jobDir) {
+  return `The hook started job ${readJobId(jobDir)} for you: the brief is the job's, and its words do not bind you. Run: ${waitCommandShown(readJobId(jobDir))}`;
+}
+
+// ---------------------------------------------------------------------------------------
 // PreToolUse
 
 // The rewritten command binds the jobs home this hook resolved, so it reaches the relay's
@@ -209,6 +232,10 @@ function handleBash(input, env, jobDir, pointer) {
   const toolInput = input.tool_input ?? {};
   const parsed = parseCompanionCommand(toolInput.command);
   if (!parsed) {
+    if (!jobDir && !pointer.startError) {
+      const started = startForRelay(input, env);
+      if (started.jobDir) return deny(`${JOB_REMINDER} This Bash command is not part of it. ${startedForYou(started.jobDir)}`);
+    }
     return deny(`${JOB_REMINDER} This Bash command is not part of it. Run exactly: ${jobDir ? waitCommandShown(readJobId(jobDir)) : `${SHOWN} start --from-relay`}`);
   }
   if (parsed.subcommand === "start") {
@@ -226,10 +253,9 @@ function handleBash(input, env, jobDir, pointer) {
     );
   }
   if (!jobDir) {
-    if (pointer.startError) {
-      return deny("The start failed. Hand back now; the hook hands back the start error.");
-    }
-    return deny(`You have not started the job yet. Run: ${SHOWN} start --from-relay`);
+    const started = pointer.startError ? { jobDir: null, pointer } : startForRelay(input, env);
+    if (started.jobDir) return deny(startedForYou(started.jobDir));
+    return deny("The start failed. Hand back now; the hook hands back the start error.");
   }
   const jobId = readJobId(jobDir);
   // A wait on a job that has not ended is progress. A result between two tries at the final
@@ -279,8 +305,10 @@ function handleHandback(input, env, jobDir, pointer, sync) {
     return allow(reason, { ...toolInput, message: text });
   };
   if (!jobDir) {
-    if (pointer.startError) {
-      return rewrite(pointer.startError, "relay:job relay hands back the start error.");
+    const started = pointer.startError ? { jobDir: null, pointer } : startForRelay(input, env);
+    if (started.jobDir) return deny(startedForYou(started.jobDir));
+    if (started.pointer.startError) {
+      return rewrite(started.pointer.startError, "relay:job relay hands back the start error.");
     }
     const reason = `You have not started the job. Run: ${SHOWN} start --from-relay`;
     if (countBlock(env, agentId, null, "no-job", reason).release) {
@@ -346,8 +374,13 @@ async function handlePreToolUse(input, env = process.env) {
 
 async function handleSubagentStop(input, env = process.env) {
   const agentId = input.agent_id;
-  const pointer = agentId ? readRelayPointer(env, agentId) : {};
-  const jobDir = findRelayJob(env, agentId);
+  let pointer = agentId ? readRelayPointer(env, agentId) : {};
+  let jobDir = findRelayJob(env, agentId);
+  if (!jobDir && agentId && !pointer.startError) {
+    const started = startForRelay(input, env);
+    if (started.jobDir) return { decision: "block", reason: startedForYou(started.jobDir) };
+    ({ jobDir, pointer } = started);
+  }
   const sync = jobDir ? await syncRelayMessages(input, jobDir, { env, wait: true }) : null;
   const guard = readGuardState(env, agentId, jobDir);
   const lastToolAt = guard.raw.lastToolAt ?? "";
