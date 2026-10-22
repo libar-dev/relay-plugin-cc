@@ -455,11 +455,11 @@ attempts. `C steer` and `C continue` already reach a job without its relay. The 
 
 ### D60. How relay 3.0 is reviewed, proved and released (owner, 22 October 2026)
 
-The owner's decisions after PR #12, in parts. What they change:
+The owner's decisions after PR #12, in parts. What they touch:
 
-- **D3 and D54.** D3's manual Desktop pass of the board stands, on the M3 (D54). Beside it come screenshots of
-  every user-facing feature, the board's included (part 4), and D54's route, the M3 through Cua Driver, now takes
-  the CLI's screenshots as well as Desktop's.
+- **D3 and D54.** D54's route, the M3 through Cua Driver, now takes the CLI's screenshots as well as Desktop's.
+  D3's manual Desktop pass of the board stands there, with screenshots of every user-facing feature beside it,
+  the board's included (part 4).
 - **The steering demo.** The release gate "a recording of the steering demo the funding notes ask for" is dropped
   (part 3).
 
@@ -483,8 +483,8 @@ The parts:
 6. **A UX and UI review by Opus 5.5** of the user-facing surfaces, with the screenshots: the commands' output, the
    status line, the board (a narrow and a wide terminal, and Desktop), the README, `docs/desktop.md` and the user
    guide.
-7. **A review of every skill the plugin ships by GPT-6 Astra**, and of the skills it is missing: `plugins/relay/skills/`
-   (jobs with `internals.md`, `grok-home.md` and `kimi-home.md`; codex-prompting with its references;
+7. **A review of every skill the plugin ships by GPT-6 Astra**, and of the skills it is missing:
+   `plugins/relay/skills/` (jobs with `internals.md`, `grok-home.md` and `kimi-home.md`; codex-prompting with its references;
    result-handling), `agents/job.md` and `commands/`. Opus 5.5 makes the skill updates.
 8. **A test-coverage review by Kimi K3 at max effort**, as a T3 Code delegate.
 9. **A real-API end-to-end suite gates the release.** The unit tests mock the backends; this suite runs the real
