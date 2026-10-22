@@ -22,6 +22,25 @@ Phase 1, steer wake:
   it received before it, since none of them has a delivery record.
 - Needs Claude Code 2.1.307 or later, for the module's `session.send` event.
 
+Phase 3, spawn and stop like a Claude agent:
+
+- **`TaskStop` on a `relay:job` agent cancels its job.** A `PostToolUse` hook on `TaskStop` runs
+  `companion cancel` for the job of the relay it stopped, and the TaskStop result comes with the
+  cancelled job's block. Until now TaskStop stopped only the relay, and the job ran on. A relay that
+  ends any other way (the Claude session ends, its process is killed, its Workflow is stopped) still
+  leaves its job running, so a `resumeFromRunId` after a stopped Workflow still adopts its jobs. A
+  cancel the hook could not finish is told to the caller and shown as a `relay-violation:` line. The
+  message `cancel` still cancels a job and lets its relay hand back the cancelled state; it is also
+  how to cancel one Workflow agent's job, since TaskStop cannot stop one agent of a Workflow.
+- **A bad header fails at the spawn.** The hooks module has an `agent.spawn` hook: before a
+  `relay:job` agent starts, it runs the new `companion check-header`, the parser and request
+  builder `start` uses, and refuses the spawn with the parser's message. The Agent call fails, or a
+  Workflow script's `agent()` throws, at once (`Subagent spawn denied by a plugin: <reason>`).
+  Until now a relay started, its start failed, and the relay handed the error back. `start` keeps
+  every check.
+- The live suite has three more checks: `stop` (TaskStop cancels the job within 15 s), `session-end`
+  (the job runs on after the Claude session ends, terminal only) and `spawn-check`.
+
 Phase 5, the live suite (development tooling; the plugin itself does not change):
 
 - `scripts/live/suite.mjs` runs live checks against the real backends, in the terminal and in T3 Code, and

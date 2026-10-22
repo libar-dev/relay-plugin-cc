@@ -44,8 +44,16 @@ function fakeCli(t) {
   fs.mkdirSync(home);
   const config = path.join(dir, 'config override');
   fs.mkdirSync(config);
+  // Derive names from CLI inputs so the same fake can model two marketplaces.
+  const claude = fs.readFileSync(path.join(root, 'tests/fixtures/smoke-tools/fake-claude.cjs'), 'utf8')
+    .replace("const plugin = 'relay@relay-smoke';", `const name = action === 'plugin marketplace add'
+  ? read(path.join(args[3], '.claude-plugin/marketplace.json')).name
+  : action === 'plugin marketplace remove' ? args[3] : args[2]?.split('@')[1];
+const plugin = args[2];`)
+    .replaceAll("['relay-smoke']", '[name]')
+    .replace("'plugins/cache/relay-smoke/relay/test-version'", "'plugins/cache', name, 'relay/test-version'");
   fs.writeFileSync(path.join(bin, 'claude'), `#!${process.execPath}\n` +
-    fs.readFileSync(path.join(root, 'tests/fixtures/smoke-tools/fake-claude.cjs'), 'utf8'), { mode: 0o755 });
+    claude, { mode: 0o755 });
   return { dir, home, config, env: { ...process.env, HOME: home, XDG_STATE_HOME: path.join(dir, 'state'), CLAUDE_CONFIG_DIR: config, TMPDIR: dir,
     PATH: `${bin}${path.delimiter}${process.env.PATH}`, SMOKE_CALL_LOG: path.join(dir, 'calls.jsonl') } };
 }
@@ -323,6 +331,116 @@ test('install detects conflicting registrations in the overridden config directo
   assert.notEqual(installSmoke(work, env).status, 0);
   assert.deepEqual(callLog(env), []);
   assert.equal(fs.existsSync(receiptPath(work, env)), false);
+});
+
+test('install with --name relay-smoke-2 coexists with relay-smoke in another folder', t => {
+  const { dir, config, env } = fakeCli(t);
+  const first = workDir(dir);
+  assert.equal(installSmoke(first, env).status, 0);
+  const work = path.join(dir, 'second work');
+  fs.mkdirSync(work);
+  const installed = smokeScript('install', work, env, '--name', 'relay-smoke-2', '--repo', root, '--worktree');
+  assert.equal(installed.status, 0, installed.stderr);
+  const saved = readJson(receiptPath(work, env));
+  assert.equal(saved.name, 'relay-smoke-2');
+  assert.equal(readJson(path.join(saved.marketplace, '.claude-plugin/marketplace.json')).name, 'relay-smoke-2');
+  assert.match(path.basename(saved.marketplace), /^relay-smoke-mkt-/);
+  assert.equal(saved.createdCache, true);
+  assert.equal(fs.existsSync(path.join(config, 'plugins/cache/relay-smoke-2')), true);
+  assert.deepEqual(callLog(env).slice(-2), [
+    ['plugin', 'install', 'relay@relay-smoke-2', '--scope', 'local'],
+    ['plugin', 'disable', 'relay@libar-relay', '--scope', 'local']
+  ]);
+  assert.match(installed.stdout, /Installed relay@relay-smoke-2 locally/);
+});
+
+test('uninstall of relay-smoke-2 preserves relay-smoke registration, cache and settings', t => {
+  const { dir, config, env } = fakeCli(t);
+  const first = workDir(dir);
+  assert.equal(installSmoke(first, env).status, 0);
+  const firstReceipt = readJson(receiptPath(first, env));
+  const firstWork = snapshot(first), firstMarketplace = snapshot(firstReceipt.marketplace);
+  writeJson(path.join(config, 'plugins/cache/relay-smoke/keep.json'), { keep: true });
+  const firstCache = snapshot(path.join(config, 'plugins/cache/relay-smoke'));
+  const registry = readJson(path.join(config, 'plugins/installed_plugins.json'));
+  const known = readJson(path.join(config, 'plugins/known_marketplaces.json'));
+  const work = path.join(dir, 'second work');
+  fs.mkdirSync(work);
+  const original = readJson(settingsPath(first));
+  writeJson(settingsPath(work), original);
+  const installed = smokeScript('install', work, env, '--name', 'relay-smoke-2', '--repo', root, '--worktree');
+  assert.equal(installed.status, 0, installed.stderr);
+  const saved = readJson(receiptPath(work, env));
+  const undone = smokeScript('uninstall', work, env);
+  assert.equal(undone.status, 0, undone.stderr);
+  assert.deepEqual(callLog(env).slice(-2), [
+    ['plugin', 'uninstall', 'relay@relay-smoke-2', '--scope', 'local'],
+    ['plugin', 'marketplace', 'remove', 'relay-smoke-2']
+  ]);
+  assert.deepEqual(readJson(path.join(config, 'plugins/installed_plugins.json')), registry);
+  assert.deepEqual(readJson(path.join(config, 'plugins/known_marketplaces.json')), known);
+  assert.equal(fs.existsSync(path.join(config, 'plugins/cache/relay-smoke')), true);
+  assert.deepEqual(snapshot(path.join(config, 'plugins/cache/relay-smoke')), firstCache);
+  assert.deepEqual(snapshot(first), firstWork);
+  assert.deepEqual(snapshot(firstReceipt.marketplace), firstMarketplace);
+  assert.deepEqual(readJson(receiptPath(first, env)), firstReceipt);
+  assert.deepEqual(readJson(settingsPath(work)), original);
+  assert.equal(fs.existsSync(path.join(config, 'plugins/cache/relay-smoke-2')), false);
+  assert.equal(fs.existsSync(saved.marketplace), false);
+  assert.equal(fs.existsSync(receiptPath(work, env)), false);
+});
+
+test('install refuses invalid marketplace names with exit 2 before writing anything', t => {
+  const { dir, env } = fakeCli(t);
+  const work = workDir(dir);
+  const before = snapshot(dir), folders = fs.readdirSync(dir, { recursive: true }).sort();
+  for (const name of ['', 'other', 'relay-smoke-', 'relay-smoke--2', 'relay-smoke-A', 'relay-smoke_2',
+    'relay-smoke/../../other', 'relay-smoke-2 extra', 'relay-smoke-2\n', 'relay-smoke-2\r']) {
+    const installed = smokeScript('install', work, env, '--name', name);
+    assert.equal(installed.status, 2, name);
+    assert.match(installed.stderr, /--name/);
+    assert.equal(installed.stderr.trim().split('\n').length, 1);
+    assert.deepEqual(snapshot(dir), before);
+    assert.deepEqual(fs.readdirSync(dir, { recursive: true }).sort(), folders);
+    assert.deepEqual(callLog(env), []);
+  }
+});
+
+test('uninstall accepts an older receipt without name as relay-smoke', t => {
+  const { dir, config, env } = fakeCli(t);
+  const work = workDir(dir);
+  assert.equal(installSmoke(work, env).status, 0);
+  const saved = readJson(receiptPath(work, env));
+  delete saved.name;
+  writeJson(receiptPath(work, env), saved);
+  const undone = smokeScript('uninstall', work, env);
+  assert.equal(undone.status, 0, undone.stderr);
+  assert.deepEqual(callLog(env).slice(-2), [
+    ['plugin', 'uninstall', 'relay@relay-smoke', '--scope', 'local'],
+    ['plugin', 'marketplace', 'remove', 'relay-smoke']
+  ]);
+  assert.equal(fs.existsSync(saved.marketplace), false);
+  assert.equal(fs.existsSync(path.join(config, 'plugins/cache/relay-smoke')), false);
+  assert.equal(fs.existsSync(path.join(work, '.claude')), false);
+  assert.equal(fs.existsSync(receiptPath(work, env)), false);
+});
+
+test('uninstall refuses invalid receipt names before changing anything', t => {
+  const { dir, env } = fakeCli(t);
+  const work = workDir(dir);
+  assert.equal(installSmoke(work, env).status, 0);
+  const saved = readJson(receiptPath(work, env)), calls = callLog(env);
+  for (const name of ['', 'other', 'relay-smoke-', 'relay-smoke--2', 'relay-smoke-A', 'relay-smoke_2',
+    'relay-smoke/../../other', 'relay-smoke-2 extra', 'relay-smoke-2\n', 'relay-smoke-2\r', null, 2, ['relay-smoke']]) {
+    writeJson(receiptPath(work, env), { ...saved, name });
+    const before = snapshot(dir);
+    const undone = smokeScript('uninstall', work, env);
+    assert.notEqual(undone.status, 0, JSON.stringify(name));
+    assert.match(undone.stderr, /Invalid receipt name/);
+    assert.equal(undone.stderr.trim().split('\n').length, 1);
+    assert.deepEqual(snapshot(dir), before);
+    assert.deepEqual(callLog(env), calls);
+  }
 });
 
 test('uninstall refuses a changed config directory and installations shared with another project', t => {
