@@ -128,7 +128,7 @@ function footer(screen) {
   return main < 0 ? [] : rows.slice(main);
 }
 
-export async function typeInView(ctx, name, text, { drive = pane, sleep = pause, beforeSend = () => {}, check = () => {}, interrupt = false, followup } = {}) {
+export async function typeInView(ctx, name, text, { agentCount, drive = pane, sleep = pause, beforeSend = () => {}, check = () => {}, interrupt = false, followup } = {}) {
   let step = 0;
   const screen = () => {
     check();
@@ -137,22 +137,38 @@ export async function typeInView(ctx, name, text, { drive = pane, sleep = pause,
     return value;
   };
   const verify = (value, expected, why) => { if (!expected(value)) throw new Error(`Navigation: expected ${why}; screen saved in ${ctx.evidenceDir}.`); };
-  const selected = name => value => footer(value).some(row => row.name === name && row.selected);
+  const cursor = value => {
+    const rows = footer(value), selected = rows.filter(row => row.selected);
+    return selected.length === 1 && rows.filter(row => row.name === selected[0].name).length === 1 ? selected[0].name : null;
+  };
+  const selected = name => value => cursor(value) === name;
+  const viewPrompt = value => value.split('\n').some(line => line.trim().replace(/\s+/g, ' ') === `❯ Message @${name}…`);
   const prompt = name => value => name === 'main' ? /^\s*❯\s*[^\n]*$/m.test(value) && !value.includes('Message @') &&
     footer(value).some(row => row.name === 'main' && row.viewed) && !footer(value).some(row => row.selected) :
-    value.split('\n').some(line => line.trim().replace(/\s+/g, ' ') === `❯ Message @${name}…`) &&
-    footer(value).some(row => row.name === name && row.viewed) && !footer(value).some(row => row.selected);
+    viewPrompt(value) && footer(value).length > 0 && !footer(value).some(row => row.selected);
   const key = async (key, expected, why) => {
     check(); drive(['keys', ctx.run.pane, key]); await sleep(250);
-    verify(screen(), expected, why);
+    const value = screen();
+    verify(value, expected, why);
+    return value;
+  };
+  const walk = async (value, direction, expected, why) => {
+    for (let presses = 0; presses < agentCount + 2; presses++) {
+      if (expected(value)) return value;
+      const previous = cursor(value);
+      value = await key(direction, next => expected(next) || (cursor(next) !== null && cursor(next) !== previous),
+        `a moving selector toward ${why}`);
+    }
+    verify(value, expected, `${why} within ${agentCount + 2} ${direction} presses`);
+    return value;
   };
   const initial = screen();
   verify(initial, prompt('main'), 'the main prompt');
-  const rows = footer(initial), index = rows.findIndex(row => row.name === name);
-  if (rows[0]?.name !== 'main' || index < 1 || rows.filter(row => row.name === name).length !== 1) throw new Error(`Navigation: missing unique footer row for ${name}.`);
-  for (let i = 0; i <= index; i++) await key('Down', selected(rows[i].name), `selector on ${rows[i].name}`);
-  await key('Enter', value => value.includes(`Message @${name}`) && footer(value).some(row => row.name === name && row.viewed), `${name}'s view`);
-  for (let i = index - 1; i >= -1; i--) await key('Up', i < 0 ? prompt(name) : selected(rows[i].name), i < 0 ? `${name}'s prompt` : `selector on ${rows[i].name}`);
+  // The transcript supplies the total; the footer only shows the current scroll window.
+  verify(initial, () => Number.isInteger(agentCount) && agentCount > 0, 'the spawned agent count');
+  await walk(initial, 'Down', selected(name), `selector on ${name}`);
+  const opened = await key('Enter', value => viewPrompt(value) && footer(value).some(row => row.name === name && row.viewed), `${name}'s view`);
+  await walk(opened, 'Up', prompt(name), `${name}'s prompt`);
   if (interrupt) {
     await key('Escape', value => prompt(name)(value) && /\bInterrupted\b/.test(value), `${name}'s interrupted prompt`);
     await sleep(3000);
@@ -174,7 +190,8 @@ export async function typeInView(ctx, name, text, { drive = pane, sleep = pause,
     verify(screen(), value => value.includes(`Message @${name}`), `${name}'s view after typing`);
     await followup.delivered();
   }
-  await key('Down', selected('main'), 'selector on main');
+  const returning = await key('Down', value => cursor(value) !== null, 'a selected footer row');
+  await walk(returning, 'Up', selected('main'), 'selector on main');
   await key('Enter', value => footer(value).some(row => row.name === 'main' && row.viewed) && !value.includes('Message @'), 'the main view');
   await key('Up', prompt('main'), 'the main prompt');
 }
@@ -235,7 +252,7 @@ export default {
         run.typed[item.backend][line] = { text, sentAt: new Date(now()).toISOString() }; ctx.save();
       };
       const type = (item, line, followup) => typeInView(ctx, item[line[0].toLowerCase()].name,
-        typedLine(run.runId, item.backend, line), { drive, sleep, check, interrupt: line === 'C1',
+        typedLine(run.runId, item.backend, line), { agentCount: parsed.spawns.length, drive, sleep, check, interrupt: line === 'C1',
           beforeSend: () => receipt(item, line), followup });
       for (const item of jobs) {
         await type(item, 'B1');

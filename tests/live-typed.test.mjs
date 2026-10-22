@@ -64,10 +64,10 @@ for (const backends of [['kimi'], ['kimi', 'zcode', 'grok', 'codex']]) {
   });
 }
 
-function navigation(dir, screens = json(path.join(fixture, 'screens.json'))) {
+function navigation(dir, screens = json(path.join(fixture, 'screens.json')), agentCount = 2) {
   const calls = [];
   const drive = args => { calls.push(args); if (args[0] === 'read') { assert.ok(screens.length, 'no blind extra screen reads'); return screens.shift(); } return ''; };
-  return { ctx: { run: { pane: 'fixture-pane' }, evidenceDir: dir }, calls, drive, sleep: async () => {} };
+  return { ctx: { run: { pane: 'fixture-pane' }, evidenceDir: dir }, agentCount, calls, drive, sleep: async () => {} };
 }
 
 test('typed navigation finds the named row and verifies every key against saved screens without Escape', async t => {
@@ -115,14 +115,14 @@ for (const glyph of ['>', '›']) test(`typed navigation rejects guessed selecti
   const { dir } = setup(t), screens = json(path.join(fixture, 'screens.json'));
   screens[1] = screens[1].replace('❯ ● main', `${glyph} ● main`);
   const nav = navigation(dir, screens);
-  await assert.rejects(typeInView(nav.ctx, 'typed-a-codex', 'A1', nav), /selector on main/);
+  await assert.rejects(typeInView(nav.ctx, 'typed-a-codex', 'A1', nav), /moving selector/);
   assert.equal(nav.calls.some(call => call[0] === 'send' || call.includes('Escape')), false);
 });
 
-for (const [label, index] of [['missing row', 0], ['wrong selection', 2], ['wrong view', 4], ['unfocused agent prompt', 7], ['wrong return view', 10], ['unfocused main prompt', 11]]) {
+for (const [label, index] of [['missing footer', 0], ['wrong selection', 2], ['wrong view', 4], ['unfocused agent prompt', 7], ['wrong return view', 10], ['unfocused main prompt', 11]]) {
   test(`typed navigation saves the screen and stops without retries: ${label}`, async t => {
     const { dir } = setup(t), screens = json(path.join(fixture, 'screens.json'));
-    screens[index] = label === 'missing row' ? screens[0].replaceAll('typed-a-codex', 'other') : 'unexpected screen';
+    screens[index] = label === 'missing footer' ? screens[0].replaceAll('main', 'other') : 'unexpected screen';
     const nav = navigation(dir, screens);
     await assert.rejects(typeInView(nav.ctx, 'typed-a-codex', 'line', nav), /Navigation:/);
     assert.equal(nav.calls.filter(call => call[0] === 'read').length, index + 1);
@@ -130,6 +130,115 @@ for (const [label, index] of [['missing row', 0], ['wrong selection', 2], ['wron
     if (index < 8) assert.equal(nav.calls.some(call => call[0] === 'send'), false);
   });
 }
+
+function scrollingNavigation(dir, returning = 'main') {
+  const recorded = json(path.join(fixture, 'screens-scroll.json'));
+  const screens = [...recorded.down, recorded.opened, ...recorded.up, recorded.sent,
+    ...(returning === 'main' ? [recorded.returnMain] : [recorded.opened, ...recorded.up.slice(0, -1)]),
+    recorded.mainSelected, recorded.mainPrompt];
+  return { ...navigation(dir, [...screens], recorded.agents.length), recorded, screens };
+}
+
+function verifiedScreens(nav, dir, name) {
+  assert.deepEqual(nav.calls[0], ['read', 'fixture-pane', '0']);
+  for (let i = 1; i < nav.calls.length; i += 2) {
+    assert.ok(['keys', 'send'].includes(nav.calls[i][0]));
+    assert.deepEqual(nav.calls[i + 1], ['read', 'fixture-pane', '0']);
+  }
+  const count = nav.calls.filter(call => call[0] === 'read').length;
+  assert.equal(count, nav.screens.length);
+  for (let i = 0; i < count; i++) {
+    assert.equal(fs.readFileSync(path.join(dir, `typed-${name}-first-${i}.txt`), 'utf8'), nav.screens[i]);
+  }
+}
+
+for (const returning of ['main', 'agent']) test(`typed navigation reaches the ninth agent through five visible rows and scrolls back up; return starts on ${returning}`, async t => {
+  const { dir } = setup(t), nav = scrollingNavigation(dir, returning);
+  const name = nav.recorded.agents.at(-1);
+  assert.match(nav.screens[0], /↓ 4 more/);
+  assert.equal(nav.screens[0].includes(name), false);
+  assert.equal(nav.screens[0].split('\n').filter(line => /^  ◯ typed-/.test(line)).length, 5);
+  assert.match(nav.recorded.down.at(-1), /↑ 4 more/);
+  assert.equal(nav.recorded.up.at(-1).includes(`● ${name}`), false);
+  await typeInView(nav.ctx, name, 'line', nav);
+  assert.deepEqual(nav.calls.filter(call => call[0] === 'keys').map(call => call[2]), [
+    ...Array(10).fill('Down'), 'Enter', ...Array(10).fill('Up'),
+    'Down', ...(returning === 'agent' ? Array(9).fill('Up') : []), 'Enter', 'Up']);
+  assert.equal(nav.calls.filter(call => call[0] === 'send').length, 1);
+  verifiedScreens(nav, dir, name);
+});
+
+test('typed navigation reaches typed-b-kimi below the initial five rows', async t => {
+  const { dir } = setup(t), recorded = json(path.join(fixture, 'screens-scroll.json'));
+  const name = 'typed-b-kimi';
+  const view = screen => screen.replace('❯ \n', `❯ Message @${name}…\n`)
+    .replace('● main', '◯ main').replace(`◯ ${name}`, `● ${name}`);
+  const screens = [...recorded.down.slice(0, 8), view(recorded.down[7]),
+    ...recorded.down.slice(0, 7).reverse().map(view), view(recorded.down[0]),
+    view(recorded.down[1]), recorded.down[1], recorded.down[0]];
+  const nav = { ...navigation(dir, [...screens], 9), screens };
+  await typeInView(nav.ctx, name, 'line', nav);
+  assert.deepEqual(nav.calls.filter(call => call[0] === 'keys').map(call => call[2]), [
+    ...Array(7).fill('Down'), 'Enter', ...Array(7).fill('Up'), 'Down', 'Enter', 'Up']);
+  verifiedScreens(nav, dir, name);
+});
+
+test('typed navigation starts from a scrolled main footer and finds an earlier agent', async t => {
+  const { dir } = setup(t), recorded = json(path.join(fixture, 'screens-scroll.json'));
+  const name = recorded.agents[0];
+  const view = screen => screen.replace('❯ \n', `❯ Message @${name}…\n`)
+    .replace('● main', '◯ main').replace(`◯ ${name}`, `● ${name}`);
+  const screens = [recorded.mainPrompt, recorded.mainSelected, recorded.down[2], view(recorded.down[2]),
+    view(recorded.down[1]), view(recorded.down[0]), view(recorded.down[0]),
+    view(recorded.down[1]), recorded.down[1], recorded.down[0]];
+  const nav = { ...navigation(dir, [...screens], 9), screens };
+  assert.equal(screens[0].includes(name), false);
+  await typeInView(nav.ctx, name, 'line', nav);
+  assert.deepEqual(nav.calls.filter(call => call[0] === 'keys').map(call => call[2]), [
+    'Down', 'Down', 'Enter', 'Up', 'Up', 'Down', 'Enter', 'Up']);
+  verifiedScreens(nav, dir, name);
+});
+
+for (const phase of ['target row', 'view prompt', 'return to main']) {
+  for (const failure of ['stalled cursor', 'press bound']) {
+    test(`typed scrolling navigation saves the screen and stops without retries at ${phase}: ${failure}`, async t => {
+      const { dir } = setup(t), recorded = json(path.join(fixture, 'screens-scroll.json'));
+      const name = recorded.agents.at(-1), limit = recorded.agents.length + 2;
+      const before = phase === 'target row' ? [recorded.down[0]] :
+        [...recorded.down, recorded.opened, ...(phase === 'return to main' ? [...recorded.up, recorded.sent, recorded.opened] : [])];
+      const moving = phase === 'target row' ? recorded.down.slice(1, 3) : recorded.up.slice(0, 2);
+      const steps = failure === 'stalled cursor' ? [moving[0], moving[0].replaceAll('1m', '2m')] :
+        Array.from({ length: limit }, (_, i) => moving[i % 2]);
+      const screens = [...before, ...steps];
+      const nav = { ...navigation(dir, [...screens], recorded.agents.length), screens };
+      await assert.rejects(typeInView(nav.ctx, name, 'line', nav),
+        failure === 'stalled cursor' ? /Navigation: expected a moving selector.*screen saved/ : /within 11 (Down|Up) presses.*screen saved/);
+      assert.equal(nav.calls.filter(call => call[0] === 'send').length, phase === 'return to main' ? 1 : 0);
+      assert.equal(nav.calls.filter(call => call.includes('Enter')).length, phase === 'target row' ? 0 : 1);
+      assert.equal(nav.calls.some(call => call.includes('Escape')), false);
+      verifiedScreens(nav, dir, name);
+    });
+  }
+}
+
+test('typed navigation searches for an absent target until the last row stops moving', async t => {
+  const { dir } = setup(t), recorded = json(path.join(fixture, 'screens-scroll.json'));
+  const screens = [...recorded.down, recorded.down.at(-1)];
+  const nav = { ...navigation(dir, [...screens], 9), screens };
+  await assert.rejects(typeInView(nav.ctx, 'missing-agent', 'line', nav), /moving selector toward selector on missing-agent/);
+  assert.equal(nav.calls.filter(call => call[0] === 'keys').length, 11);
+  assert.equal(nav.calls.some(call => call[0] === 'send' || call.includes('Enter')), false);
+  verifiedScreens(nav, dir, 'missing-agent');
+});
+
+test('typed navigation rejects multiple selected rows before opening a view', async t => {
+  const { dir } = setup(t), recorded = json(path.join(fixture, 'screens-scroll.json'));
+  const screens = [recorded.down[0], recorded.down[1].replace('  ◯ typed-a-codex', '❯ ◯ typed-a-codex')];
+  const nav = { ...navigation(dir, [...screens], 9), screens };
+  await assert.rejects(typeInView(nav.ctx, recorded.agents.at(-1), 'line', nav), /moving selector/);
+  assert.equal(nav.calls.some(call => call[0] === 'send' || call.includes('Enter')), false);
+  verifiedScreens(nav, dir, recorded.agents.at(-1));
+});
 
 test('typed analysis proves exact delivery, both backend steer outcomes, hand-backs and timings without quoted reports', t => {
   const { input } = setup(t), analysis = typed.analyze(input);
