@@ -300,10 +300,11 @@ function firstLine(text) {
   );
 }
 
-// When a relay handed back the result of the job's last attempt; null when none did (yet).
+// When a relay handed back the ended result of the job's last attempt; null when none did (yet).
+// A relay let go while the job ran handed back no result, though its hand-back is recorded.
 export function handedBackAt(view) {
   const attempts = Array.isArray(view.job.attempts) ? view.job.attempts.length : 0;
-  return (view.handbacks ?? []).findLast((entry) => entry.attempts === attempts)?.at ?? null;
+  return (view.handbacks ?? []).findLast((entry) => entry.attempts === attempts && isTerminalView(entry))?.at ?? null;
 }
 
 // A relay job whose last attempt ended with no hand-back. Only an attempt that records its

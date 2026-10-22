@@ -677,8 +677,11 @@ test("status --workflow lists the jobs of one Workflow run and no other", async 
   assert.deepEqual(JSON.parse(companion(ctx, ["status", "--workflow", "wf_other", "--json"]).stdout).jobs, []);
   assert.match(companion(ctx, ["status", "--workflow", "wf_other"]).stdout, /^No jobs for workflow wf_other\.$/m);
   assert.equal(waitJob(ctx, jobId).status, 0);
-  // Ended and not yet handed back: the listing says so, until the relay's final text passes.
+  // Ended and not yet handed back: the listing says so, until the relay's final text passes. A
+  // relay let go while the job ran is recorded, and handed back no result.
   assert.match(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /  not handed back/);
+  fs.appendFileSync(path.join(jobDirOf(ctx, jobId), "relay-handbacks.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), agentId: "earlier", attempts: 1, state: "running" })}\n`);
+  assert.match(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /  not handed back/, "a hand-back of a running job collects nothing");
   assert.equal(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt, null);
   assert.equal(await stop(ctx, companion(ctx, ["result", jobId, "--state-only"]).stdout), null);
   assert.doesNotMatch(companion(ctx, ["status", "--workflow", WORKFLOW]).stdout, /not handed back/);

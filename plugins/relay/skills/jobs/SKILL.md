@@ -13,6 +13,8 @@ Agent({ subagent_type: "relay:job", description: "<3-5 words>", prompt: "<header
 
 ## Relay or a T3 Code delegate
 
+Relay complements T3 Code and replaces none of its features. In a T3 thread, T3's own threads, delegates and task tracking come first; relay carries the jobs they cannot.
+
 In a T3 Code thread (the `t3-code` MCP server's tools are there, `delegate_task` among them), consider a T3 delegate first for a plain fan-out of independent agents: reviews, research, one-off fixes. T3 runs each child as a thread of its own, on any provider and model in its catalog with that model's options, tracks it with `task_status`, and wakes the lead when it ends. No Claude relay holds a slot or spends Claude usage while the child works.
 
 Use `relay:job` for:
@@ -50,8 +52,8 @@ cd: /abs/path/to/repo
 | `brief` | no | absolute path of the brief file; nothing follows the dashes | none |
 
 - A model named like another backend's (`glm-*`, `grok-*`, `kimi-code/*`) with no `backend:` is refused before launch, since the job would run on Codex. `backend: codex` sends it to Codex as written.
-- A `read-only` job writes no file anywhere: ask for the report as its final answer, not in a file. Kimi and ZCode in `read-only` have no shell at all; Codex and Grok run commands that cannot write.
-- In `mode: write`, a command that keeps its own state under `~` (a CLI's sign-in file, say) cannot write it there. Name that directory with `add-dir:`.
+- Ask a `read-only` job for its report as its final answer, not in a file it writes. Codex and Grok hold `read-only` with a sandbox: their commands run and cannot write. Kimi and ZCode have no sandbox: `read-only` takes their shell and write tools away, and what they start themselves (hooks, MCP servers, Kimi's own operations) can still write. See Kimi jobs and GLM jobs.
+- In Codex `mode: write`, a command that keeps its own state under `~` (a CLI's sign-in file, say) cannot write it there. Name that directory with `add-dir:`. Grok's `write` takes no `add-dir:`; such a job needs `mode: yolo`.
 - `yolo` is the default, so existing headers keep running as they did. `mode: write` with `network: true` covers web search, installs, commits and child processes on Codex and Grok, but not `ps` or writes outside the working directory. `yolo` ignores `network` and `add-dir` and the state block says so. The brief is then the only fence: name where the job may write.
 
 ## GLM jobs

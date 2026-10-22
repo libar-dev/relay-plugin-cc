@@ -9,28 +9,36 @@ import { connect } from "./connection.mjs";
 
 
 // Codex sends `turn/diff/updated` with the turn's whole diff so far after every change, and those
-// copies were most of a job directory's bytes. Only the last one of a turn is kept: it is written
-// before the turn's `turn/completed`, before another turn's diff, or when the worker ends.
+// copies were most of a job directory's bytes. Only the last one of each turn is kept, by thread
+// and turn, since a subagent's turns interleave with the parent's: it is written just before that
+// turn's own `turn/completed`, or when the worker ends.
 /** @type {import("../types").Backend["eventRecorder"]} */
 export function codexEventRecorder(write, touch) {
-  /** @type {any} */
-  let diff = null;
-  const writeDiff = () => {
-    if (diff) write(diff);
-    diff = null;
-  };
+  /** @type {Map<string, any>} */
+  const diffs = new Map();
+  const key = (threadId, turnId) => `${threadId ?? ""}\u0000${turnId ?? ""}`;
   return {
     record(notification) {
       touch();
+      const params = notification.params ?? {};
       if (notification.method === "turn/diff/updated") {
-        if (diff && diff.params?.turnId !== notification.params?.turnId) writeDiff();
-        diff = notification;
+        const id = key(params.threadId, params.turnId);
+        diffs.delete(id);
+        diffs.set(id, notification);
         return;
       }
-      if (notification.method === "turn/completed") writeDiff();
+      if (notification.method === "turn/completed") {
+        const id = key(params.threadId, params.turn?.id);
+        const diff = diffs.get(id);
+        if (diff) write(diff);
+        diffs.delete(id);
+      }
       write(notification);
     },
-    flush: writeDiff
+    flush() {
+      for (const diff of diffs.values()) write(diff);
+      diffs.clear();
+    }
   };
 }
 

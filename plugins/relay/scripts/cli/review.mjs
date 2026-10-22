@@ -11,6 +11,7 @@ import { loadPromptTemplate, interpolateTemplate } from "../lib/review/prompts.m
 import { createJobDir, generateJobId, jobPaths, nowIso, readJob, writeFileAtomic, writeJob } from "../lib/jobs/store.mjs";
 import { buildLaunchRequest, UsageError } from "../lib/jobs/request.mjs";
 import { newMessageId } from "../lib/jobs/messages.mjs";
+import { PLUGIN_VERSION } from "../lib/util/plugin.mjs";
 import { renderNativeReviewResult, renderReviewResult, reviewSchemaError } from "../lib/review/render.mjs";
 
 
@@ -36,7 +37,7 @@ function recordForegroundJob(cwd, kind, summary, request) {
     request,
     worker: { pid: process.pid, startTime: readProcessStartTime(process.pid), startedAt: nowIso() },
     sessionId: null,
-    attempts: [{ attempt: 1, source: kind, startedAt: nowIso(), state: "running" }]
+    attempts: [{ attempt: 1, source: kind, startedAt: nowIso(), relayVersion: PLUGIN_VERSION, state: "running" }]
   });
   const paths = jobPaths(jobDir);
   const tap = (notification) => {

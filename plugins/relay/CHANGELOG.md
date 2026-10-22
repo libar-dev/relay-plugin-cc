@@ -21,24 +21,26 @@ most of them run by Workflow scripts ([docs/thread-surveys.md](../../docs/thread
   so every T3 restart killed the workers it had started, and their jobs spent their one automatic
   resume on it. `RELAY_WORKER_SCOPE=off` turns the scope off.
 - Each hand-back is recorded in the job's `relay-handbacks.jsonl`. `status` marks a relay job that
-  ended with no hand-back of its result `not handed back` (only for attempts run by 2.2.0 or later), and `--json` gives `handedBackAt`, so a
+  ended with no hand-back of its result `not handed back` (only for attempts run by 2.2.0 or later; a relay let go while the job ran
+  collected nothing), and `--json` gives `handedBackAt`, so a
   sweep for jobs nobody collected reads the job instead of the relay's transcript.
 - `status --workflow <run>` lists every job one Workflow run started, in any repository.
 - A header that names a GLM, Grok or Kimi model (`glm-*`, `grok-*`, `kimi-code/*`) with no `backend:`
   is refused before launch with the backend to add. Such a job used to run on Codex and fail there.
 - A ZCode turn that fails on its sign-in (`project_token_login_failed`) says to run `zcode login`,
   then resume. Setup checks only that the credentials file exists.
-- The Codex event log keeps only each turn's last `turn/diff/updated`. Codex sends the whole diff so
+- The Codex event log keeps only each turn's last `turn/diff/updated`, by thread and turn. Codex sends the whole diff so
   far after every change, and those copies were 60% of a 2.1 GB jobs home.
 - The attempt a dead worker left open is closed as `dead` when the next attempt begins, and every
-  attempt records the plugin version that ran it (`relayVersion`).
+  attempt, a foreground review's included, records the plugin version that ran it (`relayVersion`).
 - The relay's instructions say that the brief is for the job, that the hooks' text is the plugin's
   and no prompt injection, and that the result is copied whole. Relays had read the brief's files,
   refused to start over a hook's message, and commented on `cancel`.
-- The jobs skill says what a `read-only` job cannot do on each backend, that `mode: write` needs
-  `add-dir:` for a CLI's own state under `~`, where Kimi's session record is, what a return without
+- The jobs skill says what a `read-only` job cannot do on each backend, that Codex `mode: write`
+  needs `add-dir:` for a CLI's own state under `~`, where Kimi's session record is, what a return without
   `state:` means in a workflow, that relays spend Claude usage while they wait, and that `C` in a
-  lead's own Bash is a function, not a variable.
+  lead's own Bash is a function, not a variable. In a T3 Code thread it points a plain fan-out of
+  agents to T3's delegates, which relay complements, and keeps a dynamic workflow's jobs on relay.
 
 ## 2.1.2 (2026-10-17)
 
