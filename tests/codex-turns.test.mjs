@@ -449,3 +449,18 @@ timerTest("default thread/read deadline is ten seconds", async t => {
   assert.equal(result.error.message, "thread/read: no reply in 10 s");
   assert.equal(result.finalMessage, "Candidate report");
 });
+
+test("the Codex event log keeps only a turn's last diff, before its turn/completed", async () => {
+  const { codexEventRecorder } = await import("../plugins/relay/scripts/lib/backends/codex/index.mjs");
+  const written = [];
+  let touched = 0;
+  const recorder = codexEventRecorder((n) => written.push(n), () => { touched += 1; });
+  const diff = (turnId, text) => ({ method: "turn/diff/updated", params: { threadId: "t", turnId, diff: text } });
+  for (const n of [diff("a", "1"), { method: "item/completed", params: { turnId: "a" } }, diff("a", "12"), diff("a", "123"), { method: "turn/completed", params: { turn: { id: "a" } } }, diff("b", "x"), diff("c", "y")]) recorder.record(n);
+  assert.deepEqual(written.map((n) => n.params.diff ?? n.method), ["item/completed", "123", "turn/completed", "x"]);
+  recorder.flush();
+  assert.deepEqual(written.at(-1).params.diff, "y", "the worker's end writes the last diff");
+  recorder.flush();
+  assert.equal(written.length, 5);
+  assert.equal(touched, 7, "every notification still advances the heartbeat");
+});

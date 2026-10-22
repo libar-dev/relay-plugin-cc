@@ -7,21 +7,18 @@
  * @typedef {import("../codex/protocol").ServerClientOptions} ServerClientOptions
  * @typedef {import("../codex/protocol").InitializeCapabilities} InitializeCapabilities
  */
-import { default as fs } from "node:fs";
 import { default as process } from "node:process";
 import { spawn } from "node:child_process";
 
 
-const PLUGIN_MANIFEST_URL = new URL("../../../../.claude-plugin/plugin.json", import.meta.url);
-
-const PLUGIN_MANIFEST = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_URL, "utf8"));
+import { PLUGIN_VERSION } from "../../util/plugin.mjs";
 
 
 /** @type {ClientInfo} */
 const DEFAULT_CLIENT_INFO = {
   title: "Relay Plugin",
   name: "Claude Code",
-  version: PLUGIN_MANIFEST.version ?? "0.0.0"
+  version: PLUGIN_VERSION
 };
 
 

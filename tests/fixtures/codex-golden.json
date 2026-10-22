@@ -183,12 +183,14 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 }
               ],
               "server": null,
               "undelivered": [],
-              "dropped": []
+              "dropped": [],
+              "handedBackAt": null
             }
           ]
         },
@@ -250,7 +252,8 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 },
                 {
                   "attempt": 2,
@@ -274,12 +277,14 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 }
               ],
               "server": null,
               "undelivered": [],
-              "dropped": []
+              "dropped": [],
+              "handedBackAt": null
             }
           ]
         },
@@ -341,7 +346,8 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 },
                 {
                   "attempt": 2,
@@ -365,7 +371,8 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 },
                 {
                   "attempt": 3,
@@ -389,12 +396,14 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 }
               ],
               "server": null,
               "undelivered": [],
-              "dropped": []
+              "dropped": [],
+              "handedBackAt": null
             }
           ]
         },
@@ -586,12 +595,14 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 }
               ],
               "server": null,
               "undelivered": [],
-              "dropped": []
+              "dropped": [],
+              "handedBackAt": null
             }
           ]
         },
@@ -653,7 +664,8 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 },
                 {
                   "attempt": 2,
@@ -677,12 +689,14 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 }
               ],
               "server": null,
               "undelivered": [],
-              "dropped": []
+              "dropped": [],
+              "handedBackAt": null
             }
           ]
         },
@@ -744,7 +758,8 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 },
                 {
                   "attempt": 2,
@@ -768,7 +783,8 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 },
                 {
                   "attempt": 3,
@@ -792,12 +808,14 @@
                     }
                   ],
                   "endedAt": "<time>",
-                  "hasReport": true
+                  "hasReport": true,
+                  "relayVersion": "<version>"
                 }
               ],
               "server": null,
               "undelivered": [],
-              "dropped": []
+              "dropped": [],
+              "handedBackAt": null
             }
           ]
         },
