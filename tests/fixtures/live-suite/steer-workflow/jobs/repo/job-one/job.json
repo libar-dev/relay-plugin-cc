@@ -1,0 +1,23 @@
+{
+  "id": "job-one",
+  "state": "completed",
+  "request": {
+    "backend": "codex",
+    "model": "gpt-6.1-sol"
+  },
+  "relay": {
+    "agentId": "relay-one",
+    "label": "steer-codex"
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "startedAt": "2026-10-22T10:00:10.000Z",
+      "endedAt": "2026-10-22T10:02:00.000Z",
+      "state": "completed",
+      "relayVersion": "3.0.0-test",
+      "turnId": "first-turn"
+    }
+  ],
+  "messages": []
+}

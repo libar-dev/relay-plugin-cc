@@ -47,3 +47,12 @@ jobs:
 
       - name: Run Mod tests
         run: claude plugin test plugins/relay
+
+      # The live suite's probe Mods load only in live runs, so CI holds them to the validator and
+      # their own tests.
+      - name: Validate and test the live suite's probes
+        run: |
+          for probe in scripts/live/probes/*/; do
+            claude plugin validate "$probe"
+            claude plugin test "$probe"
+          done

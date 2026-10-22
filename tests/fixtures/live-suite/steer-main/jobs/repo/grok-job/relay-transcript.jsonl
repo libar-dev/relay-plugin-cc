@@ -1,0 +1,1 @@
+{"type": "attachment", "uuid": "two", "attachment": {"type": "queued_command", "origin": {"kind": "coordinator"}, "prompt": "steer 1 for grok"}}

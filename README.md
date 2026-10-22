@@ -276,7 +276,7 @@ runs on command hooks and the transcript.
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.1. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.2. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
@@ -305,7 +305,7 @@ files under one `relay-test-run-*` directory in the temp directory, which `TMPDI
 removes it at exit once no test process runs from it. A directory whose run was killed by a signal
 is removed by the next run once its recorded owner is gone. `RELAY_TEST_KEEP_TMP=1 npm test` keeps
 the directory of a file that failed; no later run removes it, so delete it yourself. `npm run check`
-type-checks every script with TypeScript, without an installed Codex CLI.
+type-checks the plugin's scripts (`plugins/relay/scripts/`) with TypeScript, without an installed Codex CLI.
 
 A build is tried before a release in an independent Claude Code session on the test machine, while
 every other session there, the one that starts the test included, keeps the released plugin:
@@ -319,10 +319,15 @@ every other session there, the one that starts the test included, keeps the rele
 - `scripts/smoke/pane.sh` runs that session in tmux on a private socket, so an agent can start it,
   type prompts and read the screen (`start`, `send`, `read`, `wait`, `trust`, `stop`).
   `pane.sh attach-command <name>` prints the line to watch it.
-- `node scripts/live/steer-wake.mjs` starts a session with `--plugin-dir` and a fresh jobs home,
-  steers a running job on every backend three times, and checks that each message reaches the
-  job's `inbox/relay/` within 10 seconds. It keeps its records in the work directory's
-  `.live-steer/`.
+- `node scripts/live/suite.mjs` is the live suite: checks that drive a real Claude Code session
+  against the real backends, such as a steer from the main thread, a Workflow agent or a plugin,
+  and a continue after the hand-back (`list` names them). `run <check>` or `run all` runs them
+  in the terminal, each in a tmux pane with `--plugin-dir` and a fresh jobs home. In T3 Code,
+  `prepare` writes a check's prompt for a thread whose project has the build installed, and
+  `analyze` reads the thread's transcript afterwards. Each run writes one record per backend to
+  `docs/live/records/`, and `table` generates [docs/live/capabilities.md](docs/live/capabilities.md)
+  from them; `npm test` fails when the two disagree. A run's evidence (screen, transcripts, job
+  folders) stays in `~/.local/state/relay-plugin-cc/live/`.
 
 `claude plugin marketplace update` installs a new build only when the plugin's version goes up.
 Every release that changes the plugin bumps it with `node scripts/bump-version.mjs <version>`,

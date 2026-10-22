@@ -1,0 +1,2 @@
+{"type": "attachment", "uuid": "one", "attachment": {"type": "queued_command", "origin": {"kind": "coordinator"}, "prompt": "steer 1 for codex"}}
+{"type": "attachment", "uuid": "three", "attachment": {"type": "queued_command", "origin": {"kind": "coordinator"}, "prompt": "steer 2 for codex"}}

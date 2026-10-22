@@ -1,0 +1,5 @@
+{
+  "agentId": "agent-grok",
+  "jobDir": "repo/grok-job",
+  "transcriptPath": "repo/grok-job/relay-transcript.jsonl"
+}

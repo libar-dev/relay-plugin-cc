@@ -16,10 +16,10 @@ it: where the work goes, what each step must pass, and how the work was done in 
 ## Sequence
 
 1. **Phase 1, steer wake.** Done (PR #7).
-2. **Phase 5's suite runner.** It turns `scripts/live/steer-wake.mjs` into the first check of a suite: one
-   runner, one record per check (backend, model, relay version, Claude Code version, surface, timings, result),
-   the terminal and T3 as surfaces, and a capability table generated from the records. Every later phase adds its
-   checks to it.
+2. **Phase 5's suite runner** (PR #8, `mods/phase-5-suite`). `scripts/live/suite.mjs`: one runner, a registry of
+   checks, one record per check and backend in `docs/live/records/`, the terminal and T3 as surfaces, and the
+   capability table `docs/live/capabilities.md` generated from the records. Every later phase adds its checks to
+   `scripts/live/checks/`.
 3. **Phases 2 and 3**, as two PRs that can run at the same time: commands answered by the module, and the spawn
    check with TaskStop cancelling the job (D2). Both add hooks to `hooks/mod/register.js`; whichever merges second
    rebases.
@@ -35,7 +35,8 @@ it: where the work goes, what each step must pass, and how the work was done in 
   and the code, not the author's conclusions.
 - CodeRabbit and Greptile, followed with T3's `watch_pull_request`. A finding is answered on its thread when it
   is fixed or declined, then the thread is resolved.
-- The phase's own checks in the live suite, in the terminal and in T3, on the Fedora ThinkPad.
+- The phase's own checks in the live suite, in the terminal and in T3, on the Fedora ThinkPad, with their records
+  committed and `docs/live/capabilities.md` regenerated (`node scripts/live/suite.mjs table`).
 - The smoke kit (`relay-plugin-cc-smoke`) on the PR's head, installed with `scripts/smoke/install-local.sh`.
 - Its last commit updates plan.md: a review of every later phase in light of what the PR learned (the plan's
   rule 7), and the CHANGELOG and decisions.md entries.
@@ -59,9 +60,17 @@ What worked in Phase 1:
   if the lead dies). The Mod API's declarations come with the `plugin-authoring` skill; load it and copy its
   `types/claude-code.d.ts` and `reference.md` to a scratch folder for the workers. Never write under
   `~/.claude/dev-mods`.
-- Live checks run in a tmux pane on a private socket, with `--plugin-dir`, a fresh jobs home and the per-session
-  bypass setting: `node scripts/live/steer-wake.mjs --model sonnet` is the model. Probes for one-off cases
-  (another plugin's `$.session.send`, a Workflow agent's send) are small Mods loaded with a second `--plugin-dir`.
+- Live checks are the suite's. In the terminal, `node scripts/live/suite.mjs run all` (or `run <check>`, with
+  `--backends`) runs each check in a tmux pane on a private socket, with `--plugin-dir`, a fresh jobs home, the
+  per-session bypass setting and a Sonnet lead, and fails the run when `~/.claude/settings.json` changed. A check
+  that needs another plugin names a probe Mod from `scripts/live/probes/`, loaded with a second `--plugin-dir`;
+  such a check runs in the terminal only.
+- In T3, the lead installs the build into the smoke folder (`scripts/smoke/install-local.sh
+  ~/dev-libar/relay-plugin-cc-smoke`), runs `node scripts/live/suite.mjs prepare <check> --surface t3 --work-dir
+  ~/dev-libar/relay-plugin-cc-smoke`, and sends the printed prompt as the first message of a new thread of the T3
+  project `relay-plugin-cc-smoke` (`t3_thread_launch`, Sonnet). It follows the thread with `t3_thread_wait`,
+  sends a message if the thread stops before the check's marker, and then runs `node scripts/live/suite.mjs analyze
+  <run id>`, which finds the thread's transcript by the prompt's first line.
 - The release smoke test: `scripts/smoke/install-local.sh ~/dev-libar/relay-plugin-cc-smoke`, then
   `scripts/smoke/pane.sh start relay-smoke ~/dev-libar/relay-plugin-cc-smoke -- claude
   --dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}'`, then the kit's workflow
@@ -71,8 +80,9 @@ What worked in Phase 1:
 
 ## What Phase 1 learned about the tools
 
-- Claude Code (2.1.308) blocks a standalone `sleep` in Bash. A lead that has to wait uses a Monitor with an
-  until-loop; in T3 a Monitor does not start a new turn after the turn ended, so a T3 check is driven by messages.
+- Claude Code (2.1.308) blocks a standalone `sleep` in Bash. In T3 a Monitor does not start a new turn after the
+  turn ended, so the suite's prompts have the lead wait in foreground Bash until-loops and keep its turn until it
+  prints the marker; background agents' completion notices still arrive between its tool calls.
 - A folder Claude Code has not seen shows a trust dialog whose default is "No, exit": `pane.sh trust` answers it.
 - `pane.sh wait` matches each screen line; the prompt you sent is on the screen too, so wait for text only the
   answer holds.

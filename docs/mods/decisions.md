@@ -130,3 +130,101 @@ buttons send to `relay.agentId` from the job (`relay.json` after an adoption) an
 
 A Monitor the lead arms does not start a new turn in a T3 thread once the turn has ended. The Phase 1 T3 check
 stopped after its first round until a message continued it.
+
+### D19. The live suite's records are committed, its evidence stays on the test machine (Phase 5 thread)
+
+A record is one line per check, backend and surface, in `docs/live/records/<run id>.jsonl`: one file per run, so
+two phase PRs that both run the suite never edit the same file. A record names the check, backend, model, relay
+version, Claude Code version, surface, lead model, timings, result and its evidence folder, and holds no absolute
+path. The evidence (screen, transcripts, the jobs' folders) is copied out of `/tmp` into
+`${XDG_STATE_HOME:-~/.local/state}/relay-plugin-cc/live/runs/<run id>/`, so `analyze --from-copy` reproduces a
+run's records later. Committed records let anyone regenerate the capability table, and `npm test` holds the
+committed table to them. Rejected: records kept only on the machine (a public table would rest on files nobody
+else can read), and committed evidence (transcripts carry local paths and job data). A run that sent its prompt
+keeps its records, failures included; a run whose setup failed writes none.
+
+### D20. The capability table shows a cell only when its latest record passed (Phase 5 thread)
+
+Latest per check, surface and backend (by `finishedAt`, else `startedAt`, else the time in the run id); an older
+pass behind a newer failure is a dash. Kimi's
+steer cell says "as the next turn" because the steer checks require it: a send passes only when the job's outcome
+for the message is `steered` (into the running turn) on Codex, Grok and ZCode, and `turn-started` (a turn of its
+own) on Kimi, after the turn that was running at the send ended. The semantics the table states are measured,
+not written by hand.
+
+### D21. A probe Mod sends from a tool the model calls (Phase 5 thread)
+
+Phase 1's `/wake-probe` was a slash command: a person, or the driver, had to type it with an agent id known only
+once the run was under way. A tool (`mcp__wake-probe__send`) lets one prompt drive the check, as every other check
+is driven. Probes live in `scripts/live/probes/` and load with `--plugin-dir` only, never installed, so a check
+that needs one runs in the terminal only; a T3 thread loads only installed plugins. Reopen if a later phase needs
+a plugin's send proven in T3.
+
+### D22. A T3 run is prepared and analyzed by the runner and sent by the lead (Phase 5 thread)
+
+`suite.mjs prepare` writes the run and its prompt; the lead sends the prompt to a thread of the T3 project that has
+the build installed (`scripts/smoke/install-local.sh`), and `suite.mjs analyze` finds that thread's transcript by
+the prompt's first line, `Live suite run <run id>.` `prepare` reads the build's version from the smoke install's
+receipt, and a record fails when its job ran another relay version, so a thread that loaded the released plugin
+cannot pass. The prompt names the jobs home as `${RELAY_JOBS_HOME:-$HOME/.relay-jobs}`, since a T3 thread cannot
+be given an environment of its own; the terminal pane sets a fresh one.
+
+### D23. The suite replaces `steer-wake.mjs` and `analyze-steer.mjs` (Phase 5 thread)
+
+Their prompt and analyzer are the `steer-main` check; the plan's rule 4 leaves one way to run a live check.
+
+### D24. A record's Claude Code version is the transcript's (Phase 5 thread)
+
+T3 runs Claude Code through the Agent SDK, whose build can differ from `claude --version` on the same machine. The
+lead's transcript carries the version of the build that ran it, on both surfaces. The lead's model comes from the
+transcript too; a terminal run uses `--model sonnet` unless told otherwise, as Phase 1's runs did.
+
+### D25. A steer check allows 30 seconds from the send to the job's ledger (Phase 5 thread)
+
+Phase 1's analyzer allowed 10 s. In the first T3 run of the suite, Kimi's first steer took 10.25 s: the wake ended
+the relay's wait 0.86 s after the send, and the relay's own Haiku step then took 9.3 s before its next tool call,
+where the guard delivered the message. The limit was measuring Haiku's latency. A wait the wake missed runs its
+540 s bound, so 30 s still tells the two apart, and the table shows each measured range. A continue keeps 60 s:
+it first resumes a relay that has stopped. Reopen if the relay's model changes, or the ranges creep up.
+
+### D26. A delivery counts only for the sender and the run that made it (Phase 5 thread)
+
+Both reviewers of the suite (GPT-6.1 Sol and Opus 5.5) found the same two false passes. A steer from the probe or
+a Workflow agent could pass on a ledger record that another sender produced with the same text, and a check read
+its whole transcript, so an earlier run in the same thread could supply the sends and the marker. Now the analysis
+reads only the entries from the run's prompt to the next run's, and the Workflows launched in them. A ledger record
+names the relay's transcript entry that carried the message, and that entry's origin must be the sender's: the
+coordinator for the main thread, the coordinator with `plugin: wake-probe` for the probe, a peer `from` the
+Workflow agent's id. The probe's answer and the Workflow agent's `SendMessage` result must say it was delivered.
+How the backend took a message is checked against the attempts as well as the outcome: into the turn that was
+running at the send, or a later attempt that started after it ended, with Kimi's `queued-next-turn` on record. A
+continue reads the version and the report of the attempt it started, after a hand-back that came before the send.
+
+### D27. A terminal run is a plain terminal session (Phase 5 thread)
+
+Opus 5.5 found that the pane's Claude Code inherited the lead's session variables (`CLAUDECODE`,
+`CLAUDE_CODE_ENTRYPOINT=sdk-ts`, its session id, messaging socket and token), from the runner and from the tmux
+server's environment: every "terminal" transcript so far, Phase 1's included, recorded `entrypoint: sdk-ts`.
+`pane.sh start` now removes them for the command it starts, and a record fails unless the transcript's entrypoint
+is `cli` in the terminal and `sdk-ts` in T3. The terminal records committed with this phase come from clean
+sessions. Phase 1's terminal results stand as history; the suite reran their checks.
+
+### D28. A record names the build's commit (Phase 5 thread)
+
+Two builds can share a `3.0.0-dev.N` (a `--worktree` install, or two phase branches before one rebases). A record
+carries `relayCommit`, 12 hex characters with `-dirty` for uncommitted changes under `plugins/relay`; the smoke
+install's receipt records the commit it exported.
+
+### D29. The table's notes on how a backend took a message are generated from the records it shows (Phase 5 thread)
+
+The first table carried a fixed paragraph on each backend's semantics, printed even with every cell a dash, so D20's
+"measured, not written by hand" held for the cells only. The notes now list, for each way of taking a message, the
+backends whose shown records carry it, and nothing when no record passed.
+
+### D30. The suite answers the folder-trust dialog for the folders it creates (Phase 5 thread)
+
+Claude Code records the answer per folder in `~/.claude.json`, so each terminal run adds an entry for a `/tmp` work
+folder that is gone after the run. This is the one stored choice the tooling makes, as in Phase 1 (`pane.sh trust`),
+and only for a folder the runner created. A folder the caller names must already be a git work tree, which the
+runner never initializes, and already trusted: when Claude Code asks, the run stops. D13's rule holds for every other dialog. Reopen if Claude Code gets a per-session
+trust flag.

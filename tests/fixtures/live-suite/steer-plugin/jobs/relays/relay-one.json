@@ -1,0 +1,5 @@
+{
+  "agentId": "relay-one",
+  "jobDir": "repo/job-one",
+  "transcriptPath": "repo/job-one/relay-transcript.jsonl"
+}

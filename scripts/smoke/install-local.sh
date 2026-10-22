@@ -93,11 +93,11 @@ if [[ $worktree == true ]]; then
 else
   git -C "$repo" archive "$sha" plugins/relay | tar -C "$mkt/relay" --strip-components=2 -xf -
 fi
-node - "$mkt" "$dir" "$temp_dir" <<'NODE'
+node - "$mkt" "$dir" "$temp_dir" "$sha" "$worktree" <<'NODE'
 // A refusal is one line for the person, not a stack trace.
 process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path');
-const [mkt, dir, tempDirectory] = process.argv.slice(2);
+const [mkt, dir, tempDirectory, commit, worktree] = process.argv.slice(2);
 const plugin = JSON.parse(fs.readFileSync(path.join(mkt, 'relay/.claude-plugin/plugin.json'), 'utf8'));
 if (plugin.name !== 'relay' || !plugin.version) throw new Error('Export is not a versioned relay plugin.');
 fs.writeFileSync(path.join(mkt, '.claude-plugin/marketplace.json'), JSON.stringify({
@@ -114,7 +114,7 @@ fs.chmodSync(path.dirname(receipt), 0o700);
 fs.writeFileSync(receipt, JSON.stringify({
   tool: 'relay-plugin-cc/scripts/smoke/install-local.sh',
   dir, tempDirectory, config: process.env.RELAY_SMOKE_CONFIG,
-  marketplace: mkt, createdMarketplace: true,
+  marketplace: mkt, createdMarketplace: true, commit, worktree: worktree === 'true',
   cacheExisted: fs.existsSync(path.join(process.env.RELAY_SMOKE_CONFIG, 'plugins/cache/relay-smoke')),
   createdCache: false,
   createdSettingsFile: !fs.existsSync(file), createdClaudeDirectory,
