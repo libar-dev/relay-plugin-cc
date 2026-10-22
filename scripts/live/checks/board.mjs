@@ -186,10 +186,17 @@ export default {
       await waitIdle();
       // Recovery shares the focus deadline: a new turn must not restart the bound.
       const until = now() + 15000;
+      let blind = 0;
       await waitFor(`focus on ${wanted}`, async () => {
         const inverse = focusedText(await waitIdle(until));
         if (wanted instanceof RegExp ? wanted.test(inverse) : inverse.includes(wanted)) return true;
-        if (!inverse) {
+        // ctrl+x Tab gives the pane the keys with its ring on nothing, and Tab walks the ring from there.
+        // Asked again while the pane holds the keys, it hands them back, so it is asked once, and again
+        // only after polls that showed no ring. Esc goes first: a ctrl+x right after a typed command is lost.
+        if (inverse) blind = 0;
+        else if (blind++ % 6 === 0) {
+          bytes('1b');
+          await sleep(100);
           bytes('18');
           await sleep(100);
           await waitIdle(until);
@@ -309,6 +316,10 @@ export default {
         saved.narrow = { sessionId: run.sessionId, transcript: run.transcript, debugLog: run.debugLog, startupEvidence: run.startupEvidence };
         await open('narrow', jobs); await select(jobs[0], true);
         saved.selectedJob = jobs[0].job.id; capture('narrow-detail');
+      } catch (error) {
+        // The narrow pane stops below, before the outer handler saves a screen.
+        try { capture('narrow-failure'); } catch { /* Keep the original failure if the pane is gone. */ }
+        throw error;
       } finally {
         try { drive(['stop', run.pane]); }
         finally { Object.assign(run, wide); }

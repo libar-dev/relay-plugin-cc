@@ -3053,7 +3053,7 @@ function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, out
   fs.mkdirSync(workDir); fs.mkdirSync(jobsHome);
   const check = getCheck('board'), calls = [], run = { runId: 'synthetic-run', sessionId: 'board-session', completed: false };
   let time = Date.parse('2026-10-22T10:00:10Z'), selected, focus = -1, confirm = false, count = 0, handled = 0, command = '';
-  let busyUntil = 0, paneFocused = false, prefix = false, stolen = 0;
+  let busyUntil = 0, paneFocused = false, prefix = false, stolen = 0, typed = false;
   const pendingOutcomes = [], presses = [];
   const idleScreen = fs.readFileSync(path.join(fixture, 'board/lead-idle.txt'), 'utf8');
   const runningScreen = fs.readFileSync(path.join(fixture, 'board/lead-running.txt'), 'utf8');
@@ -3150,17 +3150,21 @@ function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, out
         assert.equal(paneFocused, true, 'clear must go to the board');
         assert.equal(elements()[focus], field());
       }
-      if (['18', '09'].includes(byte)) assert.equal(count, 2, 'wide session must never acquire keyboard focus');
-      if (byte === '18') prefix = true;
+      if (['18', '09', '1b'].includes(byte)) assert.equal(count, 2, 'wide session must never acquire keyboard focus');
+      // As Claude Code 2.1.308 does: Esc returns the keys to the prompt and clears what a typed command left,
+      // which swallows a ctrl+x until then; ctrl+x Tab gives the pane the keys with the ring on nothing, or
+      // hands them back while it holds them; Tab walks the ring.
+      if (byte === '1b') { paneFocused = false; focus = -1; typed = false; }
+      if (byte === '18' && !typed) prefix = true;
       if (byte === '09') {
         if (stealFocus && (stolen === 0 || stealFocus === 'always')) {
           stolen++; paneFocused = false; prefix = false; focus = -1; busyUntil = time + 1000; return '';
         }
-        if (prefix) { paneFocused = true; prefix = false; }
-        if (paneFocused) focus = (focus + 1) % elements().length;
+        if (prefix) { paneFocused = !paneFocused; prefix = false; focus = -1; }
+        else if (paneFocused) focus = (focus + 1) % elements().length;
       }
       if (byte !== '0d') continue;
-      if (command === '/relay-board') { command = 'opened'; continue; }
+      if (command === '/relay-board') { command = 'opened'; typed = count === 2; continue; }
       if (count === 1) assert.equal(elements()[focus], field(), 'only field submission uses wide Enter');
       press();
     }
@@ -3248,8 +3252,11 @@ test('board narrow session reacquires focus after a lost Tab', async t => {
   assert.equal(ctx.run.completed, true);
   const index = calls.findIndex(call => call.args[0] === 'bytes' && call.args[2] === '09');
   const nextKeys = calls.slice(index + 1).filter(call => call.args[0] === 'bytes');
-  assert.deepEqual(nextKeys.slice(0, 2).map(call => call.args.slice(2)), [['18'], ['09']]);
-  assert.ok(nextKeys[0].at >= calls[index].at + 1000);
+  // The lost Tab took the keys with it: the next ctrl+x Tab comes after the lead is idle again, once.
+  const retake = nextKeys.findIndex(call => call.args[2] === '1b');
+  assert.deepEqual(nextKeys.slice(retake, retake + 3).map(call => call.args.slice(2)), [['1b'], ['18'], ['09']]);
+  assert.ok(nextKeys[retake].at >= calls[index].at + 1000);
+  assert.equal(nextKeys.filter(call => call.args[2] === '18').length, 1);
 });
 
 test('board narrow session bounds repeated focus loss without restarting the deadline', async t => {
