@@ -7,7 +7,7 @@ Usage: pane.sh start NAME DIR [--env VAR=value]... -- command [args...]
        pane.sh send NAME TEXT             TEXT - reads stdin
        pane.sh keys NAME KEY...
        pane.sh read NAME [LINES]          Default: 200 lines of scrollback
-       pane.sh wait NAME REGEX [SECONDS]  Default: 30 seconds
+       pane.sh wait NAME REGEX [SECONDS]  An extended regex matched against each screen line. Default: 30 seconds
        pane.sh trust NAME
        pane.sh attach-command NAME
        pane.sh stop NAME
@@ -51,7 +51,7 @@ case "$action" in
   wait)
     [[ $# -ge 1 && $# -le 2 && ${2:-30} =~ ^[0-9]+$ ]] || die 'Usage: pane.sh wait NAME REGEX [SECONDS]'
     regex=$1
-    if [[ '' =~ $regex ]]; then :; else [[ $? != 2 ]] || die 'Invalid regular expression.'; fi ;;
+    grep -Eq -- "$regex" <<<'' || [[ $? != 2 ]] || die 'Invalid regular expression.' ;;
   trust|attach-command|stop) [[ $# == 0 ]] || die "Usage: pane.sh $action NAME" ;;
 esac
 
@@ -89,7 +89,8 @@ case "$action" in
     deadline=$((SECONDS + ${2:-30}))
     while :; do
       screen=$(tmux -S "$SOCK" capture-pane -p -J -t "$target" -S -2000)
-      if [[ "$screen" =~ $regex ]]; then printf '%s\n' "$screen"; exit 0; fi
+      # Line by line, so ^ and $ anchor to a line of the screen, not to the whole capture.
+      if grep -Eq -- "$regex" <<<"$screen"; then printf '%s\n' "$screen"; exit 0; fi
       (( SECONDS < deadline )) || { printf 'Timed out waiting for %s in %s\n' "$regex" "$name" >&2; exit 1; }
       sleep 0.5
     done ;;
