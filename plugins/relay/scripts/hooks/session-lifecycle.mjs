@@ -3,8 +3,6 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { TRANSCRIPT_PATH_ENV } from "../lib/harness/session-path.mjs";
-
 const SESSION_ID_ENV = "RELAY_COMPANION_SESSION_ID";
 
 function readHookInput() {
@@ -43,7 +41,6 @@ function exportOnce(name, value) {
 
 function handleSessionStart(input) {
   exportOnce(SESSION_ID_ENV, input.session_id);
-  exportOnce(TRANSCRIPT_PATH_ENV, input.transcript_path);
 }
 
 async function main() {

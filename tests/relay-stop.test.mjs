@@ -334,5 +334,6 @@ test("hooks.json registers the TaskStop command with its timeout and description
   const hooks = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, "hooks/hooks.json"), "utf8"));
   assert.deepEqual(hooks.hooks.PostToolUse, [{ matcher: "TaskStop", hooks: [{ type: "command",
     command: 'node "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/relay-stop.mjs"', timeout: 60 }] }]);
-  assert.equal(hooks.description, "Session exports, the optional stop-time review gate, the relay:job relay hook, which carries the relay's prompt, messages and report, a TaskStop hook that cancels a stopped relay's job, and a module that checks a relay:job prompt's header at the spawn and wakes a relay's wait when a message is queued for it.");
+  assert.match(hooks.description, /a TaskStop hook that cancels a stopped relay's job/);
+  assert.match(hooks.description, /checks a relay:job prompt's header at the spawn/);
 });

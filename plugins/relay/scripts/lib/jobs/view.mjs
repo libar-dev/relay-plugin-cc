@@ -326,25 +326,31 @@ export function renderJobList(views, options = {}) {
   if (views.length === 0) {
     return `No jobs${options.scope ? ` ${options.scope}` : ""}.\n`;
   }
-  const lines = [`jobs: ${views.length}`];
-  for (const view of views) {
+  const header = ["job", "state", "kind", "backend", "model/effort", "duration", "summary", "relay"];
+  const rows = views.map((view) => {
     const request = view.job.request ?? {};
+    const backend = backendFor(request);
     const end = isTerminalView(view) ? view.job.completedAt ?? view.job.updatedAt ?? null : null;
-    const parts = [
+    return [
       view.job.id,
       view.state + (view.stalled ? " (stalled)" : ""),
       view.job.kind ?? "task",
+      [backend.name, ...backend.view.lines(request)].join(", "),
       `${request.model ?? "default"}/${request.effort ?? "default"}`,
-      ...backendLines(request),
       formatDuration(view.job.createdAt, end) ?? "?",
       summarizeJob(view),
-      ...relayListPart(view.job.relay),
-      ...(notHandedBack(view) ? ["not handed back"] : []),
-      ...(view.job.automaticResumes?.length ? [`automatic-resumes: ${view.job.automaticResumes.length}`] : [])
+      [
+        ...relayListPart(view.job.relay),
+        ...(notHandedBack(view) ? ["not handed back"] : []),
+        ...(view.job.automaticResumes?.length ? [`automatic-resumes: ${view.job.automaticResumes.length}`] : [])
+      ].join(", ")
     ];
-    lines.push(parts.join("  "));
-  }
-  return `${lines.join("\n")}\n`;
+  }).map((row) => row.map((cell) => String(cell).replace(/\s+/g, " ").trim().replaceAll("\\", "\\\\").replaceAll("|", "\\|")));
+  // A loop, not a spread: `--all` can list more jobs than a call takes arguments.
+  const widths = header.map((cell, index) => rows.reduce((widest, row) => Math.max(widest, Array.from(row[index]).length), Array.from(cell).length));
+  const renderRow = (row) => `| ${row.map((cell, index) => cell + " ".repeat(widths[index] - Array.from(cell).length)).join(" | ")} |`;
+  const separator = `|${widths.map((width) => "-".repeat(width + 2)).join("|")}|`;
+  return `jobs: ${views.length}\n\n${[renderRow(header), separator, ...rows.map(renderRow)].join("\n")}\n`;
 }
 
 export function jobViewJson(view) {

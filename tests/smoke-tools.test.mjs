@@ -75,6 +75,7 @@ test('worktree export excludes generated types and keeps local settings on clean
   assert.equal(marker.worktree, true);
   assert.equal(marker.commit, spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim());
   const exported = path.join(marker.marketplace, 'relay');
+  assert.deepEqual(readJson(path.join(exported, '.claude-plugin/build.json')), { commit: marker.commit.slice(0, 12) + '-dirty' });
   assert.equal(fs.existsSync(path.join(exported, '.claude-plugin/types')), false);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(exported, '.claude-plugin/plugin.json'), 'utf8')),
     JSON.parse(fs.readFileSync(path.join(root, 'plugins/relay/.claude-plugin/plugin.json'), 'utf8')));
@@ -772,6 +773,7 @@ test('archive install receipt identifies the full exported commit and worktree f
   const saved = readJson(receiptPath(work, env));
   assert.equal(saved.commit, commit);
   assert.equal(saved.worktree, false);
+  assert.deepEqual(readJson(path.join(saved.marketplace, 'relay/.claude-plugin/build.json')), { commit: commit.slice(0, 12) });
   assert.equal(smokeScript('uninstall', work, env).status, 0);
 });
 

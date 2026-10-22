@@ -32,7 +32,7 @@ chosen). The stop-time review gate and transfer run on Codex.
 
 Requirements:
 
-- Claude Code 2.1.307 or later: the plugin's hooks module needs its `session.send` and `agent.spawn`
+- Claude Code 2.1.307 or later: the plugin's hooks module needs its `session.send`, `agent.spawn` and `command.run`
   events, and the relay hooks need `SubagentHandback`.
 - Node.js 22 or later.
 - macOS or Linux. The process sweep reads the process table with `ps`.
@@ -187,16 +187,23 @@ message: a message sent while it runs becomes the next turn.
 | `/relay:adversarial-review [focus]` | a review that questions the approach and its assumptions; its answer must be review JSON |
 | `/relay:transfer [--source <jsonl>]` | import the current Claude Code session into a Codex session you resume with `codex resume <id>` |
 
-Claude can run every command but `/relay:cancel` and `/relay:transfer` itself when you ask for one
-in plain words, for example "review my changes on Kimi". Those two run only when you type them;
-Claude cancels a job by sending its agent the message `cancel`. A review Claude starts never stops
-to ask you anything: without `--wait` or `--background` it runs in the foreground.
+The plugin's hooks module answers `/relay:status`, `/relay:result`, `/relay:cancel` and
+`/relay:transfer` itself: it runs the companion and shows its output, with no model turn and no
+tokens spent. The answer starts with the command as you typed it, then the companion's lines in a
+code block, as it prints them, then a job's report as Markdown, or the job list as a table.
+`claude -p "/relay:result <job>"` exits with the companion's exit code (0 completed, 3 ended
+without a report, 4 running, 5 cancelled), with `--output-format text` or `json`; under
+`stream-json` Claude Code exits 0. These four run only when you type them. When you ask
+in plain words, Claude reads jobs with the companion in Bash, which a session in `default`
+permission mode asks you about, and cancels a job by sending its agent the message `cancel`.
 
+Claude can run `/relay:setup`, `/relay:rescue`, `/relay:review` and `/relay:adversarial-review`
+itself when you ask for one in plain words, for example "review my changes on Kimi". A review Claude
+starts never stops to ask you anything: without `--wait` or `--background` it runs in the foreground.
 Claude Code treats each of these runs as a Skill call. A session in `default` permission mode asks
-you before Claude runs one, and `claude -p` refuses the call unless it is allowed. To run the four
-that only read without a prompt, allow `Skill(relay:review)`, `Skill(relay:adversarial-review)`,
-`Skill(relay:status)` and `Skill(relay:result)`, in `permissions.allow` or with
-`claude -p --allowedTools`.
+you before Claude runs one, and `claude -p` refuses the call unless it is allowed. To run the two
+reviews without a prompt, allow `Skill(relay:review)` and `Skill(relay:adversarial-review)`, in
+`permissions.allow` or with `claude -p --allowedTools`.
 
 Every job has its own directory under `$RELAY_JOBS_HOME` (default `~/.relay-jobs`), its own
 worker and its own server process. Jobs belong to no Claude session and survive its end. The skill's
@@ -255,8 +262,8 @@ Your Codex sign-in, API key and provider configuration apply as they do in the C
 
 The relay reads two things Claude Code does not publish as an interface: the agent transcript and
 the Workflow tool's run journal. Its markers were read from Claude Code 2.1.287 and 2.1.288, and its
-hooks need `SubagentHandback`. Its hooks module needs the `session.send` and `agent.spawn` events of the Mod API, so the
-floor is Claude Code 2.1.307. A Claude Code update can break it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json`
+hooks need `SubagentHandback`. Its hooks module needs the `session.send`, `agent.spawn` and `command.run` events of
+the Mod API, so the floor is Claude Code 2.1.307. A Claude Code update can break it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json`
 must hold the call's key as `relay.journalKey` (once another relay has adopted the job, its
 `relay.json` holds the binding), and the script must get the state block back. Repeat this check
 after a Claude Code update. It was last run in full on Claude Code 2.1.302, on Fedora, for the 2.1.0
@@ -270,11 +277,12 @@ The hooks are PreToolUse on `Bash`, `Write`, `SubagentHandback` and `StructuredO
 SubagentStop on `relay:job`, PostToolUse on `TaskStop`, SessionStart and Stop. Claude Code gives
 subagents the `SubagentHandback` tool only in auto mode. In other modes, the SubagentStop hook checks
 the relay's final text against the job's result instead. The PostToolUse hook cancels the job of a
-relay that `TaskStop` stopped. The hooks module (`hooks/mod/register.js`) adds two hooks: on
-`agent.spawn`, it checks a `relay:job` prompt's header and refuses the spawn with the parser's
-message when the header is bad; on `session.send`, when a message is sent to a relay, it ends the
-relay's current wait, and the guard delivers the message at the relay's next call. The module only
-checks headers and wakes a waiting relay: delivery runs on command hooks and the transcript.
+relay that `TaskStop` stopped. The hooks module (`hooks/mod/register.js`) adds an `agent.spawn` hook,
+which checks a `relay:job` prompt's header and refuses the spawn with the parser's message when the
+header is bad, and a `session.send` hook: when a message is sent to a relay, it ends the relay's
+current wait, and the guard delivers the message at the relay's next call. The module only checks
+headers and wakes a waiting relay: delivery runs on command hooks and the transcript. Its
+`command.run` hooks answer `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer`.
 
 ## Development
 

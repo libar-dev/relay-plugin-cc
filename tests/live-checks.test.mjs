@@ -1,12 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeCheck, BACKENDS, BACKEND_NAMES, MODELS, STEER_DELIVERY, JOBS_HOME_EXPR,
   readTranscript, transcriptCalls, runSpan, hasMarker, claudeCodeVersionOf, leadModelOf,
   formatSeconds, readJob, scopeToRun, promptText, runLine } from '../scripts/live/lib/evidence.mjs';
 import { checks, getCheck } from '../scripts/live/checks/index.mjs';
+import { commandRuns, moduleText, statusRows, noModelReply } from '../scripts/live/lib/evidence.mjs';
+import * as evidenceReaders from '../scripts/live/lib/evidence.mjs';
+import { analyzeRun } from '../scripts/live/lib/runs.mjs';
+import { setupJobs, requireCommand, requireBuild } from '../scripts/live/checks/commands.mjs';
+import { headlessCommands, runHeadless, executeHeadless } from '../scripts/live/checks/headless.mjs';
 import { workflowScript } from '../scripts/live/checks/steer-workflow.mjs';
 import { agentCalls, waitLoop } from '../scripts/live/checks/steer-main.mjs';
 import { badPrompts, goodPrompt, workflowScript as spawnScript, checkHeader, expectedMessage } from '../scripts/live/checks/spawn-check.mjs';
@@ -543,13 +549,14 @@ test('formatSeconds uses one decimal and an en dash for a range', () => {
   assert.equal(formatSeconds([2.94]), '2.9 s');
   assert.equal(formatSeconds([4, 1.5, 2]), '1.5–4.0 s');
   assert.equal(formatSeconds([2, 2]), '2.0 s');
+  assert.equal(formatSeconds([0.11, 0.14]), '0.1 s');
   assert.equal(formatSeconds([]), '—');
 });
 
-test('registry has seven unique ordered checks, the complete interface and terminal-only probes', () => {
-  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'stop', 'session-end', 'spawn-check']);
-  assert.equal(new Set(checks.map(check => check.id)).size, 7);
-  for (const check of checks) {
+test('registry keeps the prompt checks\' interface, with the command checks between continue and stop', () => {
+  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless', 'stop', 'session-end', 'spawn-check']);
+  assert.equal(new Set(checks.map(check => check.id)).size, 10);
+  for (const check of checks.filter(check => !['commands', 'transfer', 'headless'].includes(check.id))) {
     assert.match(check.id, /^[a-z0-9-]+$/);
     assert.equal(typeof check.title, 'string');
     assert.ok(check.title.length > 0);
@@ -1925,3 +1932,652 @@ test('session-end runTerminal reports Interrupted when a signalled process read 
   assert.equal(ctx.run.interrupted, true);
   assert.deepEqual(signals.map(signal => process.listeners(signal)), listeners);
 });
+
+function commandSource(shape) {
+  return readTranscript(path.join(fixture, 'commands', `${shape === 'terminal' ? 'terminal-commands' : shape + '-status'}-transcript.jsonl`));
+}
+
+function moduleAnswer(stdout, report = null, command = '/relay:status') {
+  const lines = stdout.split('\n'), split = lines.findIndex(line => line === '---' || line.startsWith('|'));
+  const verbatim = (split < 0 ? stdout : lines.slice(0, split).join('\n')).replace(/(?:\n[ \t]*)+$/, '') + '\n';
+  const tail = split < 0 ? (report === null ? '' : '---\n' + report) : lines.slice(split).join('\n');
+  const longest = Math.max(2, ...(verbatim.match(/`+/g) ?? []).map(value => value.length));
+  const fence = '`'.repeat(longest + 1);
+  return `relay: ${command}\n${fence}text\n${verbatim}${fence}\n${tail}`;
+}
+
+function commandEntries(shape, text, answer, index = 0) {
+  const source = structuredClone(commandSource(shape).filter(entry => ['queue-operation', 'user', 'system'].includes(entry.type)).slice(0, shape === 'terminal' ? 2 : 5));
+  const command = text.slice(1).split(' ')[0], args = ''; // Measured plugin-answered inputs lose their arguments.
+  const stamp = seconds => new Date(Date.parse('2026-10-22T12:00:00Z') + (index * 10 + seconds) * 1000).toISOString();
+  for (const entry of source) {
+    entry.timestamp = stamp(entry.type === 'queue-operation' ? 0 : 2);
+    if (entry.type === 'queue-operation') continue;
+    entry.entrypoint = shape === 'terminal' ? 'cli' : shape === 'p' ? 'sdk-cli' : 'sdk-ts';
+    if (entry.commandRun) {
+      entry.commandRun = { command, args, plugin: 'relay' };
+      entry.content = `<local-command-stdout>${answer}</local-command-stdout>`;
+    } else {
+      const holder = entry.type === 'user' ? entry.message : entry;
+      if (holder.content.startsWith('<command-name>')) holder.content = `<command-name>/${command}</command-name>\n            <command-message>${command}</command-message>\n            <command-args>${args}</command-args>`;
+    }
+  }
+  return source;
+}
+
+function statusText(backends, state = 'running') {
+  const header = '| job | state | kind | backend | model/effort | duration | summary | relay |\n|---|---|---|---|---|---|---|---|\n';
+  return `relay-version: 3.0.0-test\njobs: ${backends.length * 2 + 2}\n\n` + header + backends.flatMap(backend => [
+    `| done-${backend} | completed | task | ${backend} | ${MODELS[backend]}/low | 2s | done | |`,
+    `| running-${backend} | ${state} | task | ${backend} | ${MODELS[backend]}/low | ? | sleep | |`
+  ]).join('\n') + '\n' +
+    `| decoy-done | completed | task | ${backends[0]} | ${MODELS[backends[0]]}/low | 1s | decoy | |\n` +
+    `| decoy-running | running | task | ${backends[0]} | ${MODELS[backends[0]]}/low | ? | sleep | |\n`;
+}
+
+function commandsFixture(t, name = 'commands', surface = 'terminal', backends = ['codex']) {
+  const dir = temp(t), check = getCheck(name), runId = `20261022T120000Z-${name}-${surface}-abcd`;
+  const run = { runId, check: name, surface, backends, relayVersion: '3.0.0-test', relayCommit: '0123456789ab', preparedAt: '2026-10-22T11:59:00Z',
+    pluginDir: path.join(dir, 'build'), workDir: path.join(dir, 'work'), jobsHome: path.join(dir, 'jobs'), setup: { jobs: {}, decoys: {} } };
+  fs.mkdirSync(run.jobsHome, { recursive: true });
+  if (name !== 'transfer') for (const backend of backends) {
+    run.setup.jobs[backend] = {};
+    for (const kind of name === 'commands' ? ['done', 'running'] : ['done']) {
+      const id = `${kind}-${backend}`, jobDir = `repo/${id}`;
+      run.setup.jobs[backend][kind] = { id, jobDir };
+      write(path.join(run.jobsHome, jobDir, 'job.json'), { id, state: kind === 'done' ? 'completed' : 'cancelled',
+        request: { backend, model: MODELS[backend] }, attempts: [{ attempt: 1, relayVersion: run.relayVersion }] });
+      fs.writeFileSync(path.join(run.jobsHome, jobDir, 'report.md'), `# Done\ndone for ${backend}.\n`);
+    }
+  }
+  if (name !== 'transfer') for (const kind of ['done', 'running']) {
+    const id = `decoy-${kind}`, jobDir = `repo/${id}`;
+    run.setup.decoys[kind] = { id, jobDir };
+    write(path.join(run.jobsHome, jobDir, 'job.json'), { id, state: kind === 'done' ? 'completed' : 'running',
+      request: { backend: backends[0], model: MODELS[backends[0]] }, attempts: [{ relayVersion: run.relayVersion }] });
+  }
+  const plan = name === 'headless' ? headlessCommands(run) : check.commands(run);
+  const answer = (command, index) => {
+    if (command.text === '/relay:transfer') return moduleAnswer('Codex session ID: abc-123\nResume in Codex: codex resume abc-123\n', null, command.text);
+    if (command.text === '/relay:status') return moduleAnswer(statusText(backends, index === 0 ? 'running' : 'cancelled')
+      .replace('relay-version: 3.0.0-test', `relay-version: 3.0.0-test${surface === 't3' ? ` (${run.relayCommit})` : ''}`));
+    if (command.text.startsWith('/relay:cancel')) return moduleAnswer(`state: cancelled\njob: running-${command.backend}\n`, null, command.text);
+    if (command.running) return moduleAnswer(`state: running\njob: ${run.setup.decoys.running.id}\n`, null, command.text);
+    return moduleAnswer(`state: completed\njob: done-${command.backend}\n`, `# Done\ndone for ${command.backend}.\n`, command.text);
+  };
+  if (name === 'headless') {
+    run.headless = plan.map((command, index) => {
+      const transcript = path.join(dir, `session-${index}.jsonl`), stream = path.join(dir, `stream-${index}.jsonl`);
+      const rows = commandEntries('p', command.text, answer(command, index), index);
+      const sessionId = rows.find(entry => entry.sessionId).sessionId;
+      lines(transcript, rows);
+      const events = readTranscript(path.join(fixture, 'commands/p-status-stream.jsonl'));
+      events.find(event => event.type === 'assistant').message.content[0].text = answer(command, index);
+      events.find(event => event.subtype === 'init').plugins = [{ name: 'relay', path: run.pluginDir }];
+      const result = events.find(event => event.type === 'result');
+      Object.assign(result, { result: answer(command, index), session_id: sessionId, duration_ms: 250 + 100 * index });
+      lines(stream, events);
+      return { ...command, sessionId, transcript, stream, exitCode: command.running ? 4 : 0, finished: true };
+    });
+    run.transcript = run.headless[0].transcript;
+  } else {
+    const rows = [textEntry('user', `Live suite run ${runId}.`, '2026-10-22T11:59:00Z', { entrypoint: surface === 't3' ? 'sdk-ts' : 'cli', version: '2.1.308' }),
+      textEntry('assistant', check.marker, '2026-10-22T11:59:02Z', { message: { model: 'sonnet', content: [{ type: 'text', text: check.marker }] } })];
+    plan.forEach((command, index) => rows.push(...commandEntries(surface === 't3' ? 't3' : 'terminal', command.text, answer(command, index), index)));
+    run.transcript = path.join(dir, 'transcript.jsonl');
+    lines(run.transcript, rows);
+    if (surface === 'terminal') run.commands = plan.map((command, index) => ({ text: command.text,
+      sentAt: new Date(Date.parse('2026-10-22T12:00:00Z') + index * 10000).toISOString() }));
+  }
+  const env = { CODEX_HOME: path.join(dir, 'codex') };
+  if (name === 'transfer') write(path.join(env.CODEX_HOME, 'external_agent_session_imports.json'), { records: [
+    { imported_thread_id: 'abc-123', source_path: fs.realpathSync(run.transcript), imported_at: Date.parse('2026-10-22T12:00:11Z') / 1000 }
+  ] });
+  return { dir, run, check, env, input: { ...run, run, evidenceDir: dir, env } };
+}
+
+for (const shape of ['terminal', 't3', 'p']) {
+  test(`command readers invert the measured ${shape} transcript shape`, () => {
+    const entries = commandSource(shape), rows = commandRuns(entries);
+    assert.equal(rows.length, 1, 'the model Skill call is not a slash command');
+    const row = rows[0];
+    assert.equal(row.command, 'relay:status');
+    assert.equal(row.args, '');
+    assert.equal(row.plugin, 'relay');
+    assert.equal(row.noModelReply, true);
+    assert.equal(noModelReply(entries, row), true);
+    assert.equal(row.answeredAt, row.answer.timestamp);
+    assert.equal(row.startedAt, shape === 'terminal' ? null : entries[0].timestamp);
+    assert.equal(row.seconds, shape === 'terminal' ? null : shape === 't3' ? 0.14 : 0.816);
+    assert.deepEqual(statusRows(moduleText(row.text).table).map(row => [row.job, row.state]),
+      [['done-codex', 'completed'], ['running-codex', 'running']]);
+    assert.equal(moduleText(row.text).report, null);
+    assert.equal(row.input.type, shape === 'terminal' ? 'system' : 'user');
+    if (shape === 'terminal') assert.ok(entries.some(entry => entry.message?.content?.some?.(block => block.name === 'Skill')));
+  });
+}
+
+test('moduleText inverts contract examples, preserves reports and rejects prose and error text', () => {
+  for (const prefix of ['', 'relay: ']) {
+    assert.deepEqual(moduleText(prefix + '/relay:result j-1\n```text\nstate: completed\njob: j-1\n```\n---\n# Done\n'),
+      { command: '/relay:result j-1', table: null, verbatim: 'state: completed\njob: j-1\n', report: '# Done\n' });
+    assert.deepEqual(moduleText(prefix + '/relay:result j-1\n```text\nJob j-1 is busy: … Try again.\n```\n'),
+      { command: '/relay:result j-1', table: null, verbatim: 'Job j-1 is busy: … Try again.\n', report: null });
+    assert.deepEqual(moduleText(prefix + '/relay:result j-1\n````text\nsummary: use ``` fences\n````\n'),
+      { command: '/relay:result j-1', table: null, verbatim: 'summary: use ``` fences\n', report: null });
+    assert.deepEqual(moduleText(prefix + '/relay:result j-1\n```text\nstate: completed\n```\n---\n'), { command: '/relay:result j-1', table: null, verbatim: 'state: completed\n', report: '' });
+  }
+  for (const text of [null, 'The job has completed.', 'relay: \n/relay:result printed nothing (exit 0). Run `node <root>/scripts/companion.mjs result` in a shell to see its output.',
+    'relay: ```text\nstate: completed\n```\n', '\n```text\nx\n````\n', '\n```text\nx ```\n```\n', '\n```text\nx\n```\nmodel prose']) assert.equal(moduleText(text), null);
+});
+
+test('statusRows reads padded Unicode and escaped pipes, and rejects missing separators', () => {
+  assert.deepEqual(statusRows('jobs: 1\n\n| job | state | summary | relay |\n|-----|-------|---------|-------|\n| j-1 | running (stalled) | 你好 \\| x | |\n'),
+    [{ job: 'j-1', state: 'running (stalled)', summary: '你好 | x', relay: '' }]);
+  for (const text of ['No jobs.', '| job | state |\n| j-1 | running |\n', '| job | state |\n|---|\n']) assert.deepEqual(statusRows(text), []);
+});
+
+test('timing uses sentAt first, otherwise the latest enqueue since the previous answer', () => {
+  const a = commandEntries('t3', '/relay:status', moduleAnswer('No jobs.\n'));
+  a.splice(1, 0, { type: 'queue-operation', operation: 'enqueue', timestamp: '2026-10-22T12:00:01Z' });
+  const b = commandEntries('t3', '/relay:status', moduleAnswer('No jobs.\n'), 1).filter(entry => entry.type !== 'queue-operation');
+  assert.deepEqual(commandRuns([...a, ...b]).map(row => row.seconds), [1, null]);
+  assert.deepEqual(commandRuns([...a, ...b], { commands: [{ sentAt: '2026-10-22T12:00:00Z' }, { sentAt: '2026-10-22T12:00:10Z' }] }).map(row => row.seconds), [2, 2]);
+  // Claude Code records a plugin-answered command without its arguments, so only the name pairs.
+  const noArgs = structuredClone(a);
+  noArgs.at(-1).commandRun.args = '';
+  assert.notEqual(commandRuns(noArgs)[0].answer, null);
+  const mismatch = structuredClone(a);
+  mismatch.at(-1).commandRun.command = 'relay:result';
+  assert.equal(commandRuns(mismatch)[0].answer, null);
+  const later = [...mismatch, ...b];
+  assert.equal(commandRuns(later)[0].answer, null, 'a later command cannot supply the missing answer');
+});
+
+for (const shape of ['terminal', 't3', 'p']) {
+  test(`no-model-reply boundaries on ${shape}`, () => {
+    const entries = commandEntries(shape, '/relay:status', moduleAnswer('No jobs.\n'));
+    const model = { type: 'assistant', message: { model: 'sonnet', content: [{ type: 'text', text: 'Here are your jobs.' }] } };
+    assert.equal(commandRuns([...entries, model])[0].noModelReply, false);
+    assert.equal(commandRuns([...entries.slice(0, -1), model, entries.at(-1)])[0].noModelReply, false);
+    assert.equal(commandRuns([...entries, { ...model, message: { ...model.message, model: '<synthetic>' } }])[0].noModelReply, true);
+    assert.equal(commandRuns([...entries, { ...model, isSidechain: true }])[0].noModelReply, true);
+    for (const boundary of [textEntry('user', 'A new prompt.'), textEntry('user', '<task-notification>finished</task-notification>', null, { isMeta: true }),
+      { type: 'attachment', attachment: { type: 'task_notification' } }]) {
+      assert.equal(commandRuns([...entries, boundary, model])[0].noModelReply, true);
+    }
+    const foreign = structuredClone(entries); foreign.at(-1).commandRun.plugin = 'other';
+    assert.equal(commandRuns(foreign)[0].noModelReply, false);
+    assert.equal(commandRuns(entries.slice(0, -1))[0].noModelReply, false);
+  });
+}
+
+for (const [name, surfaces] of [['commands', ['terminal', 't3']], ['transfer', ['terminal', 't3']], ['headless', ['terminal']]]) {
+  for (const surface of surfaces) {
+    test(`${name} passes on ${surface}, has one record per backend and replays from evidence copies`, t => {
+      const ctx = commandsFixture(t, name, surface, name === 'transfer' ? ['codex'] : BACKENDS);
+      const analysis = ctx.check.analyze(ctx.input);
+      assert.deepEqual(analysis.results.map(row => row.result), ctx.run.backends.map(() => 'pass'), JSON.stringify(analysis.results));
+      assert.ok(analysis.results.every(row => row.delivery === null));
+      assert.equal(analysis.evidence.agents.length, name === 'transfer' ? 0 : ctx.run.backends.length * (name === 'commands' ? 2 : 1) + 2);
+      const recordsDir = path.join(ctx.dir, 'records'), evidenceDir = path.join(ctx.dir, 'evidence');
+      fs.mkdirSync(evidenceDir);
+      const first = analyzeRun(ctx.run, evidenceDir, [ctx.check], evidenceReaders, { recordsDir, env: ctx.env });
+      assert.ok(first.records.every(row => row.result === 'pass'), JSON.stringify(first.records));
+      assert.equal(first.records.length, ctx.run.backends.length);
+      assert.doesNotMatch(JSON.stringify(first.records), /\/tmp\/|\/home\//);
+      for (const source of [ctx.run.jobsHome, ctx.run.transcript, ...(ctx.run.headless ?? []).flatMap(row => [row.transcript, row.stream])]) fs.rmSync(source, { recursive: true, force: true });
+      const replay = analyzeRun(ctx.run, evidenceDir, [ctx.check], evidenceReaders, { recordsDir, fromCopy: true });
+      assert.deepEqual(replay.records, first.records);
+      assert.equal(ctx.check.cell(first.records[0]), name === 'commands' ? 'no model turn; answered in 2.0 s, cancelled in 2.0 s' :
+        name === 'transfer' ? 'no model turn; imported in 2.0 s' : 'num_turns 0; answered in 0.3–0.8 s');
+    });
+  }
+}
+
+for (const name of ['commands', 'transfer', 'headless']) {
+  for (const failure of ['missing answer', 'model reply', 'missing start time', ...(name === 'transfer' ? ['wrong session'] : ['wrong state', 'different report', 'version mismatch'])]) {
+    test(`${name} fails for ${failure}`, t => {
+      const ctx = commandsFixture(t, name), transcript = ctx.run.transcript;
+      const entries = readTranscript(transcript);
+      if (failure === 'missing answer') entries.splice(entries.findIndex(entry => entry.commandRun), 1);
+      if (failure === 'model reply') entries.splice(entries.findIndex(entry => entry.commandRun) + 1, 0,
+        { type: 'assistant', message: { model: 'sonnet', content: [] } });
+      if (failure === 'missing start time') {
+        delete ctx.run.commands;
+        for (const entry of entries) if (entry.operation === 'enqueue') delete entry.timestamp;
+      }
+      if (failure === 'wrong session') entries.find(entry => entry.commandRun?.command === 'relay:transfer').content = entries.find(entry => entry.commandRun?.command === 'relay:transfer').content.replace('codex resume abc-123', 'codex resume different');
+      if (failure === 'wrong state') edit(ctx.dir, 'jobs/repo/done-codex/job.json', job => { job.state = 'running'; });
+      if (failure === 'different report') fs.writeFileSync(path.join(ctx.dir, 'jobs/repo/done-codex/report.md'), 'different report');
+      if (failure === 'version mismatch') edit(ctx.dir, 'jobs/repo/done-codex/job.json', job => { job.attempts.at(-1).relayVersion = 'other'; });
+      lines(transcript, entries);
+      const row = ctx.check.analyze(ctx.input).results[0];
+      assert.equal(row.result, 'fail');
+      assert.match(row.reason, { 'missing answer': /Missing answer/, 'model reply': /Model reply/, 'missing start time': /start time/,
+        'wrong state': /state/, 'different report': /report.md/, 'version mismatch': /relayVersion/, 'wrong session': /Codex session/ }[failure]);
+    });
+  }
+}
+
+for (const failure of ['num_turns', 'cost', 'is_error', 'exit', 'entrypoint', 'duration', 'stream model', 'stream text', 'status row', 'receipt']) {
+  test(`headless rejects ${failure}`, t => {
+    const ctx = commandsFixture(t, 'headless'), receipt = ctx.run.headless[0];
+    const events = readTranscript(receipt.stream), result = events.find(event => event.type === 'result');
+    if (failure === 'num_turns') result.num_turns = 1;
+    if (failure === 'cost') result.total_cost_usd = 0.001;
+    if (failure === 'is_error') result.is_error = true;
+    if (failure === 'exit') receipt.exitCode = 5;
+    if (failure === 'duration') delete result.duration_ms;
+    if (failure === 'stream model') events.find(event => event.type === 'assistant').message.model = 'sonnet';
+    if (failure === 'stream text') result.result = moduleAnswer('state: running\n');
+    if (failure === 'receipt') receipt.finished = false;
+    if (failure === 'entrypoint') {
+      const entries = readTranscript(receipt.transcript);
+      entries.forEach(entry => { if (entry.entrypoint) entry.entrypoint = 'sdk-ts'; });
+      lines(receipt.transcript, entries);
+    }
+    if (failure === 'status row') {
+      const status = ctx.run.headless.at(-1), entries = readTranscript(status.transcript), stream = readTranscript(status.stream);
+      entries.at(-1).content = entries.at(-1).content.replace('| done-codex | completed |', '| done-codex | running |');
+      stream.find(event => event.type === 'result').result = stream.find(event => event.type === 'result').result.replace('| done-codex | completed |', '| done-codex | running |');
+      lines(status.transcript, entries); lines(status.stream, stream);
+    }
+    lines(receipt.stream, events);
+    assert.equal(ctx.check.analyze(ctx.input).results[0].result, 'fail');
+  });
+}
+
+for (const mode of ['success', 'start failure', 'wait failure', 'timeout', 'cancel failure']) {
+  test(`setup starts only companion jobs and cancels everything it started on ${mode}`, async t => {
+    const dir = temp(t), run = { backends: ['codex', 'grok'] }, calls = [];
+    const ctx = { run, backends: run.backends, pluginDir: path.join(dir, 'build'), workDir: path.join(dir, 'work'),
+      jobsHome: path.join(dir, 'jobs'), evidenceDir: dir, save() {} };
+    let now = 0;
+    const execute = async (command, args, options) => {
+      calls.push(args);
+      assert.equal(command, process.execPath);
+      assert.equal(args[0], path.join(ctx.pluginDir, 'scripts/companion.mjs'));
+      assert.equal(options.cwd, ctx.workDir);
+      assert.equal(options.env.RELAY_JOBS_HOME, ctx.jobsHome);
+      assert.equal(options.env.CLAUDECODE, undefined);
+      assert.equal(options.env.RELAY_COMPANION_SESSION_ID, undefined);
+      if (args[1] === 'cancel') {
+        if (mode === 'cancel failure' && args[2] === 'done-codex') throw new Error('Cancel refused.');
+        return { stdout: '' };
+      }
+      assert.deepEqual(args.slice(1, 3), ['start', '--prompt-file']);
+      const name = path.basename(args[3], '.txt'), [backend, ...parts] = name.split('-');
+      const kind = parts.at(-1), decoy = parts[0] === 'decoy';
+      const prompt = fs.readFileSync(args[3], 'utf8');
+      assert.ok(prompt.startsWith(`${backend === 'codex' ? '' : `backend: ${backend}\n`}model: ${MODELS[backend]}\neffort: low\n---\n`));
+      assert.ok(prompt.includes(kind === 'done' ? (decoy ? 'Reply with exactly one line: decoy.' : `Reply with exactly one line: done for ${backend}. Do not run any command.`) :
+        'Run the shell command `sleep 600` exactly once, and wait for it to finish. Then reply with one line: slept.'));
+      const id = `${decoy ? 'decoy-' : ''}${kind}-${backend}`, jobDir = path.join(ctx.jobsHome, 'repo', id);
+      write(path.join(jobDir, 'job.json'), { id, state: kind === 'done' ? 'completed' : 'running', attempts: [{}] });
+      const stdout = `job: ${id}\nstate: starting\ndir: ${jobDir}\n`;
+      if (name === 'grok-done' && ['start failure', 'cancel failure'].includes(mode)) throw Object.assign(new Error('Start failed.'), { stdout });
+      if (name === 'grok-done' && ['wait failure', 'timeout'].includes(mode)) write(path.join(jobDir, 'job.json'), { id, state: mode === 'timeout' ? 'starting' : 'failed' });
+      return { stdout };
+    };
+    const action = setupJobs(ctx, true, { execute, env: { PATH: process.env.PATH, CLAUDECODE: '1', RELAY_COMPANION_SESSION_ID: 'parent' }, now: () => now,
+      pause: async () => { now += 240001; } });
+    if (mode === 'success') await action;
+    else await assert.rejects(action, mode.includes('failure') && mode !== 'wait failure' ? /Start failed/ : mode === 'timeout' ? /Timed out/ : /ended failed/);
+    if (mode === 'success') {
+      assert.equal(calls.filter(args => args[1] === 'cancel').length, 0);
+      assert.deepEqual(run.setup.jobs.codex.running, { id: 'running-codex', jobDir: 'repo/running-codex' });
+    } else {
+      assert.deepEqual(calls.filter(args => args[1] === 'cancel').map(args => args[2]), ['done-codex', 'done-grok']);
+      assert.equal(run.setup.cancellations[0].status, mode === 'cancel failure' ? 'failed' : 'cancelled');
+    }
+  });
+}
+
+for (const fail of [false, true]) {
+  test(`headless executor records streams, exit codes and all sessions without a pane (failure=${fail})`, async t => {
+    const dir = temp(t), check = getCheck('headless');
+    const run = { backends: ['codex', 'kimi'], setup: { decoys: { running: { id: 'decoy-running' } }, jobs: { codex: { done: { id: 'done-codex' } }, kimi: { done: { id: 'done-kimi' } } } } };
+    const ctx = { run, pluginDir: '/build/relay', workDir: '/work/fixture', jobsHome: '/jobs/fixture', evidenceDir: dir, save() {} };
+    const calls = [];
+    const env = { PATH: '/bin', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', CLAUDE_AGENT_SDK_TEST: 'x', RELAY_COMPANION_SESSION_ID: 'parent', KEEP_ME: 'yes' };
+    await runHeadless(ctx, { env, uuid: () => `session-${calls.length}`, execute: async (command, args, options) => {
+      calls.push(args);
+      assert.equal(command, 'claude');
+      const planned = headlessCommands(run)[calls.length - 1];
+      // The results run as json, whose exit code is the command's; the status as a stream, for its init event.
+      assert.equal(planned.format, planned.text === '/relay:status' ? 'stream-json' : 'json');
+      assert.deepEqual(args, ['-p', planned.text, ...(planned.format === 'stream-json' ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json']),
+        '--plugin-dir', ctx.pluginDir, '--session-id', `session-${calls.length - 1}`, '--model', 'sonnet']);
+      assert.deepEqual(options.env, { PATH: '/bin', KEEP_ME: 'yes', RELAY_JOBS_HOME: ctx.jobsHome });
+      assert.equal(options.cwd, ctx.workDir);
+      assert.equal(options.timeout, 120000);
+      const stdout = '{"type":"result","num_turns":0}\n';
+      if (fail && calls.length === 1) throw Object.assign(new Error('Exited 5.'), { code: 5, stdout, stderr: 'failed' });
+      return { stdout, stderr: '' };
+    } });
+    assert.equal(check.completed([], run), true);
+    assert.equal(calls.length, 4);
+    assert.equal(run.headless[0].expectedTranscript, path.join(os.homedir(), '.claude/projects/-work-fixture/session-0.jsonl'));
+    assert.equal(run.transcript, path.join(dir, 'headless-0-missing-transcript.jsonl'));
+    assert.equal(fs.readFileSync(run.transcript, 'utf8'), '');
+    assert.equal(run.headless[0].exitCode, fail ? 5 : 0);
+    for (const receipt of run.headless) assert.equal(fs.readFileSync(receipt.stream, 'utf8'), '{"type":"result","num_turns":0}\n');
+    assert.deepEqual(run.removedEnvironment, ['CLAUDECODE', 'CLAUDE_AGENT_SDK_TEST', 'CLAUDE_CODE_ENTRYPOINT', 'RELAY_COMPANION_SESSION_ID']);
+    assert.equal(env.CLAUDECODE, '1');
+    run.headless.pop();
+    assert.equal(check.completed([], run), false);
+  });
+}
+
+for (const name of ['commands', 'headless']) {
+  for (const failure of ['version', 'missing report', 'missing stream']) {
+    if (name !== 'headless' && failure === 'missing stream') continue;
+    test(`${name} retains all job evidence and reproduces ${failure} failures from the copy`, t => {
+      const ctx = commandsFixture(t, name, 'terminal', ['codex', 'kimi']);
+      if (failure === 'version') edit(ctx.dir, 'jobs/repo/done-codex/job.json', job => { job.attempts.at(-1).relayVersion = 'wrong'; });
+      if (failure === 'missing report') fs.rmSync(path.join(ctx.dir, 'jobs/repo/done-codex/report.md'));
+      if (failure === 'missing stream') fs.rmSync(ctx.run.headless[0].stream);
+      const evidenceDir = path.join(ctx.dir, 'evidence'), recordsDir = path.join(ctx.dir, 'records');
+      fs.mkdirSync(evidenceDir);
+      const first = analyzeRun(ctx.run, evidenceDir, [ctx.check], evidenceReaders, { recordsDir, env: ctx.env });
+      assert.equal(first.records[0].result, 'fail');
+      for (const jobs of Object.values(ctx.run.setup.jobs)) for (const job of Object.values(jobs)) {
+        assert.ok(fs.existsSync(path.join(ctx.run.copy.jobsHome, job.jobDir, 'job.json')));
+      }
+      fs.rmSync(ctx.run.jobsHome, { recursive: true });
+      fs.rmSync(ctx.run.transcript);
+      for (const receipt of ctx.run.headless ?? []) for (const file of [receipt.transcript, receipt.stream]) fs.rmSync(file, { force: true });
+      assert.deepEqual(analyzeRun(ctx.run, evidenceDir, [ctx.check], evidenceReaders, { recordsDir, fromCopy: true }).records, first.records);
+    });
+  }
+}
+
+test('a headless exit before transcript creation still leaves replayable failure records', async t => {
+  const ctx = commandsFixture(t, 'headless'), evidenceDir = path.join(ctx.dir, 'evidence'), recordsDir = path.join(ctx.dir, 'records');
+  fs.mkdirSync(evidenceDir);
+  delete ctx.run.transcript;
+  await runHeadless({ ...ctx.run, run: ctx.run, pluginDir: '/build/relay', evidenceDir, save() {} }, {
+    env: {}, execute: async () => { throw Object.assign(new Error('Claude failed before starting.'), { code: 1, stdout: '', stderr: 'failed' }); }
+  });
+  const first = analyzeRun(ctx.run, evidenceDir, [ctx.check], evidenceReaders, { recordsDir, env: ctx.env });
+  assert.equal(first.records[0].result, 'fail');
+  assert.match(first.records[0].reason, /Missing headless transcript/);
+  for (const receipt of ctx.run.headless) for (const file of [receipt.transcript, receipt.stream]) fs.rmSync(file);
+  fs.rmSync(ctx.run.jobsHome, { recursive: true });
+  assert.deepEqual(analyzeRun(ctx.run, evidenceDir, [ctx.check], evidenceReaders, { recordsDir, fromCopy: true }).records, first.records);
+});
+
+test('moduleText preserves the first split tail and reads status only outside the fence', () => {
+  const table = '| job | summary |\n|---|---|\n| j-1 | 你好 \\| x |\n';
+  const parsed = moduleText(moduleAnswer(`relay-version: build\njobs: 1\n\n${table}`));
+  assert.deepEqual(parsed, { command: '/relay:status', verbatim: 'relay-version: build\njobs: 1\n', report: null, table });
+  assert.deepEqual(statusRows(parsed.table), [{ job: 'j-1', summary: '你好 | x' }]);
+  assert.deepEqual(statusRows(parsed.verbatim), []);
+  assert.equal(moduleText(moduleAnswer(`header\n---\n${table}`)).report, table);
+  assert.equal(moduleText(moduleAnswer(`header\n${table}---\nreport`)).table, table + '---\nreport');
+  assert.deepEqual(moduleText(moduleAnswer(table)), { command: '/relay:status', verbatim: '\n', report: null, table });
+  assert.equal(moduleText('relay: /relay:result j-1\n\nPrinted nothing (exit 0).'), null);
+});
+
+for (const text of ['/relay:status', '/relay:result job-1', '/relay:cancel job-1', '/relay:transfer']) {
+  test(`command proof requires the exact echoed text for ${text}`, () => {
+    const rows = commandRuns(commandEntries('t3', text, moduleAnswer('output\n', null, text)));
+    assert.equal(rows[0].args, '');
+    assert.equal(requireCommand(rows[0], text).command, text);
+    for (const echo of [text + ' extra', text.startsWith('/relay:result') || text.startsWith('/relay:cancel') ? text.split(' ')[0] : '/relay:other']) {
+      rows[0].text = moduleAnswer('output\n', null, echo);
+      assert.throws(() => requireCommand(rows[0], text), /Echoed command/);
+    }
+  });
+}
+
+for (const name of ['commands', 'transfer', 'headless']) {
+  for (const header of ['', 'relay-version: wrong\n', 'relay-version: 3.0.0-test\nrelay-version: wrong\n']) {
+    test(`${name} rejects a missing, wrong or ambiguous status build (${JSON.stringify(header)})`, t => {
+      const ctx = commandsFixture(t, name);
+      const file = name === 'headless' ? ctx.run.headless.at(-1).transcript : ctx.run.transcript;
+      const entries = readTranscript(file), status = entries.find(entry => entry.commandRun?.command === 'relay:status');
+      status.content = status.content.replace('relay-version: 3.0.0-test\n', header);
+      lines(file, entries);
+      if (name === 'headless') {
+        const stream = ctx.run.headless.at(-1).stream, events = readTranscript(stream);
+        events.find(event => event.type === 'result').result = status.content.slice('<local-command-stdout>'.length, -'</local-command-stdout>'.length);
+        lines(stream, events);
+      }
+      const result = ctx.check.analyze(ctx.input).results[0];
+      assert.equal(result.result, 'fail');
+      assert.match(result.reason, /relay-version/);
+      if (name === 'transfer' && header === 'relay-version: wrong\n') assert.equal(result.relayVersion, 'wrong');
+    });
+  }
+}
+
+for (const failure of ['no init', 'no relay', 'wrong path', 'running exit', 'running state', 'running job', 'running echo']) {
+  test(`headless proves plugin loading and the running decoy (${failure})`, t => {
+    const ctx = commandsFixture(t, 'headless');
+    // Only the status run is a stream with an init event; the running decoy's result runs as json.
+    const initFailure = ['no init', 'no relay', 'wrong path'].includes(failure);
+    const receipt = ctx.run.headless.find(row => initFailure ? row.format === 'stream-json' : row.running), events = readTranscript(receipt.stream);
+    const init = events.find(event => event.subtype === 'init');
+    if (failure === 'no init') events.splice(events.indexOf(init), 1);
+    if (failure === 'no relay') init.plugins = [{ name: 'other', path: ctx.run.pluginDir }];
+    if (failure === 'wrong path') init.plugins[0].path += '-other';
+    if (failure === 'running exit') receipt.exitCode = 0;
+    if (['running state', 'running job', 'running echo'].includes(failure)) {
+      const result = events.find(event => event.type === 'result');
+      const [before, after] = failure === 'running state' ? ['state: running', 'state: completed'] :
+        failure === 'running job' ? ['job: decoy-running', 'job: done-codex'] : ['/relay:result decoy-running', '/relay:result'];
+      result.result = result.result.replace(before, after);
+      const entries = readTranscript(receipt.transcript);
+      entries.find(entry => entry.commandRun).content = `<local-command-stdout>${result.result}</local-command-stdout>`;
+      lines(receipt.transcript, entries);
+    }
+    lines(receipt.stream, events);
+    assert.equal(ctx.check.analyze(ctx.input).results[0].result, 'fail');
+  });
+}
+
+for (const failure of ['wrong thread', 'wrong source', 'missing ledger', 'invalid ledger']) {
+  test(`transfer ledger rejection replays without the live ledger (${failure})`, t => {
+    const ctx = commandsFixture(t, 'transfer'), ledger = path.join(ctx.env.CODEX_HOME, 'external_agent_session_imports.json');
+    const saved = read(ledger);
+    if (failure === 'wrong thread') saved.records[0].imported_thread_id = 'other';
+    if (failure === 'wrong source') saved.records[0].source_path += '-other';
+    write(ledger, saved);
+    if (failure === 'missing ledger') fs.rmSync(ledger);
+    if (failure === 'invalid ledger') fs.writeFileSync(ledger, '{');
+    const recordsDir = path.join(ctx.dir, 'records');
+    const first = analyzeRun(ctx.run, ctx.dir, [ctx.check], evidenceReaders, { recordsDir, env: ctx.env });
+    assert.equal(first.records[0].result, 'fail');
+    assert.match(first.records[0].reason, /import (ledger|evidence)/);
+    fs.rmSync(ctx.env.CODEX_HOME, { recursive: true });
+    fs.rmSync(ctx.run.transcript);
+    assert.deepEqual(analyzeRun(ctx.run, ctx.dir, [ctx.check], evidenceReaders, { recordsDir, fromCopy: true }).records, first.records);
+  });
+}
+
+test('transfer matches the canonical transcript path and preserves proof after originals disappear', t => {
+  const ctx = commandsFixture(t, 'transfer'), original = ctx.run.transcript;
+  const link = path.join(ctx.dir, 'linked.jsonl');
+  fs.symlinkSync(original, link);
+  ctx.run.transcript = link;
+  const recordsDir = path.join(ctx.dir, 'records');
+  const first = analyzeRun(ctx.run, ctx.dir, [ctx.check], evidenceReaders, { recordsDir, env: ctx.env });
+  assert.equal(first.records[0].result, 'pass');
+  assert.equal(first.records[0].relayVersion, '3.0.0-test');
+  fs.rmSync(ctx.env.CODEX_HOME, { recursive: true });
+  fs.rmSync(original);
+  fs.rmSync(link);
+  assert.deepEqual(analyzeRun(ctx.run, ctx.dir, [ctx.check], evidenceReaders, { recordsDir, fromCopy: true }).records, first.records);
+});
+
+for (const running of [false, true]) {
+  test(`setup orders decoys after target jobs with one backend (running=${running})`, async t => {
+    const dir = temp(t), run = { backends: ['grok'] }, order = [];
+    const ctx = { run, backends: run.backends, pluginDir: '/fixture/build', workDir: dir, jobsHome: path.join(dir, 'jobs'), evidenceDir: dir, save() {} };
+    await setupJobs(ctx, running, { env: {}, async execute(command, args) {
+      assert.equal(args[1], 'start');
+      const id = path.basename(args.at(-1), '.txt'), kind = id.endsWith('done') ? 'done' : 'running';
+      const jobDir = path.join(ctx.jobsHome, 'repo', id);
+      order.push(id);
+      const prompt = fs.readFileSync(args.at(-1), 'utf8');
+      assert.match(prompt, /^backend: grok\nmodel: grok-4.7\neffort: low\n---\n/);
+      if (id === 'grok-decoy-done') assert.ok(prompt.endsWith('Reply with exactly one line: decoy.\n'));
+      if (kind === 'running') assert.match(prompt, /`sleep 600` exactly once/);
+      write(path.join(jobDir, 'job.json'), { id, state: kind === 'done' ? 'completed' : 'running', attempts: [{}] });
+      return { stdout: `job: ${id}\ndir: ${jobDir}\n` };
+    } });
+    assert.deepEqual(order, ['grok-done', 'grok-decoy-done', ...(running ? ['grok-running'] : []), 'grok-decoy-running']);
+    assert.deepEqual(run.setup.decoys, { done: { id: 'grok-decoy-done', jobDir: 'repo/grok-decoy-done' },
+      running: { id: 'grok-decoy-running', jobDir: 'repo/grok-decoy-running' } });
+  });
+}
+
+test('a setup failure after decoy starts cancels all started jobs with the grace budget', async t => {
+  const dir = temp(t), run = { backends: ['codex'] }, started = [], cancelled = [];
+  const ctx = { run, backends: run.backends, pluginDir: '/build', workDir: dir, jobsHome: path.join(dir, 'jobs'), evidenceDir: dir, save() {} };
+  await assert.rejects(setupJobs(ctx, true, { env: { RELAY_JOBS_CANCEL_GRACE_MS: '30000' }, async execute(command, args, options) {
+    if (args[1] === 'cancel') { cancelled.push(args.at(-1)); assert.equal(options.timeout, 100000); return {}; }
+    const id = path.basename(args.at(-1), '.txt'), jobDir = path.join(ctx.jobsHome, 'repo', id);
+    started.push(id);
+    write(path.join(jobDir, 'job.json'), { id, state: id.endsWith('done') ? 'completed' : 'running', attempts: [{}] });
+    const stdout = `job: ${id}\ndir: ${jobDir}\n`;
+    if (id === 'codex-decoy-running') throw Object.assign(new Error('Late setup failure.'), { stdout });
+    return { stdout };
+  } }), /Late setup failure/);
+  assert.deepEqual(started, ['codex-done', 'codex-decoy-done', 'codex-running', 'codex-decoy-running']);
+  assert.deepEqual(cancelled, started);
+  assert.equal(run.setup.cancellations.length, 4);
+});
+
+test('headless timings come from result durations even when enqueue includes a long module load', t => {
+  const ctx = commandsFixture(t, 'headless');
+  for (const receipt of ctx.run.headless) {
+    const entries = readTranscript(receipt.transcript);
+    entries.find(entry => entry.operation === 'enqueue').timestamp = '2026-10-22T11:00:00Z';
+    lines(receipt.transcript, entries);
+  }
+  const result = ctx.check.analyze(ctx.input).results[0];
+  assert.equal(result.result, 'pass');
+  assert.deepEqual(result.timings.answeredSeconds, [0.25, 0.35, 0.45]);
+});
+
+for (const surface of ['terminal', 't3']) {
+  for (const commit of [null, '0123456789ab', '0123456789ab-dirty', 'abcdef012345']) {
+    test(`status build identity on ${surface}: ${commit}`, () => {
+      const parsed = { verbatim: `relay-version: 3.0.0-test${commit ? ` (${commit})` : ''}\n` };
+      const run = { surface, relayVersion: '3.0.0-test', relayCommit: '0123456789ab' };
+      if (commit === run.relayCommit || (commit === null && surface === 'terminal')) {
+        assert.deepEqual(requireBuild(parsed, run), { relayVersion: run.relayVersion, relayCommit: commit });
+      } else assert.throws(() => requireBuild(parsed, run), /relay-version commit/);
+      if (commit?.endsWith('-dirty')) {
+        assert.equal(requireBuild(parsed, { ...run, relayCommit: commit }).relayCommit, commit);
+      }
+    });
+  }
+}
+
+for (const name of ['commands', 'transfer']) {
+  for (const stamp of ['', ' (abcdef012345)']) {
+    test(`${name} rejects missing or mismatched T3 stamp ${JSON.stringify(stamp)}`, t => {
+      const ctx = commandsFixture(t, name, 't3');
+      const rows = readTranscript(ctx.run.transcript);
+      rows.find(row => row.commandRun?.command === 'relay:status').content = rows.find(row => row.commandRun?.command === 'relay:status')
+        .content.replace(' (0123456789ab)', stamp);
+      lines(ctx.run.transcript, rows);
+      const result = ctx.check.analyze(ctx.input).results[0];
+      assert.equal(result.result, 'fail');
+      assert.match(result.reason, /relay-version commit/);
+    });
+  }
+}
+
+for (const surface of ['terminal', 't3']) {
+  test(`transfer records the reported build separately from the run on ${surface}`, t => {
+    const ctx = commandsFixture(t, 'transfer', surface);
+    const { records } = analyzeRun(ctx.run, ctx.dir, [ctx.check], evidenceReaders,
+      { recordsDir: path.join(ctx.dir, 'records'), env: ctx.env });
+    assert.equal(records[0].result, 'pass');
+    assert.equal(records[0].relayVersion, '3.0.0-test');
+    // T3 takes the commit from the status line's stamp; a terminal --plugin-dir build has none, so the run's own.
+    assert.equal(records[0].relayCommit, ctx.run.relayCommit);
+  });
+}
+
+for (const surface of ['terminal', 't3']) {
+  for (const offset of [-3, -2, 0, 2, 4, 5, null, '0', 0.5]) {
+    test(`transfer requires this command's import time on ${surface}: ${offset}`, t => {
+      const ctx = commandsFixture(t, 'transfer', surface);
+      const ledger = path.join(ctx.env.CODEX_HOME, 'external_agent_session_imports.json');
+      const saved = read(ledger), row = commandRuns(readTranscript(ctx.run.transcript), ctx.run)[1];
+      saved.records[0].imported_at = typeof offset === 'number' ? Date.parse(row.startedAt) / 1000 + offset : offset;
+      write(ledger, saved);
+      const pass = [-2, 0, 2, 4].includes(offset);
+      const recordsDir = path.join(ctx.dir, 'records');
+      const first = analyzeRun(ctx.run, ctx.dir, [ctx.check], evidenceReaders, { recordsDir, env: ctx.env });
+      assert.equal(first.records[0].result, pass ? 'pass' : 'fail');
+      if (!pass) assert.match(first.records[0].reason, /this command's time/);
+      fs.rmSync(ctx.env.CODEX_HOME, { recursive: true });
+      fs.rmSync(ctx.run.transcript);
+      assert.deepEqual(analyzeRun(ctx.run, ctx.dir, [ctx.check], evidenceReaders, { recordsDir, fromCopy: true }).records, first.records);
+    });
+  }
+}
+
+test('status rows decode escaped backslashes, pipes and trailing backslashes without splitting a cell', () => {
+  const values = ['a\\|b', 'trailing\\', '`sleep 600`'];
+  const escaped = values.map(value => value.replace(/\\/g, '\\\\').replace(/\|/g, '\\|'));
+  const table = '| job | summary |\n|---|---|\n' + escaped.map((value, i) => `| j-${i} | ${value} |`).join('\n');
+  assert.deepEqual(statusRows(table).map(row => row.summary), values);
+});
+
+test('headless execution supplies EOF immediately to a subprocess', async () => {
+  const output = await executeHeadless(process.execPath, ['-e',
+    'let bytes = 0; process.stdin.on("data", chunk => bytes += chunk.length); process.stdin.on("end", () => console.log(bytes));'],
+  { encoding: 'utf8', timeout: 5000 });
+  assert.equal(output.stdout, '0\n');
+});
+
+test('interrupted headless execution saves its partial output and starts no more commands', async t => {
+  const ctx = commandsFixture(t, 'headless'), controller = new AbortController();
+  let calls = 0;
+  await assert.rejects(runHeadless({ ...ctx.run, run: ctx.run, evidenceDir: ctx.dir, save() {} }, {
+    env: { CLAUDE_CONFIG_DIR: path.join(ctx.dir, 'claude') }, signal: controller.signal,
+    execute: async (file, args, options) => {
+      calls++;
+      assert.equal(options.signal, controller.signal);
+      controller.abort(new Error('Interrupted by SIGHUP.'));
+      throw Object.assign(new Error('Aborted'), { stdout: 'partial output', stderr: 'partial error' });
+    }
+  }), /Interrupted by SIGHUP/);
+  assert.equal(calls, 1);
+  assert.equal(ctx.run.headless.length, 1);
+  assert.equal(ctx.run.headless[0].interrupted, true);
+  assert.equal(fs.readFileSync(ctx.run.headless[0].stream, 'utf8'), 'partial output');
+  assert.notEqual(ctx.run.completed, true);
+});
+
+for (const when of ['start', 'wait']) {
+  test(`interrupted setup keeps the job receipt and cancels it (${when})`, async t => {
+    const dir = temp(t), controller = new AbortController(), calls = [];
+    const ctx = { backends: ['codex'], pluginDir: path.join(dir, 'plugin'), jobsHome: path.join(dir, 'jobs'),
+      workDir: dir, evidenceDir: dir, run: {}, save() {} };
+    await assert.rejects(setupJobs(ctx, true, {
+      signal: controller.signal, env: {},
+      async execute(file, args, options) {
+        calls.push(args[1]);
+        assert.equal(options.signal, undefined, 'cleanup must not inherit the aborted signal');
+        if (args[1] === 'cancel') return {};
+        const jobDir = path.join(ctx.jobsHome, 'repo/job-1');
+        write(path.join(jobDir, 'job.json'), { id: 'job-1', state: 'running' });
+        if (when === 'start') controller.abort(new Error('Interrupted.'));
+        return { stdout: `job: job-1\ndir: ${jobDir}\n` };
+      },
+      async pause() { controller.abort(new Error('Interrupted.')); }
+    }), /Interrupted/);
+    assert.deepEqual(calls, ['start', 'cancel']);
+    assert.deepEqual(ctx.run.setup.jobs.codex.done, { id: 'job-1', jobDir: 'repo/job-1' });
+    assert.deepEqual(ctx.run.setup.cancellations, [{ jobId: 'job-1', status: 'cancelled' }]);
+  });
+}

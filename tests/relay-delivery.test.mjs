@@ -103,7 +103,7 @@ for (const behavior of ["job", "turn-order-collab-unsupported"]) {
       assert.equal(view.state, "running");
       assert.equal(exitCodeFor(view), 4);
       assert.match(renderJobBlock(view), /^state: running$/m);
-      assert.match(renderJobList([view]), /  running  /);
+      assert.match(renderJobList([view]), /\| running +\|/);
       assert.equal(decision(await pre(ctx, "SubagentHandback", { message: "done" })), "deny");
       assert.equal((await stop(ctx, renderJobBlock(view)))?.decision, "block");
       const timeout = companion(ctx, ["wait", jobId, "--timeout-seconds", "0"]);

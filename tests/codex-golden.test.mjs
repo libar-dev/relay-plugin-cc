@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { PLUGIN_VERSION } from "../plugins/relay/scripts/lib/util/plugin.mjs";
 import { companion, finishJob, HEADER, makeHome, readJob, ROOT, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 
 const FIXTURE = path.join(ROOT, "tests/fixtures/codex-golden.json");
@@ -15,7 +16,7 @@ function normalizer(ctx, id) {
     let text = value.replaceAll(id, "<job>").replaceAll(slug, "<repo>");
     text = text.replaceAll(fs.realpathSync(ctx.root), "<tmp>").replaceAll(ctx.root, "<tmp>");
     for (const [index, clientId] of clientIds.entries()) text = text.replaceAll(clientId, `<message-${index + 1}>`);
-    return text.replace(/\b\d+[hms](?: \d+[hms])*/g, "<duration>");
+    return text.replace(/\b\d+[hms](?: \d+[hms])*/g, "<duration>").replace(/<duration> +(?=\|)/g, "<duration> ");
   };
   const walk = (value, key = "") => {
     if (value == null) return value;
@@ -63,6 +64,11 @@ for (const inherited of [false, true]) {
     assert.equal(state.spawnHomes.length, 3);
     const actual = normalizer(ctx, id)({ start, spawnHomes: state.spawnHomes, requests: state.requests, snapshots });
     const key = inherited ? "inherited" : "unset";
-    assert.deepEqual(actual, JSON.parse(fs.readFileSync(FIXTURE, "utf8"))[key]);
+    const expected = JSON.parse(fs.readFileSync(FIXTURE, "utf8"))[key];
+    // The version follows the manifest; the fixture keeps the rest of the output fixed.
+    for (const snapshot of expected.snapshots) {
+      snapshot.row = snapshot.row.replace("\nfast-tier: allowed\n", `\nfast-tier: allowed\nrelay-version: ${PLUGIN_VERSION}\n`);
+    }
+    assert.deepEqual(actual, expected);
   });
 }

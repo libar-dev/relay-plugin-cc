@@ -210,7 +210,7 @@ A message reaches the job within seconds: the plugin's hooks module ends the rel
 
 ## Direct use
 
-You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:status`, `/relay:result`, `/relay:setup` and `/relay:rescue` yourself. A review you start never asks the user a question: without `--wait` or `--background` it runs in the foreground. `/relay:cancel` and `/relay:transfer` are the user's: cancel a job with `TaskStop` on its agent, or by sending its agent the message `cancel`. The `C` commands below are for scripts and Workflow steps.
+You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:setup` and `/relay:rescue` yourself. A review you start never asks the user a question: without `--wait` or `--background` it runs in the foreground. `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` are the user's: the plugin's hooks module answers them without you. To read jobs yourself, run `C status` and `C result`, which print the same text; cancel a job with `TaskStop` on its agent, or by sending its agent the message `cancel`. The `C` commands below are for you, scripts and Workflow steps.
 
 `C` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs"`. In your own Bash, define it as a function, `C() { node "<that path>" "$@"; }`: a variable that holds the command does not split into words in zsh. A job lives in `$RELAY_JOBS_HOME` (default `~/.relay-jobs`) under `<repo-slug>/<job-id>/`; any command takes a job id or a unique prefix, or the job's directory inside that home.
 

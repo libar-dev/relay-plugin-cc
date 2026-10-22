@@ -229,6 +229,88 @@ and only for a folder the runner created. A folder the caller names must already
 runner never initializes, and already trusted: when Claude Code asks, the run stops. D13's rule holds for every other dialog. Reopen if Claude Code gets a per-session
 trust flag.
 
+### D31. A command's answer: the command as typed, the companion's lines in a code block, then Markdown (Phase 2 thread)
+
+Measured on 2.1.308 before any code: the terminal draws a command's text as Markdown, and a `---` line right after
+the state block turns the block into a setext heading; T3 draws the text as an assistant message, as Markdown
+without line breaks, so a state block's `key: value` lines run into one paragraph. Claude Code puts the plugin's
+name, `relay: `, in front of the first line, which would break a code fence that opened the text, and shows and
+records a command a plugin answered without its arguments. So the answer's first line is the command as typed
+(`relay: /relay:result <job>` on screen), then the companion's output in a fenced block up to its first line that is
+`---` or starts with `|` (with stderr after it, and a fence longer than any backtick run inside), then the rest as
+Markdown: a job's report after `---`, which the backend wrote as Markdown, or the job table, which the terminal
+draws as a box table (or, when it is wider than the terminal, as one block per job) and T3 as a table; its cells
+are drawn as Markdown too, so a brief's backticks show as inline code. The state block and every message the
+companion prints read exactly as in Bash, on every surface. Rejected: the bare text (mangled in both surfaces), a Markdown variant of the companion's
+output (a second human format, which the plan rules out), fencing the state block inside `renderResultText` (it
+would change the hand-back that every completion notice carries, for a display concern), and fencing the table
+too, which the first version did: Opus 5.5's review found it unreadable once a row wrapped in a terminal of 80 to
+120 columns. Reopen if T3 or the terminal stops rendering command output as Markdown.
+
+### D32. The commands ship without a branch fallback (Phase 2 thread)
+
+The plan had each `.catch` fall through to the markdown body on the branch, and a last commit remove it. The live
+suite has to run on the final code anyway, and a fallback would hide a failing module from a check that requires
+no model turn, so the handlers carry their final `.catch` (an error text) from the start, and the markdown bodies
+shrink to the plan's one line in the same commit. Rule 4 allows a branch fallback; nothing needed one.
+
+### D33. Claude reads jobs with `C status` and `C result`; the four commands are the user's (Phase 2 thread)
+
+A model's `Skill(relay:status)` call does not go through `command.run`: it expands the markdown body into the
+model's context (measured on 2.1.308). With the body reduced to "the module answers this command", a model calling
+it would be told the module did not load. `status.md` and `result.md` get `disable-model-invocation: true`, as
+`cancel.md` and `transfer.md` have, and the jobs skill and the README send Claude to `C status` and `C result` in
+Bash, which print the same text. Rejected: keeping the `!` bodies for the model's calls, which would leave a second
+way to run each command and a working fallback in the release. What users lose is `Skill(relay:status)` and
+`Skill(relay:result)` as permission rules: in `default` permission mode Claude Code asks before Claude's Bash call
+of the companion. Easy
+to reverse if a later Claude Code routes a model's call through `command.run`.
+
+### D34. Transfer finds the session's transcript by its id (Phase 2 thread)
+
+The module's process gets Claude Code's environment, not the variables the SessionStart hook writes to
+`CLAUDE_ENV_FILE` for Bash, so `RELAY_COMPANION_TRANSCRIPT_PATH` never reaches it. The module passes
+`$.session.id()` as `RELAY_COMPANION_SESSION_ID`, and `transfer` looks for `<id>.jsonl` directly inside the project
+folders of `~/.claude/projects`; `--source` still wins. The SessionStart hook still exports the session id, which a
+Bash call of the companion reads the same way, and stops exporting the transcript path, which nothing else read.
+One way to find the session, from both callers.
+
+### D35. A headless run of a command exits with the companion's exit code (Phase 2 thread)
+
+`command.run` answers may carry `exitCode`, which only a headless run (`claude -p "/relay:result <job>"`) uses. The
+module passes the companion's own code (0 completed, 3 ended without a report, 4 running or busy, 5 cancelled, 1
+usage), and 1 with its own error texts, so a script that ran `C result` can run the slash command instead and read
+the same code. An interactive session ignores it, and so does `--output-format stream-json` (measured on 2.1.308:
+`text` and `json` exit with the code, `stream-json` exits 0).
+
+### D36. The command checks send the run line first and the commands after it (Phase 2 thread)
+
+A slash command cannot carry the prompt's first line, `Live suite run <id>.`, by which the suite scopes a
+transcript and finds a T3 thread's. A command check's prompt is that line and a one-line reply; the commands
+follow as the session's next messages, typed into the pane by the runner, or sent to the thread by the lead from
+the list `prepare` prints. The jobs the commands read are started by the check's setup with the build's companion,
+not through Claude, so no relay's hand-back starts a lead turn among the commands, and every job the setup started
+and the commands left running is cancelled after the analysis. The transcript holds a command without its
+arguments, so a command passes only when the answer's first line, the module's echo of `e.args`, is the command as
+planned; a newer finished job and a second running job sit beside the ones the commands name, so the companion's
+defaults could not stand in for the arguments. The build that answered is proved by the `relay-version:` line of a
+`/relay:status` answer (D37); the jobs' own versions only prove the setup's build. A command's time runs from the
+runner's send in the terminal, where the transcript stamps the command and its answer alike, and from the SDK's
+`enqueue` record in T3; a `claude -p` run reports its own `duration_ms`, since its `enqueue` record comes before the
+hooks module has loaded. `transfer` runs on Codex only; the table says `n/a` for the others, and `run all` skips a
+check that applies to none of the backends asked for. Both reviewers (GPT-6.1 Sol and Opus 5.5) found the two
+false passes this closes: arguments a module dropped, and an older build answering in T3.
+
+### D37. `status` names the relay version, and a smoke install's commit (Phase 2 thread)
+
+The status header gains `relay-version: <version>` after `fast-tier:`. A person sees which build answers the
+commands, and a live check can prove that the module of the build under test answered: in T3 nothing else in the
+transcript names the build that loaded. Two builds can share a `3.0.0-dev.N` (D28), as both reviewers of the
+second round pointed out, so `install-local.sh` writes the commit into the export (`.claude-plugin/build.json`),
+and the line reads `relay-version: <version> (<commit>)` for such a build; a T3 check requires that commit to be
+the run's. A released install has no stamp. `status <job>` and `--json` are unchanged; Phase 4 gives every `--json`
+output a `relayVersion`.
+
 ### D41. TaskStop is mapped to its job by the id in the tool's result (Phase 3 thread)
 
 The plan asked to check first what TaskStop names. Measured on 2.1.308: `tool_input.task_id` is what the caller
