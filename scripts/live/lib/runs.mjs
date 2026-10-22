@@ -76,7 +76,8 @@ export function pluginCommit(pluginDir) {
 
 // The cancel grace as the companion reads RELAY_JOBS_CANCEL_GRACE_MS.
 export function cancelGrace(env = process.env) {
-  const value = Number(env.RELAY_JOBS_CANCEL_GRACE_MS);
+  const raw = env.RELAY_JOBS_CANCEL_GRACE_MS;
+  const value = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
   return Number.isFinite(value) && value >= 0 ? value : 10000;
 }
 

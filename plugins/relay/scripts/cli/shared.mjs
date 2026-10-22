@@ -7,8 +7,10 @@ import { UsageError } from "../lib/jobs/request.mjs";
 import { isTerminalView, JobViewBusy, loadJobViewSettled, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
 
 
+// An empty or blank value is unset; an explicit 0 stands.
 export function envNumber(name, fallback) {
-  const value = Number(process.env[name]);
+  const raw = process.env[name];
+  const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 

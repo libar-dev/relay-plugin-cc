@@ -210,3 +210,13 @@ test("plugin build reads strings and treats absent, invalid or unreadable stamps
   const module = await import(`${pathToFileURL(path.join(moduleDir, "plugin.mjs"))}?case=unreadable`);
   assert.equal(module.PLUGIN_BUILD, null);
 });
+
+// Greptile: column widths came from a spread of every row into Math.max, which overflows the call
+// stack once a listing (`status --all`) holds enough jobs.
+test("a listing with very many jobs renders", () => {
+  const views = Array.from({ length: 200000 }, (_, index) => view({ id: `job-${index}` }));
+  const lines = renderJobList(views).split("\n");
+  assert.equal(lines[0], "jobs: 200000");
+  assert.equal(lines[2].split("|")[1].trim(), "job");
+  assert.equal(lines.length, 200000 + 5);
+});

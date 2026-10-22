@@ -346,7 +346,8 @@ export function renderJobList(views, options = {}) {
       ].join(", ")
     ];
   }).map((row) => row.map((cell) => String(cell).replace(/\s+/g, " ").trim().replaceAll("\\", "\\\\").replaceAll("|", "\\|")));
-  const widths = header.map((cell, index) => Math.max(Array.from(cell).length, ...rows.map((row) => Array.from(row[index]).length)));
+  // A loop, not a spread: `--all` can list more jobs than a call takes arguments.
+  const widths = header.map((cell, index) => rows.reduce((widest, row) => Math.max(widest, Array.from(row[index]).length), Array.from(cell).length));
   const renderRow = (row) => `| ${row.map((cell, index) => cell + " ".repeat(widths[index] - Array.from(cell).length)).join(" | ")} |`;
   const separator = `|${widths.map((width) => "-".repeat(width + 2)).join("|")}|`;
   return `jobs: ${views.length}\n\n${[renderRow(header), separator, ...rows.map(renderRow)].join("\n")}\n`;

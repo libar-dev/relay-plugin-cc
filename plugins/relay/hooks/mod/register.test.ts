@@ -254,7 +254,7 @@ test('the arguments go as one element, exactly as typed, and none when blank', a
 })
 
 test("cancel's timeout follows the grace the companion reads, up to ten minutes", async ($, on) => {
-  const graces: (string | undefined)[] = [undefined, '30000', 'soon', '-5', '1e9', '0']
+  const graces: (string | undefined)[] = [undefined, '30000', 'soon', '-5', '1e9', '0', '', '  ']
   let next = 0
   const seen = companion(on, { grace: () => graces[next++] })
 
@@ -263,8 +263,8 @@ test("cancel's timeout follows the grace the companion reads, up to ten minutes"
   }
 
   expect(next).toBe(graces.length)
-  // Unset, a number, garbage, a negative number, a huge one, none at all.
-  expect(seen.runs.map((r) => r.init.timeoutMs)).toEqual([60000, 100000, 60000, 60000, 600000, 40000])
+  // Unset, a number, garbage, a negative number, a huge one, an explicit zero, empty and blank (unset).
+  expect(seen.runs.map((r) => r.init.timeoutMs)).toEqual([60000, 100000, 60000, 60000, 600000, 40000, 60000, 60000])
   expect(seen.reads.filter((read) => read === GRACE)).toHaveLength(graces.length)
 })
 
@@ -381,6 +381,16 @@ test('a backtick run in the verbatim part gets a longer fence', async ($, on) =>
 
   // The report is not fenced, so only the verbatim part's run counts.
   expect(result).toEqual({ text: '/relay:result\n````text\nsummary: use ``` fences\n````\n---\nreport with ````` five\n', exitCode: 0 })
+})
+
+// Greptile: a spread of every run into Math.max overflowed the call stack on a large output.
+test('an output with very many backtick runs is shown, not refused', async ($, on) => {
+  const many = '`a'.repeat(200000) + '\n'
+  companion(on, { run: () => ({ value: printed(many) }) })
+
+  const result = await $.command.run(command('relay:status', '--json'))
+
+  expect(result).toEqual({ text: '/relay:status --json\n```text\n' + many + '```\n', exitCode: 0 })
 })
 
 test('the exit code passes through when it is a whole number from 0 to 255, and is left out otherwise', async ($, on) => {

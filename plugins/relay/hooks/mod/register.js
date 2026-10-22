@@ -31,7 +31,8 @@ function companionText(e, { stdout, stderr }) {
   if (!verbatim.endsWith("\n")) {
     verbatim += "\n";
   }
-  const longest = Math.max(0, ...(verbatim.match(/`+/g) ?? []).map((run) => run.length));
+  // A loop, not a spread: a large output can hold more backtick runs than a call takes arguments.
+  const longest = (verbatim.match(/`+/g) ?? []).reduce((most, run) => Math.max(most, run.length), 0);
   const fence = "`".repeat(Math.max(3, longest + 1));
   const tail = at === -1 ? "" : lines[at] === "---" ? "---\n" + lines.slice(at + 1).join("\n") : lines.slice(at).join("\n");
   return commandLine(e) + "\n" + fence + "text\n" + verbatim + fence + "\n" + tail;
@@ -54,7 +55,9 @@ function errorText(e, paragraph) {
 async function cancelTimeoutMs($) {
   let grace = 10000;
   try {
-    const value = Number(await $.env.get("RELAY_JOBS_CANCEL_GRACE_MS"));
+    // An empty value is unset, as the companion's envNumber reads it; an explicit 0 stands.
+    const raw = await $.env.get("RELAY_JOBS_CANCEL_GRACE_MS");
+    const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
     if (Number.isFinite(value) && value >= 0) {
       grace = value;
     }

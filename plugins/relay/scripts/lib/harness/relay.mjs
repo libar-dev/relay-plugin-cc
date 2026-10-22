@@ -38,7 +38,8 @@ const COORDINATOR_PREFIX = "The coordinator sent a message while you were workin
 const COORDINATOR_SUFFIX = "\n\nAddress this before completing your current task.";
 
 function envNumber(env, name, fallback) {
-  const value = Number(env[name]);
+  const raw = env[name];
+  const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
