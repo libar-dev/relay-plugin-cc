@@ -118,8 +118,8 @@ What shipped:
   resolves `e.to` through `$.agent.list()` (an id, then a name, else `e.to` as given, since a Workflow's agents
   are not listed) and runs `companion wake --agent <id>` with a 10-second timeout. Errors are caught.
 - `companion wake` reads only the relay pointer, never the scan over every job, since it runs on every
-  `SendMessage`. It writes `<jobDir>/relay-wake.json` when the agent is the job's current relay and the job has not
-  ended.
+  `SendMessage`. It writes `<jobDir>/relay-wake.json` when the agent is the job's current relay, also on a job that
+  has ended, since a message can continue it.
 - **A marker counts against the boundary the wait came after, not against a guard check.** Claude Code puts a
   queued message into the relay's conversation only after every tool call of an assistant message has returned.
   The rule planned here (a marker is covered once the guard has read the transcript after it) missed a message

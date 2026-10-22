@@ -67,8 +67,9 @@ install -d -m 700 "$socket_dir"
 target="=$name:"
 case "$action" in
   start)
-    # Multiple tmux command arguments execute directly; no shell reparses their values.
-    tmux -S "$SOCK" new-session -d -s "$name" -x 200 -y 50 -c "$dir" "${env_args[@]}" -- "$@"
+    # Multiple tmux command arguments execute directly; no shell reparses their values. The guarded
+    # expansion keeps an empty env_args from failing under set -u on Bash before 4.4 (macOS ships 3.2).
+    tmux -S "$SOCK" new-session -d -s "$name" -x 200 -y 50 -c "$dir" ${env_args[@]+"${env_args[@]}"} -- "$@"
     # Claude Code tracks focus through the terminal's focus events, which tmux passes on only
     # when asked; without them it prints a hint under the prompt.
     tmux -S "$SOCK" set-option -g focus-events on ;;
