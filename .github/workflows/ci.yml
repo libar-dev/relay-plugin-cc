@@ -36,3 +36,14 @@ jobs:
 
       - name: Check types
         run: npm run check
+
+      # The plugin's hooks module runs only inside Claude Code, so its checks need the CLI. Neither
+      # command signs in. The version is pinned so a new release cannot change a run's result.
+      - name: Install Claude Code
+        run: npm install --global @anthropic-ai/claude-code@2.1.308
+
+      - name: Validate plugin
+        run: claude plugin validate plugins/relay
+
+      - name: Run Mod tests
+        run: claude plugin test plugins/relay

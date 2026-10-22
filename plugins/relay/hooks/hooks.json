@@ -1,5 +1,8 @@
 {
-  "description": "Session exports, the optional stop-time review gate, and the relay:job relay hook, which carries the relay's prompt, messages and report.",
+  "description": "Session exports, the optional stop-time review gate, the relay:job relay hook, which carries the relay's prompt, messages and report, and a module whose session.send hook wakes a relay's wait when a message is queued for it.",
+  "modules": [
+    "./mod/register.js"
+  ],
   "hooks": {
     "SessionStart": [
       {

@@ -150,3 +150,6 @@ output/
 
 # Local working files of agents; evidence lives outside the repository
 scratchpad/
+
+# Declarations Claude Code writes into a plugin folder it loads with --plugin-dir
+plugins/relay/.claude-plugin/types/
