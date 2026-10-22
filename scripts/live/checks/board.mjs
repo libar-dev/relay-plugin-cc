@@ -15,6 +15,31 @@ const plain = text => text.replace(/\x1b\[[0-9;]*m/g, '');
 export function leadIsIdle(screen) {
   return !/^\s*[·✢✳✶✻✽*] [^\n]*?(?:…|\.\.\.)\s+\(\d+(?:h|m|s)(?: \d+(?:h|m|s))*\b/m.test(plain(screen));
 }
+// Use a blank transcript line to measure the dock boundary in screen cells,
+// independent of emoji or wide characters elsewhere in the transcript.
+export function elementCell(screen, wanted) {
+  const lines = plain(screen).split('\n');
+  if (wanted === '❯') {
+    const y = lines.findLastIndex(line => /^❯\s*$/.test(line));
+    return y < 0 ? null : { x: 1, y: y + 1 };
+  }
+  const boundary = lines.find(line => /^ *│/.test(line))?.indexOf('│');
+  if (boundary === undefined) return null;
+  for (const [y, line] of lines.entries()) {
+    const divider = line.lastIndexOf('│');
+    if (divider < 0) continue;
+    const body = line.slice(divider + 1), at = body.indexOf(wanted);
+    if (at < 0) continue;
+    if (wanted.startsWith('job-')) {
+      if (!/^ *(?:> )?$/.test(body.slice(0, at)) || !body.slice(at + wanted.length).startsWith(' · ')) continue;
+    } else if (!wanted.startsWith('[') && body.slice(0, at).trim()) continue;
+    return { x: boundary + 2 + [...body.slice(0, at)].length, y: y + 1 };
+  }
+  return null;
+}
+export function clickBytes({ x, y }) {
+  return [...Buffer.from(`\x1b[<0;${x};${y}M\x1b[<0;${x};${y}m`)].map(byte => byte.toString(16).padStart(2, '0'));
+}
 export function focusedText(screen) {
   let inverse = false, offset = 0, text = '';
   for (const match of screen.matchAll(/\x1b\[([0-9;]*)m/g)) {
@@ -142,6 +167,13 @@ export default {
       return plain(text);
     };
     const bytes = (...hex) => drive(['bytes', run.pane, ...hex]);
+    const locate = async wanted => {
+      let cell;
+      await waitFor(`element ${wanted}`, () => (cell = elementCell(drive(['screen-escapes', run.pane]), wanted)), 15000);
+      return cell;
+    };
+    const click = async wanted => bytes(...clickBytes(await locate(wanted)));
+    // Only the new, agent-free narrow session uses keyboard focus and idle waits.
     const waitIdle = async (until = now() + 60000) => {
       let screen;
       await waitFor('idle lead', () => {
@@ -165,16 +197,22 @@ export default {
         bytes('09'); return false;
       }, until - now());
     };
-    const select = async item => {
-      await focus(item.job.id); bytes('0d');
+    const select = async (item, narrow = false) => {
+      if (narrow) { await focus(item.job.id); bytes('0d'); }
+      else await click(item.job.id);
       await waitFor('selected job details', () => {
         const screen = plain(drive(['screen-escapes', run.pane]));
         return screen.includes(`> ${item.job.id}`) && screen.includes(`model ${MODELS[item.backend]}`) && screen.includes(`relay board-${item.kind === 'agent' ? 'agent' : 'wf'}-${item.backend}`);
       });
     };
     const open = async (phase, jobs) => {
-      await waitIdle(); drive(['keys', run.pane, '-l', '/relay-board']);
-      await waitIdle(); bytes('0d');
+      if (phase === 'narrow') {
+        await waitFor('narrow first prompt', () => {
+          const screen = drive(['screen-escapes', run.pane]);
+          return leadIsIdle(screen) && /^❯\s*$/m.test(plain(screen));
+        });
+      } else await click('❯');
+      drive(['keys', run.pane, '-l', '/relay-board']); bytes('0d');
       await waitFor('every board row', () => jobs.every(item => hasRow(plain(drive(['screen-escapes', run.pane])), readJob(item.jobDir))));
       capture(phase);
     };
@@ -193,12 +231,11 @@ export default {
     const send = async (item, action) => {
       await select(item);
       const label = action === 'continue' ? 'Continue:' : item.backend === 'kimi' ? 'Queue next turn:' : 'Steer:';
-      await focus(label);
+      await click(label);
       // Clear the field left by a previous selection before typing literal text.
       bytes('05', '15');
       const text = action === 'steer' ? steerText(item.kind, item.backend) : continueText(item.kind, item.backend);
-      await focus(label); drive(['keys', run.pane, '-l', text]);
-      await focus(label);
+      drive(['keys', run.pane, '-l', text]);
       const files = item.kind === 'workflow' ? relayFiles(input(), item, evidence) : undefined;
       const receipt = { runId: run.runId, sessionId: run.sessionId, jobId: item.job.id, kind: item.kind, backend: item.backend, action, text, at: stamp() };
       if (files) receipt.relayFiles = files;
@@ -226,12 +263,12 @@ export default {
         if (item.kind !== 'workflow') continue;
         await waitFor('continued turn running', () => readJob(item.jobDir).state === 'running');
         const attempt = readJob(item.jobDir).attempts.at(-1).attempt;
-        await focus(/^Cancel$/); bytes('0d');
+        await click('[ Cancel ]');
         await waitFor('cancel confirmation', () => plain(drive(['screen-escapes', run.pane])).includes(`Cancel job ${item.job.id}, attempt ${attempt}?`));
         capture(`confirm-${item.backend}`);
-        await focus(/^Yes$/);
+        const yes = await locate('[ Yes ]');
         const receipt = { runId: run.runId, sessionId: run.sessionId, jobId: item.job.id, kind: item.kind, backend: item.backend, action: 'cancel', attempt, at: stamp() };
-        saved.actions.push(receipt); bytes('0d'); ctx.save();
+        saved.actions.push(receipt); bytes(...clickBytes(yes)); ctx.save();
         await waitFor('cancelled job', () => readJob(item.jobDir).state === 'cancelled', 15000, Date.parse(receipt.at));
         capture(`cancel-${item.backend}`);
       }
@@ -244,7 +281,7 @@ export default {
       try {
         await start(100, false, { ...this, completed: entries => hasMarker(entries, 'LIVE-BOARD-NARROW-READY') }, { ...ctx, evidenceDir: narrowDir });
         saved.narrow = { sessionId: run.sessionId, transcript: run.transcript, debugLog: run.debugLog, startupEvidence: run.startupEvidence };
-        await open('narrow', jobs); await select(jobs[0]);
+        await open('narrow', jobs); await select(jobs[0], true);
         saved.selectedJob = jobs[0].job.id; capture('narrow-detail');
       } finally {
         try { drive(['stop', run.pane]); }

@@ -18,7 +18,7 @@ import { headlessCommands, runHeadless, executeHeadless } from '../scripts/live/
 import { workflowScript } from '../scripts/live/checks/steer-workflow.mjs';
 import { agentCalls, waitLoop } from '../scripts/live/checks/steer-main.mjs';
 import { badPrompts, goodPrompt, workflowScript as spawnScript, checkHeader, expectedMessage } from '../scripts/live/checks/spawn-check.mjs';
-import { boardWorkflow, steerText, continueText, focusedText, leadIsIdle } from '../scripts/live/checks/board.mjs';
+import { boardWorkflow, steerText, continueText, focusedText, leadIsIdle, elementCell, clickBytes } from '../scripts/live/checks/board.mjs';
 import { copyEvidence } from '../scripts/live/lib/runs.mjs';
 import { postInboxMessage, claimInboxMessages, recordReceipt, writeOutcome } from '../plugins/relay/scripts/lib/jobs/messages.mjs';
 
@@ -3013,12 +3013,47 @@ test('board focus follows inverse video through colors and combined resets', () 
   assert.equal(focusedText('\x1b[38;2;7;0;27mWrong\x1b[0m \x1b[7mYes\x1b[38;5;0m!\x1b[27m'), 'Yes!');
 });
 
-function boardDriver(t, failure, { idleWaits = false, stealFocus = false, outcomeDelay = 0, saveDelay = 0 } = {}) {
+test('board click bytes encode a one-based SGR left press and release', () => {
+  assert.deepEqual(clickBytes({ x: 114, y: 9 }), [
+    '1b', '5b', '3c', '30', '3b', '31', '31', '34', '3b', '39', '4d',
+    '1b', '5b', '3c', '30', '3b', '31', '31', '34', '3b', '39', '6d'
+  ]);
+});
+
+test('board element search finds screen cells in the third live capture', () => {
+  // Unmodified board-0.txt from 20261022T202908Z-board-terminal-1455 (200 x 60).
+  const screen = fs.readFileSync(path.join(fixture, 'board/wide-live.txt'), 'utf8');
+  assert.deepEqual(elementCell(screen, 'job-mvjzvk54-e28caae7'), { x: 114, y: 2 });
+  assert.deepEqual(elementCell(screen, 'job-mvjzvdlw-de4193aa'), { x: 114, y: 9 });
+  assert.deepEqual(elementCell(screen, '❯'), { x: 1, y: 49 });
+  assert.equal(elementCell(screen, 'job-missing'), null);
+  assert.equal(elementCell(screen, 'job-mvjzvk54'), null);
+  assert.equal(elementCell(screen, '[ Cancel ]'), null);
+});
+
+test('board element search ignores transcript duplicates and handles styled fields and buttons', () => {
+  const screen = fs.readFileSync(path.join(fixture, 'board/wide-live.txt'), 'utf8').split('\n');
+  // Add detail controls to the captured dock; these lines are synthetic.
+  screen[0] = 'job-mvjzvdlw-de4193aa · codex · running · attempt 1'.padEnd(110) + '│';
+  screen[9] = '工具 🙂 job-mvjzvdlw-de4193aa'.padEnd(108) + '│\x1b[7mSteer:\x1b[0m';
+  screen[10] = ' '.repeat(110) + '│[ Cancel ]';
+  screen[11] = ' '.repeat(110) + '│Cancel job job-mvjzvdlw-de4193aa, attempt 2? [ Yes ] [ No ]';
+  assert.deepEqual(elementCell(screen.join('\n'), 'job-mvjzvdlw-de4193aa'), { x: 114, y: 9 });
+  assert.deepEqual(elementCell(screen.join('\n'), 'Steer:'), { x: 112, y: 10 });
+  assert.deepEqual(elementCell(screen.join('\n'), '[ Cancel ]'), { x: 112, y: 11 });
+  assert.deepEqual(elementCell(screen.join('\n'), '[ Yes ]'), { x: 157, y: 12 });
+  for (const label of ['Continue:', 'Queue next turn:']) {
+    assert.deepEqual(elementCell(screen.join('\n').replace('Steer:', label), label), { x: 112, y: 10 });
+  }
+  assert.equal(elementCell('job-mvjzvdlw-de4193aa · codex · running · attempt 1', 'job-mvjzvdlw-de4193aa'), null);
+});
+
+function boardDriver(t, failure, { firstPromptDelay = 0, stealFocus = false, outcomeDelay = 0, saveDelay = 0 } = {}) {
   const dir = temp(t), workDir = path.join(dir, 'work'), jobsHome = path.join(dir, 'jobs');
   fs.mkdirSync(workDir); fs.mkdirSync(jobsHome);
   const check = getCheck('board'), calls = [], run = { runId: 'synthetic-run', sessionId: 'board-session', completed: false };
   let time = Date.parse('2026-10-22T10:00:10Z'), selected, focus = -1, confirm = false, count = 0, handled = 0, command = '';
-  let busyUntil = idleWaits ? time + 20000 : 0, paneFocused = false, prefix = false, stolen = 0;
+  let busyUntil = 0, paneFocused = false, prefix = false, stolen = 0;
   const pendingOutcomes = [], presses = [];
   const idleScreen = fs.readFileSync(path.join(fixture, 'board/lead-idle.txt'), 'utf8');
   const runningScreen = fs.readFileSync(path.join(fixture, 'board/lead-running.txt'), 'utf8');
@@ -3031,7 +3066,13 @@ function boardDriver(t, failure, { idleWaits = false, stealFocus = false, outcom
   const screen = () => {
     const rows = ids.map(id => `${selected === id ? '> ' : '  '}job-${id} · ${job(id).request.backend} · ${job(id).state} · attempt ${job(id).attempts.length}`);
     if (selected) rows.push(`model ${job(selected).request.model} · effort low`, `relay ${job(selected).relay.label}`, field());
-    if (confirm) rows.push(`Cancel job job-${selected}, attempt ${job(selected).attempts.length}?`);
+    if (confirm) rows.push(`Cancel job job-${selected}, attempt ${job(selected).attempts.length}?`, '[ Yes ] [ No ]');
+    else if (selected && job(selected).state === 'running') rows.push('[ Cancel ]');
+    if (count === 1) {
+      // Busy for the entire wide session; keyboard focus acquisition never works here.
+      return [...rows.map(row => ' '.repeat(110) + '│' + row), runningScreen,
+        '✻ Waiting for 4 background agents and 1 dynamic workflow to finish', '❯'].join('\n');
+    }
     rows.push(`\x1b[7m${paneFocused ? elements()[focus] ?? '' : ''}\x1b[0m`);
     rows.push(time < busyUntil ? runningScreen : idleScreen);
     return rows.join('\n');
@@ -3054,54 +3095,75 @@ function boardDriver(t, failure, { idleWaits = false, stealFocus = false, outcom
       for (const id of ids.filter(id => id.startsWith('agent-'))) { const value = job(id); value.state = 'completed'; saveJob(id, value); }
     }
   };
+  const press = () => {
+    assert.equal(paneFocused, true, 'press must go to the board');
+    if (run.board.actions.length > handled) {
+      const action = run.board.actions.at(-1), id = action.jobId.slice(4), value = job(id);
+      assert.equal(selected, id);
+      assert.equal(elements()[focus], action.action === 'cancel' ? 'Yes' : field());
+      if (action.action !== 'cancel') assert.equal(command, action.text);
+      presses.push({ action: { ...action }, at: time });
+      handled = run.board.actions.length;
+      if (action.action === 'continue') { value.state = 'running'; value.attempts.push({ attempt: value.attempts.length + 1 }); }
+      if (action.action === 'cancel') { value.state = 'cancelled'; confirm = false; }
+      saveJob(id, value);
+      write(path.join(jobsHome, `repo/${value.id}/inbox/claimed/${action.action}.json`), { id: action.action, kind: action.action, text: action.text, createdAt: action.at });
+      const pending = { file: path.join(jobsHome, `repo/${value.id}/inbox/outcomes/${action.action}.json`),
+        value: { messageId: action.action, action: action.action === 'steer' ? 'steered' : 'turn-started' }, at: time + (typeof outcomeDelay === 'function' ? outcomeDelay(action.action) : outcomeDelay) };
+      pendingOutcomes.push(pending);
+      if (pending.at === time) write(pending.file, pending.value);
+    } else if (elements()[focus]?.startsWith('job-')) selected = elements()[focus].slice(4);
+    else if (elements()[focus] === 'Cancel') confirm = true;
+  };
   const drive = (args, text) => {
     calls.push({ args, text, at: time });
-    if (args[0] === 'screen-escapes') return failure === 'missing rows' ? 'Relay jobs' : screen();
-    if (['keys', 'bytes'].includes(args[0])) assert.ok(time >= busyUntil, `sent ${args} during a lead turn`);
+    if (args[0] === 'screen-escapes') {
+      if (failure === 'missing rows') return count === 1 && !command ? '❯' : 'Relay jobs';
+      return failure === 'missing field' && selected ? screen().replaceAll(field(), 'Hidden:') : screen();
+    }
+    if (count === 2 && ['keys', 'bytes'].includes(args[0])) assert.ok(time >= busyUntil, `sent ${args} before narrow prompt`);
     if (args[0] === 'keys') {
       command = args.at(-1);
       if (command !== '/relay-board') {
         assert.equal(paneFocused, true, 'text must go to the board');
         assert.equal(elements()[focus], field());
       }
-      if (idleWaits) { busyUntil = time + 500; paneFocused = false; focus = -1; }
     }
     if (args[0] !== 'bytes') return '';
+    const raw = Buffer.from(args.slice(2).map(byte => parseInt(byte, 16))).toString();
+    if (raw.startsWith('\x1b[<')) {
+      assert.equal(count, 1, 'mouse is only used in fullscreen');
+      const match = raw.match(/^\x1b\[<0;(\d+);(\d+)M\x1b\[<0;\1;\2m$/);
+      assert.ok(match, 'one matching SGR left press and release');
+      const x = Number(match[1]), y = Number(match[2]);
+      const row = failure === 'missing rows' ? '❯' : screen().split('\n')[y - 1];
+      if (row === '❯') { assert.equal(x, 1); return ''; }
+      const label = row.slice(x - 1);
+      const target = label.startsWith('job-') ? label.split(' · ')[0] : label.startsWith('[ Yes ]') ? 'Yes' : label.startsWith('[ Cancel ]') ? 'Cancel' : label;
+      assert.ok(elements().includes(target), `click must hit first cell of an element: ${x},${y}`);
+      paneFocused = true; focus = elements().indexOf(target);
+      if (!selected || target !== field()) press();
+      return '';
+    }
     for (const byte of args.slice(2)) {
       if (['05', '15'].includes(byte)) {
         assert.equal(paneFocused, true, 'clear must go to the board');
         assert.equal(elements()[focus], field());
       }
+      if (['18', '09'].includes(byte)) assert.equal(count, 2, 'wide session must never acquire keyboard focus');
       if (byte === '18') prefix = true;
       if (byte === '09') {
-        if (stealFocus && (stealFocus !== 'walking' || !prefix) && (stolen === 0 || stealFocus === 'always')) {
+        if (stealFocus && (stolen === 0 || stealFocus === 'always')) {
           stolen++; paneFocused = false; prefix = false; focus = -1; busyUntil = time + 1000; return '';
         }
         if (prefix) { paneFocused = true; prefix = false; }
         if (paneFocused) focus = (focus + 1) % elements().length;
       }
       if (byte !== '0d') continue;
-      if (command === '/relay-board') { command = ''; continue; }
-      assert.equal(paneFocused, true, 'Enter must go to the board');
-      if (run.board.actions.length > handled) {
-        const action = run.board.actions.at(-1), id = action.jobId.slice(4), value = job(id);
-        assert.equal(selected, id);
-        assert.equal(elements()[focus], action.action === 'cancel' ? 'Yes' : field());
-        if (action.action !== 'cancel') assert.equal(command, action.text);
-        presses.push({ action: { ...action }, at: time });
-        handled = run.board.actions.length;
-        if (action.action === 'continue') { value.state = 'running'; value.attempts.push({ attempt: value.attempts.length + 1 }); }
-        if (action.action === 'cancel') { value.state = 'cancelled'; confirm = false; }
-        saveJob(id, value);
-        write(path.join(jobsHome, `repo/${value.id}/inbox/claimed/${action.action}.json`), { id: action.action, kind: action.action, text: action.text, createdAt: action.at });
-        const pending = { file: path.join(jobsHome, `repo/${value.id}/inbox/outcomes/${action.action}.json`),
-          value: { messageId: action.action, action: action.action === 'steer' ? 'steered' : 'turn-started' }, at: time + (typeof outcomeDelay === 'function' ? outcomeDelay(action.action) : outcomeDelay) };
-        pendingOutcomes.push(pending);
-        if (pending.at === time) write(pending.file, pending.value);
-      } else if (elements()[focus]?.startsWith('job-')) selected = elements()[focus].slice(4);
-      else if (elements()[focus] === 'Cancel') confirm = true;
+      if (command === '/relay-board') { command = 'opened'; continue; }
+      if (count === 1) assert.equal(elements()[focus], field(), 'only field submission uses wide Enter');
+      press();
     }
-    if (idleWaits && !args.slice(2).some(byte => ['18', '09'].includes(byte))) { busyUntil = time + 500; paneFocused = false; focus = -1; }
     return '';
   };
   const ctx = { runId: run.runId, run, backends: ['codex', 'kimi'], jobsHome, workDir, evidenceDir: dir,
@@ -3122,7 +3184,8 @@ function boardDriver(t, failure, { idleWaits = false, stealFocus = false, outcom
       assert.equal(options.keep, true);
       assert.equal(selectedCheck.completed([textEntry('assistant', count === 1 ? 'LIVE-BOARD-READY' : 'LIVE-BOARD-NARROW-READY')]), true);
       if (count === 2) {
-        assert.match(fs.readFileSync(path.join(sessionCtx.evidenceDir, 'prompt.txt'), 'utf8'), /LIVE-BOARD-NARROW-READY/);
+        assert.match(fs.readFileSync(path.join(sessionCtx.evidenceDir, 'prompt.txt'), 'utf8'), /Do not run any tools\. Reply with exactly LIVE-BOARD-NARROW-READY/);
+        busyUntil = time + firstPromptDelay;
         selected = undefined; focus = -1; paneFocused = false; prefix = false;
       }
       run.completed = true;
@@ -3130,7 +3193,7 @@ function boardDriver(t, failure, { idleWaits = false, stealFocus = false, outcom
   return { ctx, calls, presses, dependencies: { drive, now: () => time, sleep: async ms => { time += ms; tick(); } } };
 }
 
-test('board runTerminal drives raw-byte focus in wide and narrow sessions and saves each action', async t => {
+test('board runTerminal clicks while wide is busy, uses narrow keys and saves each action', async t => {
   const { ctx, calls, dependencies } = boardDriver(t);
   await getCheck('board').runTerminal(ctx, dependencies);
   assert.equal(ctx.run.completed, true);
@@ -3168,39 +3231,34 @@ test('board idle detection distinguishes real spinner captures from completed tu
   }
 });
 
-test('board runTerminal waits for idle before opening, selecting, clearing, typing and pressing', async t => {
-  const { ctx, calls, presses, dependencies } = boardDriver(t, undefined, { idleWaits: true });
+test('board runTerminal waits for the fresh narrow prompt before sending keys', async t => {
+  const { ctx, calls, presses, dependencies } = boardDriver(t, undefined, { firstPromptDelay: 20000 });
   await getCheck('board').runTerminal(ctx, dependencies);
   assert.equal(ctx.run.completed, true);
   assert.equal(presses.length, 10);
-  assert.ok(calls.find(call => call.args[0] === 'keys').at >= Date.parse('2026-10-22T10:00:30Z'));
-  for (const { action, at } of presses) {
-    assert.equal(Date.parse(action.at), at);
-    if (action.action === 'cancel') continue;
-    const typed = calls.find(call => call.args[0] === 'keys' && call.args.at(-1) === action.text);
-    assert.ok(at >= typed.at + 500, 'the receipt starts after the post-typing idle wait');
-  }
+  const start = calls.find(call => call.args[0] === 'start' && call.args[1] === 'board-2');
+  const typed = calls.find(call => call.args[0] === 'keys' && call.args[1] === 'board-2');
+  assert.ok(typed.at >= start.at + 20000);
+  for (const { action, at } of presses) assert.equal(Date.parse(action.at), at);
 });
 
-for (const stealFocus of [true, 'walking']) {
-  test(`board runTerminal reacquires focus after a turn steals ${stealFocus === true ? 'the initial' : 'a walking'} Tab`, async t => {
-    const { ctx, calls, dependencies } = boardDriver(t, undefined, { stealFocus });
-    await getCheck('board').runTerminal(ctx, dependencies);
-    assert.equal(ctx.run.completed, true);
-    const index = calls.findIndex((call, i) => call.args[0] === 'bytes' && call.args[2] === '09' &&
-      (stealFocus === true || calls.slice(0, i).filter(c => c.args[0] === 'bytes' && c.args[2] === '09').length === 1));
-    const nextKeys = calls.slice(index + 1).filter(call => call.args[0] === 'bytes');
-    assert.deepEqual(nextKeys.slice(0, 2).map(call => call.args.slice(2)), [['18'], ['09']]);
-    assert.ok(nextKeys[0].at >= calls[index].at + 1000);
-  });
-}
+test('board narrow session reacquires focus after a lost Tab', async t => {
+  const { ctx, calls, dependencies } = boardDriver(t, undefined, { stealFocus: true });
+  await getCheck('board').runTerminal(ctx, dependencies);
+  assert.equal(ctx.run.completed, true);
+  const index = calls.findIndex(call => call.args[0] === 'bytes' && call.args[2] === '09');
+  const nextKeys = calls.slice(index + 1).filter(call => call.args[0] === 'bytes');
+  assert.deepEqual(nextKeys.slice(0, 2).map(call => call.args.slice(2)), [['18'], ['09']]);
+  assert.ok(nextKeys[0].at >= calls[index].at + 1000);
+});
 
-test('board runTerminal bounds repeated focus loss without restarting the deadline', async t => {
+test('board narrow session bounds repeated focus loss without restarting the deadline', async t => {
   const { ctx, calls, dependencies } = boardDriver(t, undefined, { stealFocus: 'always' });
   await assert.rejects(getCheck('board').runTerminal(ctx, dependencies), /Timed out waiting for (focus|idle lead)/);
   assert.equal(ctx.run.completed, false);
-  assert.equal(ctx.run.board.actions.length, 0);
-  assert.ok(dependencies.now() <= Date.parse('2026-10-22T10:00:26Z'));
+  assert.equal(ctx.run.board.actions.length, 10);
+  const start = calls.find(call => call.args[0] === 'start' && call.args[1] === 'board-2');
+  assert.ok(dependencies.now() <= start.at + 16000);
   assert.equal(calls.at(-1).args[0], 'stop');
 });
 
@@ -3215,6 +3273,15 @@ for (const [action, bound] of [['steer', 30000], ['continue', 60000]]) {
     assert.equal(Date.parse(presses.at(-1).action.at), presses.at(-1).at);
   });
 }
+
+test('board runTerminal bounds a missing click target and saves failure evidence', async t => {
+  const { ctx, calls, dependencies } = boardDriver(t, 'missing field');
+  await assert.rejects(getCheck('board').runTerminal(ctx, dependencies), /Timed out waiting for element Steer:/);
+  assert.equal(ctx.run.board.actions.length, 0);
+  assert.equal(ctx.run.board.screens.at(-1).phase, 'failure');
+  assert.ok(dependencies.now() <= Date.parse('2026-10-22T10:00:25Z'));
+  assert.equal(calls.at(-1).args[0], 'stop');
+});
 
 test('board runTerminal times out missing rows, keeps captures and closes the pane', async t => {
   const { ctx, calls, dependencies } = boardDriver(t, 'missing rows');
