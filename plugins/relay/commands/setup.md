@@ -4,10 +4,14 @@ argument-hint: '[--backend codex|grok|zcode|kimi] [--grok-home H|--kimi-home H] 
 allowed-tools: Bash(node:*), Bash(npm:*), AskUserQuestion
 ---
 
+Pass the user's arguments literally in the quoted heredoc below; never interpolate them into shell command arguments or a JavaScript string. Keep the opening delimiter quoted and the closing delimiter at column one. If its exact line occurs in the user's text, choose a new delimiter absent from that text and change both delimiter lines before running. Do not indent, escape, or otherwise rewrite the text. `--args-stdin` removes the one framing newline before the closing delimiter, then uses the same raw-argument parser as the single-string form. Use this transport on the rerun too.
+
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json $ARGUMENTS
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-stdin <<'RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD'
+$ARGUMENTS
+RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD
 ```
 
 The output is one JSON object (`schema: "relay.setup/1"`). When it holds `error`, print its `message` and stop.
@@ -72,7 +76,9 @@ npm install -g @openai/codex
 - Then rerun:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json $ARGUMENTS
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-stdin <<'RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD'
+$ARGUMENTS
+RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD
 ```
 
 If Codex is already installed or npm is unavailable:

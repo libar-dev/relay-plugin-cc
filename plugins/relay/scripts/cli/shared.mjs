@@ -58,7 +58,24 @@ function normalizeArgv(argv) {
 
 
 export function parseCommandInput(argv, config = {}) {
-  const parsed = parseArgs(normalizeArgv(argv), {
+  let tokens;
+  if (config.argsStdin && argv.includes("--args-stdin")) {
+    // This transport is separate from command options: all user arguments go in
+    // stdin. Only the setup recipe's fixed --json may accompany the selector.
+    if (argv.filter(token => token === "--args-stdin").length !== 1 || argv.some(token => token !== "--args-stdin" && token !== "--json")) {
+      throw new UsageError("--args-stdin accepts only --json alongside it; put command arguments on stdin.");
+    }
+    const framed = fs.readFileSync(0, "utf8");
+    // A heredoc adds one LF before its delimiter. Remove only that framing LF,
+    // preserving user newlines, trailing backslashes and even unmatched quotes.
+    const raw = framed.endsWith("\n") ? framed.slice(0, -1) : framed;
+    tokens = [...argv.filter(token => token !== "--args-stdin"), ...normalizeArgv([raw])];
+    // Error rendering must not read stdin a second time if parsing fails.
+    parsedJson = tokens.some(token => token === "--json" || (token.startsWith("--json=") && token !== "--json=false"));
+  } else {
+    tokens = normalizeArgv(argv);
+  }
+  const parsed = parseArgs(tokens, {
     ...config,
     aliasMap: {
       C: "cwd",

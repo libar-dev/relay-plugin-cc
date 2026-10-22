@@ -46,6 +46,8 @@ function printUsage() {
       `  companion.mjs review [--wait|--background] [--backend ${names}] [--model <m>] [--effort <e>]`,
       `                            ${homeFlags} [--base <ref>] [--scope <auto|working-tree|branch>] [--json]`,
       "  companion.mjs adversarial-review [the same options as review] [focus text] [--json]",
+      "  setup, review and adversarial-review also accept --args-stdin [--json]: read raw arguments from stdin,",
+      "    remove one final heredoc framing LF, then parse as a single argument string; no other argv options.",
       "  companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "",
       "Exit codes of wait and result: 0 completed with a report, 3 ended without a report (dead or failed) or with messages not yet run,",

@@ -123,6 +123,13 @@ Phase 6, an investigation (the plugin does not change):
   Kimi allow for a job that sends a message to the agent that started it, or to a peer, and how such a message
   and its reply would travel. Messages from a job are not part of 3.0.
 
+Fixes from the pre-releases:
+
+- `/relay:review`, `/relay:adversarial-review` and `/relay:setup` pass raw arguments to the companion
+  through a quoted heredoc and `--args-stdin`, in both review modes and on setup's rerun. Backticks,
+  `$(...)`, dollar signs, quotes and newlines in user text no longer become executable shell syntax.
+  The companion uses its existing raw-argument parser; output and exit codes are unchanged.
+
 Docs:
 
 - [docs/desktop.md](../../docs/desktop.md): relay in the Code tab of the Claude desktop app. It covers what runs

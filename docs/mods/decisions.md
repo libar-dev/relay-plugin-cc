@@ -591,3 +591,22 @@ The parts:
     that explain the features.
 12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
     owner decides.
+
+### D73. Model-run commands carry arguments on stdin (release lead)
+
+`review`, `adversarial-review` and `setup` use a quoted heredoc and the companion's `--args-stdin`
+option, including background reviews and setup's rerun. The delimiter must be absent as a whole line
+from the user's text; the command instructions require choosing another if it occurs. The companion
+removes exactly one framing LF and feeds the text to the existing single-string parser, preserving
+its quoting, whitespace and flag semantics. Only a fixed `--json` may accompany the stdin selector.
+Foreground output, exit codes, review-size estimation and Claude's background task behavior stay as
+before. `rescue` already passes its request as prose to `relay:job` and needs no shell transport.
+
+The skills review's High 1 showed that putting substituted `$ARGUMENTS` in shell source executes
+backticks and `$()` before the read-only review starts. Double quotes do not prevent this; setup's
+unquoted substitution also lets user quotes change argument boundaries. Relying on model-generated
+shell escaping or a JavaScript string was rejected because it requires getting nested quoting right
+on every invocation. A model-built argv helper would add machinery without improving on a quoted
+heredoc. The module's existing argv calls are unchanged. Tests execute every documented shell recipe
+with literal probes and compare stdin parsing with the single-string form; all fail against the
+original implementation.

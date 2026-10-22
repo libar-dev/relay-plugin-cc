@@ -19,11 +19,9 @@ test("review command uses AskUserQuestion and background Bash while staying revi
   assert.match(source, /review-only/i);
   assert.match(source, /return the companion's output verbatim to the user/i);
   assert.match(source, /```bash/);
-  assert.match(source, /```typescript/);
-  assert.match(source, /review "\$ARGUMENTS"/);
+  assert.match(source, /review --args-stdin <<'[^'\n]+'\n\$ARGUMENTS\n/);
   assert.match(source, /\[--scope auto\|working-tree\|branch\]/);
   assert.match(source, /run_in_background:\s*true/);
-  assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/companion\.mjs" review "\$ARGUMENTS"`/);
   assert.match(source, /description:\s*"Review"/);
   assert.match(source, /Do not call `BashOutput`/);
   assert.match(source, /Return the command stdout verbatim, exactly as-is/i);
@@ -47,11 +45,9 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /review-only/i);
   assert.match(source, /return the companion's output verbatim to the user/i);
   assert.match(source, /```bash/);
-  assert.match(source, /```typescript/);
-  assert.match(source, /adversarial-review "\$ARGUMENTS"/);
+  assert.match(source, /adversarial-review --args-stdin <<'[^'\n]+'\n\$ARGUMENTS\n/);
   assert.match(source, /\[--scope auto\|working-tree\|branch\] \[focus \.\.\.\]/);
   assert.match(source, /run_in_background:\s*true/);
-  assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/companion\.mjs" adversarial-review "\$ARGUMENTS"`/);
   assert.match(source, /description:\s*"Adversarial review"/);
   assert.match(source, /Do not call `BashOutput`/);
   assert.match(source, /Return the command stdout verbatim, exactly as-is/i);
@@ -93,6 +89,8 @@ test("rescue launches the relay:job agent through the same start and wait path",
   assert.doesNotMatch(rescue, /task-resume-candidate|codex-rescue|--resume-last/);
   assert.match(rescue, /never infer `mode` from the brief's words/i);
   assert.match(rescue, /The final user-visible response must be the agent's output verbatim/i);
+  assert.match(rescue, /Raw user request:\n\$ARGUMENTS/);
+  assert.doesNotMatch(rescue, /```bash|\bBash\b|companion\.mjs/);
   assert.deepEqual(fs.readdirSync(path.join(PLUGIN_ROOT, "agents")), ["job.md"]);
 });
 
@@ -251,7 +249,7 @@ test("setup command can offer Codex install and still points users to codex logi
   assert.match(setup, /^description: Check every backend the relay can run \(Codex, Grok, ZCode, Kimi\): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier or job MCP servers$/m);
   assert.match(setup, /AskUserQuestion/);
   assert.match(setup, /npm install -g @openai\/codex/);
-  assert.match(setup, /companion\.mjs" setup --json \$ARGUMENTS/);
+  assert.match(setup, /companion\.mjs" setup --json --args-stdin <<'[^'\n]+'\n\$ARGUMENTS\n/);
   assert.match(setup, /Render one table, one row per block, in the command's order/);
   assert.match(setup, /Never add rows for node or npm\./);
   assert.match(readme, /!codex login/);

@@ -61,6 +61,7 @@ function recordForegroundJob(cwd, kind, summary, request) {
 
 
 const REVIEW_OPTIONS = {
+  argsStdin: true,
   valueOptions: ["base", "scope", "model", "effort", "backend", ...Object.keys(BACKEND_HEADER_KEYS), "cwd"],
   booleanOptions: ["json", "background", "wait"],
   aliasMap: { m: "model" }

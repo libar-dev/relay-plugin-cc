@@ -43,7 +43,9 @@ Backend selection (the flags mirror a job header's keys):
 The answer is review JSON. Codex is held to the schema by its own `outputSchema`; Grok, ZCode and Kimi get the schema in the prompt and the plugin checks the answer. An answer that is not review JSON fails the review (`<backend> returned no valid review JSON`), keeps the raw answer in the report and exits non-zero; there is no second try. A turn that fails is not an answer: the review says `The <backend> turn failed: <error>` with the backend's error and exits non-zero. Grok, ZCode and Kimi read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. A Grok review always runs under Grok's `read-only` profile; where Grok refuses that profile (on a Mac whose `/var/run/docker.sock` is a symlink, or on Linux where it cannot reach a runtime socket such as `/run/podman/podman.sock`), the review fails with Grok's error. A Kimi review runs in Kimi's `default` mode: every permission request is rejected, and relay refuses the file writes and terminal commands Kimi sends through the client. That is not an OS sandbox: Kimi's hooks, the MCP servers and plugins it starts, and its other local operations can still have side effects.
 
 Argument handling:
-- Preserve the user's arguments exactly.
+- Preserve the user's arguments exactly in the quoted heredoc below; never interpolate them into shell command arguments or a JavaScript string.
+- Keep the opening delimiter quoted and the closing delimiter at column one. If its exact line occurs in the user's text, choose a new delimiter absent from that text and change both delimiter lines before running. Do not indent, escape, or otherwise rewrite the text.
+- `--args-stdin` removes the one framing newline before the closing delimiter, then uses the same raw-argument parser as the single-string form.
 - Do not strip `--wait` or `--background` yourself.
 - Do not weaken the adversarial framing or rewrite the user's focus text.
 - The companion script parses `--wait` and `--background`, but Claude Code's `Bash(..., run_in_background: true)` is what actually detaches the run.
@@ -55,20 +57,20 @@ Argument handling:
 Foreground flow:
 - Run:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" adversarial-review "$ARGUMENTS"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" adversarial-review --args-stdin <<'RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD'
+$ARGUMENTS
+RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD
 ```
 - Return the command stdout verbatim, exactly as-is.
 - Do not paraphrase, summarize, or add commentary before or after it. The one exception is the foreground line above, first, when you invoked the command yourself.
 - Do not fix any issues mentioned in the review output.
 
 Background flow:
-- Launch the review with `Bash` in the background:
-```typescript
-Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" adversarial-review "$ARGUMENTS"`,
-  description: "Adversarial review",
-  run_in_background: true
-})
+- Launch this command with `Bash`, setting `description: "Adversarial review"` and `run_in_background: true`:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" adversarial-review --args-stdin <<'RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD'
+$ARGUMENTS
+RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD
 ```
 - Do not call `BashOutput` or wait for completion in this turn.
 - After launching the command, tell the user: "The adversarial review started in the background. Check `/relay:status` for progress."
