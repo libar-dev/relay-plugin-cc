@@ -101,11 +101,13 @@ console.log(saved.addedMarketplace && marketplace && !problem ? 'marketplace' : 
 console.log(JSON.stringify({ saved, installLocation: marketplace?.installLocation, marketplaceVerified: !problem }));
 NODE
 )
-mapfile -t steps <<< "$state"
+# Three lines: the plugin step, the marketplace step, the saved state as JSON. Plain reads, since
+# macOS's /bin/bash is 3.2 and has no mapfile.
+{ IFS= read -r plugin_step; IFS= read -r marketplace_step; IFS= read -r saved_state; } <<< "$state"
 cd -- "$dir"
-if [[ ${steps[0]} == installed ]]; then claude plugin uninstall relay@relay-smoke --scope local; fi
-if [[ ${steps[1]} == marketplace ]]; then claude plugin marketplace remove relay-smoke; fi
-cleanup_node "$dir" "${steps[2]}" <<'NODE'
+if [[ $plugin_step == installed ]]; then claude plugin uninstall relay@relay-smoke --scope local; fi
+if [[ $marketplace_step == marketplace ]]; then claude plugin marketplace remove relay-smoke; fi
+cleanup_node "$dir" "$saved_state" <<'NODE'
 // A refusal is one line for the person, not a stack trace.
 process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path');

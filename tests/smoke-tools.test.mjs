@@ -431,6 +431,24 @@ for (const preexistingCache of [true, false]) {
   });
 }
 
+test('the smoke scripts use nothing newer than Bash 3.2, which macOS ships as /bin/bash', () => {
+  // A static check: CI and the Fedora machine run a newer Bash, so a 4.x feature would pass every
+  // other test there and fail on a Mac.
+  const newer = [
+    [/\b(mapfile|readarray)\b/, 'mapfile/readarray (4.0)'],
+    [/\bdeclare\s+-[a-zA-Z]*A/, 'associative arrays (4.0)'],
+    [/\blocal\s+-n\b|\bdeclare\s+-n\b/, 'namerefs (4.3)'],
+    [/\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?(,,|\^\^|,|\^)\}/, 'case modification (4.0)'],
+    [/\[\[\s+-v\b/, '[[ -v ]] (4.2)'],
+    [/\bcoproc\b|\|&|&>>|;;&|\bwait\s+-n\b/, 'a 4.x operator'],
+  ];
+  for (const name of ['pane.sh', 'install-local.sh', 'uninstall-local.sh']) {
+    const text = fs.readFileSync(path.join(root, 'scripts/smoke', name), 'utf8')
+      .split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+    for (const [pattern, what] of newer) assert.doesNotMatch(text, pattern, `${name} uses ${what}`);
+  }
+});
+
 test('unset config override uses the scratch HOME .claude directory, and claude runs without one', t => {
   const { dir, home, env } = fakeCli(t);
   delete env.CLAUDE_CONFIG_DIR;
