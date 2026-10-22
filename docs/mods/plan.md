@@ -413,7 +413,8 @@ The later phases, in this light:
      decide whether they are offered: it holds no Workflow agent. The label follows the backend:
      "Queue next turn" for Kimi. This holds for a relay the Agent tool started. For a Workflow job, a send by id
      forks the relay or reaches nothing ([After Phase 6](#after-phase-6-what-held-and-what-changed), D53), and
-     Phase 4 decides what the buttons do: D61 sends to the job directly.
+     Phase 4 decides what the buttons do. As built (D61), the relay route is for this session's Agent-tool relay
+     while it lives, and for a continue of its ended job; every other job is sent to directly.
    - **Cancel** runs the same `companion cancel` as `/relay:cancel`, and names the job and attempt again when
      pressed.
 3. **Companion JSON, changed in place** (done, below). The stop gate, `setup.md` and the jobs skill change in the same PR:

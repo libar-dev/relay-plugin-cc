@@ -595,27 +595,34 @@ The parts:
 ### D61. The board's Steer and Continue go by the relay only for an Agent-tool relay of this session (Phase 4 thread)
 
 One route per press, chosen from the job as `companion status <job> --json` reads it at the press, never from the
-list on screen. **By the relay** when the job's current relay binding has an agent id, `relay.workflowRunId` is null,
-the job's `claudeSessionId` is `$.session.id()` read at the press, and, for a starting or running job, `$.agent.list()`
-lists the relay as a live `relay:job` agent and the relay has called within 15 minutes (`relay.lastToolAt`, D59): the
-board sends `$.session.send({ to: { agentId }, text })`, the lead's `SendMessage` (D17). An ended or dead job of this
-session continues by its relay although the list has dropped the finished agent: that is D17's Continue. The relay delivers it, and after a continue
-it hands the new report back to the lead. **To the job directly** for every other job: a Workflow relay's (a send by id
-forks a running Workflow relay and reaches no job after it ended, D53), another session's or one from before `/clear`
-(not this session's relay to message), a running job whose relay has been silent for more than 15 minutes, and a job
-with no relay. The board runs `companion steer|continue <job> --message <text> --json`, with a 75 s timeout, since
-the companion waits up to 60 s for the worker's acknowledgement.
+list on screen. **By the relay** when the job's current relay binding has an agent id and is not a Workflow relay's
+(no `relay.workflowRunId`, no `stringReturn`), and the job's `claudeSessionId` is `$.session.id()` read at the press:
+for a starting or running job, only while `$.agent.list()` lists the relay as a live `relay:job` agent and it has
+called within 15 minutes (`relay.lastToolAt`, D59); for an ended or dead job, always, since D17's Continue resumes the
+finished relay that the list has dropped. The board then sends `$.session.send({ to: { agentId }, text })`, the lead's
+`SendMessage` (D17); the relay delivers it, and after a continue hands the new report back to the lead. **To the job
+directly** for every other job: a Workflow relay's (a send by id forks a running Workflow relay and reaches no job after
+it ended, D53), another session's or one from before `/clear` (not this session's relay to message), a live job whose
+relay is not listed or has been silent for more than 15 minutes, and a job with no relay. The board runs
+`companion steer|continue <job> --message <text> --json`, bounded by the companion's acknowledgement wait
+(`RELAY_JOBS_ACK_TIMEOUT_MS`, 60 s by default) plus 15 s, at most ten minutes.
+
+"This session" is the session id. Claude Code 2.1.309's `← for agents` moves the conversation to a new id, so the
+jobs it launched before go to the job directly afterwards: nothing is sent twice and no relay loop is forked, but a
+continue of such an ended job runs an attempt nobody hands back to the lead, which the board then shows with its report.
 
 A send the relay refuses shows its reason and offers **Send to the job directly**, pressed by the person; that press
 reads the job again and sends nothing if the job moved on to another kind or attempt. A press while a send runs does
 nothing. The board never falls back by itself and never sends again after an accepted or unclear send: the guard delivers what reached the
 relay's transcript, so a second route could deliver the message twice. The pane names the route each send took, and the
-result comes from the job's `messages` on its next read (the outcome, never the send's `isDelivered` alone). The board
+result comes from the job's `messages` on its next read (the outcome, never the send's `isDelivered` alone); a send by
+the relay reads as delivered only once a message with the sent text's preview, carried by the relay since the send,
+shows there. The board
 records no hand-back: a continue sent to the job directly runs an attempt nobody hands back, so that attempt stays
 `not handed back`, and the board shows its report. A steer sent directly to a job whose relay still waits comes back in
 that relay's block, to the Workflow script or the other session.
 
-Decided with GPT-6.1 Sol and Opus 5.5 as advisors. They rejected routing by `$.agent.list()` (it holds no Workflow
+Decided with GPT-6.1 Sol and Opus 5.5 as advisors. They rejected routing by `$.agent.list()` alone (it holds no Workflow
 agent and drops a subagent once it finishes, when Continue is wanted), sending by id to a Workflow relay (D53), no
 buttons for Workflow jobs (`companion steer` and `continue` reach them safely), and sending everything through the
 companion (an Agent-tool relay's continue would begin an attempt its lead never hears of).

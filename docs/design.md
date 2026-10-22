@@ -499,7 +499,8 @@ Each call has a timeout above its command's own deadline: 30 seconds for `status
 a second, twice `RELAY_JOBS_CANCEL_GRACE_MS` (10 s by default) and 40 seconds more for `cancel`, which can wait the
 grace once for its own worker and once for a worker that took the job over, up to the ten minutes `$.process.run`
 allows (a grace above 280 s outlasts it), and 180 for `transfer`, which gives Codex's import two minutes. A call that timed out or could not start, and output that `$.process.run` cut at 4 MiB,
-answer an error text that names the shell command to run instead, never a partial list. The markdown files keep
+answer an error text that names the shell command to run instead, never a partial list; the plugin's path and the
+typed arguments are single-quoted in it, one shell word each, as the module passed them. The markdown files keep
 the names, descriptions and argument hints for the command picker, and their body only says that the module
 answers the command: Claude Code runs it when the module did not load. Claude does not call these four itself. A
 model's Skill call expands a command's markdown body and never reaches `command.run`, so Claude reads jobs with
@@ -537,18 +538,21 @@ how the backend took it, and the report as Markdown.
 
 - **Steer** (a starting or running job; `Queue next turn` on Kimi) and **Continue** (an ended or dead job) send the
   field's text by one route, chosen from the job as it is read at the press (D61): by the relay, as the lead's
-  `SendMessage`, for an Agent-tool relay of this session that is alive; to the job directly with `companion steer` or
-  `continue` otherwise. A send the relay refuses offers `Send to the job directly`; nothing is sent twice. Each message
+  `SendMessage`, for an Agent-tool relay of this session that is alive, and for a continue of an ended job of this
+  session by its finished relay; to the job directly with `companion steer` or `continue` otherwise. A send the relay refuses offers `Send to the job directly`; nothing is sent twice. Each message
   in the job's view says which route carried it.
 - **Cancel** asks again, naming the job and its attempt, and `Yes` runs `companion cancel <job> --attempt <N> --json`
   with the bound `/relay:cancel` uses, so it never stops a newer attempt ([Cancel](#cancel)).
 
-The pane draws from `$.state` alone. From `/relay-board` until the pane closes, while it is placed and a surface draws,
-the list is read every three seconds, one read at a time, and the selected job when it is selected and when its state,
-attempts, messages, report or relay's last call change; state is written, and the pane drawn again, only when what it
-shows changed. A busy answer keeps the last data, marked as such. Nothing runs while the pane is closed or nothing
-draws. Its keys and
-clicks follow Claude Code's rules for panes (D65): the keyboard between turns, the mouse in the fullscreen layout.
+The pane draws from `$.state` alone. From `/relay-board` until the pane closes, while it is placed, shown (not behind
+another pane's tab) and a surface draws, the list is read every three seconds, one read at a time; where nothing draws
+yet, the reads start when a surface attaches. The selected job is read when it is selected, when its
+state, attempts, open or owed messages, report or relay's last call change, and every 30 seconds while it is live, for a
+message taken between two reads. State is written, and the pane drawn again, only when what it shows or what decides
+those reads changed. A busy answer keeps the last data, marked as such. Nothing runs while the pane is closed, hidden
+behind another pane's tab, or not drawn. A press says what it is doing at once (`Reading the job…`, `Cancelling attempt
+N…`), and another press on the same job waits for it. Its keys and clicks follow Claude Code's rules for panes (D65): the keyboard
+between turns, the mouse in the fullscreen layout.
 
 ### The report
 
