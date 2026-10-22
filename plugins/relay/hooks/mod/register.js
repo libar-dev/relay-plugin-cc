@@ -260,7 +260,8 @@ const CLEARED_TICKS = 6;
 // One tick: a read only while a surface draws the session and no read is in flight. While the
 // last good answer cleared the line, a job can only appear through a start the module rarely
 // sees, so a tick reads only every CLEARED_TICKS ticks, or at every tick for CLEARED_TICKS ticks
-// after a relay event it did see (a relay's job exists only once its start has run).
+// after a relay event it did see (a relay's job exists only once its start has run) or a busy
+// answer.
 async function poll($, poller, tick) {
   if ((await $.session.surfaces()).length === 0 || poller.isReading) {
     return;
@@ -275,6 +276,9 @@ async function poll($, poller, tick) {
     if (text !== null) {
       $.ui.status(text);
       poller.isCleared = text === undefined;
+    } else if (poller.isCleared) {
+      // Busy: a job's record is being written, often by a worker that has just started.
+      poller.fastUntil = tick + CLEARED_TICKS;
     }
   } finally {
     poller.isReading = false;
