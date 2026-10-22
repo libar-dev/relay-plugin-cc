@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.2.0 (2026-10-22)
+
+From a survey of every T3 Code thread on three machines, about 360 relay jobs from 17 to 22 October,
+most of them run by Workflow scripts ([docs/thread-surveys.md](../../docs/thread-surveys.md)).
+
+- A Kimi job no longer ends `completed` with `report: none`. Kimi can write a turn's `turn.ended`
+  before the engine's last batch of messages, the final answer included; relay dropped every message
+  after `turn.ended`. A message now goes to the prompt turn of the engine turn running (for a
+  notice run inside a prompt turn, that prompt turn), and a turn ends once that engine turn has
+  ended too, or 10 s after `turn.ended` at most.
+- A Workflow relay no longer loops on its state block. The relay retypes the block, and Haiku often
+  left out its last line, `relay: …`; the hook blocked each try, and a `result` between tries reset
+  the eight-block budget, so a relay could be blocked 44 times or be let go with prose as the step's
+  return. A line that restates the request or only informs may now be left out; an outcome line may
+  not, and no line may change. Only a `wait` on a job that has not ended, by its view (a dead job has ended), renews the
+  budget.
+- On Linux, a worker started from a unit of the user's systemd runs in a scope of its own
+  (`systemd-run --user --scope`). T3 Code's server runs as `t3code.service` with `KillMode=mixed`,
+  so every T3 restart killed the workers it had started, and their jobs spent their one automatic
+  resume on it. `RELAY_WORKER_SCOPE=off` turns the scope off.
+- Each hand-back is recorded in the job's `relay-handbacks.jsonl`. `status` marks a relay job that
+  ended with no hand-back of its result `not handed back` (only for attempts run by 2.2.0 or later), and `--json` gives `handedBackAt`, so a
+  sweep for jobs nobody collected reads the job instead of the relay's transcript.
+- `status --workflow <run>` lists every job one Workflow run started, in any repository.
+- A header that names a GLM, Grok or Kimi model (`glm-*`, `grok-*`, `kimi-code/*`) with no `backend:`
+  is refused before launch with the backend to add. Such a job used to run on Codex and fail there.
+- A ZCode turn that fails on its sign-in (`project_token_login_failed`) says to run `zcode login`,
+  then resume. Setup checks only that the credentials file exists.
+- The Codex event log keeps only each turn's last `turn/diff/updated`. Codex sends the whole diff so
+  far after every change, and those copies were 60% of a 2.1 GB jobs home.
+- The attempt a dead worker left open is closed as `dead` when the next attempt begins, and every
+  attempt records the plugin version that ran it (`relayVersion`).
+- The relay's instructions say that the brief is for the job, that the hooks' text is the plugin's
+  and no prompt injection, and that the result is copied whole. Relays had read the brief's files,
+  refused to start over a hook's message, and commented on `cancel`.
+- The jobs skill says what a `read-only` job cannot do on each backend, that `mode: write` needs
+  `add-dir:` for a CLI's own state under `~`, where Kimi's session record is, what a return without
+  `state:` means in a workflow, that relays spend Claude usage while they wait, and that `C` in a
+  lead's own Bash is a function, not a variable.
+
 ## 2.1.2 (2026-10-17)
 
 - A job's event log keeps the last updates of every turn. A Kimi turn ends on the session record,
