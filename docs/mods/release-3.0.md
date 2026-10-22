@@ -22,7 +22,7 @@ it: where the work goes, what each step must pass, and how the work was done in 
    `scripts/live/checks/`.
 3. **Phases 2 and 3**, as two PRs that can run at the same time: commands answered by the module, and the spawn
    check with TaskStop cancelling the job (D2). Both add hooks to `hooks/mod/register.js`; whichever merges second
-   rebases. Phase 3: PR #PRNUM.
+   rebases. Phase 3: PR #11.
 4. **Phase 4**, in this order: the companion's `--json` changed in place (the board reads it), the status line,
    the board pane.
 5. **Phase 6**, the investigation report, at any point. No code.
