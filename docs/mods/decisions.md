@@ -18,8 +18,9 @@ Entries are never edited after the fact. A reversed decision gets a new entry th
 
 ## Open for the owner
 
-- **What confirms the release candidate before the release PR merges** (D60, part 11; D95). Read for now as the
-  automated checks passing on the release candidate; to confirm with the owner at that step.
+- **What confirms the release candidate before the owner tests it** (D60, part 11; with the cuts, the release
+  candidate is the last cut, D70). Read for now as the automated checks passing on the release candidate; to
+  confirm with the owner at that step.
 
 ## Entries
 
@@ -599,24 +600,30 @@ How D95's cuts are made.
 - **The version.** A cut is `3.0.0-pre.N`, set by `scripts/bump-version.mjs` everywhere it sets a version, the
   marketplace included, and by hand in the README's Development line. The cut PR's merge commit is tagged
   `v3.0.0-pre.N`. A cut gets no GitHub release and no npm release.
-- **Between cuts,** phase PRs keep raising `3.0.0-dev.N` (D6), set over the cut's version: build numbers only have
-  to be unique. By semver `dev.N` sorts below `pre.N`, which matters nowhere: the cut machines install by tag, the
+- **Between cuts,** phase PRs keep raising `3.0.0-dev.N` (D6), set over the cut's version: a phase branch that
+  merges a cut resolves the version conflict to its own `3.0.0-dev.N`, never the cut's. Build numbers only have to
+  be unique. By semver `dev.N` sorts below `pre.N`, which matters nowhere: the cut machines install by tag, the
   smoke installs use marketplaces of their own, and the live suite runs `--plugin-dir`. Rejected: `3.0.0-pre.N.M`
   for dev builds, which reads like a cut; renaming the dev series, which would change D6 for no reader.
-- **The cut PR** holds the version and one line under the CHANGELOG's 3.0.0 heading, nothing else, so the build
-  the real-API suite tests is the build the tag names. Its gates are those of any PR into `release/3.0`, with
-  `npm run check-version`, and the real-API suite on the PR's head on Fedora and on the M3 through cmux. It merges
-  while `release/3.0` has not moved since that run, so the merge commit's tree is the tested tree; if it has
-  moved, the PR is rebased and the suite runs again.
-- **The release candidate** is the release PR's head, cut as one more pre-release, so the owner's machines run the
-  code that merges.
+- **The cut PR** changes only the version fields, the README's Development line and one CHANGELOG entry, so the
+  build the real-API suite tests is the build the tag names. Its gates are those of the other PRs into
+  `release/3.0` (without a decisions.md entry), `npm run check-version`, and the real-API suite on the PR's head on
+  Fedora and on the M3 through cmux. It merges while `release/3.0` has not moved since that run, so the merge
+  commit's tree is the tested tree; if it has moved, the PR is rebased and the suite runs again. After the tag and
+  before infra installs it, the cut installs and goes back to `#v2.2.0` in a throwaway `HOME`.
+- **The release candidate** is the last cut, made from `release/3.0` once the reviews' fixes have merged. The
+  release PR then changes only the version (3.0.0), the README line and the CHANGELOG's date, so the owner's
+  machines run the plugin code that merges. A change to the plugin after the last cut needs another cut.
 - **pre.1 was the exception.** On the owner's word that it be installed at once, it was cut from c73e053 with
   `npm test`, `npm run check`, `claude plugin validate`, `claude plugin test` and CI, and the two-family review and
-  the bots followed the merge (217adc8). No plugin code had changed since 962130b, where the real-API suite had
-  run twice on Fedora and passed but for the fenced hand-back the typed-message fix closes; it did not run on the
-  M3. pre.1's companion listed the same 404 jobs as 2.2.0 in a copy of a 2.2.0 jobs home, and gave the same report
-  for one ended job. The rest of the checks wait for pre.2: a `continue` across versions, and 2.2.0 reading a jobs
-  home a cut wrote.
+  the bots followed the merge (217adc8). No plugin code had changed since 962130b, where the real-API suite's
+  recorded run on Fedora passed or hit its known limits, but for the fenced hand-back the typed-message fix
+  closes; it did not run on the M3. pre.1's companion listed the same 404 jobs as 2.2.0 in a copy of a 2.2.0 jobs
+  home, and gave the same report for one ended job. libar-infra installed it directly, with no throwaway-`HOME`
+  check, and on the ThinkPad while a lead's Workflow had two relay jobs running, which finished under that
+  session's 2.2.0. The jobs-home checks wait for pre.2: 2.2.0 reads a jobs home a cut wrote (`status --all`, and
+  `result` of a completed job, a job cancelled with `cancel` and with `cancel --attempt`, and one a TaskStop
+  cancelled), and `continue` crosses versions both ways.
 
 ### D95. Pre-release cuts before 3.0.0, on the M3 and the ThinkPad (owner, 22 October 2026)
 
@@ -638,25 +645,27 @@ The owner, in four messages that day:
 > Use exactly the same workflow as we did before. It is very simple. […] We should do exactly the same on the
 > Fedora machine. […] I will deploy production workflows on both M3 and Fedora with the new relay plugin.
 
-So 3.0.0 is preceded by pre-release cuts, `3.0.0-pre.N` (D70). Each goes at user scope on the M3 and the ThinkPad,
-replacing 2.2.0, through the marketplace pinned to the cut's tag, the procedure earlier releases used, and
-libar-infra executes the install. The owner runs production work on both machines, and the threads run heavy
-orchestration testing on both over the weekend, with infra's thread tests (killing, stopping and resuming threads).
-The issues found go into the next cut, until none remain. The M1 stays on 2.2.0 as the fallback.
+So 3.0.0 is preceded by pre-release cuts, `3.0.0-pre.N` (D70). libar-infra installs each at user scope on the M3
+and the ThinkPad, replacing 2.2.0, by the procedure earlier releases used, with the marketplace pinned to the cut's
+tag. The owner runs production work on both machines, and the threads run heavy orchestration testing on both over
+the weekend, with the test suite the owner pointed to (killing, stopping and resuming threads). The issues found go
+into the next cut, until none remain. The M1 stays on 2.2.0 as the fallback.
 
 What it changes:
 
 - **D1.** "Nothing reaches the fleet before the release" gives way for the cuts on the M3 and the ThinkPad. `main`
-  and the M1 stay on 2.2.0 until the release PR merges.
-- **release-3.0.md.** The working rule that no test build is installed at user scope on the ThinkPad gives way for
-  the cuts. The live suite and the smoke kit still test their own builds: a `--plugin-dir` build replaces the
-  installed plugin of the same name for its session (measured on 2.1.308 with the cut installed: only the
-  `--plugin-dir` relay loads), and a smoke folder disables `relay@libar-relay` in its local settings.
+  stays on 2.2.0 until the release PR merges, and the M1 until the owner's fleet update.
+- **The ThinkPad's working rule** that no test build is installed at user scope there gives way for the cuts. The
+  live suite and the smoke kit still test their own builds: a `--plugin-dir` build replaces the installed plugin
+  of the same name for its session (measured on 2.1.308 with the cut installed: only the `--plugin-dir` relay
+  loads), and a smoke folder disables `relay@libar-relay` in its local settings.
 - **D60, part 11.** The owner's testing is production use of each cut. What confirms the release candidate stays
   open for the owner.
+- **release-3.0.md.** Branches and versions, the Sequence, step 10, "Pre-release cuts" and the fleet pin gate
+  follow this entry.
 
 Arranged by the coordinating thread: the install runs in a terminal the owner watches; the owner's checklist is
-the guide lead's pre-release guide.
+the guide lead's pre-release guide, built from the manual test script.
 
 ### D96. A user's stop of a relay leaves its job running, with a notice (owner, 22 October 2026)
 
@@ -666,17 +675,19 @@ The coordinating thread recommended option A, and the owner answered: "A is fina
   twice in the relay's view, the desktop app's Stop button. Relay shows a notice naming the job, with
   `/relay:cancel` and `/relay:result`.
 - **`TaskStop` on a relay and the message `cancel` still cancel the job** (D2, D44): they are the deliberate ways
-  to stop the work. A cancelled job keeps its backend session, and `continue` resumes it there; a message to its
-  relay does so only for a relay the Agent tool started (D53).
+  to stop the work. A cancelled job keeps its backend session, and the companion's `continue` resumes it there; a
+  message to its relay does so only for a relay the Agent tool started (D53).
 - **A resumed Workflow still never adopts a cancelled job.** No change for 3.0 (D42).
 
 Why, from the coordinating thread's reading of relay 2.2.0's survey of about 920 T3 threads and 360 relay jobs
 (PR #5): no relay on record died through a `TaskStop`. The deaths came from T3 restarts, a quit of the T3 app on
 macOS, a usage limit that ended at least 14 relays at once, and a `kill -9` of a lead. Every job either ran on or
-was resumed, by its automatic resume or a Workflow resumed with `resumeFromRunId`, and its work was recovered. It is
-not ruled out that such deaths fire the same signal as a user's stop; if they do, a rule that cancelled the job on
-a user's stop would have cancelled every one of those recoveries. Rejected: B, a user's stop cancels the job.
+was resumed, by its automatic resume or a Workflow resumed with `resumeFromRunId`, and its work could be recovered;
+the losses on record came from causes a stop rule does not touch, and 2.2.0 fixed the main one. It is not ruled out
+that such deaths fire the same signal as a user's stop; if they do, a rule that cancelled the job on a user's stop
+would have cancelled those jobs, and none of those recoveries could have happened. Rejected: B, a user's stop
+cancels the job.
 
 Still open: on macOS, quitting the T3 app kills relay workers, for a reason not known yet; the cuts' use on the M3
 watches for it. The coordinating thread scheduled the notice after Phase 4's status line and board, which rework
-the same file.
+`hooks/mod/register.js`, as the notice will.
