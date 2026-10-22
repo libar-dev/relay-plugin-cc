@@ -18,7 +18,7 @@ import { headlessCommands, runHeadless, executeHeadless } from '../scripts/live/
 import { workflowScript } from '../scripts/live/checks/steer-workflow.mjs';
 import { agentCalls, waitLoop } from '../scripts/live/checks/steer-main.mjs';
 import { badPrompts, goodPrompt, workflowScript as spawnScript, checkHeader, expectedMessage } from '../scripts/live/checks/spawn-check.mjs';
-import { boardWorkflow, steerText, continueText, focusedText } from '../scripts/live/checks/board.mjs';
+import { boardWorkflow, steerText, continueText, focusedText, leadIsIdle } from '../scripts/live/checks/board.mjs';
 import { copyEvidence } from '../scripts/live/lib/runs.mjs';
 import { postInboxMessage, claimInboxMessages, recordReceipt, writeOutcome } from '../plugins/relay/scripts/lib/jobs/messages.mjs';
 
@@ -2918,7 +2918,7 @@ function boardInput(dir) {
   return { ...input(dir, ['codex', 'kimi']), evidenceDir: dir, run: read(path.join(dir, 'run.json')) };
 }
 
-test('board is terminal only and prompts exact Agent and Workflow calls with a file-gated lead', async () => {
+test('board is terminal only and prompts exact Agent and Workflow calls with a lead that ends at ready', async () => {
   const check = getCheck('board'), prompt = check.prompt({ runId: 'synthetic-run', backends: BACKENDS });
   assert.deepEqual(check.surfaces, ['terminal']);
   assert.deepEqual(parseArgs(['run', 'board'], checks, BACKENDS).backends, BACKENDS);
@@ -2935,10 +2935,12 @@ test('board is terminal only and prompts exact Agent and Workflow calls with a f
   assert.match(prompt, /ALL 8 jobs/);
   assert.match(prompt, /LIVE-BOARD-READY/);
   assert.match(prompt, /Send no messages yourself/);
-  assert.ok(prompt.includes(waitLoop(60)));
-  assert.match(prompt, /at most 20 minutes/);
-  assert.match(prompt, /\.live-board-synthetic-run\.done/);
-  assert.match(prompt, /LIVE-BOARD-DONE/);
+  assert.match(prompt, /end your turn immediately/);
+  assert.match(prompt, /Leave the background relays and the Workflow running/);
+  assert.doesNotMatch(prompt, /Keep your turn|foreground Bash|LIVE-BOARD-DONE|\.done/);
+  assert.equal(check.marker, 'LIVE-BOARD-READY');
+  assert.equal(check.completed([textEntry('assistant', 'LIVE-BOARD-READY')]), true);
+  assert.equal(check.completed([textEntry('assistant', 'LIVE-BOARD-DONE')]), false);
   const warnings = [];
   assert.equal(await main(['prepare', 'board', '--surface', 't3', '--work-dir', '/tmp'], checks, evidenceReaders,
     { warn: text => warnings.push(text), log() {} }), 1);
@@ -2961,6 +2963,8 @@ for (const [name, change, reason] of [
   ['an Agent steer without an inbox/relay record', dir => fs.rmSync(path.join(dir, boardAgent, 'inbox/relay/steer-entry.json')), /no completed inbox\/relay record/],
   ['a Workflow steer with an inbox/relay record', dir => write(path.join(dir, boardWorkflowJob, 'inbox/relay/extra.json'), { messageId: 'steer' }), /Workflow action has an inbox\/relay record/],
   ['a Workflow steer that started a new relay loop', dir => lines(path.join(dir, 'transcript/subagents/workflows/wf-board/agent-fork.jsonl'), [textEntry('user', 'fork', '2026-10-22T10:00:21Z', { agentId: 'workflow-codex' })]), /new relay loop/],
+  ['a missing runner finish time', dir => edit(dir, 'run.json', value => { delete value.checkFinishedAt; }), /runner finish time/],
+  ['an outcome after the runner finished', dir => edit(dir, 'run.json', value => { value.checkFinishedAt = '2026-10-22T10:00:21Z'; }), /another run/],
   ['a continue with no new attempt', dir => edit(dir, `${boardAgent}/job.json`, value => { value.attempts.pop(); }), /Continue has no new attempt/],
   ['a cancel of another attempt', dir => edit(dir, `${boardWorkflowJob}/inbox/claimed/cancel.json`, value => { value.attempt = 1; }), /another attempt/],
   ['a missing row in the wide capture', dir => fs.writeFileSync(path.join(dir, 'wide.txt'), 'Relay jobs\n'), /Missing job row in wide/],
@@ -2972,8 +2976,8 @@ for (const [name, change, reason] of [
   }, /main conversation origin/],
   ['an action after the next run prompt', dir => {
     const file = path.join(dir, 'transcript.jsonl'), entries = readTranscript(file);
-    entries.splice(entries.length - 1, 0, textEntry('user', 'Live suite run other-run.', '2026-10-22T10:00:19Z')); lines(file, entries);
-  }, /Missing board markers/],
+    entries.push(textEntry('user', 'Live suite run other-run.', '2026-10-22T10:00:19Z')); lines(file, entries);
+  }, /another run/],
   ['missing selected details in the narrow capture', dir => fs.writeFileSync(path.join(dir, 'narrow-detail.txt'), 'Relay jobs\n'), /selected job details/]
 ]) {
   test(`board rejects ${name}`, t => {
@@ -3009,11 +3013,15 @@ test('board focus follows inverse video through colors and combined resets', () 
   assert.equal(focusedText('\x1b[38;2;7;0;27mWrong\x1b[0m \x1b[7mYes\x1b[38;5;0m!\x1b[27m'), 'Yes!');
 });
 
-function boardDriver(t, failure) {
+function boardDriver(t, failure, { idleWaits = false, stealFocus = false, outcomeDelay = 0, saveDelay = 0 } = {}) {
   const dir = temp(t), workDir = path.join(dir, 'work'), jobsHome = path.join(dir, 'jobs');
   fs.mkdirSync(workDir); fs.mkdirSync(jobsHome);
   const check = getCheck('board'), calls = [], run = { runId: 'synthetic-run', sessionId: 'board-session', completed: false };
   let time = Date.parse('2026-10-22T10:00:10Z'), selected, focus = -1, confirm = false, count = 0, handled = 0, command = '';
+  let busyUntil = idleWaits ? time + 20000 : 0, paneFocused = false, prefix = false, stolen = 0;
+  const pendingOutcomes = [], presses = [];
+  const idleScreen = fs.readFileSync(path.join(fixture, 'board/lead-idle.txt'), 'utf8');
+  const runningScreen = fs.readFileSync(path.join(fixture, 'board/lead-running.txt'), 'utf8');
   const ids = ['agent-codex', 'workflow-codex', 'agent-kimi', 'workflow-kimi'];
   const jobPath = id => path.join(jobsHome, `repo/job-${id}/job.json`);
   const job = id => read(jobPath(id));
@@ -3024,10 +3032,14 @@ function boardDriver(t, failure) {
     const rows = ids.map(id => `${selected === id ? '> ' : '  '}job-${id} · ${job(id).request.backend} · ${job(id).state} · attempt ${job(id).attempts.length}`);
     if (selected) rows.push(`model ${job(selected).request.model} · effort low`, `relay ${job(selected).relay.label}`, field());
     if (confirm) rows.push(`Cancel job job-${selected}, attempt ${job(selected).attempts.length}?`);
-    rows.push(`\x1b[7m${elements()[focus] ?? ''}\x1b[0m`);
+    rows.push(`\x1b[7m${paneFocused ? elements()[focus] ?? '' : ''}\x1b[0m`);
+    rows.push(time < busyUntil ? runningScreen : idleScreen);
     return rows.join('\n');
   };
   const tick = () => {
+    for (const pending of pendingOutcomes) {
+      if (time >= pending.at) write(pending.file, pending.value);
+    }
     if (run.board.actions.filter(a => a.action === 'steer').length === 4 && handled >= 4) {
       for (const id of ids) {
         const value = job(id);
@@ -3041,39 +3053,65 @@ function boardDriver(t, failure) {
     if (run.board.actions.filter(a => a.action === 'cancel').length === 2 && handled >= 10) {
       for (const id of ids.filter(id => id.startsWith('agent-'))) { const value = job(id); value.state = 'completed'; saveJob(id, value); }
     }
-    if (fs.existsSync(path.join(workDir, '.live-board-synthetic-run.done')) && !hasMarker(readTranscript(run.transcript), check.marker)) {
-      fs.appendFileSync(run.transcript, JSON.stringify(textEntry('assistant', check.marker, new Date(time).toISOString())) + '\n');
-    }
   };
   const drive = (args, text) => {
-    calls.push({ args, text });
+    calls.push({ args, text, at: time });
     if (args[0] === 'screen-escapes') return failure === 'missing rows' ? 'Relay jobs' : screen();
-    if (args[0] === 'keys') command = args.at(-1);
+    if (['keys', 'bytes'].includes(args[0])) assert.ok(time >= busyUntil, `sent ${args} during a lead turn`);
+    if (args[0] === 'keys') {
+      command = args.at(-1);
+      if (command !== '/relay-board') {
+        assert.equal(paneFocused, true, 'text must go to the board');
+        assert.equal(elements()[focus], field());
+      }
+      if (idleWaits) { busyUntil = time + 500; paneFocused = false; focus = -1; }
+    }
     if (args[0] !== 'bytes') return '';
     for (const byte of args.slice(2)) {
-      if (byte === '09') focus = (focus + 1) % elements().length;
+      if (['05', '15'].includes(byte)) {
+        assert.equal(paneFocused, true, 'clear must go to the board');
+        assert.equal(elements()[focus], field());
+      }
+      if (byte === '18') prefix = true;
+      if (byte === '09') {
+        if (stealFocus && (stealFocus !== 'walking' || !prefix) && (stolen === 0 || stealFocus === 'always')) {
+          stolen++; paneFocused = false; prefix = false; focus = -1; busyUntil = time + 1000; return '';
+        }
+        if (prefix) { paneFocused = true; prefix = false; }
+        if (paneFocused) focus = (focus + 1) % elements().length;
+      }
       if (byte !== '0d') continue;
       if (command === '/relay-board') { command = ''; continue; }
+      assert.equal(paneFocused, true, 'Enter must go to the board');
       if (run.board.actions.length > handled) {
         const action = run.board.actions.at(-1), id = action.jobId.slice(4), value = job(id);
+        assert.equal(selected, id);
+        assert.equal(elements()[focus], action.action === 'cancel' ? 'Yes' : field());
+        if (action.action !== 'cancel') assert.equal(command, action.text);
+        presses.push({ action: { ...action }, at: time });
         handled = run.board.actions.length;
         if (action.action === 'continue') { value.state = 'running'; value.attempts.push({ attempt: value.attempts.length + 1 }); }
         if (action.action === 'cancel') { value.state = 'cancelled'; confirm = false; }
         saveJob(id, value);
         write(path.join(jobsHome, `repo/${value.id}/inbox/claimed/${action.action}.json`), { id: action.action, kind: action.action, text: action.text, createdAt: action.at });
-        write(path.join(jobsHome, `repo/${value.id}/inbox/outcomes/${action.action}.json`), { messageId: action.action, action: action.action === 'steer' ? 'steered' : 'turn-started' });
+        const pending = { file: path.join(jobsHome, `repo/${value.id}/inbox/outcomes/${action.action}.json`),
+          value: { messageId: action.action, action: action.action === 'steer' ? 'steered' : 'turn-started' }, at: time + (typeof outcomeDelay === 'function' ? outcomeDelay(action.action) : outcomeDelay) };
+        pendingOutcomes.push(pending);
+        if (pending.at === time) write(pending.file, pending.value);
       } else if (elements()[focus]?.startsWith('job-')) selected = elements()[focus].slice(4);
       else if (elements()[focus] === 'Cancel') confirm = true;
     }
+    if (idleWaits && !args.slice(2).some(byte => ['18', '09'].includes(byte))) { busyUntil = time + 500; paneFocused = false; focus = -1; }
     return '';
   };
-  const ctx = { runId: run.runId, run, backends: ['codex', 'kimi'], jobsHome, workDir, evidenceDir: dir, save() {},
+  const ctx = { runId: run.runId, run, backends: ['codex', 'kimi'], jobsHome, workDir, evidenceDir: dir,
+    save() { time += saveDelay; tick(); },
     async paneDriver(sessionCtx, selectedCheck, options) {
       count++;
       if (count === 1) {
         fs.cpSync(path.join(fixture, 'board/jobs'), jobsHome, { recursive: true });
         fs.cpSync(path.join(fixture, 'board/transcript'), path.join(dir, 'transcript'), { recursive: true });
-        lines(path.join(dir, 'transcript.jsonl'), readTranscript(path.join(fixture, 'board/transcript.jsonl')).slice(0, -1));
+        lines(path.join(dir, 'transcript.jsonl'), readTranscript(path.join(fixture, 'board/transcript.jsonl')));
         for (const id of ids) {
           const value = job(id); value.state = 'running'; value.attempts = value.attempts.slice(0, 1); saveJob(id, value);
           fs.rmSync(path.join(jobsHome, `repo/job-${id}/inbox`), { recursive: true });
@@ -3085,11 +3123,11 @@ function boardDriver(t, failure) {
       assert.equal(selectedCheck.completed([textEntry('assistant', count === 1 ? 'LIVE-BOARD-READY' : 'LIVE-BOARD-NARROW-READY')]), true);
       if (count === 2) {
         assert.match(fs.readFileSync(path.join(sessionCtx.evidenceDir, 'prompt.txt'), 'utf8'), /LIVE-BOARD-NARROW-READY/);
-        selected = undefined; focus = -1;
+        selected = undefined; focus = -1; paneFocused = false; prefix = false;
       }
       run.completed = true;
     } };
-  return { ctx, calls, dependencies: { drive, now: () => time, sleep: async ms => { time += ms; tick(); } } };
+  return { ctx, calls, presses, dependencies: { drive, now: () => time, sleep: async ms => { time += ms; tick(); } } };
 }
 
 test('board runTerminal drives raw-byte focus in wide and narrow sessions and saves each action', async t => {
@@ -3108,11 +3146,75 @@ test('board runTerminal drives raw-byte focus in wide and narrow sessions and sa
   assert.ok(ctx.run.board.actions.every(a => a.sessionId === 'board-session'));
   assert.equal(ctx.run.board.screens.length, 15);
   for (const screen of ctx.run.board.screens) assert.ok(fs.readFileSync(path.join(ctx.evidenceDir, screen.file), 'utf8'));
-  assert.ok(fs.existsSync(path.join(ctx.workDir, '.live-board-synthetic-run.done')));
+  assert.equal(fs.existsSync(path.join(ctx.workDir, '.live-board-synthetic-run.done')), false);
+  assert.equal(getCheck('board').completed(readTranscript(ctx.run.transcript)), true);
   assert.equal(ctx.run.sessionId, 'board-session');
   assert.equal(ctx.run.board.narrow.sessionId, 'narrow-session');
   assert.ok(calls.filter(call => call.args[0] === 'keys').every(call => call.args[2] === '-l'));
 });
+
+test('board idle detection distinguishes real spinner captures from completed turns', () => {
+  const running = fs.readFileSync(path.join(fixture, 'board/lead-running.txt'), 'utf8');
+  const idle = fs.readFileSync(path.join(fixture, 'board/lead-idle.txt'), 'utf8');
+  assert.equal(leadIsIdle(running), false);
+  assert.equal(leadIsIdle(idle), true);
+  for (const line of ['✽ Deliberating… (48s · ↓ 2.9k tokens)', '✢ Deliberating… (1m 3s · ↓ 2.9k tokens)',
+    '· Thinking… (2s)', '✳ Working… (1h 2m 3s · ↑ 200 tokens)', '✶ Working... (3s)']) {
+    assert.equal(leadIsIdle(line), false, line);
+  }
+  for (const line of ['✻ Cogitated for 1m 39s · done 10:19 PM', '✽ Worked for 48s',
+    'relay: 8 running', '● Running f=.live-board-20261022T201454Z-board-terminal-24f… · 19s', '❯']) {
+    assert.equal(leadIsIdle(line), true, line);
+  }
+});
+
+test('board runTerminal waits for idle before opening, selecting, clearing, typing and pressing', async t => {
+  const { ctx, calls, presses, dependencies } = boardDriver(t, undefined, { idleWaits: true });
+  await getCheck('board').runTerminal(ctx, dependencies);
+  assert.equal(ctx.run.completed, true);
+  assert.equal(presses.length, 10);
+  assert.ok(calls.find(call => call.args[0] === 'keys').at >= Date.parse('2026-10-22T10:00:30Z'));
+  for (const { action, at } of presses) {
+    assert.equal(Date.parse(action.at), at);
+    if (action.action === 'cancel') continue;
+    const typed = calls.find(call => call.args[0] === 'keys' && call.args.at(-1) === action.text);
+    assert.ok(at >= typed.at + 500, 'the receipt starts after the post-typing idle wait');
+  }
+});
+
+for (const stealFocus of [true, 'walking']) {
+  test(`board runTerminal reacquires focus after a turn steals ${stealFocus === true ? 'the initial' : 'a walking'} Tab`, async t => {
+    const { ctx, calls, dependencies } = boardDriver(t, undefined, { stealFocus });
+    await getCheck('board').runTerminal(ctx, dependencies);
+    assert.equal(ctx.run.completed, true);
+    const index = calls.findIndex((call, i) => call.args[0] === 'bytes' && call.args[2] === '09' &&
+      (stealFocus === true || calls.slice(0, i).filter(c => c.args[0] === 'bytes' && c.args[2] === '09').length === 1));
+    const nextKeys = calls.slice(index + 1).filter(call => call.args[0] === 'bytes');
+    assert.deepEqual(nextKeys.slice(0, 2).map(call => call.args.slice(2)), [['18'], ['09']]);
+    assert.ok(nextKeys[0].at >= calls[index].at + 1000);
+  });
+}
+
+test('board runTerminal bounds repeated focus loss without restarting the deadline', async t => {
+  const { ctx, calls, dependencies } = boardDriver(t, undefined, { stealFocus: 'always' });
+  await assert.rejects(getCheck('board').runTerminal(ctx, dependencies), /Timed out waiting for (focus|idle lead)/);
+  assert.equal(ctx.run.completed, false);
+  assert.equal(ctx.run.board.actions.length, 0);
+  assert.ok(dependencies.now() <= Date.parse('2026-10-22T10:00:26Z'));
+  assert.equal(calls.at(-1).args[0], 'stop');
+});
+
+for (const [action, bound] of [['steer', 30000], ['continue', 60000]]) {
+  test(`board runTerminal counts the ${action} acknowledgement bound from the press`, async t => {
+    const { ctx, presses, dependencies } = boardDriver(t, undefined, {
+      saveDelay: 2000, outcomeDelay: kind => kind === action ? bound + 1000 : 0
+    });
+    await assert.rejects(getCheck('board').runTerminal(ctx, dependencies), new RegExp(`${action} accepted by the job`));
+    assert.equal(ctx.run.completed, false);
+    assert.equal(presses.at(-1).action.action, action);
+    assert.equal(Date.parse(presses.at(-1).action.at), presses.at(-1).at);
+  });
+}
 
 test('board runTerminal times out missing rows, keeps captures and closes the pane', async t => {
   const { ctx, calls, dependencies } = boardDriver(t, 'missing rows');

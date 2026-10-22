@@ -4,13 +4,17 @@ import { analyzeBackends, filesUnder, formatSeconds, hasMarker, inboxMessages, l
   oneRelay, readJob, readJson, readTranscript, recordsFor, relayJob, requireBackend, requireVersion,
   scopeToRun, textContent, toolResults, transcriptCalls } from '../lib/evidence.mjs';
 import { pane } from '../lib/terminal.mjs';
-import { agentCalls, opening, waitLoop, waitRunning } from './steer-main.mjs';
+import { agentCalls, opening, waitRunning } from './steer-main.mjs';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const ready = 'LIVE-BOARD-READY';
-const doneFile = runId => `.live-board-${runId}.done`;
 const ended = job => ['completed', 'failed', 'cancelled'].includes(job.state);
 const plain = text => text.replace(/\x1b\[[0-9;]*m/g, '');
+// Claude Code 2.1.308: active turns have an ellipsis and a parenthesized elapsed
+// time. Completed turns say e.g. "✻ Cogitated for 1m 39s · done 10:19 PM".
+export function leadIsIdle(screen) {
+  return !/^\s*[·✢✳✶✻✽*] [^\n]*?(?:…|\.\.\.)\s+\(\d+(?:h|m|s)(?: \d+(?:h|m|s))*\b/m.test(plain(screen));
+}
 export function focusedText(screen) {
   let inverse = false, offset = 0, text = '';
   for (const match of screen.matchAll(/\x1b\[([0-9;]*)m/g)) {
@@ -107,22 +111,22 @@ function route(item, action, message) {
 
 export default {
   id: 'board', title: 'The board steers, continues and cancels jobs',
-  surfaces: ['terminal'], probes: [], timeoutMinutes: 25, marker: 'LIVE-BOARD-DONE',
+  surfaces: ['terminal'], probes: [], timeoutMinutes: 25, marker: ready,
   prompt({ runId, backends }) {
-    return opening(runId, agentCalls(backends, { prefix: 'board-agent', brief })) +
+    return opening(runId, agentCalls(backends, { prefix: 'board-agent', brief })).replace(/^Keep your turn[^\n]*\n/m, '') +
       `\nRun one Workflow now. This is an explicit request to use the Workflow tool. Pass this script inline and verbatim, with no args:\n\n${boardWorkflow(backends)}\n\n` +
       waitRunning([...backends, ...backends]).replace('each ${RELAY_JOBS_HOME:-$HOME/.relay-jobs}/relays/<agentId>.json pointer',
         'each ${RELAY_JOBS_HOME:-$HOME/.relay-jobs}/relays/<agentId>.json pointer (including the board-wf labels and agentIds in the Workflow journal)') +
-      `Print ${ready} on its own line. Send no messages yourself. Keep this turn open with foreground Bash until-loops of at most one minute each (${waitLoop(60)}), checking for the file ${doneFile(runId)} in the current work folder between loops. Wait at most 20 minutes. Do not steer, continue, cancel or respawn any job. Only after the file exists, print exactly this line by itself:\nLIVE-BOARD-DONE\n`;
+      `Send no messages yourself. Do not steer, continue, cancel or respawn any job. Print ${ready} on its own line as your final answer and end your turn immediately. Leave the background relays and the Workflow running. Do not wait for their completion or for a file, and print no second marker.\n`;
   },
-  completed(entries, run) { return hasMarker(entries, this.marker) && run.completed === true; },
+  completed(entries) { return hasMarker(entries, this.marker); },
   async runTerminal(ctx, { drive = pane, sleep = pause, now = Date.now, signal } = {}) {
     const run = ctx.run, stamp = () => new Date(now()).toISOString();
     const saved = run.board = { actions: [], screens: [] }, input = () => ({ ...ctx, run, transcript: run.transcript });
     const evidence = { transcripts: [], agents: [] };
     const checkAbort = () => { signal?.throwIfAborted(); if (run.interrupted) throw new Error('Interrupted.'); };
-    const waitFor = async (label, predicate, timeout = 60000) => {
-      const until = now() + timeout;
+    const waitFor = async (label, predicate, timeout = 60000, since = now()) => {
+      const until = since + timeout;
       while (true) {
         checkAbort();
         const matched = await predicate();
@@ -138,13 +142,28 @@ export default {
       return plain(text);
     };
     const bytes = (...hex) => drive(['bytes', run.pane, ...hex]);
+    const waitIdle = async (until = now() + 60000) => {
+      let screen;
+      await waitFor('idle lead', () => {
+        screen = drive(['screen-escapes', run.pane]);
+        return leadIsIdle(screen);
+      }, until - now());
+      return screen;
+    };
     const focus = async wanted => {
-      await waitFor(`focus on ${wanted}`, () => {
-        const screen = drive(['screen-escapes', run.pane]);
-        const inverse = focusedText(screen);
+      await waitIdle();
+      // Recovery shares the focus deadline: a new turn must not restart the bound.
+      const until = now() + 15000;
+      await waitFor(`focus on ${wanted}`, async () => {
+        const inverse = focusedText(await waitIdle(until));
         if (wanted instanceof RegExp ? wanted.test(inverse) : inverse.includes(wanted)) return true;
+        if (!inverse) {
+          bytes('18');
+          await sleep(100);
+          await waitIdle(until);
+        }
         bytes('09'); return false;
-      }, 15000);
+      }, until - now());
     };
     const select = async item => {
       await focus(item.job.id); bytes('0d');
@@ -154,9 +173,10 @@ export default {
       });
     };
     const open = async (phase, jobs) => {
-      drive(['keys', run.pane, '-l', '/relay-board']); bytes('0d');
+      await waitIdle(); drive(['keys', run.pane, '-l', '/relay-board']);
+      await waitIdle(); bytes('0d');
       await waitFor('every board row', () => jobs.every(item => hasRow(plain(drive(['screen-escapes', run.pane])), readJob(item.jobDir))));
-      capture(phase); bytes('18'); await sleep(100); bytes('09');
+      capture(phase);
     };
     const start = async (width, fullscreen, selected, sessionCtx = ctx) => {
       await ctx.paneDriver(sessionCtx, selected, { keep: true, drive(args, text) {
@@ -177,21 +197,22 @@ export default {
       // Clear the field left by a previous selection before typing literal text.
       bytes('05', '15');
       const text = action === 'steer' ? steerText(item.kind, item.backend) : continueText(item.kind, item.backend);
-      drive(['keys', run.pane, '-l', text]);
+      await focus(label); drive(['keys', run.pane, '-l', text]);
+      await focus(label);
+      const files = item.kind === 'workflow' ? relayFiles(input(), item, evidence) : undefined;
       const receipt = { runId: run.runId, sessionId: run.sessionId, jobId: item.job.id, kind: item.kind, backend: item.backend, action, text, at: stamp() };
-      if (item.kind === 'workflow') receipt.relayFiles = relayFiles(input(), item, evidence);
-      saved.actions.push(receipt); ctx.save(); bytes('0d');
+      if (files) receipt.relayFiles = files;
+      saved.actions.push(receipt); bytes('0d'); ctx.save();
       await waitFor(`${action} accepted by the job`, () => {
         const messages = inboxMessages(item.jobDir).filter(message => message.text === text && Date.parse(message.createdAt) >= Date.parse(receipt.at));
         return messages.some(message => readJson(path.join(item.jobDir, 'inbox/outcomes', `${message.id}.json`), true));
-      }, action === 'steer' ? 30000 : 60000);
+      }, action === 'steer' ? 30000 : 60000, Date.parse(receipt.at));
       capture(`${action}-${item.kind}-${item.backend}`);
       return receipt;
     };
     try {
       if (fs.readdirSync(ctx.jobsHome).length) throw new Error('board requires an empty jobs home.');
-      if (fs.existsSync(path.join(ctx.workDir, doneFile(run.runId)))) throw new Error('Board done file already exists.');
-      await start(200, true, { ...this, completed: entries => hasMarker(entries, ready) });
+      await start(200, true, this);
       const jobs = boardJobs(input(), evidence);
       await open('wide', jobs);
       for (const item of jobs) await send(item, 'steer');
@@ -210,13 +231,11 @@ export default {
         capture(`confirm-${item.backend}`);
         await focus(/^Yes$/);
         const receipt = { runId: run.runId, sessionId: run.sessionId, jobId: item.job.id, kind: item.kind, backend: item.backend, action: 'cancel', attempt, at: stamp() };
-        saved.actions.push(receipt); ctx.save(); bytes('0d');
-        await waitFor('cancelled job', () => readJob(item.jobDir).state === 'cancelled', 15000);
+        saved.actions.push(receipt); bytes('0d'); ctx.save();
+        await waitFor('cancelled job', () => readJob(item.jobDir).state === 'cancelled', 15000, Date.parse(receipt.at));
         capture(`cancel-${item.backend}`);
       }
       await waitFor('Agent continuations to end', () => jobs.every(item => ended(readJob(item.jobDir))), 120000);
-      fs.writeFileSync(path.join(ctx.workDir, doneFile(run.runId)), 'done\n');
-      await waitFor(this.marker, () => hasMarker(scopeToRun(readTranscript(run.transcript), run.runId), this.marker), 90000);
       drive(['stop', run.pane]);
       const wide = { sessionId: run.sessionId, pane: run.pane, transcript: run.transcript, debugLog: run.debugLog,
         startupEvidence: run.startupEvidence, promptSentAt: run.promptSentAt };
@@ -247,9 +266,9 @@ export default {
     return analyzeBackends(input, this.scope, ({ backend, row, entries, allEntries, evidence }) => {
       jobs ??= boardJobs(input, evidence);
       const saved = input.run.board;
-      const start = Date.parse(entries.find(entry => hasMarker([entry], ready))?.timestamp), end = Date.parse(entries.find(entry => hasMarker([entry], this.marker))?.timestamp);
+      const start = Date.parse(entries.find(entry => hasMarker([entry], ready))?.timestamp), end = Date.parse(input.run.checkFinishedAt);
       const next = allEntries[allEntries.indexOf(entries.at(-1)) + 1];
-      if (!hasMarker(entries, ready) || !Number.isFinite(end)) throw new Error('Missing board markers in this run.');
+      if (!Number.isFinite(start) || !(end > start)) throw new Error('Missing board ready marker or runner finish time in this run.');
       const screens = (saved?.screens ?? []).map(screen => {
         const file = path.join(input.evidenceDir, screen.file);
         (evidence.files ??= []).push(file);
@@ -273,7 +292,8 @@ export default {
           if (actionName !== 'cancel' && action.text !== (actionName === 'steer' ? steerText(kind, backend) : continueText(kind, backend))) throw new Error('Unexpected board message text.');
           const message = messageFor(jobDir, action), outcome = readJson(path.join(jobDir, 'inbox/outcomes', `${message.id}.json`), true);
           if (outcome?.messageId !== message.id) throw new Error('Missing board message outcome.');
-          if (!(Date.parse(message.createdAt) < end && Date.parse(outcome.at) >= at && Date.parse(outcome.at) < end)) throw new Error('Message outcome belongs to another run.');
+          if (!(Date.parse(message.createdAt) < end && Date.parse(outcome.at) >= at && Date.parse(outcome.at) < end &&
+              (!next || Date.parse(outcome.at) < Date.parse(next.timestamp)))) throw new Error('Message outcome belongs to another run.');
           const attempts = job.attempts ?? [], active = attempts.find(attempt => Date.parse(attempt.startedAt) <= at && Date.parse(attempt.endedAt) > at);
           let elapsed;
           if (actionName === 'cancel') {
