@@ -317,3 +317,41 @@ two notes recognised as harness entries, read from the 2.1.308 binary and kept w
 `state: cancelled`. The same probe measured D44's advice: the message `cancel` to a running Workflow relay goes
 through such a second loop and cancelled its job in under a second. So D42's "no TaskStop for one Workflow agent"
 holds until a message has reached that agent; after one, a TaskStop on its id cancels the job like any relay's.
+
+### D51. Phase 6's PR raises no version (Phase 6 thread)
+
+Phase 6 is a report. No code of the plugin changes, only its CHANGELOG, so no build gets a new `3.0.0-dev.N`.
+This is an exception to D6, which numbers builds: a phase PR that changes no plugin code raises no version.
+The PR passes the gates that apply to docs: `npm test`, `npm run check`, `claude plugin validate`,
+`claude plugin test`, CI, a review by two model families and the bots. It adds no live check, so it commits no
+records, and it runs no smoke kit, since no plugin code changed since Phase 5's smoke run.
+
+### D52. A job's message would be the relay's own `SendMessage` (Phase 6 thread)
+
+The plan had the module deliver a job's message with `$.session.send` as the relay agent's own. Measured in
+2.1.308, a module's send always comes from the main conversation: it carries no sender agent from any loop, an
+`agentId` passed to it is dropped, `"main"` refuses it, and a peer reads it as the coordinator's. The relay agent
+can send as itself: it gets the `SendMessage` tool, and the `PreToolUse` guard takes the message from the job's
+outbox under the relay lock and rewrites the call's `message` and `to` with `updatedInput`; `PostToolUse` records
+whether the send succeeded. Measured: it fires for a subagent's and a Workflow agent's `SendMessage`, with the
+rewritten input and the result, and a failed send is `success: false` there; a denial fires no hook after the
+call, so the guard records its own. The guard, not the job, decides the address and writes the header that
+names the job. The relay never sees the text. Relay does not resend, so the guarantee is at most once, with a
+success, a failure or an unknown outcome on record. The answer to a question the job waits on goes back as the
+waiting tool call's result, because a steer ends that wait on no backend; how an answer, the deadline and a
+cancel settle a question is a contract the report names for the later plan.
+Rejected: a module `session.send` hook that rewrites the relay's send. It works, but the guard already owns the
+relay's ledger, and the hook works only where the module loads. The report has the evidence and the design
+([messages-from-a-job.md](messages-from-a-job.md)). Reopen if Claude Code lets a module send as an agent.
+
+### D53. D17 covers relays started with the Agent tool (Phase 6 thread)
+
+D17 has Phase 4's Steer and Continue send to the job's recorded relay id. In 2.1.308 a message by id to a running
+Workflow agent starts a second loop of it, and the original loop never reads it. For a `relay:job` Workflow agent
+the steer still reached the job, through the second relay loop, in the one run measured. A message to a Workflow
+relay that has ended fails, or resumes a `general-purpose` agent that answers in the relay's place, and the job
+gets no turn. So D17 holds as decided for relays the Agent tool started. What the buttons do for a Workflow job is
+Phase 4's to decide, with a live check of both cases from the lead's session, judged by the job's ledger and
+attempts. `C steer` and `C continue` already reach a job without its relay. The same fork carries the message
+`cancel` to a Workflow relay, which the Phase 3 branch's D42 and D44 rely on. Phase 3's checks should measure it
+(the Phase 3 thread was told); if none does, the release does.
