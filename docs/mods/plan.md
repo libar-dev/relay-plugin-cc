@@ -142,8 +142,10 @@ running the companion and showing its output.)
 
 - Four `command.run` handlers on the plugin's own command names. Each runs the companion with argv (never a
   shell) and returns `{ text }`. Either truncation flag, a timeout or a missing exit code becomes an error text,
-  never "no jobs". `immediate: true`, so they run during a turn in the terminal. In T3 they wait for the turn to
-  end.
+  never "no jobs". They run when the current turn ends, on every surface. `immediate` is a property of a command
+  the module registers itself; the 2.1.307 declarations make it read-only for any other command
+  (`CommandDescribeInput.immediate`). In the terminal and Desktop, the board (Phase 4) is how to see jobs during a
+  turn.
 - `renderJobList` (`lib/jobs/view.mjs:325`) prints the Markdown table that `status.md` currently asks the model to
   build. It becomes the only human format, so `C status` in Bash prints it too.
 - `result` keeps `renderResultText` (`view.mjs:278`), because the guard's hand-back compares against it
@@ -250,7 +252,8 @@ leaves room for them:
   board's buttons send as the lead does.
 - **A reconciler driven by receiver-side events** (Astra F3): those events fire at the next tool round.
 - **New command names** (`relay-jobs`, `relay-status`): a second name for the same command, and command pickers
-  that list markdown commands don't list them.
+  that list markdown commands don't list them. Registering them would make the commands `immediate` in the terminal.
+  That is the one thing these names would add, and the board covers it.
 - **A `bridge` subcommand beside the current JSON** (Sol, Astra): a second interface. The JSON changes in place.
 - **A setup form:** `/relay:setup` asks questions and installs things.
 - **`$.model.*` summaries of reports, and a model-callable status tool:** reports are shown exactly as written,
@@ -265,6 +268,7 @@ the kit owns history. They corrected these points:
 - **SDK hosts:** they run the module's hooks, commands and process calls, and they receive the `ui_*` messages.
   Whether those messages are drawn is up to the host.
 - **`immediate` commands:** they run during a turn in the terminal. Over stream-json they run when the turn ends.
+  Only a command the module registers can be `immediate`.
 - **"Relay already exposes enough for a board":** not as an interface for a module. Phase 4 covers the gaps: no
   version, errors in stderr text, an unbounded `--all`, and `$.process.run`'s silent truncation.
 - **Hook ordering:** Mod hooks run above the plugin's command hooks. The research didn't say so, and it decides
