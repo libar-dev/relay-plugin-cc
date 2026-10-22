@@ -2,9 +2,9 @@
 
 ## 3.0.0 (unreleased)
 
-The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5, built on the branch
-`release/3.0` ([docs/mods/release-3.0.md](../../docs/mods/release-3.0.md)). Each phase adds its
-entries here.
+The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5 and Phase 6's report, built
+on the branch `release/3.0` ([docs/mods/release-3.0.md](../../docs/mods/release-3.0.md)). Each phase adds
+its entries here.
 
 Phase 1, steer wake:
 

@@ -1,7 +1,7 @@
 # relay 3.0: how it is built and released
 
 relay 3.0.0 is Phases 1 to 5 of [the plan](plan.md), released together for the fleet and for the first public
-publication ([decisions.md](decisions.md), D1). This page is the working agreement for every thread that builds
+publication, with Phase 6's report ([decisions.md](decisions.md), D1). This page is the working agreement for every thread that builds
 it: where the work goes, what each step must pass, and how the work was done in Phase 1.
 
 ## Branches and versions
@@ -32,6 +32,8 @@ it: where the work goes, what each step must pass, and how the work was done in 
 ## What a phase PR must pass
 
 - `npm test`, `npm run check`, `claude plugin validate plugins/relay`, `claude plugin test plugins/relay`, and CI.
+  A phase that changes no plugin code, such as Phase 6's report, raises no version and runs no live check and no
+  smoke kit (D51).
 - A review by two model families before the bots: GPT-6.1 Sol through relay, and Opus 5.5. Each gets the brief
   and the code, not the author's conclusions.
 - CodeRabbit and Greptile, followed with T3's `watch_pull_request`. A finding is answered on its thread when it
@@ -101,3 +103,5 @@ What worked in Phase 1:
 - A message by agent id to a running Workflow agent starts a second loop of that agent, and the original loop
   never reads it. A message to a Workflow agent that has ended fails, or resumes it as `general-purpose`.
 - A module's `$.session.send` always sends as the main conversation, from any loop.
+- The guard reads the transcript a job recorded at start. After a Workflow agent forks, Claude Code can write
+  later entries to `subagents/agent-<id>.jsonl` instead.
