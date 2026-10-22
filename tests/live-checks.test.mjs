@@ -2615,10 +2615,10 @@ test('status-line captured footer fixture passes for all four backends with both
   const data = statusInput(path.join(fixture, 'status-line')), check = getCheck('status-line');
   const analyzed = check.analyze(data);
   assert.deepEqual(analyzed.results, BACKENDS.map(backend => ({ backend, model: MODELS[backend],
-    relayVersion: '3.0.0-test', delivery: null, timings: { shownSeconds: [3], clearedSeconds: [10] }, result: 'pass', reason: null })));
+    relayVersion: '3.0.0-test', delivery: null, timings: { shownSeconds: [3], clearedSeconds: [4] }, result: 'pass', reason: null })));
   assert.equal(analyzed.evidence.files.length, 4);
   assert.equal(analyzed.evidence.agents.length, 4);
-  assert.equal(check.cell(analyzed.results[0]), 'count shown in 3.0 s, cleared in 10.0 s');
+  assert.equal(check.cell(analyzed.results[0]), 'count shown in 3.0 s, cleared in 4.0 s');
 });
 
 for (const [failure, file, text, reason] of [
@@ -2640,6 +2640,7 @@ for (const [failure, file, text, reason] of [
   ['never clears', 'cleared', statusScreen('⚠ relay: 1 dead · 2 owed'), /never clears/],
   ['keeps a wrapped count', 'cleared', statusScreen('⚠ relay: 4\n  running'), /never clears/],
   ['becomes unavailable', 'cleared', statusScreen('⚠ relay: status unavailable'), /never clears/],
+  ['wraps inside its prefix', 'cleared', statusScreen('⚠ rel\n  ay: status unavailable'), /never clears/],
   ['is below a blank footer row', 'cleared', statusScreen('\n  ⚠ relay: status unavailable'), /never clears/],
   ['has an empty capture', 'cleared', '', /never clears/],
   ['loses its prompt', 'cleared', 'How did this session go?\n', /never clears/],
@@ -2711,7 +2712,12 @@ test('status-line rejects observations beyond either 60 second bound', t => {
   const data = statusInput(copy(t, 'status-line')), check = getCheck('status-line');
   for (const phase of ['running', 'cleared']) {
     const changed = structuredClone(data);
-    changed.run.statusLine.screens.filter(row => row.phase === phase).at(-1).at = '2026-10-22T10:02:00.000Z';
+    if (phase === 'running') changed.run.statusLine.screens.filter(row => row.phase === phase).at(-1).at = '2026-10-22T10:02:00.000Z';
+    else {
+      // The clear is timed from its first capture, so every capture of it moves past the bound.
+      const rows = changed.run.statusLine.screens.filter(row => row.phase === phase), shift = Date.parse('2026-10-22T10:02:00.000Z') - Date.parse(rows[0].at);
+      for (const row of rows) row.at = new Date(Date.parse(row.at) + shift).toISOString();
+    }
     for (const row of check.analyze(changed).results) {
       assert.equal(row.result, 'fail'); assert.match(row.reason, /60 second bounds/);
     }
@@ -2816,7 +2822,7 @@ test('status-line runTerminal starts all backends in one ready pane, captures sc
   await getCheck('status-line').runTerminal(ctx, dependencies);
   const analyzed = getCheck('status-line').analyze(statusInput(ctx.evidenceDir));
   assert.ok(analyzed.results.every(row => row.result === 'pass'));
-  assert.deepEqual(analyzed.results[0].timings, { shownSeconds: [6], clearedSeconds: [13] });
+  assert.deepEqual(analyzed.results[0].timings, { shownSeconds: [6], clearedSeconds: [7] });
   assert.equal(state().starts, 4); assert.equal(state().cancels, 4);
   assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
   assert.equal(ctx.run.statusLine.screens.length, 14);
@@ -2835,7 +2841,7 @@ for (const failure of ['never appears', 'never clears', 'unavailable', 'blank cl
     assert.equal(ctx.run.completed, false);
     assert.ok(ctx.run.error);
     if (failure === 'never appears') assert.equal(state().runningReads, 57);
-    if (failure === 'never clears') assert.equal(state().clearedReads, 57);
+    if (failure === 'never clears') assert.equal(state().clearedReads, 61);
     if (failure === 'dead job') assert.match(ctx.run.error, /Jobs not starting or running: grok-job \(dead\)/);
     if (failure === 'status failure') {
       for (const backend of BACKENDS) assert.ok(ctx.run.error.includes(`${backend}-job (unreadable)`));
@@ -2850,7 +2856,7 @@ test('status-line includes every sequential start and cancel in its timings', as
   await getCheck('status-line').runTerminal(ctx, dependencies);
   const results = getCheck('status-line').analyze(statusInput(ctx.evidenceDir)).results;
   assert.ok(results.every(row => row.result === 'pass'));
-  assert.deepEqual(results[0].timings, { shownSeconds: [42], clearedSeconds: [49] });
+  assert.deepEqual(results[0].timings, { shownSeconds: [42], clearedSeconds: [43] });
 });
 
 test('status-line names a missing setup job at the running deadline', async t => {
@@ -2871,7 +2877,7 @@ test('status-line runTerminal waits a fresh poll interval after an empty redraw'
   await getCheck('status-line').runTerminal(ctx, dependencies);
   assert.equal(state().clearedReads, 13);
   assert.deepEqual(getCheck('status-line').analyze(statusInput(ctx.evidenceDir)).results[0].timings,
-    { shownSeconds: [6], clearedSeconds: [16] });
+    { shownSeconds: [6], clearedSeconds: [10] });
 });
 
 for (const failure of [undefined, 'never appears', 'cancel failure']) {
@@ -2884,6 +2890,13 @@ for (const failure of [undefined, 'never appears', 'cancel failure']) {
     assert.ok(state().cancels >= state().starts);
   });
 }
+
+test('status-line stops the pane of an interrupted run even under --keep', async t => {
+  const { ctx, dependencies, state } = statusDriver(t, 'interrupted', { keep: true });
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Interrupted/);
+  assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
+  assert.equal(state().cancels, state().starts);
+});
 
 test('status-line stops after failed cleanup when --keep is absent', async t => {
   const { ctx, dependencies, state } = statusDriver(t, 'cancel failure');

@@ -794,7 +794,7 @@ for (const mode of ['inherited', 'server-only', 'no-server', 'empty']) {
   });
 }
 
-for (const [selected, keys] of [['No, exit', ['Down', 'Enter']], ['Yes, I trust this folder', ['Enter']], [null, []]]) {
+for (const [selected, keys, said] of [['No, exit', ['Down'], 'Selected'], ['Yes, I trust this folder', ['Enter'], 'Accepted'], [null, []]]) {
   test(`pane trust answers the folder dialog from its selection: ${selected ?? 'no dialog'}`, t => {
     const { dir, env } = fakeCli(t);
     fs.writeFileSync(path.join(dir, 'bin/tmux'), `#!${process.execPath}\n` +
@@ -807,7 +807,7 @@ for (const [selected, keys] of [['No, exit', ['Down', 'Enter']], ['Yes, I trust 
     assert.equal(result.status, 0, result.stderr);
     const calls = fs.readFileSync(env.SMOKE_TMUX_LOG, 'utf8').trim().split('\n').map(JSON.parse);
     assert.deepEqual(calls.filter(args => args[2] === 'send-keys').map(args => args.slice(5)), keys.length ? [keys] : []);
-    assert.equal(result.stdout, selected ? 'Accepted folder trust in clean\n' : '');
+    assert.equal(result.stdout, selected ? `${said} folder trust in clean\n` : '');
   });
 }
 

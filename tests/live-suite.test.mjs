@@ -542,6 +542,12 @@ test('debug inspection recognizes relay and probe modules and rejects load error
   assert.equal(inspectDebug(log, '/tmp/plugin').pluginRead, true);
   assert.equal(inspectDebug(log, '/tmp/plugin').startup, true);
   assert.equal(inspectDebug(log, '/tmp/other').pluginRead, false);
+  // An installed copy's module would answer for the build under test.
+  const foreign = inspectDebug(log + '[DEBUG] hooks module relay@libar-relay loaded (environment 6); events: session.send\n', '/tmp/plugin');
+  assert.equal(foreign.moduleLoaded, false);
+  assert.match(foreign.moduleErrors.join('\n'), /relay@libar-relay loaded/);
+  assert.equal(inspectDebug('[DEBUG] Read hooks.json for plugin relay (enabled=true): /tmp/plugin/hooks/hooks.json\n' +
+    '[DEBUG] hooks module relay@libar-relay loaded (environment 6)\n', '/tmp/plugin').moduleLoaded, false);
   const failed = inspectDebug(log + '[ERROR] /tmp/plugin/hooks/mod/register.js failed to load', '/tmp/plugin');
   assert.equal(failed.moduleLoaded, false);
   assert.equal(failed.moduleErrors.length, 1);
@@ -655,7 +661,7 @@ test('runTerminal override receives the contract context and skips the pane driv
   assert.equal(readRecords(ctx.recordsDir)[0].result, 'pass');
 });
 
-for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', 'SIGHUP', 'partial-start', 'stop-error', 'custom-completion', 'caller-trust', 'custom-scope', 'timeout', 'partial-line', 'trust-retry', 'trust-stuck']) {
+for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', 'SIGHUP', 'partial-start', 'stop-error', 'custom-completion', 'caller-trust', 'custom-scope', 'timeout', 'partial-line', 'trust-retry', 'trust-stuck', 'lost-enter']) {
   test(`terminal driver with a fake pane: ${mode}`, async t => {
     const ctx = scratch(t);
     const created = createRun(ctx.env.RELAY_LIVE_HOME, registry[1], { surface: 'terminal', backends: ['codex'],
@@ -693,6 +699,8 @@ for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', '
         if (mode.startsWith('SIG')) process.emit(mode);
       }
       if (args[0] === 'read' && mode === 'partial-line' && ++fullReads === 2) writeTranscript(transcript, entries(input.runId, check.marker));
+      // lost-enter: the pasted prompt stays in the input box until the second Enter the runner sends.
+      if (args[0] === 'read' && mode === 'lost-enter' && calls.filter(call => call[0] === 'keys').length < 1) return 'Live suite\n───\n❯ [Pasted text #1 +3 lines]\n───';
       if (args[0] === 'read') return 'FAKE-DONE';
       return args[0] === 'start' ? 'RELAY_LIVE_UNSET CLAUDECODE\nRELAY_LIVE_UNSET RELAY_COMPANION_TEST\nRELAY_LIVE_UNSET CLAUDECODE\n' : 'pane command';
     };
@@ -700,11 +708,13 @@ for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', '
     const selected = mode === 'custom-scope' ? { ...registry[1], scope: entries => entries, completed: entries => entries.some(entry => entry.observed === 'done') } : mode === 'custom-completion' ? { ...registry[1], marker: undefined, completed: entries => entries.some(entry => entry.type === 'assistant') } : registry[1];
     const action = runTerminal(input, selected, { run: created.run, save() {}, readers, env: ctx.env, drive,
       pause: async () => { if (mode === 'timeout' && created.run.promptSentAt) now += 60001; }, log() {}, warn() {}, keep: mode.startsWith('SIG') || mode === 'partial-start' });
-    if (['complete', 'custom-completion', 'custom-scope', 'partial-line', 'trust-retry'].includes(mode)) await action;
-    else await assert.rejects(action, mode === 'trust-stuck' ? /trust dialog stayed after three answers/ : mode === 'caller-trust' ? { message: `${ctx.workDir} is not trusted by Claude Code; open it in Claude Code once, or let the runner create the work folder.` } : mode === 'partial-start' ? /Start failed/ : mode === 'stop-error' ? /Could not stop/ : mode === 'bypass' ? /bypass-permissions dialog/ : mode === 'module-error' ? /wake-probe hooks module failed/ : mode === 'timeout' ? /Timed out waiting/ : /Interrupted/);
+    if (['complete', 'custom-completion', 'custom-scope', 'partial-line', 'trust-retry', 'lost-enter'].includes(mode)) await action;
+    else await assert.rejects(action, mode === 'trust-stuck' ? /trust dialog stayed after six answers/ : mode === 'caller-trust' ? { message: `${ctx.workDir} is not trusted by Claude Code; open it in Claude Code once, or let the runner create the work folder.` } : mode === 'partial-start' ? /Start failed/ : mode === 'stop-error' ? /Could not stop/ : mode === 'bypass' ? /bypass-permissions dialog/ : mode === 'module-error' ? /wake-probe hooks module failed/ : mode === 'timeout' ? /Timed out waiting/ : /Interrupted/);
     assert.equal(calls.filter(args => args[0] === 'stop').length, 1);
+    // lost-enter: one Enter more than the paste's own, and none in any other mode.
+    assert.equal(calls.filter(args => args[0] === 'keys').length, mode === 'lost-enter' ? 1 : 0);
     assert.equal(calls.filter(args => args[0] === 'send').length, ['bypass', 'module-error', 'partial-start', 'caller-trust', 'trust-stuck'].includes(mode) ? 0 : 1);
-    assert.equal(calls.filter(args => args[0] === 'trust').length, ['bypass', 'partial-start', 'caller-trust'].includes(mode) ? 0 : { 'trust-retry': 2, 'trust-stuck': 3 }[mode] ?? 1);
+    assert.equal(calls.filter(args => args[0] === 'trust').length, ['bypass', 'partial-start', 'caller-trust'].includes(mode) ? 0 : { 'trust-retry': 2, 'trust-stuck': 6 }[mode] ?? 1);
     assert.equal(Boolean(created.run.promptSentAt), !['bypass', 'module-error', 'partial-start', 'caller-trust', 'trust-stuck'].includes(mode));
     assert.deepEqual(created.run.removedEnvironment, mode === 'partial-start' ? ['CLAUDECODE'] : ['CLAUDECODE', 'RELAY_COMPANION_TEST']);
     if (created.run.promptSentAt) assert.equal(created.run.transcript, transcript);

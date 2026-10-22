@@ -15,9 +15,10 @@ function pinned(screen) {
   return lines.slice(prompt + 2).map(line => line.trim());
 }
 const prefix = /^⚠\uFE0F?\s+relay:\s*/;
+// A plugin's status line starts its row with ⚠, so a prefix a narrow pane wrapped still keeps a row from clearing.
 const cleared = screen => {
   const footer = pinned(screen);
-  return footer !== null && !footer.some(line => prefix.test(line));
+  return footer !== null && !footer.some(line => line.startsWith('⚠'));
 };
 function running(screen, count) {
   const footer = pinned(screen);
@@ -31,13 +32,16 @@ function running(screen, count) {
   }
   return new RegExp(`^${count}\\s+running(?:\\s*·\\s*\\d+\\s+(?:dead|owed))*$`).test(text.trim());
 }
+// True on a clear that a capture more than 5 s later confirms; since() is the first capture of that clear.
 function confirmedClear() {
   let first = null;
-  return (screen, at) => {
+  const confirms = (screen, at) => {
     if (!cleared(screen)) { first = null; return false; }
     first ??= at;
     return at - first > 5000;
   };
+  confirms.since = () => first;
+  return confirms;
 }
 function homeJobs(home) {
   const directories = dir => fs.readdirSync(dir, { withFileTypes: true })
@@ -156,7 +160,11 @@ export default {
       run.statusLine.cancelledAt = stamp();
       ctx.save();
       await cancel();
-      await waitFor('cleared', run.statusLine.cancelledAt, confirmedClear());
+      // The cancels run one after another and may each wait for their worker, so the bound starts when
+      // they return; the timing still counts from the first cancel's start.
+      run.statusLine.cancelsReturnedAt = stamp();
+      ctx.save();
+      await waitFor('cleared', run.statusLine.cancelsReturnedAt, confirmedClear());
       run.completed = true;
     } catch (error) {
       run.completed = false;
@@ -166,7 +174,8 @@ export default {
       try { if (ownsHome) await cancel(); }
       catch (error) { run.completed = false; run.error = error.message; throw error; }
       finally {
-        try { if (run.pane && stopRequested) drive(['stop', run.pane]); }
+        // The ordinary driver kept the pane for --keep; an interrupted run stops it anyway, as that driver does.
+        try { if (run.pane && (stopRequested || run.interrupted || signal?.aborted)) drive(['stop', run.pane]); }
         catch (error) { run.completed = false; run.error = error.message; throw error; }
         finally { run.checkFinishedAt = stamp(); ctx.save(); }
       }
@@ -189,9 +198,12 @@ export default {
       const confirmsClear = confirmedClear();
       const clear = screens.find(row => row.phase === 'cleared' && confirmsClear(row.text, Date.parse(row.at)));
       if (!clear) throw new Error('The status line never clears on two captures more than 5 seconds apart.');
+      const clearedAt = confirmsClear.since();
       const shownSeconds = (Date.parse(shown.at) - Date.parse(saved.startedAt)) / 1000;
-      const clearedSeconds = (Date.parse(clear.at) - Date.parse(saved.cancelledAt)) / 1000;
-      if (![shownSeconds, clearedSeconds].every(value => Number.isFinite(value) && value >= 0 && value <= 60) ||
+      const clearedSeconds = (clearedAt - Date.parse(saved.cancelledAt)) / 1000;
+      const returned = Date.parse(saved.cancelsReturnedAt ?? saved.cancelledAt);
+      if (![shownSeconds, clearedSeconds].every(value => Number.isFinite(value) && value >= 0) || shownSeconds > 60 ||
+          !(clearedAt - returned <= 60000) || !(returned >= Date.parse(saved.cancelledAt)) ||
           !(Date.parse(before.at) <= Date.parse(saved.startedAt)) || !(Date.parse(shown.at) <= Date.parse(saved.cancelledAt)) ||
           screens.some((row, i) => !Number.isFinite(Date.parse(row.at)) || (i > 0 && Date.parse(row.at) < Date.parse(screens[i - 1].at)) ||
             (row.phase === 'cleared' && Date.parse(row.at) < Date.parse(saved.cancelledAt)))) {

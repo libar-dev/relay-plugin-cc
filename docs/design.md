@@ -507,6 +507,25 @@ model's Skill call expands a command's markdown body and never reaches `command.
 
 `transfer` gets the session id from `$.session.id()` and finds the session's file by it ([Transfer](#transfer)).
 
+### The status line
+
+The module pins one line under the prompt for the session's repository, `2 running · 1 dead · 3 owed`, which
+Claude Code draws as `⚠ relay: 2 running · 1 dead · 3 owed`. Running counts `starting` and `running` jobs, dead
+counts `dead` ones (`resume` continues them), owed is the sum of the rows' `undeliveredCount`, the messages a job
+acknowledged and has not run. A part at 0 is left out; with nothing to count the line is cleared.
+
+It comes from `companion status --json --active --limit 200` in the session's directory ([JSON for
+programs](#json-for-programs)), run by argv with a 10 s timeout and one read at a time. When more pages exist the
+running count carries a `+`. A busy answer keeps the line as it was; a failed read, a timeout, cut output or an
+answer that is not `relay.status/1` shows `status unavailable` until the next good answer.
+
+A timer ticks every five seconds from `session.start`, once per load of the module. A tick reads only while
+`$.session.surfaces()` is not empty, so where nothing draws the session (an Agent SDK host such as T3 Code) no
+process runs. While a count shows, every tick reads. While the line is cleared, a tick reads every thirty seconds,
+and on every tick for thirty seconds after a relay event the module saw: a `relay:job` spawn, a send that woke a
+relay, one of the four commands above, or a busy answer. A job a `relay:job` agent of this session starts shows within
+about five seconds; a review, a start the model runs in Bash, or another session's job within thirty (D63).
+
 ### The report
 
 PreToolUse on `SubagentHandback` denies the hand-back while the job is not terminal or a message is

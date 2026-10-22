@@ -198,6 +198,9 @@ without a report, 4 running, 5 cancelled), with `--output-format text` or `json`
 in plain words, Claude reads jobs with the companion in Bash, which a session in `default`
 permission mode asks you about, and cancels a job by sending its agent the message `cancel`.
 
+In the terminal, a status line under the prompt counts the repository's jobs while any are
+running or dead or owe messages: `relay: 2 running · 1 dead · 3 owed`.
+
 Claude can run `/relay:setup`, `/relay:rescue`, `/relay:review` and `/relay:adversarial-review`
 itself when you ask for one in plain words, for example "review my changes on Kimi". A review Claude
 starts never stops to ask you anything: without `--wait` or `--background` it runs in the foreground.
@@ -283,7 +286,9 @@ which checks a `relay:job` prompt's header and refuses the spawn with the parser
 header is bad, and a `session.send` hook: when a message is sent to a relay, it ends the relay's
 current wait, and the guard delivers the message at the relay's next call. The module only checks
 headers and wakes a waiting relay: delivery runs on command hooks and the transcript. Its
-`command.run` hooks answer `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer`.
+`command.run` hooks answer `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer`,
+and its status line counts the repository's running and dead jobs and owed messages
+([design.md](docs/design.md#the-status-line)).
 
 ## Development
 

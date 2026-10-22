@@ -730,7 +730,7 @@ const STATUS_ARGV = [
 ]
 
 type StatusOptions = {
-  surfaces?: () => string[]
+  surfaces?: () => string[] | Promise<string[]>
   run?: () => unknown
   start?: { surface: string | null; isInteractive: boolean }
 }
@@ -745,7 +745,8 @@ async function statusEngine($: any, on: any, options: StatusOptions = {}) {
   on('session.cwd', () => ({ value: CWD }))
   on('session.surfaces', () => {
     surfaceReads++
-    return { value: options.surfaces ? options.surfaces() : ['terminal'] }
+    const answer = options.surfaces ? options.surfaces() : ['terminal']
+    return answer instanceof Promise ? answer.then((value) => ({ value })) : { value: answer }
   })
   on('process.run', (_: unknown, e: any) => {
     runs.push(e)
@@ -906,6 +907,26 @@ test('a tick while a read is in flight runs nothing', async ($, on) => {
   expect(seen.lines).toEqual(['1 running', '1 dead'])
 })
 
+test('ticks whose surface reads are slow still run one read at a time', async ($, on) => {
+  const surfaces: ((value: string[]) => void)[] = []
+  const runs: ((value: unknown) => void)[] = []
+  const seen = await statusEngine($, on, {
+    surfaces: () => new Promise<string[]>((resolve) => surfaces.push(resolve)),
+    run: () => new Promise((resolve) => runs.push(resolve)),
+  })
+
+  await seen.clock.advance(10000)
+  expect(surfaces).toHaveLength(2)
+  // Both surface reads answer while neither tick has read yet: only the first may run the listing.
+  for (const answer of surfaces) answer(['terminal'])
+  await seen.clock.settle()
+  expect(seen.runs).toHaveLength(1)
+
+  runs[0]({ value: listing([job('j-1', 'running')]) })
+  await seen.clock.settle()
+  expect(seen.lines).toEqual(['1 running'])
+})
+
 test('a desktop session that starts with no surface reads once the desktop attaches', async ($, on) => {
   let surfaces: string[] = []
   // The desktop app's local session starts as the SDK's does, drawing nowhere yet.
@@ -937,7 +958,7 @@ test('while the line is cleared a tick reads every thirty seconds, and every fiv
     // Unavailable is no good answer, so it reads at every tick as a count does.
     failed('error', 1),
     listing([]),
-    // A busy answer keeps the line, cleared here, and the rate with it.
+    // A busy answer keeps the line, cleared here, and reads at the next tick: a record was changing.
     failed('busy', 4),
     listing([]),
   ]
@@ -965,8 +986,6 @@ test('while the line is cleared a tick reads every thirty seconds, and every fiv
   expect(seen.runs).toHaveLength(6)
   expect(seen.lines.slice(4)).toEqual(['status unavailable', undefined])
   await seen.clock.advance(30000)
-  expect(seen.runs).toHaveLength(7)
-  await seen.clock.advance(25000)
   expect(seen.runs).toHaveLength(7)
   await seen.clock.advance(5000)
   expect(seen.runs).toHaveLength(8)

@@ -107,6 +107,21 @@ Phase 4, the companion's JSON, changed in place (the status line and the board r
 - The stop-time review gate reads the new JSON. `check-header` keeps its text answer.
 - The live suite's `stop` check requires the hand-back record.
 
+Phase 4, the status line:
+
+- The terminal shows a status line under the prompt while the repository has jobs to tell about:
+  `relay: 2 running · 1 dead · 3 owed`. Running counts starting and running jobs, dead counts jobs whose worker
+  died (`resume` continues them), owed counts messages a job acknowledged and has not run. The hooks module reads
+  `status --json --active` every five seconds while a count shows, every thirty while the line is cleared, and every
+  five for thirty seconds after it sees a relay start, a wake, one of its commands or a busy read. A busy read keeps
+  the line; a failed one shows `status unavailable`. Where nothing draws the session (an Agent SDK host such as T3
+  Code), it runs no process.
+- The live suite has a `status-line` check (terminal only): the line shows one running job per backend, then clears
+  after the cancel. The runner answers the folder trust dialog in two steps (Down, then Enter once "Yes" is
+  selected) and again when a key was lost, presses Enter again while the lead's pasted prompt sits unsent, and
+  refuses a run where an installed copy of the plugin loaded its hooks module beside the build under test.
+- A recovery test that took up to 219 s on a loaded machine shortens its cleanup's cancel grace.
+
 Phase 5, the live suite (development tooling; the plugin itself does not change):
 
 - `scripts/live/suite.mjs` runs live checks against the real backends, in the terminal and in T3 Code, and
