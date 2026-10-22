@@ -97,8 +97,10 @@ for (const key of ['createdMarketplace', 'createdCache', 'createdSettingsFile', 
 if (entries.some(e => e.scope !== 'local' || !e.projectPath || path.resolve(e.projectPath) !== dir)) {
   throw new Error(`${saved.name} has an installation outside this directory; refusing to remove its marketplace.`);
 }
-// The registry, not addedMarketplace, tells us whether a partially failed add registered the name.
-const problem = marketplaceProblem(saved, marketplace?.installLocation);
+// The registry, not addedMarketplace, tells us whether a partially failed add registered the name. A name
+// registered elsewhere is someone else's; an unregistered one (an add that failed before registering, or a
+// marketplace removed by hand) leaves only the receipt's own folder to check.
+const problem = marketplaceProblem(saved, marketplace ? marketplace.installLocation : saved.marketplace);
 if (problem) throw new Error(`Leaving ${saved.name} and keeping its receipt; changing nothing: ${problem}.`);
 console.log(saved.name);
 console.log(saved.installedPlugin && entries.length ? 'installed' : 'absent');

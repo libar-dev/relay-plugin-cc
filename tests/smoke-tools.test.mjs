@@ -210,12 +210,14 @@ for (const action of ['plugin marketplace add', 'plugin install']) {
     } });
     const before = callLog(env).length;
     const undone = smokeScript('uninstall', work, env);
-    assert.equal(undone.status, action === 'plugin marketplace add' ? 1 : 0, undone.stderr);
+    // An add that failed before registering leaves the name unregistered, so only the receipt's own folder
+    // is checked, and the cleanup goes on.
+    assert.equal(undone.status, 0, undone.stderr);
     assert.deepEqual(callLog(env).slice(before), action === 'plugin install'
       ? [['plugin', 'marketplace', 'remove', 'relay-smoke']] : []);
     assert.deepEqual(readJson(settingsPath(work)), { enabledPlugins: { 'relay@libar-relay': false, 'relay@relay-smoke': true } });
-    assert.equal(fs.existsSync(saved.marketplace), action === 'plugin marketplace add');
-    assert.equal(fs.existsSync(receiptPath(work, env)), action === 'plugin marketplace add');
+    assert.equal(fs.existsSync(saved.marketplace), false);
+    assert.equal(fs.existsSync(receiptPath(work, env)), false);
     assert.deepEqual(readJson(path.join(config, 'plugins/cache/relay-smoke/keep.json')), { createdLater: true });
   });
 }
@@ -264,6 +266,32 @@ test('cleanup deregisters a failed marketplace add before removing its folder an
   assert.equal(fs.existsSync(receiptPath(work, env)), false);
   assert.equal(fs.existsSync(path.join(work, '.claude')), false);
 });
+
+for (const failure of ['marketplace removed by hand', 'add that failed before registering']) {
+  test(`uninstall cleans up after a ${failure}`, t => {
+    const { dir, config, env } = fakeCli(t);
+    const work = workDir(dir);
+    if (failure === 'add that failed before registering') env.SMOKE_FAIL_ACTION = 'plugin marketplace add';
+    const installed = installSmoke(work, env);
+    const saved = readJson(receiptPath(work, env));
+    if (failure === 'marketplace removed by hand') {
+      assert.equal(installed.status, 0, installed.stderr);
+      const known = readJson(path.join(config, 'plugins/known_marketplaces.json'));
+      delete known[saved.name];
+      writeJson(path.join(config, 'plugins/known_marketplaces.json'), known);
+    } else {
+      assert.notEqual(installed.status, 0);
+      assert.equal(saved.addedMarketplace, false);
+    }
+    const known = path.join(config, 'plugins/known_marketplaces.json');
+    assert.equal(fs.existsSync(known) ? readJson(known)[saved.name] : undefined, undefined);
+    const undone = smokeScript('uninstall', work, env);
+    assert.equal(undone.status, 0, undone.stderr);
+    assert.ok(!callLog(env).some(call => call.join(' ').startsWith('plugin marketplace remove')));
+    assert.equal(fs.existsSync(saved.marketplace), false);
+    assert.equal(fs.existsSync(receiptPath(work, env)), false);
+  });
+}
 
 test('failed add receipt preserves a registration at another location', t => {
   const { dir, config, env } = fakeCli(t);

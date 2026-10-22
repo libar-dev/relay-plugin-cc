@@ -394,8 +394,9 @@ The later phases, in this light:
   TaskStop on the forked id cancels the job as D41 says (D48). Its other open point stands: after a fork, Claude
   Code can write later entries to `subagents/agent-<id>.jsonl`, which the guard does not read. The release can turn
   the probe into a check of the message `cancel` to a Workflow relay.
-- **The release.** `suite.mjs run all` now has seven checks; `session-end` runs only in the terminal and takes about
-  four minutes. The T3 checks are `steer-main`, `steer-workflow`, `continue`, `stop` and `spawn-check`. The
+- **The release.** `suite.mjs run all` now has ten checks; `steer-plugin`, `headless` and `session-end` run only in
+  the terminal, and `session-end` takes about four minutes. The T3 checks are `steer-main`, `steer-workflow`,
+  `continue`, `commands`, `transfer`, `stop` and `spawn-check`. The
   capability table gains the stop and spawn rows the funding notes list. The smoke kit's `hi-refused` agent is now
   refused at the spawn (`Subagent spawn denied by a plugin: model: glm-5.3-flash is a ZCode model…`), not handed
   back as `state: not started`; the kit's SMOKE-TEST.md says the old form and needs the new one for 3.0.
