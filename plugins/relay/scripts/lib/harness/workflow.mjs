@@ -51,6 +51,15 @@ const WORKFLOW_TRAILERS = Object.freeze({
   reminder: /^\n*<system-reminder>\n/
 });
 
+// What Claude Code writes as a user entry, with no origin and no `isMeta`, when it interrupts an agent's turn: a
+// TaskStop, or a Workflow stopped while the agent ran (read from Claude Code 2.1.308). A relay that runs again
+// afterwards (a Workflow relay's other loop, or a relay a message resumes) must not hand it to the job as a message.
+const INTERRUPT_MARKERS = Object.freeze(["[Request interrupted by user]", "[Request interrupted by user for tool use]"]);
+
+export function isInterruptMarker(text) {
+  return typeof text === "string" && INTERRUPT_MARKERS.includes(text.trim());
+}
+
 export const SCHEMA_SENTENCE =
   "schema is not supported on a relay:job agent: it returns the job's state block as a string. Drop schema; for structured data, give the file named on its report: line to an agent that has the schema.";
 

@@ -41,6 +41,9 @@ Phase 3, spawn and stop like a Claude agent:
   every check, and checks relative `cd:`, `add-dir:` and `brief:` paths alone, since the relay's
   directory is not known at the spawn. A Workflow script that runs agents in `parallel` should catch
   the error per call.
+- A relay never hands Claude Code's interrupt note (`[Request interrupted by user for tool use]`) to its job.
+  A relay stopped by TaskStop that ran again, resumed by a message or as a Workflow relay's second loop, handed
+  it over, and on a cancelled job that restarted the job.
 - The live suite has three more checks: `stop` (TaskStop cancels the job within 15 s), `session-end`
   (the job runs on after the Claude session ends, terminal only) and `spawn-check`.
 

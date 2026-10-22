@@ -25,7 +25,7 @@ import { appendRelayViolation, messageExists, messageAccount, newMessageId, post
 import { absoluteJobsHomeEnv, listJobDirs, nowIso, readJob, jobPaths, readJsonOrNull, resolveJobsHome, TERMINAL_STATES, writeJsonAtomic } from "../jobs/store.mjs";
 import { isTerminalView, JobViewBusy, loadJobView } from "../jobs/view.mjs";
 import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
-import { classifyHarnessEntry, unframeComputedTask, WORKFLOW_SYSTEM_NOTES } from "./workflow.mjs";
+import { classifyHarnessEntry, isInterruptMarker, unframeComputedTask, WORKFLOW_SYSTEM_NOTES } from "./workflow.mjs";
 
 // The wake (the hooks module's session.send hook) ends a wait when a message is sent to the relay,
 // so the bound only caps a tool call. 600 s is the Bash tool's maximum.
@@ -168,7 +168,8 @@ export function relayToolBoundary(entries, toolUseId) {
 // - a `user` entry whose origin is the coordinator or a peer (a message that resumes a relay
 //   that has handed back), unwrapped from the harness's fixed wrapper when it has one; a
 //   peer's text is its origin's `body`;
-// - a plain `user` turn that is not metadata (`isMeta`) and not a tool result.
+// - a plain `user` turn that is not metadata (`isMeta`), not a tool result and not Claude Code's
+//   interrupt note (workflow.mjs).
 // Under the Workflow tool the harness's two user entries are recognised by their marker line
 // (workflow-harness.mjs): the user request is skipped, the computed task is the prompt,
 // unframed. `structuredOutput` is true when the system prompt snapshot asks for the
@@ -305,6 +306,9 @@ export function parseRelayTranscript(text, toolUseId = null) {
     }
     if (!fromCoordinator && classifyHarnessEntry(messageText) === "user-request") {
       return; // harness context, never a message
+    }
+    if (!fromCoordinator && isInterruptMarker(messageText)) {
+      return; // Claude Code's note that it interrupted the relay, never a message
     }
     addMessage(fromCoordinator ? unwrapCoordinator(messageText) : messageText, fromCoordinator ? "coordinator" : "user");
   });

@@ -323,7 +323,9 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   relay and the job has not ended, it runs `cancel` and waits for it, so the caller's TaskStop
   returns with the cancelled job's block beside it. A cancel that fails, or that leaves a newer
   worker still running, is told to the caller and recorded as a relay violation. Claude Code has no
-  TaskStop for one agent of a Workflow, and a TaskStop on a whole Workflow cancels nothing: its
+  TaskStop for one agent of a Workflow until a message has reached it (a message to a running
+  Workflow relay starts a second loop under its id, which TaskStop can stop, and that cancels the job
+  like any relay's). A TaskStop on a whole Workflow cancels nothing: its
   relays end, the jobs run on, and the `resumeFromRunId` that usually follows adopts them, which it
   never does for a cancelled job. The hook tells the caller which of the run's jobs keep running,
   with the command to cancel one. Cancel one Workflow job while its relay runs with the message
@@ -454,7 +456,10 @@ Violations are never removed; `result` and `status` print each as a `relay-viola
   in no hook field, so every run directory is tried with the exact basename `agent-<id>.jsonl`, and
   the path found is recorded on the job.
 - **The harness's own entries are recognised by their marker line**, the one exception to "never by
-  text", because the harness marks its two user entries with nothing else. The markers, the
+  text", because the harness marks its two user entries with nothing else. Claude Code's note that it
+  interrupted a turn (`[Request interrupted by user for tool use]`, after a TaskStop) is recognised the
+  same way and never delivered: a relay that runs again after a stop would otherwise hand it to the
+  job, and on a cancelled job a message is a continue. The markers, the
   system-prompt notes and the trailers live in one module with the Claude Code version they were
   read from. The user-request entry is skipped. The computed-task entry is the prompt, with one
   indentation level removed; a later one is delivered as a message. A line at column zero inside

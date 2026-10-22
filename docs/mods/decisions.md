@@ -301,3 +301,19 @@ run. Opus 5.5's review raised it. The TaskStop hook finds the run id from the Wo
 caller's transcript (`taskId` to `runId`), lists that run's jobs that have not ended, and, when there are any,
 tells the caller they keep running for a `resumeFromRunId`, with the command to cancel one. A Workflow without
 relay jobs gets no output.
+
+### D48. A relay never hands Claude Code's interrupt note to its job (Phase 3 thread)
+
+When Claude Code interrupts an agent's turn (TaskStop, a stopped Workflow), it writes a user entry,
+`[Request interrupted by user for tool use]` or `[Request interrupted by user]`, with no origin and no `isMeta`.
+The guard took every plain user turn for a message, so a stopped relay that ran again handed the note to its job:
+on a cancelled job that is a continue, which restarted the job TaskStop had just cancelled. A relay runs again after
+a stop in two ways. A message resumes it. And, as the Phase 6 thread found, a `SendMessage` to a running Workflow
+relay starts a second loop under the same agent id while the first runs on. That second loop is a `local_agent`
+task that TaskStop can stop: the TaskStop hook then cancels the job, as D2 and D41 say, and the first loop's guard
+delivered the note. A live probe showed exactly that (the job back to `completed` in a second attempt); with the
+two notes recognised as harness entries, read from the 2.1.308 binary and kept with the other markers in
+`lib/harness/workflow.mjs`, the same probe left the job `cancelled` and both Workflow agents returned
+`state: cancelled`. The same probe measured D44's advice: the message `cancel` to a running Workflow relay goes
+through such a second loop and cancelled its job in under a second. So D42's "no TaskStop for one Workflow agent"
+holds until a message has reached that agent; after one, a TaskStop on its id cancels the job like any relay's.
