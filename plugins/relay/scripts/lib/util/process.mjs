@@ -3,6 +3,40 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import process from "node:process";
 
+// On Linux a process stays in its systemd unit's cgroup whatever its session or process group,
+// and stopping the unit kills everything in that cgroup: T3 Code runs as `t3code.service` with
+// KillMode=mixed, so its restart killed every job worker it had started, setsid or not. A process
+// started from a unit of the user's manager goes through `systemd-run --user --scope`, which gives
+// it a scope of its own in the same pid. The answer is the command and arguments to spawn.
+// RELAY_WORKER_SCOPE=off turns it off.
+/** @type {boolean | null} */
+let userScopeWorks = null;
+
+export function inOwnUserScope(command, args, { env = process.env, platform = process.platform, cgroup = null, probe = null, description = null } = {}) {
+  if (platform !== "linux" || env.RELAY_WORKER_SCOPE === "off") return { command, args };
+  let text = cgroup;
+  if (text == null) {
+    try { text = fs.readFileSync("/proc/self/cgroup", "utf8"); } catch { return { command, args }; }
+  }
+  // cgroup v2 is one line `0::<path>`; under a user's manager a service's path holds
+  // `/user@<uid>.service/` and ends in `.service`.
+  const unified = text.split("\n").find((line) => line.startsWith("0::"))?.slice(3).trim() ?? "";
+  if (!/\/user@\d+\.service\//.test(unified) || !/\.service$/.test(unified)) return { command, args };
+  if (probe) {
+    if (!probe()) return { command, args };
+  } else {
+    if (userScopeWorks === null) {
+      const result = spawnSync("systemd-run", ["--user", "--scope", "--quiet", "--collect", "--", "true"], { env, stdio: "ignore", timeout: 5000 });
+      userScopeWorks = !result.error && result.status === 0;
+    }
+    if (!userScopeWorks) return { command, args };
+  }
+  return {
+    command: "systemd-run",
+    args: ["--user", "--scope", "--quiet", "--collect", ...(description ? [`--description=${description}`] : []), "--", command, ...args]
+  };
+}
+
 export function runCommand(command, args = [], options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
