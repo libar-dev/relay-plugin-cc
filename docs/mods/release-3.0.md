@@ -1,7 +1,7 @@
 # relay 3.0: how it is built and released
 
 relay 3.0.0 is Phases 1 to 5 of [the plan](plan.md), released together for the fleet and for the first public
-publication ([decisions.md](decisions.md), D1). This page is the working agreement for every thread that builds
+publication, with Phase 6's report ([decisions.md](decisions.md), D1). This page is the working agreement for every thread that builds
 it: where the work goes, what each step must pass, and how the work was done in Phase 1.
 
 ## Branches and versions
@@ -25,7 +25,8 @@ it: where the work goes, what each step must pass, and how the work was done in 
    rebases.
 4. **Phase 4**, in this order: the companion's `--json` changed in place (the board reads it), the status line,
    the board pane.
-5. **Phase 6**, the investigation report, at any point. No code.
+5. **Phase 6**, the investigation report, at any point. No code (PR #9). Reported in
+   [messages-from-a-job.md](messages-from-a-job.md).
 6. **The release PR**, `release/3.0` into `main`.
 
 ## What a phase PR must pass
@@ -35,9 +36,11 @@ it: where the work goes, what each step must pass, and how the work was done in 
   and the code, not the author's conclusions.
 - CodeRabbit and Greptile, followed with T3's `watch_pull_request`. A finding is answered on its thread when it
   is fixed or declined, then the thread is resolved.
-- The phase's own checks in the live suite, in the terminal and in T3, on the Fedora ThinkPad, with their records
-  committed and `docs/live/capabilities.md` regenerated (`node scripts/live/suite.mjs table`).
-- The smoke kit (`relay-plugin-cc-smoke`) on the PR's head, installed with `scripts/smoke/install-local.sh`.
+- When the phase changes plugin code: its own checks in the live suite, in the terminal and in T3, on the Fedora
+  ThinkPad, with their records committed and `docs/live/capabilities.md` regenerated
+  (`node scripts/live/suite.mjs table`); and the smoke kit (`relay-plugin-cc-smoke`) on the PR's head, installed
+  with `scripts/smoke/install-local.sh`. A phase that changes no plugin code, such as Phase 6's report, raises no
+  version and runs neither (D51).
 - Its last commit updates plan.md: a review of every later phase in light of what the PR learned (the plan's
   rule 7), and the CHANGELOG and decisions.md entries.
 
@@ -92,3 +95,13 @@ What worked in Phase 1:
 - `$.agent.list()` holds no Workflow agent. A message from another agent reaches a relay as origin kind `peer`.
 - Never set `CLAUDE_CONFIG_DIR` and never answer a dialog that stores a choice (D13). Check
   `~/.claude/settings.json` against a copy taken before a live run.
+
+## What Phase 6 learned about the tools
+
+- A `SendMessage` from a background subagent or a Workflow agent to `"main"` starts a turn of an idle main thread,
+  in the terminal and in T3. A busy one reads it when its current tool call returns.
+- A message by agent id to a running Workflow agent starts a second loop of that agent, and the original loop
+  never reads it. A message to a Workflow agent that has ended fails, or resumes it as `general-purpose`.
+- A module's `$.session.send` always sends as the main conversation, from any loop.
+- The guard reads the transcript a job recorded at start. After a Workflow agent forks, Claude Code can write
+  later entries to `subagents/agent-<id>.jsonl` instead.

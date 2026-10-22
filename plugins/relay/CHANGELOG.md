@@ -2,9 +2,9 @@
 
 ## 3.0.0 (unreleased)
 
-The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5, built on the branch
-`release/3.0` ([docs/mods/release-3.0.md](../../docs/mods/release-3.0.md)). Each phase adds its
-entries here.
+The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5 and Phase 6's report, built
+on the branch `release/3.0` ([docs/mods/release-3.0.md](../../docs/mods/release-3.0.md)). Each phase adds
+its entries here.
 
 Phase 1, steer wake:
 
@@ -31,6 +31,12 @@ Phase 5, the live suite (development tooling; the plugin itself does not change)
 - The checks so far: a steer from the main thread, from a Workflow agent and from another plugin's
   `$.session.send`, and a continue after the hand-back, on all four backends. A steer passes only when the job's
   record shows how the backend took it: into the running turn on Codex, Grok and ZCode, as the next turn on Kimi.
+
+Phase 6, an investigation (the plugin does not change):
+
+- [docs/mods/messages-from-a-job.md](../../docs/mods/messages-from-a-job.md) reports what Codex, Grok, ZCode and
+  Kimi allow for a job that sends a message to the agent that started it, or to a peer, and how such a message
+  and its reply would travel. Messages from a job are not part of 3.0.
 
 ## 2.2.0 (2026-10-22)
 
