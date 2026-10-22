@@ -323,23 +323,26 @@ What shipped:
   both families, a way the spawn check could refuse a launch `start` accepts (a relative path, then `mode: write`'s
   worktree roots), and the first found the `stop` check crediting a cancel the hook had not made.
 
-Live results (the Fedora machine, Claude Code 2.1.308, 3.0.0-dev.3, Sonnet 5.5 lead; records in
-`docs/live/records/`, table in [docs/live/capabilities.md](../live/capabilities.md)). The phase's own checks and
-`steer-main` ran on the final build, 1f274c4; the whole suite ran on f7e474b, which differs from it only in where
-the interrupt-note filter applies (D48):
+Live results (the Fedora machine, Claude Code 2.1.308, Sonnet 5.5 lead; records in `docs/live/records/`, table in
+[docs/live/capabilities.md](../live/capabilities.md)), on 3.0.0-dev.4, with Phase 2 merged in. The whole suite ran
+on d90fd59, Phase 2's checks included; `stop` ran again on the final build, 7a0d4b7, which differs only in how the
+TaskStop hook words a job that ended before its cancel:
 
 | Check | Terminal | T3 Code |
 |---|---|---|
-| `stop` | cancelled 0.2–1.4 s after the TaskStop | 0.2–1.1 s |
-| `session-end` | ran on, and completed 140–159 s after the session ended | terminal only |
+| `stop` | cancelled 0.2–0.4 s after the TaskStop | 0.2–0.4 s |
+| `session-end` | ran on, and completed 148–166 s after the session ended | terminal only |
 | `spawn-check` | refused at the spawn with the parser's message, all four backends | the same |
-| `steer-main` | 2.0–4.0 s to the job's ledger | 2.2–13.3 s (Kimi's 13.3 s with two suites running at once; the limit is 30 s) |
-| `steer-workflow`, `steer-plugin`, `continue` (f7e474b) | 3.1–4.1 s | Phase 5's records stand |
+| `steer-main` | 2.4–4.4 s to the job's ledger | 1.5–6.4 s |
+| `steer-workflow`, `steer-plugin`, `continue` | 2.5–3.9 s | Phase 5's records stand |
+| Phase 2's `commands`, `transfer`, `headless` | pass | Phase 2's records stand |
 
-64 of 64 records passed on those two builds, and 40 of 40 on 9487e38 before the last two fixes. The cancels of about
-a second on 1f274c4 ran beside a T3 run and the smoke kit; alone they took 0.2–0.5 s. The smoke kit passed on the
-final build (workflow `wf_f2f4cd17-c20`, then the plain fan-out, whose `hi-refused` was refused at the spawn with the
-parser's message).
+57 of 57 records passed on 3.0.0-dev.4. Before Phase 2 merged, the same checks passed on 3.0.0-dev.3 builds
+(9487e38, f7e474b, 1f274c4; 104 records). The smoke kit passed on the final build (workflow `wf_a060662f-a89`, then
+the plain fan-out, whose `hi-refused` was refused at the spawn with the parser's message). In one T3 run of
+`steer-main`, Kimi's model took the three steers, as the next turns they are on Kimi, for instructions, and ran
+`companion steer` on its own job three times; the lead withheld its marker until told the check judges the
+records, not the reports.
 
 ### After Phase 3: what held and what changed
 
