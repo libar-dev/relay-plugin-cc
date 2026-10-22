@@ -155,3 +155,5 @@ scratchpad/
 # tsconfig.json beside them that extends them
 plugins/relay/.claude-plugin/types/
 plugins/relay/tsconfig.json
+scripts/live/probes/*/.claude-plugin/types/
+scripts/live/probes/*/tsconfig.json
