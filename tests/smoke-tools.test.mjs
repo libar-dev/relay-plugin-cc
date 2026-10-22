@@ -830,3 +830,45 @@ test('pane pid prints the pane process id on a private tmux socket', async t => 
   assert.equal(pane('stop', 'pid-test').status, 0);
   assert.notEqual(pane('pid', 'pid-test').status, 0);
 });
+
+test('pane start runs in its folder after the folder a tmux server started from is deleted', async t => {
+  const dir = fs.realpathSync(fs.mkdtempSync('/tmp/relay-pane-cwd-test-'));
+  const env = { ...process.env, XDG_RUNTIME_DIR: dir };
+  const socket = path.join(dir, 'claude-tmux/tmux.sock');
+  t.after(() => {
+    spawnSync('tmux', ['-S', socket, 'kill-server']);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const pane = (cwd, ...args) => spawnSync('bash', [path.join(root, 'scripts/smoke/pane.sh'), ...args], { env, cwd, encoding: 'utf8' });
+  const target = path.join(dir, 'target'), caller = path.join(dir, 'caller'), script = path.join(dir, 'record.cjs');
+  fs.mkdirSync(target);
+  fs.writeFileSync(script, 'require("node:fs").writeFileSync(process.argv[2], process.cwd()); setInterval(() => {}, 1000);');
+  const recorded = async name => {
+    const file = path.join(dir, name), deadline = Date.now() + 5000;
+    while (!fs.existsSync(file) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    return fs.readFileSync(file, 'utf8');
+  };
+  // pane.sh starts the server from its socket's folder, so deleting the caller's folder strands nothing.
+  fs.mkdirSync(caller);
+  const first = pane(caller, 'start', 'first', target, '--', process.execPath, script, path.join(dir, 'first'));
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(await recorded('first'), target);
+  fs.rmSync(caller, { recursive: true });
+  const direct = spawnSync('tmux', ['-S', socket, 'new-session', '-d', '-s', 'direct', '-c', target, '--',
+    process.execPath, script, path.join(dir, 'direct')], { env, encoding: 'utf8' });
+  assert.equal(direct.status, 0, direct.stderr);
+  assert.equal(await recorded('direct'), target);
+  // A server another caller started from a folder since deleted: the pane's command enters its folder itself.
+  spawnSync('tmux', ['-S', socket, 'kill-server']);
+  for (const deadline = Date.now() + 5000; fs.existsSync(socket) && Date.now() < deadline;) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  fs.mkdirSync(caller);
+  const stranded = spawnSync('tmux', ['-S', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'stranded', '--',
+    process.execPath, '-e', 'setInterval(() => {}, 1000)'], { env, cwd: caller, encoding: 'utf8' });
+  assert.equal(stranded.status, 0, stranded.stderr);
+  fs.rmSync(caller, { recursive: true });
+  const second = pane(dir, 'start', 'second', target, '--', process.execPath, script, path.join(dir, 'second'));
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(await recorded('second'), target);
+});

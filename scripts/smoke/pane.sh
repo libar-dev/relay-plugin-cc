@@ -65,6 +65,9 @@ if [[ "$action" == attach-command ]]; then
 fi
 command -v tmux >/dev/null || die 'tmux is required.'
 install -d -m 700 "$socket_dir"
+# The call that starts the shared tmux server gives it this process's working directory. On tmux 3.7c a server
+# whose directory was deleted ignores new-session -c, so start it from the socket's folder, never the caller's.
+cd -- "$socket_dir"
 target="=$name:"
 case "$action" in
   start)
@@ -84,7 +87,9 @@ case "$action" in
     done
     # Multiple tmux command arguments execute directly; no shell reparses their values. The guarded
     # expansion keeps an empty env_args from failing under set -u on Bash before 4.4 (macOS ships 3.2).
-    tmux -S "$SOCK" new-session -d -s "$name" -x 200 -y 50 -c "$dir" ${env_args[@]+"${env_args[@]}"} -- env ${clean_env[@]+"${clean_env[@]}"} "$@"
+    # The command enters DIR itself too, so a pane starts there on a server an older pane.sh stranded.
+    tmux -S "$SOCK" new-session -d -s "$name" -x 200 -y 50 -c "$dir" ${env_args[@]+"${env_args[@]}"} -- \
+      env ${clean_env[@]+"${clean_env[@]}"} sh -c 'cd -- "$1" && shift && exec "$@"' pane "$dir" "$@"
     # Claude Code tracks focus through the terminal's focus events, which tmux passes on only
     # when asked; without them it prints a hint under the prompt.
     tmux -S "$SOCK" set-option -g focus-events on ;;
