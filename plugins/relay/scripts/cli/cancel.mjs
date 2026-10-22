@@ -261,7 +261,13 @@ export async function handleCancel(argv) {
       const worker = view.job.worker;
       const cooperative = attempt !== null && (taken || (stopped && view.state !== "dead"));
       if (cooperative) {
-        tree = tree.filter(entry => entry.pid !== worker?.pid);
+        // The worker answered and may begin a newer attempt, so it is never signalled. Its tree is read
+        // again for what attempt N left (a tool started while the turn was interrupted): a newer attempt is
+        // recorded before its server starts, so a read after which the count is still N holds none of it.
+        const later = worker?.pid && isWorkerAlive(worker) ? snapshotProcessTree([worker.pid]) : [];
+        const current = readJob(jobDir)?.attempts?.length ?? 0;
+        const merged = current === attempt || (attempt === 1 && current === 0) ? mergeSnapshots(tree, later) : tree;
+        tree = Object.assign(merged.filter(entry => entry.pid !== worker?.pid), merged.cause ? { cause: merged.cause } : {});
       } else {
         tree = mergeSnapshots(tree, snapshotProcessTree(processRoots(view.job)));
       }

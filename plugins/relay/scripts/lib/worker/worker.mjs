@@ -322,7 +322,7 @@ async function runWorkerRound(jobDir, options, held) {
   const cancelBeforeTurn = () => {
     const attempts = (job.attempts ?? []).map(entry =>
       entry.endedAt ? entry : { ...entry, state: "cancelled", endedAt: nowIso() });
-    save({ ...me_record, attempts, state: "cancelled", completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
+    save({ ...me_record, attempts, state: "cancelled", pendingFirstTurn: false, completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
     cancelOutcome({ action: "cancelled" });
     dropQueued("the job was cancelled");
     return releaseAndReturn({});

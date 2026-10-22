@@ -47,6 +47,10 @@ function asyncCompanion(ctx, args, extra = {}) {
   return new Promise(resolve => child.on("close", status => resolve({ status, stdout, stderr })));
 }
 
+function isAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
 test("cancel --attempt 1 cancels running attempt 1 and prints relay.cancel/1 with actions", async t => {
   const { ctx, id, dir } = await running(t);
   const result = companion(ctx, ["cancel", id, "--attempt", "1", "--json"]);
@@ -788,6 +792,41 @@ test("a job whose first turn failed still runs its brief before a resume message
   const message = postInboxMessage(dir, { kind: "resume", text: "Resume now." });
   await runWorker(dir, { env: ctx.env });
   assert.deepEqual(ctx.fakeState().turnStarts.map(turn => turn.prompt).slice(0, 2), ["The failed brief.", message.text]);
+});
+
+test("a cancel the worker takes before the first turn leaves no brief for later continues", async t => {
+  const { ctx, dir } = recorded(t, "starting", []);
+  writeJob(dir, { ...readStoredJob(dir), pendingFirstTurn: true,
+    request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: ctx.work }) });
+  fs.writeFileSync(jobPaths(dir).brief, "The cancelled brief.");
+  postInboxMessage(dir, { kind: "cancel", text: "", attempt: 1 });
+  await runWorker(dir, { env: ctx.env });
+  assert.equal(readStoredJob(dir).state, "cancelled");
+  assert.equal(readStoredJob(dir).pendingFirstTurn, false);
+  const first = postInboxMessage(dir, { kind: "continue", text: "First continue." });
+  await runWorker(dir, { env: ctx.env });
+  const second = postInboxMessage(dir, { kind: "continue", text: "Second continue." });
+  await runWorker(dir, { env: ctx.env });
+  assert.deepEqual(ctx.fakeState().turnStarts.map(turn => turn.prompt), [first.text, second.text]);
+});
+
+for (const scoped of [true, false]) test(`a ${scoped ? "scoped" : "plain"} cancel stops a tool child the interrupt started under a live server`, async t => {
+  // The turn does not end on the interrupt, so the server, and the child it started then, still run when cancel
+  // reads the tree again after the grace.
+  const ctx = setup(t, { turnMs: 60000, behavior: "job-hang-child" });
+  const { id } = startJob(ctx, undefined, "First turn.", { FAKE_CODEX_INTERRUPT_CHILD: "1" });
+  await waitFor(() => readJob(ctx, id).turnId);
+  const before = await waitFor(() => ctx.fakeState().descendants?.[0]);
+  const worker = readJob(ctx, id).worker;
+  t.after(() => {
+    for (const entry of ctx.fakeState().descendants ?? []) { try { process.kill(entry.childPid, "SIGKILL"); } catch {} }
+    try { process.kill(worker.pid, "SIGKILL"); } catch {}
+  });
+  companion(ctx, ["cancel", id, ...(scoped ? ["--attempt", "1"] : []), "--json"], { RELAY_JOBS_CANCEL_GRACE_MS: "1500" });
+  const late = ctx.fakeState().descendants.filter(entry => entry.childPid !== before.childPid);
+  assert.equal(late.length, 1, "the interrupt started one child");
+  await waitFor(() => !isAlive(late[0].childPid), 5000);
+  assert.equal(isAlive(before.childPid), false);
 });
 
 test("cancelling a dead start clears its pending brief before a later continue", async t => {
