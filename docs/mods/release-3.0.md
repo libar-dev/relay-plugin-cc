@@ -21,7 +21,7 @@ it: where the work goes, what each step must pass, and how the work was done in 
    capability table `docs/live/capabilities.md` generated from the records. Every later phase adds its checks to
    `scripts/live/checks/`.
 3. **Phases 2 and 3**, as two PRs that can run at the same time: commands answered by the module (Phase 2, PR
-   PRNUMBER), and the spawn check with TaskStop cancelling the job (D2). Both add hooks to `hooks/mod/register.js`;
+   #10), and the spawn check with TaskStop cancelling the job (D2). Both add hooks to `hooks/mod/register.js`;
    whichever merges second rebases.
 4. **Phase 4**, in this order: the companion's `--json` changed in place (the board reads it), the status line,
    the board pane.
