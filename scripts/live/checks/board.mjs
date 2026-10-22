@@ -200,9 +200,13 @@ export default {
     const select = async (item, narrow = false) => {
       if (narrow) { await focus(item.job.id); bytes('0d'); }
       else await click(item.job.id);
-      await waitFor('selected job details', () => {
+      let clickedAt = now();
+      await waitFor('selected job details', async () => {
         const screen = plain(drive(['screen-escapes', run.pane]));
-        return screen.includes(`> ${item.job.id}`) && screen.includes(`model ${MODELS[item.backend]}`) && screen.includes(`relay board-${item.kind === 'agent' ? 'agent' : 'wf'}-${item.backend}`);
+        if (screen.includes(`> ${item.job.id}`) && screen.includes(`model ${MODELS[item.backend]}`) && screen.includes(`relay board-${item.kind === 'agent' ? 'agent' : 'wf'}-${item.backend}`)) return true;
+        // A click can land while the session redraws, and selecting a row again changes nothing.
+        if (!narrow && now() - clickedAt > 3000) { await click(item.job.id); clickedAt = now(); }
+        return false;
       });
     };
     const open = async (phase, jobs) => {
@@ -273,12 +277,25 @@ export default {
         await waitFor('continued turn running', () => readJob(item.jobDir).state === 'running');
         const attempt = readJob(item.jobDir).attempts.at(-1).attempt;
         await click('[ Cancel ]');
-        await waitFor('cancel confirmation', () => plain(drive(['screen-escapes', run.pane])).includes(`Cancel job ${item.job.id}, attempt ${attempt}?`));
+        let cancelAt = now();
+        await waitFor('cancel confirmation', async () => {
+          if (plain(drive(['screen-escapes', run.pane])).includes(`Cancel job ${item.job.id}, attempt ${attempt}?`)) return true;
+          // The first press only asks; pressing it again before the question shows asks again.
+          if (now() - cancelAt > 3000) { await click('[ Cancel ]'); cancelAt = now(); }
+          return false;
+        });
         capture(`confirm-${item.backend}`);
         const yes = await locate('[ Yes ]');
         const receipt = { runId: run.runId, sessionId: run.sessionId, jobId: item.job.id, kind: item.kind, backend: item.backend, action: 'cancel', attempt, at: stamp() };
         saved.actions.push(receipt); bytes(...clickBytes(yes)); ctx.save();
-        await waitFor('cancelled job', () => readJob(item.jobDir).state === 'cancelled', 15000, Date.parse(receipt.at));
+        // Yes goes away once pressed; while it is still there, the press was lost.
+        let yesAt = now();
+        await waitFor('cancelled job', async () => {
+          if (readJob(item.jobDir).state === 'cancelled') return true;
+          const cell = elementCell(drive(['screen-escapes', run.pane]), '[ Yes ]');
+          if (cell && now() - yesAt > 3000) { bytes(...clickBytes(cell)); yesAt = now(); }
+          return false;
+        }, 15000, Date.parse(receipt.at));
         capture(`cancel-${item.backend}`);
       }
       await waitFor('Agent continuations to end', () => jobs.every(item => ended(readJob(item.jobDir))), 120000);
