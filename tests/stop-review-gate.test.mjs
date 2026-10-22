@@ -356,6 +356,25 @@ test("stop gate reports a task error object's message as a failed start", async 
   assert.deepEqual(fake.calls, ["task"]);
 });
 
+for (const [scenario, stdout, stderr, detail] of [
+  ["a crash on stderr", "", "Module load failed\nStack trace", "Module load failed"],
+  ["a crash on stdout", "Uncaught error\nStack trace", "", "Uncaught error"],
+  ["a wrong schema", JSON.stringify({ schema: "relay.start/1" }), "Start crashed\nStack trace", "Start crashed"]
+]) {
+  test(`stop gate keeps the failed start label for ${scenario}`, async () => {
+    const { runStopReview } = await import(STOP_HOOK);
+    const calls = [];
+    const runCompanion = args => {
+      calls.push(args[0]);
+      return { status: 1, stdout, stderr, error: null };
+    };
+    assert.deepEqual(runStopReview(process.cwd(), {}, { runCompanion }), {
+      ok: true, failure: `the stop-time Codex review failed (exit 1: ${detail}). Run /relay:review --wait to review by hand.`
+    });
+    assert.deepEqual(calls, ["task"]);
+  });
+}
+
 test("stop gate treats a wait busy error object at exit 4 as timed out and cancels", async () => {
   const { runStopReview } = await import(STOP_HOOK);
   const fake = reviewWith({ value: taskJson }, { status: 4, value: { schema: "relay.wait/1", error: { kind: "busy", message: "Job is busy." } } });

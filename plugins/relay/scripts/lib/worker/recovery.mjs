@@ -4,7 +4,7 @@ import process from "node:process";
 import { releaseLeaseToConsumer, spawnWorker } from "./delivery.mjs";
 import { acquireWorkerLease, isWorkerAlive } from "../jobs/lease.mjs";
 import { computeJobView } from "../jobs/view.mjs";
-import { messageExists, newMessageId, postInboxMessage } from "../jobs/messages.mjs";
+import { hasOpenCancel, messageExists, newMessageId, postInboxMessage } from "../jobs/messages.mjs";
 import { nowIso, readJob, writeJob } from "../jobs/store.mjs";
 import { listProcesses, readProcessStartTime, snapshotProcessTree, stopProcessSnapshot } from "../util/process.mjs";
 
@@ -62,10 +62,13 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
   const me = { pid: process.pid, startTime: readProcessStartTime(process.pid) };
   if (!acquireWorkerLease(jobDir, me, "recovery")) return "busy";
   let launch = false;
+  let cancelOpen = false;
   let cwd;
   try {
     let job = readJob(jobDir);
     if (computeJobView(job).state !== "dead" || (job.kind && job.kind !== "task")) return false;
+    cancelOpen = hasOpenCancel(jobDir, job);
+    if (cancelOpen) return false;
     const epoch = job.recoveryEpoch ?? "start";
     const previous = recoveryForEpoch(job);
     // A reservation interrupted before posting is repaired with the same message id.
@@ -90,8 +93,8 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
     cwd = job.request.cwd;
     launch = true;
   } finally {
-    // A message that arrives while recovery holds the lease needs a worker to consume it.
-    releaseLeaseToConsumer(jobDir, me, env, { spawn: !launch });
+    // An open cancel must finish without a replacement worker; other arrivals need a consumer.
+    releaseLeaseToConsumer(jobDir, me, env, { spawn: !launch && !cancelOpen });
   }
   if (launch) spawnWorker(jobDir, cwd, env);
   return launch;

@@ -75,7 +75,8 @@ for (const inherited of [false, true]) {
       for (const row of listing.jobs) {
         delete row.attemptRecords;
         delete row.server;
-        Object.assign(row, { backend: "codex", updatedAt: "<time>", hasReport: true, notHandedBack: false, openMessages: 0 });
+        Object.assign(row, { backend: "codex", updatedAt: "<time>", hasReport: true, notHandedBack: false, openMessages: 0,
+          undeliveredCount: 0, droppedCount: 0, automaticResumeCount: 0, relayViolationCount: 0 });
       }
       snapshot.row = snapshot.row.replace("\nfast-tier: allowed\n", `\nfast-tier: allowed\nrelay-version: ${PLUGIN_VERSION}\n`);
     }

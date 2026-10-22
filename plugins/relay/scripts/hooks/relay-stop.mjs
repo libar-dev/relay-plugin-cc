@@ -64,13 +64,15 @@ export function handleTaskStop(input, env = process.env) {
     // A zero exit says the job has ended, not that the cancel ended it: the job may have finished on its own
     // between the state read above and the cancel, which then only records a no-op.
     const exited = !result.error && !result.signal;
-    const ended = exited && result.status === 0 ? readJob(jobDir) : null;
-    const endedAs = ended?.state;
+    const blockState = /^state: (.*)$/m.exec(result.stdout ?? "");
+    const ended = exited && result.status === 0 && !blockState ? readJob(jobDir) : null;
+    const endedAs = exited && result.status === 0 ? blockState?.[1] ?? ended?.state : null;
+    const attempts = blockState ? Number(/^attempts: (\d+)$/m.exec(result.stdout ?? "")?.[1] ?? 0) : ended?.attempts?.length ?? 0;
     const withWorker = exited && (result.status === 0 ||
       (result.status === 4 && [result.stdout, result.stderr].some(text => text?.includes("the cancel is with its"))));
     if (endedAs === "cancelled") {
       context = `TaskStop stopped the relay:job agent ${agentId}, and the relay hook cancelled its job ${job.id}:\n${result.stdout}`;
-      try { appendRelayHandback(jobDir, { agentId, attempts: ended.attempts?.length ?? 0, state: "cancelled", by: "TaskStop" }); }
+      try { appendRelayHandback(jobDir, { agentId, attempts, state: "cancelled", by: "TaskStop" }); }
       catch (error) { context += ` The hand-back could not be recorded: ${oneLine(error instanceof Error ? error.message : error)}.`; }
     } else if (TERMINAL_STATES.has(endedAs)) {
       context = `TaskStop stopped the relay:job agent ${agentId}. Its job ${job.id} ended (${endedAs}) before the cancel reached it; nothing was cancelled:\n${result.stdout}`;

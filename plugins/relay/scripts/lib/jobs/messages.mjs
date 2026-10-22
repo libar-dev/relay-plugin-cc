@@ -86,6 +86,24 @@ export function messageExists(jobDir, messageId) {
 }
 
 
+export function hasOpenCancel(jobDir, job) {
+  const paths = jobPaths(jobDir);
+  const since = job.attempts?.at(-1)?.startedAt ?? job.createdAt;
+  for (const dir of [paths.inbox, paths.claimed]) {
+    let names;
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (!name.endsWith(".json") || name.startsWith(".")) continue;
+      const message = readJsonOrNull(path.join(dir, name));
+      if (message?.kind !== "cancel" || !(message.createdAt >= since)) continue;
+      const outcome = readOutcome(jobDir, message.id);
+      if (!outcome || ["interrupt-sent", "interrupt-failed"].includes(outcome.action)) return true;
+    }
+  }
+  return false;
+}
+
+
 // Relay violations: appended, never rewritten, so a failed check is never forgotten.
 export function appendRelayViolation(jobDir, violation) {
   const file = path.join(jobDir, "relay-violations.jsonl");

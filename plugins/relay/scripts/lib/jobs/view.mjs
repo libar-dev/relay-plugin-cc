@@ -386,15 +386,19 @@ export function jobViewJson(view) {
     summary: summarizeJob(view),
     relay: view.job.relay ? { ...view.job.relay, lastToolAt: view.lastToolAt ?? null } : null,
     relayViolations: view.relayViolations ?? [],
+    relayViolationCount: view.relayViolations?.length ?? 0,
     handedBackAt: view.job.relay ? handedBackAt(view) : null,
     notHandedBack: notHandedBack(view),
     openMessages: view.openMessages ?? 0,
     messages: view.messages ?? [],
     automaticResumes: view.job.automaticResumes ?? [],
+    automaticResumeCount: view.job.automaticResumes?.length ?? 0,
     attemptRecords: view.job.attempts ?? [],
     server: view.job.server ?? null,
     undelivered: view.undelivered ?? [],
-    dropped: view.dropped ?? []
+    undeliveredCount: view.undelivered?.length ?? 0,
+    dropped: view.dropped ?? [],
+    droppedCount: view.dropped?.length ?? 0
   };
 }
 
@@ -406,12 +410,17 @@ export function jobRowJson(view) {
     errorMessage: firstLine(row.errorMessage) ? Array.from(firstLine(row.errorMessage)).slice(0, 200).join("") : null,
     relay: relay ? {
       agentId: relay.agentId ?? null, workflowRunId: relay.workflowRunId ?? null,
-      label: relay.label ?? null, phase: relay.phase ?? null,
+      label: relay.label == null ? null : oneLineLabel(relay.label), phase: relay.phase == null ? null : oneLineLabel(relay.phase),
       adopted: relay.previous?.length ?? 0, lastToolAt: relay.lastToolAt ?? null
     } : null,
-    relayViolations: row.relayViolations.map(entry => ({
+    undelivered: row.undelivered.slice(0, 20),
+    dropped: row.dropped.slice(-5).map(entry => ({
+      ...entry, reason: entry.reason == null ? null : Array.from(String(entry.reason).split(/\r?\n/)[0]).slice(0, 200).join("")
+    })),
+    automaticResumes: row.automaticResumes.slice(-5),
+    relayViolations: row.relayViolations.slice(-5).map(entry => ({
       at: entry.at ?? null, kind: entry.kind ?? null,
-      reason: entry.reason == null ? null : String(entry.reason).split(/\r?\n/)[0]
+      reason: entry.reason == null ? null : Array.from(String(entry.reason).split(/\r?\n/)[0]).slice(0, 200).join("")
     }))
   };
 }

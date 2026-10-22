@@ -157,15 +157,15 @@ export function runStopReview(cwd, input = {}, { limits = stopGateLimits(), runC
     return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review did not start: ${started.error.message}. ${MANUAL_REVIEW}` };
   }
   const task = parseJson(started.stdout);
-  if (task?.schema !== "relay.task/1") {
-    return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review returned invalid JSON. ${MANUAL_REVIEW}` };
-  }
-  if (task.error) {
+  if (task?.schema === "relay.task/1" && task.error) {
     return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review failed (exit ${started.status}: ${task.error.message}). ${MANUAL_REVIEW}` };
   }
   if (started.status !== 0) {
     const detail = firstLine(started.stderr || started.stdout);
     return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review failed (exit ${started.status}${detail ? `: ${detail}` : ""}). ${MANUAL_REVIEW}` };
+  }
+  if (task?.schema !== "relay.task/1") {
+    return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review returned invalid JSON. ${MANUAL_REVIEW}` };
   }
   const jobId = task.jobId;
   if (typeof jobId !== "string" || !jobId) {

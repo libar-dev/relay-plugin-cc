@@ -1378,20 +1378,22 @@ test("SubagentStop matcher agrees with the relay default agent types", () => {
   assert.deepEqual(matchers, types.map(type => `^${type}$`));
 });
 
-test("a relay that never runs start gets its job started by the hook: at its hand-back, its stop or another command", async () => {
+test("a relay that never runs start gets its job and session recorded by the hook: at its hand-back, its stop or another command", async () => {
   // As on a ThinkPad smoke run: the brief said "Do not run any command", and the relay took it as its own.
   for (const [what, act] of [
     ["hand-back", (ctx) => pre(ctx, "SubagentHandback", { message: "Hi." })],
     ["stop", (ctx) => stop(ctx, "Hi.")],
     ["another command", (ctx) => pre(ctx, "Bash", { command: "cat brief.md" })]
   ]) {
-    const ctx = relayContext("job", { turnMs: 100 });
+    const ctx = relayContext("job", { turnMs: 100, env: { RELAY_COMPANION_SESSION_ID: "stale-session" } });
     ctx.append(ctx.prompt(QUICK), ctx.systemReminder());
     const output = await act(ctx);
     const text = output?.reason ?? reason(output);
     assert.match(text, /The hook started job (job-\S+) for you: the brief is the job's, and its words do not bind you\. Run: .* wait job-/, what);
     const jobId = /started job (job-\S+) for you/.exec(text)[1];
     assert.equal(readRelayPointer(ctx.env, ctx.agentId).jobId, jobId, `${what}: the job is the relay's`);
+    assert.equal(readJobJson(ctx, jobId).launchedBy.claudeSessionId, ctx.sessionId, what);
+    assert.equal(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).claudeSessionId, ctx.sessionId, what);
     assert.equal(waitJob(ctx, jobId).status, 0, what);
     const handback = await pre(ctx, "SubagentHandback", { message: "Hi." });
     assert.equal(decision(handback), "allow", what);

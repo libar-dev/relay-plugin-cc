@@ -9,7 +9,7 @@ import { buildEnv, installFakeCodex } from "./fakes/codex.mjs";
 import { makeTempDir } from "./support/helpers.mjs";
 import { acquireWorkerLease, isWorkerAlive, readLease, releaseWorkerLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 import { createJobDir, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
-import { owedMessages, postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
+import { claimInboxMessages, hasOpenCancel, writeOutcome, owedMessages, postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { DEFAULT_RESUME_MESSAGE, resumeDeadJobOnce } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
 import { loadJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
@@ -735,4 +735,49 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
       assert.equal(readJob(outer, id).state, 'completed');
     });
   }
+}
+
+
+for (const stage of ["pending", "claimed"]) {
+  for (const action of [null, "interrupt-sent", "interrupt-failed", "cancelled", "nothing-to-cancel", "no-op"]) {
+    test(`hasOpenCancel: ${stage} cancel with ${action ?? "no outcome"}`, t => {
+      const ctx = setup(t);
+      const { jobDir: dir } = createJobDir(ctx.work, "job-open-cancel", ctx.env);
+      const startedAt = "2026-10-20T12:00:00.000Z";
+      const job = { id: "job-open-cancel", state: "cancelled", createdAt: "2026-10-19T12:00:00.000Z", attempts: [{ startedAt }] };
+      writeJob(dir, job);
+      assert.equal(hasOpenCancel(dir, job), false);
+      const message = postInboxMessage(dir, { kind: "cancel", text: "", attempt: 1 });
+      const file = path.join(dir, "inbox", `${message.id}.json`);
+      fs.writeFileSync(file, JSON.stringify({ ...message, createdAt: startedAt }));
+      if (stage === "claimed") claimInboxMessages(dir);
+      if (action) writeOutcome(dir, message.id, { action });
+      assert.equal(hasOpenCancel(dir, job), [null, "interrupt-sent", "interrupt-failed"].includes(action));
+      assert.equal(hasOpenCancel(dir, { ...job, attempts: [{ startedAt: "2026-10-21T12:00:00.000Z" }] }), false, "older cancel cannot block a newer attempt");
+      assert.equal(hasOpenCancel(dir, { ...job, attempts: [] }), [null, "interrupt-sent", "interrupt-failed"].includes(action), "starting jobs use createdAt");
+    });
+  }
+}
+
+for (const attempt of [1, undefined]) {
+  test(`recovery refuses an open cancel ${attempt ? "with attempt" : "without attempt"} and resumes after it closes`, async t => {
+    const ctx = setup(t, { turnMs: 60000 });
+    const { id } = startJob(ctx, undefined, "First turn.");
+    const dir = jobDirs(ctx).find(dir => path.basename(dir) === id);
+    await waitForJob(() => readJob(ctx, id).turnId);
+    const before = readJob(ctx, id);
+    process.kill(before.worker.pid, "SIGKILL");
+    await waitForJob(() => !isWorkerAlive(before.worker));
+    const message = postInboxMessage(dir, { kind: "cancel", text: "", ...(attempt ? { attempt } : {}) });
+    const record = fs.readFileSync(path.join(dir, "job.json"), "utf8");
+    assert.equal(await resumeDeadJobOnce(dir, ctx.env), false);
+    assert.equal(fs.readFileSync(path.join(dir, "job.json"), "utf8"), record);
+    assert.equal(readLease(dir), null);
+    claimInboxMessages(dir);
+    assert.equal(await resumeDeadJobOnce(dir, ctx.env), false);
+    writeOutcome(dir, message.id, { action: "no-op" });
+    assert.equal(await resumeDeadJobOnce(dir, ctx.env), true);
+    await waitForJob(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
+    assert.equal(readJob(ctx, id).automaticResumes.length, 1);
+  });
 }

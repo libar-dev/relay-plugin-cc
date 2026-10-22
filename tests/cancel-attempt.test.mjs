@@ -6,9 +6,12 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { setup, startJob, companion, jobDir, readJob, waitFor, ROOT } from "./support/job-helpers.mjs";
 import { createJobDir, jobPaths, readJob as readStoredJob, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
-import { pendingInboxMessages, postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
+import { claimInboxMessages, pendingInboxMessages, postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { acquireWorkerLease, isWorkerAlive, readLease, releaseWorkerLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 import { readProcessStartTime } from "../plugins/relay/scripts/lib/util/process.mjs";
+
+import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
+import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 
 const SCRIPT = path.join(ROOT, "plugins/relay/scripts/companion.mjs");
 
@@ -156,7 +159,8 @@ fs.renameSync = function(from, to) {
   const result = await cancelled;
   assert.equal(result.status, 1, result.stdout + result.stderr);
   assert.equal(result.stderr, "");
-  assert.deepEqual(JSON.parse(result.stdout).error, { kind: "attempt-changed", message: `Job ${id} is at attempt 2, not 1: nothing was cancelled.` });
+  assert.equal(JSON.parse(result.stdout).error.kind, "attempt-changed");
+  assert.match(JSON.parse(result.stdout).error.message, /attempt 2|current attempt \(2\)/);
   await waitFor(() => cancels(dir).some(({ outcome }) => outcome?.action === "no-op"));
   await waitFor(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
   assert.equal(readJob(ctx, id).state, "running");
@@ -222,3 +226,207 @@ for (const asJson of [true, false]) {
     assert.equal(JSON.parse(fs.readFileSync(path.join(jobPaths(dir).inbox, name), "utf8")).attempt, 1);
   });
 }
+
+
+test("worker claims cancel for attempt 1 before beginning a starting job's first attempt", async t => {
+  const { ctx, dir } = recorded(t, "starting", []);
+  writeJob(dir, { ...readStoredJob(dir), request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: ctx.work }), pendingFirstTurn: true });
+  fs.writeFileSync(jobPaths(dir).brief, "First turn.");
+  const message = postInboxMessage(dir, { kind: "cancel", text: "", attempt: 1 });
+  const job = await runWorker(dir, { env: ctx.env });
+  assert.equal(job.state, "cancelled");
+  assert.deepEqual(job.attempts, []);
+  assert.equal(readOutcome(dir, message.id).action, "cancelled");
+  assert.equal(fs.existsSync(path.join(ctx.bin, "fake-codex-state.json")), false);
+});
+
+test("superseded matching cancels all receive interrupt-sent and cancelled while a mismatch gets only no-op", async t => {
+  const { ctx, id, dir } = await running(t);
+  const worker = readJob(ctx, id).worker;
+  process.kill(worker.pid, "SIGSTOP");
+  let messages;
+  try {
+    messages = [1, undefined, 2, 1].map(attempt => postInboxMessage(dir, { kind: "cancel", text: "", ...(attempt ? { attempt } : {}) }));
+  } finally {
+    process.kill(worker.pid, "SIGCONT");
+  }
+  await waitFor(() => messages.every(message => ["cancelled", "no-op"].includes(readOutcome(dir, message.id)?.action)));
+  const job = readJob(ctx, id);
+  for (const message of messages) {
+    const actions = job.messages.filter(entry => entry.id === message.id).map(entry => entry.action);
+    assert.deepEqual(actions, message.attempt === 2 ? ["no-op"] : ["interrupt-sent", "cancelled"]);
+  }
+  assert.equal(ctx.fakeState().interrupts.length, 1);
+});
+
+function preload(ctx, name, source) {
+  const file = path.join(ctx.root, `${name}.mjs`);
+  fs.writeFileSync(file, `import fs from "node:fs";\nimport path from "node:path";\n${source}`);
+  return { NODE_OPTIONS: `--import=${file}` };
+}
+
+function pauseBeforeMark(ctx) {
+  const marker = path.join(ctx.root, "before-mark");
+  const gate = path.join(ctx.root, "allow-mark");
+  const env = preload(ctx, "pause-before-mark", `
+const mkdir = fs.mkdirSync;
+let paused = false;
+fs.mkdirSync = function(...args) {
+  if (!paused && /at markCancelledAfterKill/.test(new Error().stack)) {
+    paused = true;
+    fs.writeFileSync(${JSON.stringify(marker)}, "");
+    const deadline = Date.now() + 15000;
+    while (!fs.existsSync(${JSON.stringify(gate)}) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  return mkdir.apply(this, args);
+};`);
+  return { marker, release: () => fs.writeFileSync(gate, ""), env };
+}
+
+for (const closing of [false, true]) {
+  test(`cancel succeeds and preserves a continue ${closing ? "started during the close wait" : "arriving as attempt 1 is cancelled"}`, async t => {
+    const ctx = setup(t, { turnMs: 60000 });
+    const marker = path.join(ctx.root, "cancelled");
+    const workerEnv = preload(ctx, "continue-on-cancel", `
+const rename = fs.renameSync;
+let posted = false;
+fs.renameSync = function(from, to) {
+  const result = rename.apply(this, arguments);
+  if (!posted && String(to).endsWith(path.sep + "job.json")) {
+    const job = JSON.parse(fs.readFileSync(to, "utf8"));
+    if (job.state === "cancelled") {
+      posted = true;
+      fs.writeFileSync(${JSON.stringify(marker)}, "");
+      ${closing ? 'process.kill(process.pid, "SIGSTOP");' : `const id = "continue-after-cancel";
+      fs.writeFileSync(path.join(path.dirname(to), "inbox", id + ".json"), JSON.stringify({ id, kind: "continue", text: "[long] Next.", createdAt: new Date().toISOString() }));`}
+    }
+  }
+  return result;
+};`);
+    const { id } = startJob(ctx, undefined, "First turn.", workerEnv);
+    const dir = jobDir(ctx, id);
+    await waitFor(() => readJob(ctx, id).turnId);
+    const worker = readJob(ctx, id).worker;
+    t.after(() => { try { process.kill(worker.pid, "SIGCONT"); } catch {} });
+    const closeMarker = path.join(ctx.root, "closing");
+    const cancelEnv = closing ? preload(ctx, "observe-closing", `
+const read = fs.readFileSync;
+fs.readFileSync = function(file, ...args) {
+  const stack = new Error().stack;
+  if (String(file).startsWith("/proc/") && /waitUntil/.test(stack) && !/cancelStopped/.test(stack)) fs.writeFileSync(${JSON.stringify(closeMarker)}, "");
+  return read.call(this, file, ...args);
+};`) : {};
+    const cancelled = asyncCompanion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...cancelEnv, RELAY_JOBS_CANCEL_GRACE_MS: "20000" });
+    if (closing) {
+      await waitFor(() => fs.existsSync(marker) && fs.existsSync(closeMarker));
+      postInboxMessage(dir, { kind: "continue", text: "[long] Next." });
+      process.kill(worker.pid, "SIGCONT");
+    }
+    const result = await cancelled;
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(result.stderr, "");
+    const out = JSON.parse(result.stdout);
+    assert.ok(out.actions.includes("attempt 1 was stopped; attempt 2 started since, for a message, and runs on"));
+    await waitFor(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
+    const job = readJob(ctx, id);
+    assert.equal(job.attempts[0].state, "cancelled");
+    assert.equal(job.state, "running");
+    assert.equal(isWorkerAlive(job.worker), true);
+    assert.equal(cancels(dir).length, 1);
+    assert.equal(cancels(dir)[0].outcome.action, "cancelled");
+  });
+}
+
+test("a worker dying during cancel grace cannot be automatically recovered and attempt 1 is marked cancelled", async t => {
+  const { ctx, id, dir } = await running(t);
+  const worker = readJob(ctx, id).worker;
+  process.kill(worker.pid, "SIGSTOP");
+  const pause = pauseBeforeMark(ctx);
+  t.after(pause.release);
+  const cancelled = asyncCompanion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...pause.env, RELAY_JOBS_CANCEL_GRACE_MS: "20000" });
+  await waitFor(() => pendingInboxMessages(dir).length > 0);
+  process.kill(worker.pid, "SIGKILL");
+  await waitFor(() => fs.existsSync(pause.marker));
+  const waited = companion(ctx, ["wait", id, "--auto-resume", "--timeout-seconds", "1", "--json"]);
+  assert.equal(waited.status, 3, waited.stdout + waited.stderr);
+  assert.equal(readJob(ctx, id).attempts.length, 1);
+  assert.equal(readJob(ctx, id).automaticResumes?.length ?? 0, 0);
+  pause.release();
+  const result = await cancelled;
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(JSON.parse(result.stdout).state, "cancelled");
+  assert.equal(readJob(ctx, id).attempts[0].state, "cancelled");
+  assert.equal(cancels(dir)[0].outcome.action, "cancelled");
+});
+
+for (const beforeAttempt of [false, true]) {
+  test(`a cancel kill preserves a continue's new worker ${beforeAttempt ? "before its attempt starts" : "after attempt 2 starts"}`, async t => {
+    const ctx = setup(t, { turnMs: 60000 });
+    const workerEnv = preload(ctx, "stop-after-interrupt", `
+const rename = fs.renameSync;
+fs.renameSync = function(from, to) {
+  const result = rename.apply(this, arguments);
+  if (String(to).includes(path.sep + "outcomes" + path.sep) && JSON.parse(fs.readFileSync(to, "utf8")).action === "interrupt-sent") process.kill(process.pid, "SIGSTOP");
+  return result;
+};`);
+    const { id } = startJob(ctx, undefined, "First turn.", workerEnv);
+    const dir = jobDir(ctx, id);
+    await waitFor(() => readJob(ctx, id).turnId);
+    const pause = pauseBeforeMark(ctx);
+    t.after(pause.release);
+    const cancelled = asyncCompanion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...pause.env, RELAY_JOBS_CANCEL_GRACE_MS: "1200" });
+    await waitFor(() => fs.existsSync(pause.marker));
+    const started = path.join(ctx.root, "new-worker");
+    const gate = path.join(ctx.root, "new-worker-go");
+    const continueEnv = beforeAttempt ? preload(ctx, "pause-new-worker", `
+const read = fs.readFileSync;
+let paused = false;
+fs.readFileSync = function(file, ...args) {
+  if (!paused && String(file).endsWith(path.sep + "job.json") && /runWorkerRound/.test(new Error().stack)) {
+    paused = true;
+    fs.writeFileSync(${JSON.stringify(started)}, String(process.pid));
+    const deadline = Date.now() + 15000;
+    while (!fs.existsSync(${JSON.stringify(gate)}) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  return read.call(this, file, ...args);
+};`) : {};
+    t.after(() => fs.writeFileSync(gate, ""));
+    const continued = asyncCompanion(ctx, ["continue", id, "--message", "[long] Next."], continueEnv);
+    if (beforeAttempt) await waitFor(() => fs.existsSync(started));
+    else await waitFor(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
+    const pid = readLease(dir).pid;
+    pause.release();
+    const result = await cancelled;
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const out = JSON.parse(result.stdout);
+    assert.ok(out.actions.some(action => action.startsWith("killed the worker process")));
+    const expected = `the worker of attempt 1 was stopped; a new worker (pid ${pid}) took the job for a message sent since, and runs on`;
+    assert.ok(out.actions.includes(expected), result.stdout);
+    fs.writeFileSync(gate, "");
+    assert.equal((await continued).status, 0);
+    await waitFor(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
+    assert.equal(isWorkerAlive(readJob(ctx, id).worker), true);
+    assert.equal(cancels(dir).length, 1);
+  });
+}
+
+test("delegated no-op reports attempt-changed with the worker's reason", t => {
+  const { ctx, id, dir } = recorded(t, "running", [{ attempt: 1, state: "running" }]);
+  const holder = { pid: process.pid, startTime: readProcessStartTime(process.pid) };
+  assert.equal(acquireWorkerLease(dir, holder), true);
+  t.after(() => releaseWorkerLease(dir, holder));
+  const env = preload(ctx, "delegate-refusal", `
+const rename = fs.renameSync;
+fs.renameSync = function(from, to) {
+  const result = rename.apply(this, arguments);
+  if (String(to).endsWith(".json") && path.dirname(String(to)) === ${JSON.stringify(jobPaths(dir).inbox)}) {
+    const message = JSON.parse(fs.readFileSync(to, "utf8"));
+    fs.writeFileSync(path.join(${JSON.stringify(jobPaths(dir).outcomes)}, message.id + ".json"), JSON.stringify({ action: "no-op", reason: "attempt 1 is not the job's current attempt (2)" }));
+  }
+  return result;
+};`);
+  const result = companion(ctx, ["cancel", id, "--attempt", "1", "--json"], env);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.equal(result.stderr, "");
+  assert.deepEqual(JSON.parse(result.stdout).error, { kind: "attempt-changed", message: `Job ${id}: attempt 1 is not the job's current attempt (2); nothing was cancelled.` });
+});

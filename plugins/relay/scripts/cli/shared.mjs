@@ -37,12 +37,11 @@ export function printJson(command, value) {
 }
 
 
-// Whether this run asked for JSON: what the command's own parse found, or, when the parse
-// itself failed, the `--json` token.
+// Keep JSON errors even when a malformed option prevents the command's parse from finding it.
 let parsedJson = null;
 
 export function jsonRequested(argv) {
-  return parsedJson ?? normalizeArgv(argv).includes("--json");
+  return Boolean(parsedJson) || normalizeArgv(argv).some(token => token === "--json" || token.startsWith("--json="));
 }
 
 

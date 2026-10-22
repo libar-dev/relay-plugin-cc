@@ -414,3 +414,48 @@ test("TaskStop adds a failed hand-back append to the cancelled job's context", t
   assert.equal(append.mock.callCount(), 1);
   assert.deepEqual(readRelayHandbacks(dir), []);
 });
+
+for (const state of ["cancelled", "running"]) {
+  test(`TaskStop records the cancelled attempt from its stdout block when job.json is already ${state} at attempt 2`, t => {
+    const { ctx, dir } = recorded();
+    const stdout = "state: cancelled\nattempts: 1\ncancel: the job's worker ended it cancelled\n";
+    const mocked = t.mock.method(childProcess, "spawnSync", () => {
+      writeJob(dir, { ...readJob(dir), state, attempts: [{ state: "cancelled" }, { state }] });
+      return { status: 0, stdout, stderr: "" };
+    });
+    syncBuiltinESMExports();
+    t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+    const output = handleTaskStop(input(ctx), ctx.env);
+    assert.match(context(output), /the relay hook cancelled its job/);
+    assert.ok(context(output).endsWith(stdout));
+    const [handback] = readRelayHandbacks(dir);
+    assert.equal(handback.attempts, 1);
+    assert.equal(handback.state, "cancelled");
+    assert.equal(handback.by, "TaskStop");
+  });
+}
+
+test("TaskStop uses a completed stdout block even when job.json now says cancelled", t => {
+  const { ctx, dir } = recorded();
+  const mocked = t.mock.method(childProcess, "spawnSync", () => {
+    writeJob(dir, { ...readJob(dir), state: "cancelled", attempts: [{ state: "completed" }, { state: "cancelled" }] });
+    return { status: 0, stdout: "state: completed\nattempts: 1\n", stderr: "" };
+  });
+  syncBuiltinESMExports();
+  t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+  const output = handleTaskStop(input(ctx), ctx.env);
+  assert.match(context(output), /ended \(completed\) before the cancel reached it/);
+  assert.deepEqual(readRelayHandbacks(dir), []);
+});
+
+test("TaskStop falls back to job.json when the cancel block has no state line", t => {
+  const { ctx, dir } = recorded();
+  const mocked = t.mock.method(childProcess, "spawnSync", () => {
+    writeJob(dir, { ...readJob(dir), state: "cancelled", attempts: [{ state: "cancelled" }] });
+    return { status: 0, stdout: "cancel: cancelled\n", stderr: "" };
+  });
+  syncBuiltinESMExports();
+  t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+  assert.match(context(handleTaskStop(input(ctx), ctx.env)), /the relay hook cancelled its job/);
+  assert.equal(readRelayHandbacks(dir)[0].attempts, 1);
+});

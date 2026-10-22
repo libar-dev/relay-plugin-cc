@@ -4,11 +4,13 @@ import { findJobDir, listJobDirs, readJob, repoSlugFor, resolveJobsHome, TERMINA
 import { UsageError } from "../lib/jobs/request.mjs";
 import { splitRawArgumentString } from "../lib/util/args.mjs";
 import { messageAccount } from "../lib/jobs/messages.mjs";
+import { isWorkerLease, readLease } from "../lib/jobs/lease.mjs";
 import { readRepoConfig, readUserConfig } from "../lib/jobs/config.mjs";
 import { PLUGIN_BUILD, PLUGIN_VERSION } from "../lib/util/plugin.mjs";
 import { exitCodeFor, JobViewBusy, jobRowJson, jobViewJson, loadJobViewSettled as loadJobView, renderJobBlock, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
 
 const STATUS_LIST_LIMIT = 20;
+const STATUS_PAGE_BYTES = 2 * 1024 * 1024;
 
 
 // `--state-only` prints the state block without `---` and the report: what a string-return
@@ -47,18 +49,26 @@ function printListing(dirs, { slug, workflow, options, limit, cursor }) {
   const key = job => [job.createdAt ?? null, String(job.id)];
   records.sort((a, b) => compareKeys(key(a.job), key(b.job)));
   const jobs = [];
+  let rowBytes = 0;
   let lastKey = null;
   let more = false;
   for (const { dir, job } of records) {
     if (cursor && compareKeys(key(job), cursor) <= 0) continue;
-    if (options.active && TERMINAL_STATES.has(job.state) && messageAccount(dir).undelivered.length === 0) continue;
+    if (options.active && TERMINAL_STATES.has(job.state) && messageAccount(dir).undelivered.length === 0) {
+      const again = readJob(dir);
+      if (again && TERMINAL_STATES.has(again.state) && (again.attempts?.length ?? 0) === (job.attempts?.length ?? 0) && !isWorkerLease(readLease(dir))) continue;
+    }
     if (!options.active && jobs.length === limit) { more = true; break; }
     let view;
     try { view = loadJobView(dir); }
     catch (error) { if (error instanceof JobViewBusy) throw error; continue; }
     if (options.active && TERMINAL_STATES.has(view.state) && view.undelivered.length === 0) continue;
     if (jobs.length === limit) { more = true; break; }
-    jobs.push(jobRowJson(view));
+    const row = jobRowJson(view);
+    const bytes = Buffer.byteLength(JSON.stringify(row, null, 2).replace(/^/gm, "    ")) + 2;
+    if (jobs.length && rowBytes + bytes > STATUS_PAGE_BYTES) { more = true; break; }
+    jobs.push(row);
+    rowBytes += bytes;
     lastKey = key(job);
   }
   printJson("status", {
