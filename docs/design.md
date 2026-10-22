@@ -398,27 +398,30 @@ about 80 ms, before the sender's `SendMessage` returns.
 shell (`node <plugin root>/scripts/companion.mjs <command> <arguments as typed>`, in the session's directory), and
 its output is the command's answer. No model turn starts and nothing costs tokens: `claude -p "/relay:status"`
 reports `num_turns: 0`. A model no longer retells the output, so nothing has to ask it not to summarize a report.
-Like every plugin command, these run once the current turn has ended. Claude Code 2.1.308 shows and
-records a command a plugin answered without its arguments (`/relay:result`, not `/relay:result <job>`);
-the hook gets them, and the output names the job.
+Like every plugin command, these run once the current turn has ended.
 
 Every surface draws the answer as Markdown. The terminal draws a command's text as Markdown, where a `---` line
 right after the state block turns the block into a heading, and T3 Code shows it as the assistant's message, with
-the lines of a paragraph run together. So the module puts the companion's lines up to the first `---` line in a
-code block, with anything the companion wrote to stderr after them, and then `---` and the job's report, which the
-backend wrote as Markdown and which is drawn as such. The text starts with a line break, because Claude Code puts
-`relay: ` in front of its first line. The model reads the same text. In a headless run the command exits with the
-companion's exit code (the table under [The state block](#the-state-block) for `result`).
+the lines of a paragraph run together. Claude Code also puts `relay: ` in front of the first line, and shows and
+records a command a plugin answered without its arguments (`/relay:result`, not `/relay:result <job>`); the hook
+gets them. So the answer's first line is the command as typed, which the person reads as `relay: /relay:result
+<job>`. The companion's own lines follow in a code block, exactly as printed, with anything it wrote to stderr
+after them, up to the first line that is `---` or starts with `|`. After a `---` comes the job's report, which the
+backend wrote as Markdown; after a `|` comes the job table, drawn as a table. The model reads the same text. In a
+headless run the command exits with the companion's exit code (the table under [The state block](#the-state-block)
+for `result`). `status` names the relay version in its header (`relay-version:`), the build that answers.
 
 Each call has a timeout above its command's own deadline: 30 seconds for `status` and `result`, which read in under
-a second, 60 for `cancel`, which waits `RELAY_JOBS_CANCEL_GRACE_MS` (10 s) before it kills a worker, and 180 for
-`transfer`, which gives Codex's import two minutes. A call that timed out or could not start, and output that
-`$.process.run` cut at 4 MiB, answer an error text that names the shell command to run instead, never a partial
-list. The markdown files keep the names, descriptions and argument hints for the command picker, and their body
-only says that the module answers the command: Claude Code runs it when the module did not load. Claude does not
-call these four itself. A model's Skill call expands a command's markdown body and never reaches `command.run`, so
-Claude reads jobs with `C status` and `C result` in Bash, which print the same text, and cancels a job by sending
-its agent `cancel`.
+a second, twice `RELAY_JOBS_CANCEL_GRACE_MS` (10 s by default) and 40 seconds more for `cancel`, which can wait the
+grace once for its own worker and once for a worker that took the job over, and 180 for `transfer`, which gives
+Codex's import two minutes. A call that timed out or could not start, and output that `$.process.run` cut at 4 MiB,
+answer an error text that names the shell command to run instead, never a partial list. The markdown files keep
+the names, descriptions and argument hints for the command picker, and their body only says that the module
+answers the command: Claude Code runs it when the module did not load. Claude does not call these four itself. A
+model's Skill call expands a command's markdown body and never reaches `command.run`, so Claude reads jobs with
+`C status` and `C result` in Bash, which print the same text, and cancels a job by sending its agent `cancel`.
+
+`transfer` gets the session id from `$.session.id()` and finds the session's file by it ([Transfer](#transfer)).
 
 ### The report
 

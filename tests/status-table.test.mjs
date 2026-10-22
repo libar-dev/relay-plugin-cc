@@ -5,6 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { renderJobList } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { repoSlugFor } from "../plugins/relay/scripts/lib/jobs/store.mjs";
+import { PLUGIN_VERSION } from "../plugins/relay/scripts/lib/util/plugin.mjs";
 import { makeTempDir, run } from "./support/helpers.mjs";
 import { SCRIPT } from "./support/runtime-fixture.mjs";
 
@@ -137,6 +138,7 @@ test("companion status prints its headers, then jobs and a blank line before the
     `repo: ${slug}`,
     "review-gate: disabled",
     "fast-tier: allowed",
+    `relay-version: ${PLUGIN_VERSION}`,
     "jobs: 1",
     "",
     "| job   | state     | kind | backend | model/effort | duration | summary | relay |",

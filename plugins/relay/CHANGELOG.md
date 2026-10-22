@@ -26,14 +26,17 @@ Phase 2, commands answered by the module:
 
 - `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` start no model turn and cost
   no tokens. The hooks module answers each with a `command.run` hook that runs the companion and
-  shows its output: its own lines in a code block, exactly as printed, and a job's report after them
-  as Markdown. Until now a model ran the command and retold its output. A headless
+  shows its output: the command as typed (Claude Code shows such a command without its arguments),
+  the companion's own lines in a code block, exactly as printed, then a job's report as Markdown or
+  the job list as a table. Until now a model ran the command and retold its output. A headless
   `claude -p "/relay:result <job>"` exits with the companion's exit code.
 - `C status` prints the job list as a Markdown table with a header row (job, state, kind, backend,
   model/effort, duration, summary, relay); every row names its backend, Codex included. It replaces
-  the two-space-separated lines, and is the list `/relay:status` shows. `--json` is unchanged.
+  the two-space-separated lines, and is the list `/relay:status` shows. Its header names the relay
+  version (`relay-version:`). `--json` is unchanged.
 - Claude no longer calls `/relay:status` and `/relay:result` itself: a model's call of a command
-  never reaches the module. It reads jobs with `C status` and `C result`, which print the same text.
+  never reaches the module. It reads jobs with `C status` and `C result` in Bash, which print the
+  same text; in `default` permission mode Claude Code asks before that Bash call.
   `Skill(relay:status)` and `Skill(relay:result)` in `permissions.allow` have no use any more.
 - `transfer` finds the session's file by the session's id (`RELAY_COMPANION_SESSION_ID`), in the
   project folders of `~/.claude/projects`; `--source` still takes a file. The SessionStart hook no

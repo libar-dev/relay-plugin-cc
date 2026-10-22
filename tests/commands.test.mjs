@@ -211,7 +211,7 @@ test("status, result, cancel and transfer are answered by the module's command.r
   const resultHandling = read("skills/result-handling/SKILL.md");
 
   for (const name of ["status", "result", "cancel", "transfer"]) {
-    assert.match(module, new RegExp(`on\\("command\\.run", \\{ command: "relay:${name}" \\}, \\(\\$, e\\) => answerCommand\\(\\$, e, "${name}",`), name);
+    assert.match(module, new RegExp(`on\\("command\\.run", \\{ command: "relay:${name}" \\}, (?:async )?\\(\\$, e\\) => answerCommand\\(\\$, e, "${name}",`), name);
   }
   assert.match(resultHandling, /do not turn a failed or incomplete job run into a Claude-side implementation attempt/i);
   assert.match(resultHandling, /if the job was never successfully invoked, do not generate a substitute answer at all/i);
@@ -349,7 +349,7 @@ test("review and adversarial-review are model-invocable; status, result, cancel 
   }
   for (const name of ["status", "result", "cancel", "transfer"]) {
     const source = read(`commands/${name}.md`);
-    assert.equal(source.slice(source.indexOf("\n---\n") + 5), "\nThe relay module answers this command. If you read this, it did not load: say so and stop.\n", name);
+    assert.equal(source.slice(source.indexOf("\n---\n") + 5), "\nThe relay module answers this command; it needs Claude Code 2.1.307 or later. If you read this, it did not load: say so and stop.\n", name);
     assert.doesNotMatch(frontmatter(name), /allowed-tools/, name);
     assert.match(frontmatter(name), /^description: .{40,}$/m, name);
     assert.match(frontmatter(name), /^argument-hint: /m, name);

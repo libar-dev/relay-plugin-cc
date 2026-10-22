@@ -189,11 +189,12 @@ message: a message sent while it runs becomes the next turn.
 
 The plugin's hooks module answers `/relay:status`, `/relay:result`, `/relay:cancel` and
 `/relay:transfer` itself: it runs the companion and shows its output, with no model turn and no
-tokens spent. The output's own lines are shown in a code block, as the companion prints them, and a
-job's report after them as Markdown. `claude -p "/relay:result <job>"` exits with the companion's
-exit code (0 completed, 3 ended without a report, 4 running, 5 cancelled). These four run only when
-you type them. When you ask in plain words, Claude reads jobs with the companion in Bash, and
-cancels a job by sending its agent the message `cancel`.
+tokens spent. The answer starts with the command as you typed it, then the companion's lines in a
+code block, as it prints them, then a job's report as Markdown, or the job list as a table.
+`claude -p "/relay:result <job>"` exits with the companion's exit code (0 completed, 3 ended
+without a report, 4 running, 5 cancelled). These four run only when you type them. When you ask
+in plain words, Claude reads jobs with the companion in Bash, which a session in `default`
+permission mode asks you about, and cancels a job by sending its agent the message `cancel`.
 
 Claude can run `/relay:setup`, `/relay:rescue`, `/relay:review` and `/relay:adversarial-review`
 itself when you ask for one in plain words, for example "review my changes on Kimi". A review Claude

@@ -4,4 +4,4 @@ argument-hint: '[job-id]'
 disable-model-invocation: true
 ---
 
-The relay module answers this command. If you read this, it did not load: say so and stop.
+The relay module answers this command; it needs Claude Code 2.1.307 or later. If you read this, it did not load: say so and stop.
