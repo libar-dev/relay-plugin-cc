@@ -78,7 +78,8 @@ Phase 4, the companion's JSON, changed in place (the status line and the board r
   before), `not-found`, `usage`, `attempt-changed` or `error`, and nothing a reader needs goes to stderr. A script
   that read a `--json` error from stderr reads it from stdout now.
 - **`status --json` lists pages of slim rows.** Rows leave out `attemptRecords` and `server`, carry a short relay
-  binding and one-line errors, and come newest first, 50 a page (`--limit N`, up to 200), with `nextCursor` for
+  binding and one-line errors, keep a few entries of each list (owed, dropped, recovered, violations) with its full
+  count, and come newest first, 50 a page (`--limit N`, up to 200, and never past 2 MiB), with `nextCursor` for
   `--cursor`; `--active` lists only jobs that are starting, running or dead, or owe messages. `--all` and
   `--workflow` page the same way. Until now the listing held every field of every job, `--all` and `--workflow`
   every job: 1.29 MB for 473 jobs. `status <job> --json`, `result`, `wait` and `cancel` keep every field. The text
@@ -89,9 +90,11 @@ Phase 4, the companion's JSON, changed in place (the status line and the board r
   `hasReport`, `updatedAt`, `claudeSessionId` (the Claude Code session the job was started from) and
   `relay.lastToolAt` (the relay's last tool call). `steer`, `continue` and `resume` add `job`; `start` and `task`
   add `backend`.
-- `cancel --attempt N` cancels only while the job is at attempt N, so a cancel meant for one attempt never stops a
-  newer one that a continue or an automatic recovery started. Otherwise it changes nothing and says
-  `attempt-changed`.
+- `cancel --attempt N` cancels the job only while attempt N is current, so a cancel meant for one attempt never stops
+  a newer one that a continue or an automatic recovery started; it then says `attempt-changed`. Once attempt N is
+  stopped, a newer attempt a message starts runs on.
+- Automatic recovery no longer resumes a job with an open cancel. A worker that died while a cancel was under way,
+  or that the cancel killed, could be resumed by its relay's wait and meet the cancel again.
 - A `TaskStop` that cancelled a job records its hand-back, since the TaskStop result carried the cancelled block:
   `status` no longer marks such a job `not handed back`.
 - The stop-time review gate reads the new JSON. `check-header` keeps its text answer.

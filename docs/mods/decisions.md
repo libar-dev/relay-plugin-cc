@@ -467,7 +467,8 @@ Fedora build (its Linux beta is for Debian 12+ and Ubuntu 22.04+), and the M3 ca
 Every `--json` output is one object on stdout whose first fields are `schema` (`relay.<command>/1`, raised when
 that command's shape changes), `relayVersion` and `relayBuild` (D37's commit). An error under `--json` is the same
 header with `error: { kind, message }` on stdout, nothing a reader needs on stderr, and the exit code it had: `busy`
-4, and `not-found`, `usage`, `attempt-changed` and `error` 1. A job object keeps today's fields and names, flat at
+4, and `not-found`, `usage`, `attempt-changed` and `error` 1. A malformed argument list that swallows `--json` as
+another option's value still answers in JSON. A job object keeps today's fields and names, flat at
 the top, so a script that read `.state` or `.handedBackAt` reads them still; every field is present (null, false,
 0 or an empty list when it has no value), and `backend` is always set. `status` has two forms under one schema, a
 listing without a job and one job with it, as the command's arguments choose. Rejected: an envelope
@@ -478,24 +479,28 @@ a second interface); schema names per form, which would name the arguments, not 
 
 The status line and the board read listings through `$.process.run`, which keeps 4 MiB of stdout. A full row is
 mostly attempt records with server stderr tails (1.29 MB for 473 jobs), so a row leaves out `attemptRecords`, the
-server and the messages, and cuts the relay binding and the errors to what a list shows: 50 rows of a 300-job home
+server and the messages, cuts the relay binding and the errors to what a list shows, and keeps a few entries of each
+list (owed, dropped, recovered, violations) with its full count; Sol's review built 6.2 MB of rows from 300 dropped
+messages a job, and a page also ends before 2 MiB: 50 rows of a 300-job home
 with large attempt records came to 50 KB, read in 0.16 s. Pages are 50 rows by default and at most 200, newest
 first by `createdAt`, then job id, and a cursor names the last row's key, so a job created between pages never
 shifts them. `--active` keeps the jobs that are starting, running or dead, or owe messages; it skips a job whose
 stored state has ended and whose inbox owes nothing without viewing it. `--limit`, `--cursor` and `--active` are
 `--json` options: the text listing (`/relay:status`'s) is unchanged. One job's JSON keeps every field.
 
-### D57. `cancel --attempt` is checked by `cancel` and by the worker (Phase 4 thread)
+### D57. `cancel --attempt` cancels only while that attempt is current (Phase 4 thread)
 
-The board's Cancel names a job and an attempt; a continue or an automatic recovery can begin the next attempt
-between the press and the cancel. `cancel --attempt N` checks before it posts, the cancel message carries N and
-the worker answers `no-op` to one for another attempt (the window between `cancel`'s check and the worker taking
-the message), and `cancel` checks again before it kills after the grace and under the lease for a dead worker. A
-starting job's first attempt counts as 1. A refusal signals and writes nothing and is `attempt-changed`. After
-`cancel` has killed the attempt it was asked to, it checks no more: a relay's `wait --auto-resume` can see the
-killed worker's job as dead and start a recovery, and the lead's reading of the first version found that a check there
-would leave that recovery running, the job uncancelled. Without `--attempt` nothing changes; `/relay:cancel` and the
-TaskStop hook pass none.
+The board's Cancel names a job and an attempt, and a continue or an automatic recovery can begin the next attempt
+between the press and the cancel. `cancel --attempt N` checks before it posts, its message carries N and the worker
+answers `no-op` to one for another attempt (the window between `cancel`'s check and the worker taking the message),
+and `cancel` checks again before it kills after the grace and under the lease for a dead worker. A starting job's
+first attempt counts as 1. Once attempt N is stopped (the worker took the cancel, or `cancel` killed it), a newer
+attempt a message starts runs on and `cancel` succeeds, saying so. Both reviewers (GPT-6.1 Sol and Opus 5.5) found
+the first version's edges: a check after the kill that left a recovery running, a missing check that cancelled a
+recovery after a worker died by itself, a cancel that had worked reported as `attempt-changed`, and a sweep that could
+kill a worker that had begun the next attempt. The root of the first two was a recovery racing the cancel, so
+automatic recovery no longer resumes a job with an open cancel, with or without `--attempt`. Without `--attempt`
+nothing else changes; `/relay:cancel` and the TaskStop hook pass none.
 
 ### D58. A TaskStop that cancelled a job records its hand-back (Phase 4 thread)
 
@@ -509,6 +514,7 @@ the record.
 The board shows how each message was taken and whether a running job's relay still lives, and routes Steer and
 Continue. So one job's JSON lists every message with its stage, a one-line preview (120 characters; the text stays in
 the job's files), the relay's transcript entry that carried it, and its outcome from `inbox/outcomes/`; `relay.lastToolAt`
-is the relay guard's record of the relay's last tool call (a relay calls at least every 540 s while its job runs);
+is the relay guard's record of the relay's last tool call;
 `claudeSessionId` is the Claude Code session the job was started from (`launchedBy`), which a relay of the
-Agent tool shares.
+Agent tool shares. A waiting relay calls about every nine minutes; the gap can pass ten (the Bash tool's limit) by its
+own model's step and the guard's lock wait, so a reader that judges a relay lost allows more than that.

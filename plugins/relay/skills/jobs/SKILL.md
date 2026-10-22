@@ -172,7 +172,7 @@ dir: ~/.relay-jobs/<repo>/<job>
 - `completed` means the job finished its answer, not that its commands passed. Read the report.
 - Lines that may appear: `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (messages to the job, acknowledged and not run yet; `resume` runs them; it says nothing about the report), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
 
-`status` marks a relay job that ended with no hand-back of its result `not handed back` (`handedBackAt: null` in `--json`): its caller died or gave up, and `C result <job>` has the report. A job a `TaskStop` cancelled counts as handed back: the TaskStop result carried its block.
+`status` marks a relay job that ended with no hand-back of its result `not handed back` (`notHandedBack: true` in `--json`): its caller died or gave up, and `C result <job>` has the report. A job a `TaskStop` cancelled counts as handed back: the TaskStop result carried its block.
 
 A failed cancel stays pending while the job runs and tries remain. A terminal job closes it as done, and three started tries close it as failed.
 
@@ -218,7 +218,7 @@ You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:setup` and 
 |---|---|
 | `C start --prompt-file <header+brief>` | start a job, print `job: <id>`, return at once |
 | `C wait <job> [--timeout-seconds N] [--state-only]` | block until the job ends or N seconds pass (default 240); print the block and the report |
-| `C status [<job>] [--all] [--workflow <run>] [--json]` | this repository's newest 20 jobs, every repository's with `--all`, every job of one Workflow run with `--workflow`, or one job's block |
+| `C status [<job>] [--all] [--workflow <run>] [--json]` | this repository's newest 20 jobs, every repository's with `--all`, every job of one Workflow run with `--workflow`, or one job's block; with `--json`, pages of 50 (below) |
 | `C result [<job>] [--state-only]` | the block and report, without waiting; without a job, the newest finished job of this repository |
 | `C steer <job> --message-file F` | steer the running turn, or queue the message as the next turn |
 | `C continue <job> --message-file F` | a new turn on the same thread |
