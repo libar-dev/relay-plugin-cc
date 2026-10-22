@@ -142,9 +142,9 @@ What worked in Phase 1:
   `prompt.change {kind: "clear"}` fire, and they name neither the view nor the agent. The line reaches the agent's
   transcript when its tool call returns, as origin `human`; typed after the agent ended, it resumes the agent at
   once (`SubagentStart`; the main thread's queue gets "Agent X was resumed by the user").
-- The view in force reaches a module only through a drawn site: the `AbovePrompt` band and a `Pane` get
-  `e.props.view.agentId`, and a switch re-runs their hook. A band hook that passes draws nothing and still re-runs.
-  `$.ui.status` gets no view.
+- The view in force reaches a module through a drawn site. The 2.1.308 declarations give `e.props.view.agentId` to
+  the `AbovePrompt` band and to a `Pane`, and none to `$.ui.status`. Measured for the band: opening an agent's view
+  and going back re-run its hook with the agent's id and with none, and a hook that passes draws nothing.
 - Keys in the terminal: from the main prompt, `Down` moves into the agent list and `Up` from `main` gives the prompt
   back; `Enter` on a row opens that agent's view, and `Up` as many times as `Down` reaches its prompt. Esc in a
   running agent's view stops the agent, and `x` on its row in the list stops it too; both end its turn with

@@ -428,7 +428,8 @@ A line the person types into the relay's own view (↓ in the footer, Enter, the
 neither the view nor the agent. Claude Code writes the line into the relay's transcript when the
 relay's current tool call returns, so it reaches the job at the relay's next call: when its `wait`
 returns, at most 540 seconds later, or when the job ends, and then as a continue, not a steer. A
-line typed after the hand-back resumes the relay at once and continues the job.
+line typed after the hand-back resumes the relay at once and continues the job, and one typed right
+after Esc interrupted the relay resumes it at once too: a steer while the job runs.
 
 The module draws nothing, so it runs wherever the plugin loads: the terminal, Desktop, `claude -p`
 and Agent SDK hosts. Where it does not run, on a Claude Code below the 2.1.307 floor, a message
@@ -478,19 +479,23 @@ gives the exact wait command. Otherwise it rewrites the hand-back's `message` to
 pipe. After a failed start the hand-back is allowed at once and carries the start error. Claude
 Code gives a subagent the `SubagentHandback` tool only in auto mode, and a subagent under the
 Workflow tool does not get it. Without it, SubagentStop blocks while the job runs, a message is
-owed, or the relay's final text differs from the result. A message after the hand-back resumes
+owed, or the relay's final text differs from the result; one code fence around the whole result,
+with at most a language tag after its opening backticks, is not a difference. A message after the hand-back resumes
 the relay; the hook delivers it at the next tool call, as a continue, and the next hand-back is
 rewritten the same way. The hand-back records every inbound entry the hook saw, delivered or not.
 SubagentStop lets a relay that handed back stop without a check only while its transcript is
 readable and nothing inbound arrived after that hand-back. A relay a message resumed must end with
-exactly the result or hand back again, so it can never answer the message in its own words,
-whether or not the hook could deliver it.
+exactly the result or hand back again, so while the hook can check it, the relay cannot answer the
+message in its own words, whether or not the hook could deliver it. Three cases stay open, by
+design: the block budget lets a relay go after eight blocks, with a recorded violation; a hook that
+fails lets the stop through; and a relay whose start failed has no job and no transcript check, so
+its hand-back of the start error stands.
 
 ### Long waits, never trapped
 
 The hook sets every relay `wait` to 540 seconds with a Bash timeout of 600 seconds, the Bash tool's
-maximum. A message does not wait for the bound: the wake ends the wait ([The wake](#the-wake)), so
-the bound only caps one tool call, and a long job costs its relay a model call about every nine
+maximum. A `SendMessage` does not wait for the bound: the wake ends the wait ([The wake](#the-wake)), so
+the bound only caps one tool call for it (a line typed into the relay's view has no wake and can wait the whole bound), and a long job costs its relay a model call about every nine
 minutes. It was 120 seconds before the wake, the time a message then took to arrive. The hook also
 adds `--exit-zero-while-running`, so a wait that times out on a running job prints `still running:
 not an error. Run the same wait again.` first and exits 0. The Bash tool marks every non-zero exit
@@ -1015,7 +1020,11 @@ would need `grok agent`.
 reaches the job at the relay's next call, up to 540 seconds later, or as a continue once the job
 has ended. Esc in a running relay's view, or `x` on its row in the footer's agent list, stops the
 relay agent and leaves its job running, as any end of a relay other than TaskStop does; Claude Code
-fires no hook for it but the module's `turn.complete`. `/relay:cancel <job>` cancels the job.
+fires no hook for it but the module's `turn.complete`. `/relay:cancel <job>` cancels the job. A
+line typed in the view right after Esc resumes the relay and is delivered at once: a steer while the
+job runs, a continue once it has ended. In the terminal, ↓ and Enter open the view with the cursor
+still in the agent list; ↑ (as many times as ↓) reaches the view's prompt, and the first Esc does
+the same. Esc at the view's prompt stops the relay.
 
 **Not measured.** Sustained rate limits and simultaneous jobs on one plan for Grok, ZCode and Kimi,
 and a crash during a partial answer. Nothing caps how many jobs run at once.

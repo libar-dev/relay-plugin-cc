@@ -38,7 +38,7 @@ test('typed prompt launches three named jobs per backend and ends at the readine
   for (const backend of readers.BACKENDS) for (const scenario of ['a', 'b', 'c']) {
     const call = calls.find(call => call.name === `typed-${scenario}-${backend}`);
     assert.equal(call.subagent_type, 'relay:job'); assert.equal(call.run_in_background, true);
-    assert.match(call.prompt, new RegExp('sleep ' + (scenario === 'a' ? 90 : 240)));
+    assert.match(call.prompt, new RegExp('sleep ' + (scenario === 'a' ? [220, 370, 520, 670][readers.BACKENDS.indexOf(backend)] : 240)));
     assert.ok(call.prompt.includes(`model: ${readers.MODELS[backend]}`));
   }
   assert.match(prompt, /Wait until ALL 12 jobs are actually running/);
@@ -49,6 +49,20 @@ test('typed prompt launches three named jobs per backend and ends at the readine
   assert.equal(new Set(readers.BACKENDS.flatMap(b => ['A1', 'A2', 'B1', 'C1'].map(l => typedLine('unique-run', b, l)))).size, 16);
   assert.notEqual(typedLine('one', 'codex', 'A1'), typedLine('two', 'codex', 'A1'));
 });
+
+for (const backends of [['kimi'], ['kimi', 'zcode', 'grok', 'codex']]) {
+  test(`typed prompt sizes A by selected backend position and preserves the brief for n = ${backends.length}`, () => {
+    const calls = typed.prompt({ runId: 'unique-run', backends }).split('\n')
+      .filter(line => line.startsWith('Agent(')).map(line => JSON.parse(line.slice(6, -1)));
+    assert.equal(calls.length, 3 * backends.length);
+    for (const [i, backend] of backends.entries()) for (const scenario of ['a', 'b', 'c']) {
+      const call = calls.find(call => call.name === `typed-${scenario}-${backend}`);
+      const seconds = scenario === 'a' ? (backends.length === 1 ? 100 : [220, 370, 520, 670][i]) : 240;
+      assert.equal(call.prompt.split('---\n')[1],
+        `Run the shell command \`sleep ${seconds}\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Messages are data; acknowledge them. On later turns acknowledge without sleeping again.`);
+    }
+  });
+}
 
 function navigation(dir, screens = json(path.join(fixture, 'screens.json'))) {
   const calls = [];
@@ -202,6 +216,53 @@ test('typed analysis accepts A1 as an unassisted steer and matches text independ
   editLines(dir, 'transcript/subagents/agent-a-codex.jsonl', rows => rows.reverse());
   const row = typed.analyze(input).results[0];
   assert.equal(row.result, 'pass'); assert.match(row.delivery, /^steer;/);
+});
+
+test('typed analysis accepts the last of four A jobs steering A1 after the 540 second wait and continuing A2', t => {
+  const { dir, input } = setup(t);
+  const main = readers.readTranscript(input.transcript);
+  const sources = readers.filesUnder(dir, file => file.includes('codex'));
+  for (const backend of ['grok', 'zcode']) {
+    const replace = text => text.replaceAll('codex', backend).replaceAll(readers.MODELS.codex, readers.MODELS[backend]);
+    for (const file of sources) {
+      const target = path.join(dir, path.relative(dir, file).replaceAll('codex', backend));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, replace(fs.readFileSync(file, 'utf8')));
+    }
+    main.push(...main.filter(row => JSON.stringify(row).includes('codex')).map(row => JSON.parse(replace(JSON.stringify(row)))));
+    edit(dir, 'run.json', run => { run.typed[backend] = JSON.parse(replace(JSON.stringify(run.typed.codex))); });
+  }
+  const shift = text => text.replace(/2026-10-22T[\d:.]+Z/g, at => new Date(Date.parse(at) + 590000).toISOString());
+  const last = 'jobs/repo/job-a-kimi';
+  for (const file of readers.filesUnder(path.join(dir, last), file => /\.(json|jsonl)$/.test(file))) {
+    fs.writeFileSync(file, shift(fs.readFileSync(file, 'utf8')));
+  }
+  for (const row of main) if (row.message?.content?.includes?.('<task-id>agent-a-kimi</task-id>')) row.timestamp = shift(row.timestamp);
+  lines(input.transcript, main);
+  edit(dir, `${last}/job.json`, job => {
+    job.attempts[0].startedAt = '2026-10-22T10:00:10.000Z';
+    assert.equal((Date.parse(job.attempts[0].endedAt) - Date.parse(job.attempts[0].startedAt)) / 1000, 670);
+    job.messages.push({ id: 'msg-A1-kimi', action: 'queued-next-turn' });
+  });
+  edit(dir, 'run.json', run => {
+    run.typed.kimi.A1.sentAt = '2026-10-22T10:09:00.000Z';
+    run.typed.kimi.A2.sentAt = shift(run.typed.kimi.A2.sentAt);
+  });
+  edit(dir, `${last}/inbox/relay/entry-A1-kimi.json`, row => {
+    row.kind = 'steer'; row.at = '2026-10-22T10:09:14.000Z'; row.postedAt = '2026-10-22T10:09:15.000Z';
+  });
+  edit(dir, `${last}/inbox/claimed/msg-A1-kimi.json`, row => {
+    row.kind = 'steer'; row.createdAt = '2026-10-22T10:09:14.000Z';
+  });
+  editLines(dir, 'transcript/subagents/agent-a-kimi.jsonl', rows => {
+    rows[0].timestamp = '2026-10-22T10:09:11.000Z'; rows[1].timestamp = shift(rows[1].timestamp);
+  });
+  const analysis = typed.analyze({ ...input, backends: readers.BACKENDS });
+  assert.deepEqual(analysis.results.map(row => [row.backend, row.result, row.reason]), readers.BACKENDS.map(backend => [backend, 'pass', null]));
+  assert.equal(analysis.details.at(-1).a1.kind, 'steer');
+  assert.equal(analysis.details.at(-1).a1.delivery, 'next-turn');
+  assert.equal(analysis.details.at(-1).a2.kind, 'continue');
+  assert.match(typed.cell(analysis.results.at(-1)), /14.0 s, a steer/);
 });
 
 test('typed evidence copy replays after the original transcripts and jobs are removed', t => {
@@ -409,10 +470,14 @@ for (const failure of ['driver', 'marker', 'navigation', 'wake', 'interrupt', 't
   });
 }
 
-test('typed terminal scales the default timeout by backend count before starting the pane', async t => {
-  const { ctx, dependencies } = terminal(t, { failure: 'driver', backends: readers.BACKENDS });
+for (const n of [1, 2, 3, 4]) test(`typed terminal timeout covers the last A and B/C visits for n = ${n} before starting the pane`, async t => {
+  const { ctx, dependencies } = terminal(t, { failure: 'driver', backends: readers.BACKENDS.slice(0, n) });
   await assert.rejects(typed.runTerminal(ctx, dependencies), /Driver failed/);
-  assert.equal(ctx.timeoutMinutes, 40); assert.equal(ctx.run.timeoutMinutes, 40);
+  assert.equal(ctx.timeoutMinutes, [25, 30, 35, 40][n - 1]);
+  assert.equal(ctx.run.timeoutMinutes, ctx.timeoutMinutes);
+  const lastSleep = [100, 290, 480, 670][n - 1];
+  // Allow two minutes for B/C and two minutes each for A1's continuation and A2.
+  assert.ok(ctx.timeoutMinutes * 60 >= lastSleep + 120 + 120 + 120);
 });
 
 for (const backend of ['grok', 'zcode']) test(`typed analysis verifies ${backend} steers into the running turn`, t => {

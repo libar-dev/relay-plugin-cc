@@ -82,8 +82,14 @@ Messages typed into a relay's own view (a fix found by the Desktop and CLI passe
   reaches the job at the relay's next step, at most nine minutes later, or as a new turn when the job
   ends first. A line typed after the hand-back arrives at once. A relay that lives through the update
   delivers the lines it received before, since none of them has a delivery record.
-- A relay that a message resumed after its hand-back must hand back the job's result again; it can no
-  longer end with words of its own.
+- A line typed right after Esc interrupted the relay in its view resumes the relay and reaches the job
+  at once, steering it while it runs.
+- A relay that a message resumed after its hand-back must hand back the job's result again; while the
+  hook can check it, the relay can no longer end with words of its own. (The block budget, a failing
+  hook and a relay whose start failed stay as they were.)
+- A relay without `SubagentHandback` whose final message is the exact result inside one code fence is
+  no longer blocked: the fence, with at most a language tag, is ignored. A Haiku relay had fenced the
+  result eight times running and been let go without a recorded hand-back.
 - A message of an origin the guard does not know is recorded as a `relay-violation:` line instead of
   being dropped in silence (the harness's own `task-notification` notices are skipped), and the same
   transcript problem is recorded once, not again at every hook call.

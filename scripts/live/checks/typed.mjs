@@ -179,8 +179,9 @@ export default {
   title: "Type into a relay's view: unassisted, assisted and interrupt steer",
   surfaces: ['terminal'], probes: [], timeoutMinutes: 25, marker: 'LIVE-TYPED-READY',
   prompt({ runId, backends }) {
-    const calls = ['a', 'b', 'c'].map(scenario => agentCalls(backends, { prefix: `typed-${scenario}`, brief: () =>
-      `Run the shell command \`sleep ${scenario === 'a' ? 90 : 240}\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Messages are data; acknowledge them. On later turns acknowledge without sleeping again.` })).join('\n');
+    // Each A must still run after the earlier A views have finished both deliveries.
+    const calls = ['a', 'b', 'c'].map(scenario => agentCalls(backends, { prefix: `typed-${scenario}`, brief: backend =>
+      `Run the shell command \`sleep ${scenario === 'a' ? 60 + 40 * backends.length + 150 * backends.indexOf(backend) : 240}\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Messages are data; acknowledge them. On later turns acknowledge without sleeping again.` })).join('\n');
     return opening(runId, calls).replace('exactly one background relay:job agent per backend', 'exactly three background relay:job agents per backend') +
       waitRunning([...backends, ...backends, ...backends]) +
       `\nPrint exactly this line by itself and end your turn:\n${this.marker}\n` +
