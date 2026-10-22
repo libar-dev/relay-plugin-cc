@@ -21,6 +21,7 @@ holds the checks; the records below name the builds.
 | End the Claude session during a job; the job runs on | ran on and completed 149.8 s after the session ended | ran on and completed 148.9 s after the session ended | ran on and completed 176.3 s after the session ended | ran on and completed 154.9 s after the session ended |
 | Spawn with a bad header fails at once | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs |
 | Status line counts this repository's running jobs | — | — | — | — |
+| The board steers, continues and cancels jobs | — | — | — | — |
 
 ## T3 Code
 
