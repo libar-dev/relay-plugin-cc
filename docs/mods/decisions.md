@@ -18,9 +18,7 @@ Entries are never edited after the fact. A reversed decision gets a new entry th
 
 ## Open for the owner
 
-- **What confirms the release candidate before the owner tests it** (D60, part 11; with the cuts, the release
-  candidate is the last cut, D70). Read for now as the automated checks passing on the release candidate; to
-  confirm with the owner at that step.
+None.
 
 ## Entries
 
@@ -624,6 +622,29 @@ How D95's cuts are made.
   gave the same `result` output as pre.1's. It also listed and read the seven completed jobs pre.1 had written in
   the ThinkPad's jobs home. Not checked: a running job, `continue` across versions, a `cancel --attempt` record.
 
+### D74. New skills wait for a package after 3.0; corrections ship now (owner, 23 October 2026)
+
+GPT-6 Astra's review of the skills (D60, part 7) proposed four skills relay lacks: briefing an unattended job,
+operating and troubleshooting jobs, composing and recovering a Workflow, and choosing a backend and route. They go to
+a package after 3.0. Corrections to existing instructions that are wrong or dangerous ship now, in the cuts.
+
+### D75. `/relay-board`'s contract for 3.0 (owner, 23 October 2026)
+
+The board (D62) takes mouse clicks at any time in fullscreen, and keys only while the session is idle. That is the
+contract for 3.0, and the docs say it plainly.
+
+### D76. The release candidate, and "Cloud Contest" (owner, 23 October 2026)
+
+"Cloud Contest" (D60, part 11) was a dictation slip, not a step. The stable release candidate is the last installed
+cut, with the finished stable PR and its reviews, and the owner's go after real use. No extra environment. This
+closes the item that was open for the owner.
+
+### D77. Plugin updates need no T3 restart; infra installs (owner, 23 October 2026)
+
+A user-level install reaches new Claude sessions at once, and an existing session picks it up with `/reload-plugins`;
+no T3 restart is needed for a plugin update. Every install and every piece of infrastructure work goes to an infra
+session on the M1's libar-infra project; leads do none of it (D97).
+
 ### D90. One walkthrough, two documents (guide lead)
 
 The guide lead writes one feature walkthrough. It covers every user-facing feature of 3.0 in the order a user meets
@@ -651,7 +672,7 @@ on GitHub, so a guide can merge before the public-assets pass. That pass replace
 in a clean demo setup. The proofs taken on the M3 show the account and stay local. The same device marks lines that
 wait on later work.
 
-### D93. The pre-release guide is for daily use, not a test matrix (guide lead)
+### D93. The pre-release guide is for daily use, not a test matrix (guide lead; amends D60, part 11)
 
 After the owner chose pre-release cuts (D95), the manual test script became the owner's pre-release guide. It holds:
 - each cut and its known issues, with what to do meanwhile;
@@ -660,10 +681,17 @@ After the owner chose pre-release cuts (D95), the manual test script became the 
 - a note template a lead can act on;
 - how a machine is switched.
 
-The cuts are tested by the end-to-end suite, the live suite and libar-infra's thread tests, which find issues. Under
-D97 none of them gates a cut, and the guide holds no backend-by-surface matrix of its own. Every cut updates the
-known-issues list, which is part of the go/no-go. The first draft's step-by-step script stays in the guide lead's
-working folder.
+The cuts are tested by the real-API end-to-end suite and libar-infra's thread tests, which find issues; the live
+suite tests the cut's plugin code with `--plugin-dir`. Under D97 none of them gates a cut: a cut PR passes `npm run
+check-version` and CI (D70), and the release PR's gates still run the live and real-API suites on the release head
+(D60, part 9). The guide holds no backend-by-surface matrix of its own. With every cut, the guide lead updates the
+known-issues list in a docs PR of its own, not in the cut PR (D70); the list is part of the go/no-go for heavy
+production (D97). The first draft's step-by-step script stays in the guide lead's working folder.
+
+What it changes: D60, part 11, as D95 amended it. There is no step-by-step script; the walkthrough feeds the
+pre-release guide and the user guide, and D95's "built from the manual test script" means that the guide replaced it.
+Edited by the release lead from the guide lead's text, on the coordinating thread's instruction: the gates, the
+known-issues update and the go/no-go are named.
 
 ### D95. Pre-release cuts before 3.0.0, on the M3 and the ThinkPad (owner, 22 October 2026; amended by D97)
 
@@ -732,7 +760,7 @@ Still open: on macOS, quitting the T3 app kills relay workers, for a reason not 
 watches for it. The coordinating thread scheduled the notice after Phase 4's status line and board, which rework
 `hooks/mod/register.js`, as the notice will.
 
-### D97. Test pre.1, then cycle pre-releases for 48 hours before heavy production (owner, 22 October 2026)
+### D97. Test pre.1, then cycle pre-releases for 48 hours before heavy production (owner, 22 October 2026; amended by D99)
 
 The owner, after pre.1 was installed:
 
@@ -773,3 +801,8 @@ Arranged by the coordinating thread: the survey reads every T3 thread on the M1,
 jobs homes, for how the pre-releases are used and where relay fails. It runs twice: once partway through D97's 48
 hours, to feed the next cut, and once at the end, before the go for heavy production. Each pass records its cutoff
 in docs/thread-surveys.md, and the next starts there.
+
+### D99. Heavy production starts on pre.2 (owner, 23 October 2026; amends D97)
+
+The owner is ready to start heavy production and waits for the pre.2 tag, which is now the top priority. D97 held
+heavy production back for 48 hours of cuts; it starts on pre.2. Cuts keep coming after it as issues are found.

@@ -59,11 +59,11 @@ Phase 4's `--json` and the typed-message fix merge, and more as Phase 4 lands an
    guide (with screenshots that explain the features). A screenshot that is published, in the T3 post or the
    user guide, shows no account or session names.
 9. **The release PR**, `release/3.0` into `main`.
-10. **The release candidate** is the last cut, made once the reviews' fixes have merged (D70). Once it is
-    confirmed (decisions.md, "Open for the owner"), the owner uses it on the M3 and the ThinkPad as every cut
-    before it. Then, on the owner's word, the release PR merges with a merge commit, and `v3.0.0` is tagged and
-    published as a GitHub release. The release PR changes only the version, the README line and the CHANGELOG's
-    date over the last cut; a change to the plugin needs another cut.
+10. **The release candidate** is the last installed cut, made once the reviews' fixes have merged (D70), with the
+    finished release PR and its reviews (D76). The owner uses it on the M3 and the ThinkPad as every cut before it.
+    Then, on the owner's go after that real use, the release PR merges with a merge commit, and `v3.0.0` is
+    tagged and published as a GitHub release. The release PR changes only the version, the README line and the
+    CHANGELOG's date over the last cut; a change to the plugin needs another cut.
 11. **The fleet update, then the publication**, when the owner decides. The merge already makes 3.0.0 what the
     marketplace serves; the publication is the T3 post and, later, public screenshots for users, taken in a
     clean demo setup.
@@ -89,8 +89,8 @@ procedure (see "Pre-release cuts").
 
 ## What the release PR must pass
 
-D60 added the real-API suite, the screenshots, the walkthrough with its test script and guide, and the reviews,
-and dropped the demo recording: feature screenshots and the user guide replace it.
+D60 added the real-API suite, the screenshots, the walkthrough with the pre-release guide and the user guide
+(D93), and the reviews, and dropped the demo recording: feature screenshots and the user guide replace it.
 
 - `npm test`, `npm run check`, `claude plugin validate plugins/relay`, `claude plugin test plugins/relay`, CI,
   CodeRabbit and Greptile.
@@ -151,8 +151,9 @@ libar-infra installs each cut with its fleet tool, in a terminal the owner watch
    and those of the folder it runs in.
 3. **Check.** `claude plugin list` shows `3.0.0-pre.N`; a new session's `/relay:status` says `relay-version:
    3.0.0-pre.N`; `~/.claude/settings.json` differs from the copy only in plugin and marketplace entries.
-4. **Sessions.** A session that started before the switch keeps the build it loaded until its plugins reload or
-   its process is replaced; it reloads only when it holds no Workflow of relays. New sessions run the cut.
+4. **Sessions.** New Claude sessions run the cut at once, with no T3 restart (D77). A session that started before the
+   switch keeps the build it loaded until it runs `/reload-plugins` or its process is replaced; it reloads only when
+   it holds no Workflow of relays.
 5. **The way back** is the same with `#v2.2.0`. pre.1's rollback check showed that 2.2.0's companion reads ended
    jobs pre.1 wrote (D70); a running job, `continue` across versions and a `cancel --attempt` record were not
    checked. Roll back only once every job the cut started has ended and been read, and check afterwards that
