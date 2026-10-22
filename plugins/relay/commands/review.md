@@ -37,7 +37,7 @@ Backend selection (the flags mirror a job header's keys):
 - A Codex review runs in the Codex home (`~/.codex`, or `CODEX_HOME`); `--grok-home <name|path>` runs a Grok review in that Grok home, and `--kimi-home <name|path>` a Kimi review in that Kimi home.
 - A combination a job would refuse (`--grok-home` without Grok, `--kimi-home` without Kimi) is refused the same way, before anything runs.
 - On Codex, `--effort` is ignored with a `note:` line: Codex's own reviewer takes no effort.
-- Every review is read-only and recorded as a job: `/relay:status` lists it, with `backend:` on Grok, ZCode and Kimi as for a job.
+- Every review is read-only and recorded as a job: `/relay:status` lists it with its backend, as it lists a job.
 
 Grok, ZCode and Kimi read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. Return that message as it is. A Grok review always runs under Grok's `read-only` profile; where Grok refuses that profile (on a Mac whose `/var/run/docker.sock` is a symlink, or on Linux where it cannot reach a runtime socket such as `/run/podman/podman.sock`), the review fails with Grok's error. A Kimi review runs in Kimi's `default` mode: every permission request is rejected, and relay refuses the file writes and terminal commands Kimi sends through the client. That is not an OS sandbox: Kimi's hooks, the MCP servers and plugins it starts, and its other local operations can still have side effects.
 

@@ -2,6 +2,7 @@ import { parseCommandInput, resolveJobReference, outputResult, resolveCommandCwd
 import { default as process } from "node:process";
 import { findJobDir, listJobDirs, readJob, repoSlugFor, resolveJobsHome } from "../lib/jobs/store.mjs";
 import { readRepoConfig, readUserConfig } from "../lib/jobs/config.mjs";
+import { PLUGIN_BUILD, PLUGIN_VERSION } from "../lib/util/plugin.mjs";
 import { exitCodeFor, JobViewBusy, jobViewJson, loadJobViewSettled as loadJobView, renderJobBlock, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
 
 const STATUS_LIST_LIMIT = 20;
@@ -60,6 +61,6 @@ export function handleStatus(argv) {
     return;
   }
   const config = readRepoConfig(cwd);
-  const header = `jobs-home: ${resolveJobsHome()}\n${slug ? `repo: ${slug}\n` : ""}review-gate: ${config.stopReviewGate ? "enabled" : "disabled"}\nfast-tier: ${readUserConfig().fastTier}\n`;
+  const header = `jobs-home: ${resolveJobsHome()}\n${slug ? `repo: ${slug}\n` : ""}review-gate: ${config.stopReviewGate ? "enabled" : "disabled"}\nfast-tier: ${readUserConfig().fastTier}\nrelay-version: ${PLUGIN_VERSION}${PLUGIN_BUILD !== null ? ` (${PLUGIN_BUILD})` : ""}\n`;
   outputResult(header + renderJobList(views, { scope: workflow ? `for workflow ${workflow}` : slug ? "for this repository" : "" }), false);
 }

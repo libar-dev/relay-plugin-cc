@@ -65,32 +65,61 @@ export function pluginCommit(pluginDir) {
     const commit = git(['rev-parse', 'HEAD']);
     const dirty = git(['status', '--porcelain', '--', path.resolve(pluginDir)]);
     return commit.slice(0, 12) + (dirty ? '-dirty' : '');
-  } catch { return null; }
+  } catch {
+    // An export (a smoke install, the plugin cache) is no git work tree; install-local.sh stamped it.
+    try {
+      const commit = readJson(path.join(pluginDir, '.claude-plugin/build.json')).commit;
+      return typeof commit === 'string' && /^[a-f0-9]{12}(-dirty)?$/.test(commit) ? commit : null;
+    } catch { return null; }
+  }
+}
+
+// The cancel grace as the companion reads RELAY_JOBS_CANCEL_GRACE_MS.
+export function cancelGrace(env = process.env) {
+  const raw = env.RELAY_JOBS_CANCEL_GRACE_MS;
+  const value = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
+  return Number.isFinite(value) && value >= 0 ? value : 10000;
+}
+
+export function cancelTimeout(env = process.env) {
+  return Math.min(600000, 2 * cancelGrace(env) + 40000);
 }
 
 export async function cancelUnfinishedJobs(run, { env = process.env, execute = promisify(execFile) } = {}) {
-  if (!run.jobsHomeCreated || !run.promptSentAt) return [];
+  const owned = [...Object.values(run.setup?.jobs ?? {}).flatMap(jobs => Object.values(jobs)),
+    ...Object.values(run.setup?.decoys ?? {})];
+  if (!owned.length && (!run.jobsHomeCreated || !run.promptSentAt)) return [];
   const directories = dir => fs.readdirSync(dir, { withFileTypes: true })
     .filter(entry => entry.isDirectory()).map(entry => path.join(dir, entry.name));
-  const jobs = directories(run.jobsHome).flatMap(directories)
-    .filter(dir => fs.existsSync(path.join(dir, 'job.json'))).sort();
-  run.cancellations = [];
-  for (const dir of jobs) {
+  const jobs = owned.length ? owned.map(job => ({ id: job.id, dir: path.resolve(run.jobsHome, job.jobDir) })) :
+    directories(run.jobsHome).flatMap(directories).filter(dir => fs.existsSync(path.join(dir, 'job.json'))).map(dir => ({ dir }));
+  jobs.sort((a, b) => a.dir.localeCompare(b.dir));
+  const receipts = [];
+  run.cancellations ??= [];
+  for (const { id, dir } of jobs) {
+    if (id && !fs.existsSync(dir)) {
+      const receipt = { jobId: id, status: 'gone' };
+      run.cancellations.push(receipt);
+      receipts.push(receipt);
+      continue;
+    }
     let job;
     try { job = readJson(path.join(dir, 'job.json')); } catch { /* Let cancel read a busy job. */ }
     if (['completed', 'failed', 'cancelled'].includes(job?.state)) continue;
-    const jobId = job?.id ?? path.basename(dir);
+    const jobId = id ?? job?.id ?? path.basename(dir);
     const receipt = { jobId, status: 'cancelled' };
     try {
       await execute(process.execPath, [path.join(run.pluginDir, 'scripts/companion.mjs'), 'cancel', jobId],
-        { env: { ...env, RELAY_JOBS_HOME: run.jobsHome }, timeout: 60000, encoding: 'utf8' });
+        // Its own process group: a Ctrl-C at the runner's terminal must not kill a cancel under way.
+        { cwd: run.workDir, env: { ...env, RELAY_JOBS_HOME: run.jobsHome }, timeout: cancelTimeout(env), encoding: 'utf8', detached: true });
     } catch (error) {
       receipt.status = 'failed';
       receipt.error = error.message;
     }
     run.cancellations.push(receipt);
+    receipts.push(receipt);
   }
-  return run.cancellations;
+  return receipts;
 }
 
 function projectFolders(workDir, configDir) {
@@ -197,10 +226,11 @@ export function unanalyzedRecords(run, message, readers, root = evidenceRoot(), 
 export function makeRecords(run, check, analysis, entries, readers, root = evidenceRoot()) {
   entries = (check.scope ?? readers.scopeToRun)(entries, run.runId);
   const span = readers.runSpan(entries, run.runId, check.marker);
+  if (check.commands) span.finishedAt = entries.findLast(entry => entry?.timestamp)?.timestamp ?? span.finishedAt;
   // A command-only scope need not contain a Live suite prompt.
   if (check.scope) span.startedAt ??= entries.find(entry => entry.timestamp)?.timestamp ?? null;
   const duration = span.startedAt && span.finishedAt ? (Date.parse(span.finishedAt) - Date.parse(span.startedAt)) / 1000 : null;
-  const completed = check.completed ? check.completed(entries) : Boolean(check.marker && readers.hasMarker(entries, check.marker));
+  const completed = check.completed ? check.completed(entries, run) : Boolean(check.marker && readers.hasMarker(entries, check.marker));
   const entrypoint = entries.find(entry => !entry.isSidechain && entry.entrypoint)?.entrypoint ?? null;
   const expected = (check.entrypoints ?? { terminal: ['cli'], t3: ['sdk-ts'] })[run.surface] ?? [];
   const accepted = expected.includes(entrypoint);
@@ -216,7 +246,8 @@ export function makeRecords(run, check, analysis, entries, readers, root = evide
       .filter(([, values]) => Array.isArray(values) && values.every(Number.isFinite)));
     return clean({ schema: 'relay.live-record/1', runId: run.runId, check: run.check, surface: run.surface,
       backend, model: typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]*(\/[A-Za-z0-9._:-]+)?$/.test(model) && !localPath.test(model) ? model : null,
-      relayVersion: result?.relayVersion ?? run.relayVersion, relayCommit: run.relayCommit ?? null,
+      relayVersion: result?.relayVersion ?? run.relayVersion,
+      relayCommit: result && Object.hasOwn(result, 'relayCommit') ? result.relayCommit : run.relayCommit ?? null,
       claudeCodeVersion: readers.claudeCodeVersionOf(entries), leadModel: readers.leadModelOf(entries),
       platform: run.platform ?? process.platform, startedAt: span.startedAt, finishedAt: span.finishedAt,
       durationSeconds: Number.isFinite(duration) ? duration : null, delivery: result?.delivery ?? null,
@@ -227,6 +258,12 @@ export function makeRecords(run, check, analysis, entries, readers, root = evide
 
 export function writeRecords(run, records, evidenceDir, recordsDir) {
   if (!run.promptSentAt) return null;
+  if (run.interrupted) for (const record of records) {
+    record.result = 'fail';
+    if (!record.reason?.startsWith('The run was interrupted.')) {
+      record.reason = 'The run was interrupted.' + (record.reason ? ` ${record.reason}` : '');
+    }
+  }
   const lines = records.map(row => JSON.stringify(row)).join('\n') + '\n';
   fs.mkdirSync(recordsDir, { recursive: true });
   const file = path.join(recordsDir, `${run.runId}.jsonl`);
@@ -273,7 +310,7 @@ export function copyEvidence(run, analysis, evidenceDir) {
         } });
       jobCopies.set(source, target);
     }
-    for (const file of new Set([run.transcript, ...analysis.evidence.transcripts].filter(Boolean))) {
+    for (const file of new Set([run.transcript, ...analysis.evidence.transcripts, ...(analysis.evidence.files ?? [])].filter(Boolean))) {
       if (!available(file)) continue;
       const relative = relativeInside(path.dirname(run.transcript), file);
       let target = relative === null ? null : path.join(session, relative);
@@ -330,6 +367,7 @@ export function copyEvidence(run, analysis, evidenceDir) {
     }
     fs.rmSync(backup, { recursive: true, force: true });
     return { transcript: paths.has(run.transcript) ? finalPath(paths.get(run.transcript)) : null,
+      files: Object.fromEntries([...paths].map(([source, target]) => [source, finalPath(target)])),
       jobsHome: finalPath(jobsHome), manifest: path.join(copy, 'manifest.json'), originalJobDirs: [...jobCopies.keys()] };
   } finally { fs.rmSync(staging, { recursive: true, force: true }); }
 }
@@ -398,7 +436,13 @@ export function analyzeRun(run, evidenceDir, registry, readers, options = {}) {
   run.promptSentAt ??= readers.runSpan(entries, run.runId, check.marker).startedAt ??
     (check.scope ? entries.find(entry => entry.timestamp)?.timestamp : null) ?? run.preparedAt;
   const input = { runId: run.runId, backends: run.backends, surface: run.surface, transcript,
-    jobsHome: path.resolve(jobsHome), relayVersion: run.relayVersion, evidenceDir };
+    jobsHome: path.resolve(jobsHome), relayVersion: run.relayVersion, evidenceDir, run, env, fromCopy: Boolean(options.fromCopy),
+    evidencePath: file => {
+      if (!options.fromCopy) return file;
+      const copied = run.copy?.files?.[file];
+      if (!copied) throw new Error('Cannot read command evidence: ENOENT.');
+      return copied;
+    } };
   const analysis = options.analysis ?? check.analyze(input);
   const records = makeRecords(run, check, analysis, allEntries, readers, path.dirname(path.dirname(evidenceDir)));
   if (!options.fromCopy) {

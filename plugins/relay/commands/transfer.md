@@ -2,9 +2,6 @@
 description: Transfer the current Claude Code session into a resumable Codex thread
 argument-hint: "[--source <claude-jsonl>]"
 disable-model-invocation: true
-allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" transfer "$ARGUMENTS"`
-
-Present the command output to the user exactly as returned. Preserve the Codex session ID and the `codex resume <session-id>` command.
+The relay module answers this command; it needs Claude Code 2.1.307 or later. If you read this, it did not load: say so and stop.

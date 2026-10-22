@@ -605,7 +605,7 @@ test("status lists jobs by directory read and reports one job's block", async ()
   const jobId = startJob(ctx, HEADER, "Listed job.\n");
   assert.equal(waitJob(ctx, jobId).status, 0);
   const list = companion(ctx, ["status"]);
-  assert.match(list.stdout, new RegExp(`${jobId}  completed  task  gpt-test/low`));
+  assert.match(list.stdout, new RegExp(`\\| ${jobId} +\\| completed +\\| task +\\| codex +\\| gpt-test/low +\\|`));
   const one = companion(ctx, ["status", jobId]);
   assert.match(one.stdout, /^state: completed$/m);
   assert.doesNotMatch(one.stdout, /Report for/);
@@ -637,7 +637,7 @@ test("SessionEnd leaves a running job alone", async () => {
   assert.equal(companion(ctx, ["cancel", jobId]).status, 0);
 });
 
-test("SessionStart run three times writes each export once", () => {
+test("SessionStart run three times exports only the session id once", () => {
   const envFile = path.join(makeTempDir(), "claude-env.sh");
   fs.writeFileSync(envFile, "export OTHER=1\n");
   for (let index = 0; index < 3; index += 1) {
@@ -650,8 +650,7 @@ test("SessionStart run three times writes each export once", () => {
   const lines = fs.readFileSync(envFile, "utf8").trim().split("\n");
   assert.deepEqual(lines, [
     "export OTHER=1",
-    "export RELAY_COMPANION_SESSION_ID='sess-2'",
-    "export RELAY_COMPANION_TRANSCRIPT_PATH='/tmp/t.jsonl'"
+    "export RELAY_COMPANION_SESSION_ID='sess-2'"
   ]);
 });
 

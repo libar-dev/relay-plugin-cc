@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { configDirectory, findTranscript } from './runs.mjs';
+import { cancelGrace, cancelTimeout, configDirectory, findTranscript } from './runs.mjs';
 
 const paneScript = fileURLToPath(new URL('../../smoke/pane.sh', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -30,8 +30,11 @@ export function claudeArgs({ pluginDir, probeDirs, sessionId, model }) {
     '--debug', '--session-id', sessionId, '--model', model];
 }
 
-export function paneStartArgs(ctx, name, sessionId) {
-  return ['start', name, ctx.workDir, '--env', `RELAY_JOBS_HOME=${ctx.jobsHome}`, '--', ...claudeArgs({ ...ctx, sessionId })];
+// The grace goes in explicitly: a tmux server that outlived an earlier run keeps that run's
+// environment, and the runner times a cancel by the grace the module in the pane reads.
+export function paneStartArgs(ctx, name, sessionId, env = process.env) {
+  return ['start', name, ctx.workDir, '--env', `RELAY_JOBS_HOME=${ctx.jobsHome}`,
+    '--env', `RELAY_JOBS_CANCEL_GRACE_MS=${cancelGrace(env)}`, '--', ...claudeArgs({ ...ctx, sessionId })];
 }
 
 function pane(args, input) {
@@ -55,7 +58,7 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
   try {
     started = true;
     let startup;
-    try { startup = drive(paneStartArgs(ctx, name, sessionId)); }
+    try { startup = drive(paneStartArgs(ctx, name, sessionId, env)); }
     catch (error) { startup = error.stdout; throw error; }
     finally {
       run.removedEnvironment = [...new Set(String(startup ?? '').split('\n')
@@ -108,7 +111,8 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
       }
       if (all) {
         const entries = (check.scope ?? readers.scopeToRun)(all, run.runId);
-        done = check.completed ? check.completed(entries) : Boolean(check.marker && screen.includes(check.marker) && readers.hasMarker(entries, check.marker));
+        done = check.commands ? readers.hasMarker(entries, check.marker) : check.completed ? check.completed(entries, run) :
+          Boolean(check.marker && screen.includes(check.marker) && readers.hasMarker(entries, check.marker));
         if (done) break;
       }
       if (Date.now() - lastUpdate >= 30000) {
@@ -116,6 +120,10 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
         lastUpdate = Date.now(); save();
       }
       await pause(2000);
+    }
+    if (done && check.commands) {
+      run.completed = false;
+      await runCommands(ctx, check, { run, save, readers, drive, pause, env, aborted: () => aborted });
     }
     run.completed = done;
     if (aborted) throw new Error('Interrupted.');
@@ -137,12 +145,61 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
           }
         }
       } finally {
-        run.interrupted = aborted;
+        run.interrupted ||= aborted;
         process.off('SIGINT', abort);
         process.off('SIGTERM', abort);
         process.off('SIGHUP', abort);
         save();
       }
     }
+  }
+}
+
+export function sessionEnvironment(env = process.env) {
+  // pane.sh owns this list; read its case patterns without executing the tmux driver.
+  const source = fs.readFileSync(paneScript, 'utf8');
+  const patterns = source.match(/^        (CLAUDECODE\|[A-Z_*|]+)\)$/m)?.[1].split('|');
+  if (!patterns) throw new Error('Cannot read the parent-session variable list in pane.sh.');
+  const removed = Object.keys(env).filter(key => patterns.some(pattern =>
+    pattern.endsWith('*') ? key.startsWith(pattern.slice(0, -1)) : key === pattern)).sort();
+  return { env: Object.fromEntries(Object.entries(env).filter(([key]) => !removed.includes(key))), removed };
+}
+
+export async function runCommands(ctx, check, { run, save, readers, drive = pane, pause = delay,
+  aborted = () => false, now = Date.now, env = process.env } = {}) {
+  const answers = () => {
+    try {
+      return readers.readTranscript(run.transcript).filter(entry => !entry.isSidechain &&
+        entry.type === 'system' && entry.subtype === 'local_command' && entry.commandRun).length;
+    } catch (error) {
+      if (String(error.message).startsWith('Invalid JSON at ')) return null;
+      throw error;
+    }
+  };
+  run.commands = [];
+  for (const command of check.commands(run)) {
+    if (aborted()) throw new Error('Interrupted.');
+    const readDeadline = now() + 5000;
+    let before = answers();
+    while (before === null && now() < readDeadline && !aborted()) {
+      await pause(250);
+      before = answers();
+    }
+    if (aborted()) throw new Error('Interrupted.');
+    if (before === null) throw new Error('Incomplete transcript before command send.');
+    run.commands.push({ text: command.text, sentAt: new Date(now()).toISOString() });
+    save();
+    drive(['send', run.pane, command.text]);
+    const timeout = /^\/relay:cancel(?:\s|$)/.test(command.text) ? Math.max(200000, cancelTimeout(env) + 20000) : 200000;
+    const deadline = now() + timeout;
+    let answered = false;
+    while (now() < deadline && !aborted()) {
+      fs.writeFileSync(path.join(ctx.evidenceDir, 'screen.txt'), drive(['read', run.pane, '2000']));
+      const count = answers();
+      if (count !== null && count > before) { answered = true; break; }
+      await pause(1000);
+    }
+    if (aborted()) throw new Error('Interrupted.');
+    if (!answered) throw new Error(`No answer to ${command.text} within ${timeout / 1000} seconds. Available evidence will be analyzed.`);
   }
 }

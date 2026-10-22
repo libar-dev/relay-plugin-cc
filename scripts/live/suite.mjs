@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { analyzeRun, cancelUnfinishedJobs, configDirectory, createRun, evidenceRoot, pluginCommit, pluginVersion, readJson,
@@ -19,6 +20,44 @@ node scripts/live/suite.mjs table [--records-dir DIR] [--out FILE] [--relay-vers
 `;
 
 export class UsageError extends Error {}
+
+function selectedBackends(check, backends) {
+  const selected = backends.filter(backend => !check.backends || check.backends.includes(backend));
+  if (!selected.length) throw new UsageError(`${check.id} does not apply to any selected backend.`);
+  return selected;
+}
+
+async function setupRun(check, ctx, dependencies) {
+  if (!check.setup) return;
+  try {
+    dependencies.signal?.throwIfAborted();
+    await check.setup(ctx, dependencies);
+    dependencies.signal?.throwIfAborted();
+  }
+  catch (error) {
+    ctx.run.setupFailed = true;
+    ctx.run.error = `Setup failed: ${error.message}`;
+    throw new Error(ctx.run.error);
+  } finally { ctx.save(); }
+}
+
+function interruptionGuard(run, save) {
+  const controller = new AbortController();
+  const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => {
+    const handler = () => {
+      if (!run.interrupted) console.error(`${signal}: stopping the run; its setup jobs are cancelled before the runner exits.`);
+      run.interrupted = true;
+      run.interruptedBy ??= signal;
+      save();
+      controller.abort(new Error(`Interrupted by ${run.interruptedBy}.`));
+    };
+    process.on(signal, handler);
+    return [signal, handler];
+  });
+  // The terminal driver still owns pane shutdown. This guard owns setup/headless cancellation
+  // and stays installed while cleanup runs, without passing its aborted signal to cancellation.
+  return { signal: controller.signal, close() { for (const [signal, handler] of handlers) process.off(signal, handler); } };
+}
 
 export function parseArgs(args, registry, backends) {
   if (args.includes('--help') || args.includes('-h')) return { help: true };
@@ -61,19 +100,23 @@ export function parseArgs(args, registry, backends) {
   if (command === 'run') {
     if (!positional.length) throw new UsageError('run requires at least one check or all.');
     if (positional.includes('all') && positional.length !== 1) throw new UsageError('all cannot be combined with check names.');
-    options.checks = positional[0] === 'all' ? registry.filter(check => check.surfaces.includes('terminal')).map(check => check.id) : positional;
+    options.all = positional[0] === 'all';
+    options.checks = options.all ? registry.filter(check => check.surfaces.includes('terminal')).map(check => check.id) : positional;
     if (new Set(options.checks).size !== options.checks.length) throw new UsageError('A check must not be repeated.');
     for (const id of options.checks) {
       const check = registry.find(item => item.id === id);
       if (!check) throw new UsageError(`Unknown check: ${id}`);
       if (!check.surfaces.includes('terminal')) throw new UsageError(`${id} does not support terminal.`);
+      if (!options.all) selectedBackends(check, options.backends);
     }
+    if (!options.all && options.checks.length === 1) options.backends = selectedBackends(registry.find(check => check.id === options.checks[0]), options.backends);
     if (options.checks.length > 1 && (options.workDir || options.jobsHome)) throw new UsageError('--work-dir and --jobs-home require a single check.');
   } else if (command === 'prepare') {
     if (positional.length !== 1) throw new UsageError('prepare requires one check.');
     if (!registry.some(check => check.id === positional[0])) throw new UsageError(`Unknown check: ${positional[0]}`);
     if (options.surface !== 't3' || !options.workDir) throw new UsageError('prepare requires --surface t3 and --work-dir DIR.');
     options.checkId = positional[0];
+    options.backends = selectedBackends(registry.find(check => check.id === options.checkId), options.backends);
   } else if (command === 'analyze') {
     if (positional.length !== 1) throw new UsageError('analyze requires one run id.');
     try { runDirectory('', positional[0]); } catch (error) { throw new UsageError(error.message); }
@@ -99,12 +142,32 @@ function requireWorkTree(workDir) {
   throw new UsageError(`--work-dir must already be inside a git work tree: ${workDir}`);
 }
 
+async function cleanupRun(run, evidenceDir, { env, warn, cancelJobs = cancelUnfinishedJobs }) {
+  let failed = false;
+  try {
+    const cancellations = await cancelJobs(run, { env });
+    for (const item of cancellations.filter(item => item.status === 'failed')) {
+      warn(`Could not cancel ${item.jobId}: ${item.error}`);
+      failed = true;
+    }
+  } catch (error) {
+    run.cancellationError = error.message;
+    warn(error.message);
+    failed = true;
+  } finally { writeJson(path.join(evidenceDir, 'run.json'), run); }
+  return failed;
+}
+
 export async function runChecks(options, registry, readers, { env = process.env, log = console.log,
   warn = console.error, driver = runTerminal, commitOf = pluginCommit, cancelJobs = cancelUnfinishedJobs } = {}) {
   if (options.workDir) requireWorkTree(options.workDir);
   let status = 0;
   for (const id of options.checks) {
     const check = registry.find(item => item.id === id);
+    if (options.all && check.backends && !options.backends.some(backend => check.backends.includes(backend))) {
+      log(`Skipping ${id}: does not apply to any selected backend.`);
+      continue;
+    }
     const pluginDir = fs.realpathSync(options.pluginDir);
     const relayVersion = pluginVersion(pluginDir);
     const workDir = options.workDir ?? fs.mkdtempSync('/tmp/relay-live-work-');
@@ -112,7 +175,7 @@ export async function runChecks(options, registry, readers, { env = process.env,
     if (!options.workDir) execFileSync('git', ['init', '--quiet', workDir]);
     fs.mkdirSync(jobsHome, { recursive: true });
     const { run, evidenceDir } = createRun(evidenceRoot(env), check, { surface: 'terminal',
-      backends: readers.BACKENDS.filter(backend => options.backends.includes(backend)), workDir: fs.realpathSync(workDir),
+      backends: selectedBackends(check, readers.BACKENDS.filter(backend => options.backends.includes(backend))), workDir: fs.realpathSync(workDir),
       jobsHome: fs.realpathSync(jobsHome), workDirCreated: !options.workDir, jobsHomeCreated: !options.jobsHome,
       pluginDir, relayVersion, relayCommit: commitOf(pluginDir), model: options.model,
       timeoutMinutes: options.timeoutMinutes ?? check.timeoutMinutes,
@@ -125,52 +188,66 @@ export async function runChecks(options, registry, readers, { env = process.env,
       model: run.model, timeoutMinutes: run.timeoutMinutes, run, save, readers,
       paneDriver: (input = ctx, selected = check, overrides = {}) => driver(input, selected,
         { run, save, readers, keep: options.keep, env, log, warn, ...overrides }) };
-    let analysis, sessionFailed = false;
+    const interruption = interruptionGuard(run, save);
+    let records;
     try {
-      if (check.runTerminal) {
-        analysis = await check.runTerminal(ctx);
-        // An override returning its analysis has completed its session work.
-        run.promptSentAt ??= run.preparedAt;
-        run.transcript ??= analysis?.evidence.transcripts[0] ?? null;
-      } else await driver(ctx, check, { run, save, readers, keep: options.keep, env, log, warn });
-    } catch (error) {
-      run.error = error.message;
-      sessionFailed = true;
-      status = 1;
-      warn(error.message);
-    } finally {
-      const after = commitOf(pluginDir);
-      if (run.relayCommit && after !== run.relayCommit) run.relayCommit = run.relayCommit.replace(/-dirty$/, '') + '-dirty';
-      if (run.promptSentAt && run.jobsHomeCreated && (sessionFailed || run.interrupted || run.completed === false)) {
-        try {
-          const cancellations = await cancelJobs(run, { env });
-          for (const item of cancellations.filter(item => item.status === 'failed')) {
-            warn(`Could not cancel ${item.jobId}: ${item.error}`);
-            status = 1;
-          }
-        } catch (error) {
-          run.cancellationError = error.message;
-          warn(error.message);
-          status = 1;
-        }
-      }
-      if (guard(run, evidenceDir, warn)) status = 1;
-      save();
-    }
-    if (run.promptSentAt) {
+      let analysis, sessionFailed = false;
       try {
-        const result = analyzeRun(run, evidenceDir, registry, readers, { recordsDir: options.recordsDir, analysis, env });
-        summaries(result, registry, log);
-        if (result.records.some(record => record.result !== 'pass')) status = 1;
+        await setupRun(check, ctx, { env, signal: interruption.signal });
+        interruption.signal.throwIfAborted();
+        if (check.runTerminal) {
+          analysis = await check.runTerminal(ctx, { env, signal: interruption.signal });
+          // An override returning its analysis has completed its session work.
+          run.promptSentAt ??= run.preparedAt;
+          run.transcript ??= analysis?.evidence.transcripts[0] ?? null;
+        } else await driver(ctx, check, { run, save, readers, keep: options.keep, env, log, warn });
+        interruption.signal.throwIfAborted();
       } catch (error) {
         run.error = error.message;
-        save();
-        warn(error.message);
+        sessionFailed = true;
         status = 1;
-        const records = unanalyzedRecords(run, error.message, readers, evidenceRoot(env));
-        summaries({ records, file: writeRecords(run, records, evidenceDir, options.recordsDir) }, registry, log);
+        warn(error.message);
+      } finally {
+        const after = commitOf(pluginDir);
+        if (run.relayCommit && after !== run.relayCommit) run.relayCommit = run.relayCommit.replace(/-dirty$/, '') + '-dirty';
+        if (guard(run, evidenceDir, warn)) status = 1;
+        save();
       }
-    } else status = 1;
+      if (!check.setup && run.promptSentAt && run.jobsHomeCreated &&
+        (sessionFailed || run.interrupted || run.completed === false)) {
+        if (await cleanupRun(run, evidenceDir, { env, warn, cancelJobs })) status = 1;
+      }
+      try {
+        if (run.promptSentAt) {
+          try {
+            const result = analyzeRun(run, evidenceDir, registry, readers, { recordsDir: options.recordsDir, analysis, env });
+            records = result.records;
+            summaries(result, registry, log);
+            if (result.records.some(record => record.result !== 'pass')) status = 1;
+          } catch (error) {
+            run.error = error.message;
+            save();
+            warn(error.message);
+            status = 1;
+            records = unanalyzedRecords(run, error.message, readers, evidenceRoot(env));
+            summaries({ records, file: writeRecords(run, records, evidenceDir, options.recordsDir) }, registry, log);
+          }
+        } else status = 1;
+      } finally {
+        if (check.setup && run.setup && (!run.setupFailed || run.interrupted)) {
+          if (await cleanupRun(run, evidenceDir, { env, warn, cancelJobs })) status = 1;
+        }
+      }
+    } finally {
+      try {
+        if (run.interrupted) {
+          status = 1;
+          // A signal during post-analysis cleanup must also invalidate the already written records.
+          if (records) writeRecords(run, records, evidenceDir, options.recordsDir);
+        }
+        save();
+      } finally { interruption.close(); }
+    }
     if (run.interrupted) break;
   }
   return status;
@@ -191,16 +268,36 @@ export async function main(args, registry, readers, dependencies = {}) {
       if (!check.surfaces.includes('t3')) throw new Error(`${check.id} does not support t3.`);
       requireWorkTree(options.workDir);
       const build = smokeInstall(options.workDir, env);
-      const { run, evidenceDir } = createRun(evidenceRoot(env), check, { surface: 't3', backends: options.backends, ...build });
+      const { run, evidenceDir } = createRun(evidenceRoot(env), check, { surface: 't3', backends: options.backends, ...build,
+        ...(check.setup ? { jobsHome: path.resolve(env.RELAY_JOBS_HOME || path.join(os.homedir(), '.relay-jobs')), jobsHomeCreated: false } : {}) });
+      const save = () => writeJson(path.join(evidenceDir, 'run.json'), run);
+      const interruption = interruptionGuard(run, save);
+      try {
+        await setupRun(check, { ...run, run, save, evidenceDir }, { env, signal: interruption.signal });
+      } finally {
+        try {
+          if (run.interrupted && run.setup) await cleanupRun(run, evidenceDir, { env, warn, cancelJobs: dependencies.cancelJobs });
+          save();
+        } finally { interruption.close(); }
+      }
       log(`${run.runId}\n${path.join(evidenceDir, 'prompt.txt')}\n---\n${fs.readFileSync(path.join(evidenceDir, 'prompt.txt'), 'utf8').replace(/\n$/, '')}`);
+      if (check.commands) log('---\nAfter the marker, send each line below as its own message, in order; wait until the thread is idle after each:\n' +
+        check.commands(run).map(command => command.text).join('\n'));
       return 0;
     }
     if (options.command === 'analyze') {
       const evidenceDir = runDirectory(evidenceRoot(env), options.runId);
       const run = readJson(path.join(evidenceDir, 'run.json'));
-      const result = analyzeRun(run, evidenceDir, registry, readers, { ...options, env });
-      summaries(result, registry, log);
-      return run.settingsChanged || result.records.some(record => record.result !== 'pass') ? 1 : 0;
+      let result, cleanupFailed = false;
+      try {
+        result = analyzeRun(run, evidenceDir, registry, readers, { ...options, env });
+        summaries(result, registry, log);
+      } finally {
+        if (!options.fromCopy && !run.setupFailed && run.setup) {
+          cleanupFailed = await cleanupRun(run, evidenceDir, { env, warn, cancelJobs: dependencies.cancelJobs });
+        }
+      }
+      return cleanupFailed || run.settingsChanged || result.records.some(record => record.result !== 'pass') ? 1 : 0;
     }
     return await runChecks(options, registry, readers, dependencies);
   } catch (error) {

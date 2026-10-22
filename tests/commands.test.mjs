@@ -70,12 +70,6 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /can still take extra focus text after the flags/i);
 });
 
-test("status renders the columns the status rows print, with no home column", () => {
-  const status = read("commands/status.md");
-  assert.match(status, /^- Render the job lines as one Markdown table: job id, state, kind, model\/effort, duration, summary, relay\./m);
-  assert.doesNotMatch(status, /, home,|Home holds|`home:`/);
-});
-
 test("continue is not exposed as a user-facing command", () => {
   const commandFiles = fs.readdirSync(path.join(PLUGIN_ROOT, "commands")).sort();
   assert.deepEqual(commandFiles, [
@@ -133,7 +127,6 @@ test("rescue turns --backend, --grok-home and --kimi-home into header lines; the
 });
 
 test("docs name the session, ZCode's default effort as the header does, and \"the job\" where the rename dropped the article", () => {
-  assert.match(read("commands/result.md"), /^- The state block: state, job, session, model, effort,/m);
   const defaults = "Without `--model` and `--effort`, Codex, Grok and Kimi use their configured defaults, and ZCode uses its selected default model at effort `high`, the plugin's default (ZCode's own is `max`), as a job header does.";
   for (const name of ["review", "adversarial-review"]) {
     assert.ok(read(`commands/${name}.md`).includes(defaults), name);
@@ -211,16 +204,15 @@ test("packaging keeps the public install names and attribution", () => {
   assert.match(notice, /OpenAI/);
 });
 
-test("transfer, result, and cancel commands are exposed as deterministic runtime entrypoints", () => {
-  const transfer = read("commands/transfer.md");
-  const result = read("commands/result.md");
-  const cancel = read("commands/cancel.md");
+// The module runs each of the four commands' companion subcommand itself; its Mod tests
+// (hooks/mod/register.test.ts) check the argv and the text.
+test("status, result, cancel and transfer are answered by the module's command.run hooks", () => {
+  const module = read("hooks/mod/register.js");
   const resultHandling = read("skills/result-handling/SKILL.md");
 
-  assert.match(transfer, /companion\.mjs" transfer "\$ARGUMENTS"/);
-  assert.match(transfer, /codex resume <session-id>/);
-  assert.match(result, /companion\.mjs" result "\$ARGUMENTS"/);
-  assert.match(cancel, /companion\.mjs" cancel "\$ARGUMENTS"/);
+  for (const name of ["status", "result", "cancel", "transfer"]) {
+    assert.match(module, new RegExp(`on\\("command\\.run", \\{ command: "relay:${name}" \\}, (?:async )?\\(\\$, e\\) => answerCommand\\(\\$, e, "${name}",`), name);
+  }
   assert.match(resultHandling, /do not turn a failed or incomplete job run into a Claude-side implementation attempt/i);
   assert.match(resultHandling, /if the job was never successfully invoked, do not generate a substitute answer at all/i);
 });
@@ -322,7 +314,7 @@ test("README carries the first hour, stop gate, Claude Code dependency and devel
   for (const source of [readme, internals]) {
     assert.ok(source.includes("The relay reads two things Claude Code does not publish as an interface: the agent transcript and the Workflow tool's run journal"));
     assert.match(source, /Claude Code 2\.1\.287 and 2\.1\.288/);
-    assert.match(source, /the `session\.send` event of the Mod API, so the floor is Claude Code 2\.1\.307/);
+    assert.match(source, /the `session\.send` and `command\.run` events of the Mod API, so the floor is Claude Code 2\.1\.307/);
     assert.match(source, /A Claude Code update can break it\./);
     assert.ok(source.includes("the job's `job.json` must hold the call's key as `relay.journalKey`"));
     assert.ok(source.includes("once another relay has adopted the job, its `relay.json` holds the binding"));
@@ -344,13 +336,23 @@ test("README carries the first hour, stop gate, Claude Code dependency and devel
 
 // Claude may run the reading and review commands itself; cancel and transfer stay the user's:
 // Claude cancels a job by sending its agent `cancel`, and transfer moves the user's own session.
-test("review, adversarial-review, status and result are model-invocable; cancel and transfer are not", () => {
+// The module answers status, result, cancel and transfer with a command.run hook, which a model's
+// Skill call never reaches, so they are the person's; their markdown body only runs when the
+// module did not load. A model reads jobs with `C status` and `C result` in Bash.
+test("review and adversarial-review are model-invocable; status, result, cancel and transfer are not and only say the module did not load", () => {
   const frontmatter = name => /^---\n([\s\S]*?)\n---\n/.exec(read(`commands/${name}.md`))[1];
   const userOnly = fs.readdirSync(path.join(PLUGIN_ROOT, "commands")).map(file => file.replace(/\.md$/, ""))
     .filter(name => /^disable-model-invocation:\s*true$/m.test(frontmatter(name))).sort();
-  assert.deepEqual(userOnly, ["cancel", "transfer"]);
-  for (const name of ["review", "adversarial-review", "status", "result"]) {
+  assert.deepEqual(userOnly, ["cancel", "result", "status", "transfer"]);
+  for (const name of ["review", "adversarial-review"]) {
     assert.match(frontmatter(name), /^description: .{40,}$/m, name);
+  }
+  for (const name of ["status", "result", "cancel", "transfer"]) {
+    const source = read(`commands/${name}.md`);
+    assert.equal(source.slice(source.indexOf("\n---\n") + 5), "\nThe relay module answers this command; it needs Claude Code 2.1.307 or later. If you read this, it did not load: say so and stop.\n", name);
+    assert.doesNotMatch(frontmatter(name), /allowed-tools/, name);
+    assert.match(frontmatter(name), /^description: .{40,}$/m, name);
+    assert.match(frontmatter(name), /^argument-hint: /m, name);
   }
   for (const name of ["review", "adversarial-review"]) {
     const source = read(`commands/${name}.md`);

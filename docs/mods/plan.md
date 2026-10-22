@@ -1,9 +1,10 @@
 # Relay and Claude Code Mods: the plan
 
-Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. Phase 1 and Phase 5's suite
-runner are done on the branch `release/3.0`, Phase 6's investigation is reported, and the later phases were
-reviewed in the light of each ([After Phase 1](#after-phase-1-what-held-and-what-changed),
+Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. Phase 1, Phase 5's suite
+runner and Phase 2 are done on the branch `release/3.0`, Phase 6's investigation is reported, and the later phases
+were reviewed in the light of each ([After Phase 1](#after-phase-1-what-held-and-what-changed),
 [After the suite runner](#after-the-suite-runner-what-held-and-what-changed),
+[After Phase 2](#after-phase-2-what-held-and-what-changed),
 [After Phase 6](#after-phase-6-what-held-and-what-changed)). Phases 1 to 5 ship together as relay 3.0.0
 ([release-3.0.md](release-3.0.md)); every decision taken on the way is in [decisions.md](decisions.md).
 It combines three independent plans in this directory:
@@ -197,38 +198,100 @@ What changed, and where:
 Phases 2 and 3 are unchanged. Their hooks go into the same `register.js`, and their Mod tests into
 `register.test.ts`.
 
-## Phase 2: commands that answer without a model turn (one PR)
+## Phase 2: commands that answer without a model turn (done, on `release/3.0`)
 
-`/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` start no model turn, cost no tokens and
-show the companion's output exactly. How long a command takes is the companion's time, not a turn's.
-`status` and `result` take under a second. `cancel` can take more than 10 seconds: it waits
-`RELAY_JOBS_CANCEL_GRACE_MS` (10 s) before it kills the worker. `transfer` waits up to two minutes for Codex's
-import (`lib/backends/codex/transfer.mjs:11`). Each handler's `$.process.run` timeout is set above its command's
-own deadline, at 60 s for `cancel` and 180 s for `transfer`, so the module never cuts off a cancel or a transfer
-that would have succeeded. Today `status.md` and `result.md` ask a model to render or repeat that
-output, and all four cost a turn. (`transfer` wasn't in the delegates' plans; it follows the same pattern of
-running the companion and showing its output.)
+What shipped:
 
-- Four `command.run` handlers on the plugin's own command names. Each runs the companion with argv (never a
-  shell) and returns `{ text }`. Either truncation flag, a timeout or a missing exit code becomes an error text,
-  never "no jobs". They run when the current turn ends, on every surface. `immediate` is a property of a command
-  the module registers itself; the 2.1.307 declarations make it read-only for any other command
-  (`CommandDescribeInput.immediate`). In the terminal and Desktop, the board (Phase 4) is how to see jobs during a
-  turn.
-- `renderJobList` (`lib/jobs/view.mjs:325`) prints the Markdown table that `status.md` currently asks the model to
-  build. It becomes the only human format, so `C status` in Bash prints it too.
-- `result` keeps `renderResultText` (`view.mjs:278`), because the guard's hand-back compares against it
-  (`relay-guard.mjs:346`, `:421`). Any change to how it reads goes there, so the hand-back and the command keep
-  one format.
-- **On the branch only:** each handler's `.catch` falls through to the markdown body, which first says "the relay
-  module did not answer this command". In the PR's last commit, `.catch` returns an error text instead. Each
-  markdown body then shrinks to one line ("The relay module answers this command. If you read this, it did not
-  load: say so and stop."), and the frontmatter keeps the name and description for the command picker.
+- Four `command.run` hooks in `hooks/mod/register.js`, on the plugin's own command names. Each runs the companion
+  with argv in the session's directory (`$.session.cwd()`), with a timeout above its command's own deadline: 30 s
+  for `status` and `result`, twice `RELAY_JOBS_CANCEL_GRACE_MS` plus 40 s for `cancel` (60 s at the default), 180 s
+  for `transfer`, which also gets `$.session.id()` as `RELAY_COMPANION_SESSION_ID`. A hook never calls `next`, and
+  each registration's `.catch` answers an error text, so the markdown body never runs while the module is loaded.
+  Truncation, a timeout, a missing exit code and empty output answer an error text that names the shell command,
+  never a partial list. A headless run exits with the companion's exit code (D35).
+- The answer (D31): the command as typed on the first line, then the companion's lines in a code block up to the
+  first line that is `---` or starts with `|`, then a job's report as Markdown or the job table as a table.
+- `renderJobList` prints a Markdown table, the only human format: job, state, kind, backend (every row), model/effort,
+  duration, summary, relay. `status` names `relay-version:` in its header (D37).
+- The four markdown bodies are one line, "The relay module answers this command; it needs Claude Code 2.1.307 or
+  later. If you read this, it did not load: say so and stop.", and the four are no longer model-invocable (D33).
+- `transfer` finds the session's transcript by its id (D34); the SessionStart hook stops exporting the transcript path.
+- No branch fallback (D32).
+- Tests: 19 Mod tests for the commands beside Phase 1's 7, Node goldens for the table, transfer's lookup.
+- Live suite: three checks (D36). `commands` runs `/relay:status`, `/relay:result` and `/relay:cancel` on jobs the
+  check's setup starts with the build's companion, beside a newer finished decoy and a second running job, in the
+  terminal and in T3. `transfer` runs `/relay:transfer` on Codex and finds this session in Codex's import ledger.
+  `headless` runs the commands in `claude -p` and requires `num_turns: 0`, the plugin path in the stream's init
+  event, and exit 4 for a running job. Checks may now name their backends, a setup and the commands to send.
 
-Acceptance: `claude plugin validate` passes. A Mod test per command checks argv, cwd and the text passed
-through, and covers truncation, timeout, busy (exit 4) and stderr. Node goldens cover the status table. In the
-live suite, each command shows its output with no model reply in the terminal and in T3. `claude -p
-"/relay:status" --output-format stream-json` reports `num_turns: 0`.
+Live results (the Fedora machine, Claude Code 2.1.308, 3.0.0-dev.3 at f9d0c35, Sonnet 5.5 lead; the records are in
+`docs/live/records/` and the table in [docs/live/capabilities.md](../live/capabilities.md)):
+
+| Check | Terminal | T3 Code |
+|---|---|---|
+| `commands` | answered in 0.6 to 0.7 s, cancelled in 1.0 to 5.4 s | answered in 0.1 s, cancelled in 0.3 to 3.3 s |
+| `transfer` (Codex) | imported in 0.9 s | imported in 0.3 s |
+| `headless` (`claude -p`) | `num_turns: 0`, 0.1 to 0.3 s; exit 4 for a running job | terminal only |
+
+Every record passed, on all four backends, 22 of 22. A terminal time runs from the runner's paste into the pane,
+which costs about half a second; a T3 time from the SDK's `enqueue` record. `steer-main` passed again in the
+terminal on the same build (2.4 to 4.7 s), since the module's `session.send` hook shares the file. The smoke kit
+passed on the same build (workflow `wf_da36d661-804`, then the plain fan-out, whose `status` named
+`relay-version: 3.0.0-dev.3 (f9d0c3526839)`). The PR's later commits change no plugin code.
+
+## After Phase 2: what held and what changed
+
+Assumptions that held:
+
+- A `command.run` hook answers the plugin's own markdown command and keeps its `relay:` name, with `num_turns: 0`
+  and no cost, in the terminal, in `claude -p` and in T3. T3 passes a slash command, sent as a thread's message, to
+  Claude Code as a command, arguments included.
+- `$.process.run` of the companion is quick: the answer comes 0.1 to 0.3 s after T3 hands the message over.
+- The hook's own budget (10 s) stops while a `$` call runs, so a 180 s transfer fits.
+
+What changed, and where:
+
+- **Both surfaces draw a command's text as Markdown** (D31). The terminal turned a state block followed by `---`
+  into a heading; T3 shows the text as the assistant's message, without line breaks. The answer puts the
+  companion's lines in a code block and leaves only the report and the job table to Markdown.
+- **Claude Code shows and records a plugin-answered command without its arguments** (`/relay:result`, not
+  `/relay:result <job>`), in the transcript too, though the hook gets them; prompt history does not record such a
+  command at all. The answer's first line is the command as typed, and the live checks read the arguments from it.
+- **A model's Skill call of a command never reaches `command.run`**: it expands the markdown body. With the body
+  reduced to one line, the four commands are the user's, and Claude reads jobs with `C status` and `C result` in
+  Bash (D33).
+- **The module's processes get Claude Code's environment, not `CLAUDE_ENV_FILE`'s**: transfer finds the session by
+  the id the module passes (D34).
+- **`claude -p` records `entrypoint: sdk-cli` only with the parent session's variables removed**, as `pane.sh start`
+  removes them; the `headless` check does the same.
+- **A table wider than the terminal**: at 100 columns Claude Code draws it as one block per job; at 200 columns a
+  table a few columns too wide wraps its right border onto the next line (the smoke kit's `--workflow` listing).
+  Readable either way; the module does not size the table to `presentation.columns`.
+- **A slash command cannot carry the run line** (D36): a command check's prompt carries it, and the commands follow
+  as the session's next messages, typed by the runner in the terminal and sent by the lead in T3 from the list
+  `prepare` prints. Both reviewers found that a check could pass on a module that dropped the arguments, or on an
+  older build in T3; the decoy jobs and the `relay-version:` line close both.
+
+The later phases, in this light:
+
+- **Phase 3.** Unchanged in substance. Its hooks join four `command.run` hooks in `register.js`, its tests 26 Mod
+  tests in `register.test.ts`; whichever of Phases 2 and 3 merges second rebases. A TaskStop check can use the new
+  check fields: `setup` to start a job without Claude where a relay is not the point, `backends`, and
+  `completed(entries, run)`. TaskStop's `PostToolUse` hook runs `companion cancel` in a command hook, where
+  `RELAY_JOBS_CANCEL_GRACE_MS` sets the wait as it does for `/relay:cancel`.
+- **Phase 4.** The board's Cancel runs the same `companion cancel` as `/relay:cancel` and should take its timeout
+  the same way (twice the grace and 40 s). `/relay:board` is a command the module registers itself, so it can be
+  `immediate` in the terminal; its live check can use the commands phase (type `/relay:board` after the marker),
+  but a command that opens a pane may record no `local_command` answer, which the phase waits for, so Phase 4 must
+  check what the transcript holds for it. The status line and the board read the companion's JSON, not the table.
+  When `--json` changes in place, the commands are unaffected: they show the human output, and a person who types
+  `/relay:status --json` sees the JSON in a code block.
+- **Phase 6.** Reported (PR #9); nothing here changes it. The commands run the companion directly, so the
+  forked Workflow relay it found (D53) does not touch them.
+- **The release.** `suite.mjs run all` now includes `commands`, `transfer` and `headless`. In T3, `commands` and
+  `transfer` are driven by the lead: the prompt, then each command `prepare` prints, as its own message. Every
+  `transfer` run imports a session into the user's Codex home. The README's capability table gains the three rows,
+  with `n/a` for `transfer` off Codex.
 
 ## Phase 3: spawn and stop like a Claude agent (one PR)
 
@@ -531,8 +594,8 @@ The funding principles ([funding.md](funding.md)) add no product feature. Four p
 The module's `session.send` hook works in T3: Phase 1's live check ran in a T3 thread on all four backends (see
 Phase 1). T3 loads a plugin installed at local scope in the thread's project directory, which is how an unreleased
 build is checked there without reaching other threads. A Monitor the lead arms does not start a new turn in a T3
-thread once its turn has ended, so a scripted T3 check is driven by messages to the thread. Phases 2 and 3 are
-expected to work in T3 too; Phase 2's live suite checks it. Phase 4 needs two things
+thread once its turn has ended, so a scripted T3 check is driven by messages to the thread. Phase 2's commands
+work in T3 (its live suite checked them there), and Phase 3 is expected to. Phase 4 needs two things
 from T3: it has to render the `ui_*` messages, and it has to attach a surface. The module refreshes the status
 line only while `$.session.surfaces()` is non-empty. [t3-code.md](t3-code.md) explains what relay would need from T3 and why relay complements T3's
 own delegates. It is the article to link from a post to the T3 community.

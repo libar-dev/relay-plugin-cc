@@ -100,6 +100,9 @@ const fs = require('node:fs'), path = require('node:path');
 const [mkt, dir, tempDirectory, commit, worktree] = process.argv.slice(2);
 const plugin = JSON.parse(fs.readFileSync(path.join(mkt, 'relay/.claude-plugin/plugin.json'), 'utf8'));
 if (plugin.name !== 'relay' || !plugin.version) throw new Error('Export is not a versioned relay plugin.');
+fs.writeFileSync(path.join(mkt, 'relay/.claude-plugin/build.json'), JSON.stringify({
+  commit: commit.slice(0, 12) + (worktree === 'true' ? '-dirty' : '')
+}, null, 2) + '\n');
 fs.writeFileSync(path.join(mkt, '.claude-plugin/marketplace.json'), JSON.stringify({
   name: 'relay-smoke', owner: { name: 'Relay smoke test' }, metadata: { version: plugin.version },
   plugins: [{ name: 'relay', version: plugin.version, source: './relay' }]
