@@ -133,6 +133,11 @@ export function buildLaunchRequest(values, options = {}) {
     throw new UsageError(`mode must be one of ${[...MODES.keys()].join(", ")}, not "${values.mode}".`);
   }
   backend = backendNamed(name);
+  // Without `backend:` a job runs on the default backend, whatever its model is called.
+  const family = values.backend == null && model ? BACKENDS.find(candidate => candidate !== backend && candidate.request.modelFamily?.test(model)) : null;
+  if (family) {
+    throw new UsageError(`model: ${model} is a ${family.label} model, and with no backend: the job runs on ${backend.label}. Name the backend: backend: ${family.name} (--backend ${family.name} for a review), or backend: ${backend.name} to send it to ${backend.label} as written.`);
+  }
   for (const candidate of BACKENDS) {
     for (const [key, field] of Object.entries(candidate.request.headerKeys)) {
       if (candidate !== backend && values[field] != null) throw new UsageError(`${key} is only valid with backend: ${candidate.name}.`);

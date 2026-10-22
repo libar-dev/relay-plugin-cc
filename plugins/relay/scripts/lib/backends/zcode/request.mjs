@@ -5,6 +5,7 @@ export const requestRules = {
   headerKeys: {},
   defaultSource: "use ZCode's default model, or effort high",
   defaultEffort: ZCODE_DEFAULT_EFFORT,
+  modelFamily: /^(?:[^/]+\/)*glm-/i,
   refusals: {
     mode: { write: ": it has no workspace sandbox, and its edit mode lets shell commands write anywhere. Use mode: yolo, or mode: read-only." },
     webSearch: "; use live or disabled."

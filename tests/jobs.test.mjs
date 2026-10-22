@@ -963,3 +963,12 @@ test("direct start accepts --fast and off omits serviceTier everywhere", () => {
     assert.equal(Object.hasOwn(request, "serviceTier"), false);
   }
 });
+
+test("a model of another backend's family with no backend: is refused before launch; an explicit backend sends it as written", () => {
+  for (const [model, backend] of [["glm-5.3", "zcode"], ["account:zai-individual-coding-plan/GLM-5.3-Flash", "zcode"], ["grok-4.7", "grok"], ["kimi-code/k3", "kimi"]]) {
+    assert.throws(() => buildLaunchRequest({ model, effort: "high" }), new RegExp(`with no backend: the job runs on Codex\\. Name the backend: backend: ${backend} \\(--backend ${backend} for a review\\), or backend: codex`), model);
+    assert.equal(buildLaunchRequest({ model, effort: "high", backend: "codex" }).model, model);
+  }
+  assert.equal(buildLaunchRequest({ model: "glm-5.3", effort: "high", backend: "zcode" }).backend, "zcode");
+  assert.equal(buildLaunchRequest({ model: "gpt-6-sol", effort: "high" }).backend, "codex");
+});
