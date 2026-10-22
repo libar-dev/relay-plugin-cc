@@ -70,7 +70,7 @@ $RELAY_JOBS_HOME (default ~/.relay-jobs) / <repo-slug> / <job-id> /
   worker.lease.d/         the worker lease: numbered records 1, 2, 3 ...
   relay.json              the current relay binding, once a second relay adopts the job
   relay-guard.json        the relay hook's state: its consecutive blocks and the last hand-back
-  relay-wake.json         a message was sent to the relay after its last wait returned
+  relay-wake.json         when a message was last sent to the job's relay
   relay-handbacks.jsonl   every result a relay handed back, appended and never rewritten
   relay-violations.jsonl  every relay violation, appended and never rewritten
 ```

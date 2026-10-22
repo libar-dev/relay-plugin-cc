@@ -45,6 +45,7 @@ function agentCommand(suffix) {
 // One relay tool call: PreToolUse hook (a process), then the tool runs with what the hook
 // allowed and rewrote. Returns the hook output and, for Bash, the command's result.
 async function relayCall(ctx, toolName, toolInput) {
+  if (toolName === "Bash") ctx.append(ctx.toolUse(toolInput.command));
   const hook = await runHookProcess(ctx, hookInput(ctx, "PreToolUse", { tool_name: toolName, tool_input: toolInput }));
   assert.equal(hook.status, 0, hook.stderr);
   const output = hook.json?.hookSpecificOutput;
@@ -56,6 +57,53 @@ async function relayCall(ctx, toolName, toolInput) {
     return { decision: "allow", input, result: runBash(ctx, input) };
   }
   return { decision: "allow", input };
+}
+
+for (const ended of [false, true]) {
+  test(`end to end: a message queued after the wait boundary wakes ${ended ? "a completed job continued by the guard" : "the running job's current wait"} at once`, async t => {
+    const ctx = relayContext("job", { turnMs: 60000 });
+    ctx.append(ctx.prompt(`model: gpt-test\neffort: low\n---\n${ended ? "[quick] " : ""}Wake test.`));
+    const started = await relayCall(ctx, "Bash", { command: agentCommand("start --from-relay") });
+    assert.equal(started.result.status, 0, started.result.stdout + started.result.stderr);
+    const jobId = /^job: (\S+)$/m.exec(started.result.stdout)[1];
+    t.after(() => companion(ctx, ["cancel", jobId]));
+    await waitFor(() => readJobJson(ctx, jobId).state === (ended ? "completed" : "running"));
+
+    const boundary = new Date(Date.now() - 1000).toISOString();
+    if (ended) {
+      const beforeBoundary = ctx.peerQueued("B: continue the job.");
+      beforeBoundary.timestamp = boundary;
+      ctx.append(beforeBoundary);
+    }
+    const command = `${RELAY_CMD} wait ${jobId} --timeout-seconds 540`;
+    ctx.append({ type: "api-request", timestamp: boundary }, ctx.toolUse(command));
+    // Queued messages enter the transcript only after the current tool calls return.
+    const pending = ctx.peerQueued("C: sent after the boundary.");
+    const woke = companion(ctx, ["wake", "--agent", ctx.agentId]);
+    assert.equal(woke.status, 0, woke.stderr);
+    assert.equal(woke.stdout, `wake: ${jobId}\n`);
+    const markerFile = path.join(jobDirOf(ctx, jobId), "relay-wake.json");
+    const marker = JSON.parse(fs.readFileSync(markerFile, "utf8"));
+    assert.ok(Date.parse(marker.at) > Date.parse(boundary));
+
+    const hook = await runHookProcess(ctx, hookInput(ctx, "PreToolUse", { tool_name: "Bash", tool_input: { command } }));
+    assert.equal(hook.status, 0, hook.stderr);
+    const input = hook.json.hookSpecificOutput.updatedInput;
+    assert.ok(input.command.endsWith(`--wake-after '${boundary}'`), input.command);
+    const start = Date.now();
+    const waited = { result: runBash(ctx, input) };
+    assert.ok(Date.now() - start < 2000, `wait took ${Date.now() - start} ms`);
+    assert.equal(stillRunning(waited), true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(markerFile, "utf8")), marker);
+    assert.ok(![...codexReceived(ctx).turns, ...codexReceived(ctx).steers].includes(pending.attachment.origin.body));
+
+    ctx.append(pending, { type: "api-request", timestamp: new Date().toISOString() }, ctx.toolUse(command));
+    const delivered = await runHookProcess(ctx, hookInput(ctx, "PreToolUse", { tool_name: "Bash", tool_input: { command } }));
+    assert.equal(delivered.json.hookSpecificOutput.permissionDecision, "allow");
+    const received = codexReceived(ctx);
+    assert.equal([...received.turns, ...received.steers].filter(text => text === "C: sent after the boundary.").length, 1);
+    if (ended) assert.ok(received.turns.includes("B: continue the job."));
+  });
 }
 
 test("end to end: prompt, messages before, during and after the run, and every hand-back are carried by code", async () => {

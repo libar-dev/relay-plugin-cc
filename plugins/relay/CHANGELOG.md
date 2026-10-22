@@ -14,7 +14,8 @@ Phase 1 of the Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)).
 - A `SendMessage` from another agent, such as an orchestrator subagent or a Workflow agent, now
   reaches the relay's job, while it runs and after it ended. The guard took only the main thread's
   messages; Claude Code marks another agent's as `peer`, and the guard dropped it without a record.
-  The Phase 1 live check found it.
+  The Phase 1 live check found it. A relay that lived through the update delivers the peer messages
+  it received before it, since none of them has a delivery record.
 - Needs Claude Code 2.1.307 or later, for the module's `session.send` event.
 
 ## 2.2.0 (2026-10-22)

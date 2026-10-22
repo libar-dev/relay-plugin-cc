@@ -162,7 +162,7 @@ export function relayContext(behavior = "job", options = {}) {
         CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT,
         ...(options.env ?? {})
       };
-  const base = { session_id: sessionId, transcript_path: mainTranscript, cwd: work, agent_id: agentId, agent_type: "relay:job", permission_mode: "auto" };
+  const base = { tool_use_id: randomUUID(), session_id: sessionId, transcript_path: mainTranscript, cwd: work, agent_id: agentId, agent_type: "relay:job", permission_mode: "auto" };
   if (options.workflow) {
     base.agent_transcript_path = shallow;
   }
@@ -226,8 +226,11 @@ export function relayContext(behavior = "job", options = {}) {
     userTurn(text) {
       return { parentUuid: null, isSidechain: true, agentId, type: "user", message: { role: "user", content: text }, uuid: randomUUID(), timestamp: new Date().toISOString() };
     },
-    toolUse(command) {
+    toolUse(command, toolUseId = randomUUID(), messageId = randomUUID()) {
+      base.tool_use_id = toolUseId;
       return fresh("bashToolUse", agentId, (entry) => {
+        entry.message.id = messageId;
+        entry.message.content[0].id = toolUseId;
         entry.message.content[0].input = { command };
       });
     },

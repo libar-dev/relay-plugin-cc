@@ -363,21 +363,33 @@ are addressed by id) and runs `companion wake --agent <id>`. It never refuses, r
 message, and an error in it leaves the send as it was.
 
 `wake` reads the relay pointer for that agent id and nothing else, since it runs on every message
-a session sends. When the agent is the job's current relay and the job has not ended, it writes
-`relay-wake.json` in the job directory. A relay's `wait` (the hook adds `--exit-zero-while-running`)
-looks for that file at every poll, once a second, and returns as a timeout would, with `still
-running: …`. The relay runs `wait` again, and the guard delivers the message at that call through
-the ledger above. The wake posts nothing, so a message still has one way to the job.
+a session sends. When the agent is the job's current relay, it writes `relay-wake.json`, with the
+time, in the job directory, also on a job that has ended: a message can continue it.
 
-The wait removes the marker whenever it returns. Every message queued before the wait returned
-enters the relay's conversation at that boundary, so the marker is spent. A message sent after the
-boundary, while the relay's model writes its next `wait` call, leaves a marker that makes that wait
-return at once. Comparing the marker with the time of the guard's last transcript read would miss
-it, because the message is not in the transcript yet when the guard reads it. A marker whose message
-is already in costs one extra wait call, and a marker ends at most one wait.
+A relay's `wait` returns on a marker that is newer than the boundary its tool call came after, and
+on no other. The boundary is where Claude Code last put queued messages into the relay's
+conversation, which it does only after every tool call of an assistant message has returned. The
+guard reads it from the relay's transcript at the `wait` call: the latest timestamp of the entries
+before the assistant message that holds the call. It passes it as `wait --wake-after <time>`. Every
+message queued before the boundary is in the conversation, and the guard delivers it at this call. A
+message queued after it, while the relay's model writes its `wait`, has a newer marker, and the wait
+returns at once, as a timeout would, with `still running: …`. The relay runs `wait` again, and the
+guard delivers the message at that call through the ledger above. The wake posts nothing, so a
+message still has one way to the job. When the guard cannot find the call in the transcript, the
+boundary is the guard's own time.
+
+Nothing removes a marker; a new wake moves its time forward. That matters in three cases a rule of
+"the wait takes the marker" got wrong. A `wait` left over from an earlier relay of the job (Claude
+Code killed, then a Workflow resume adopting the job) would take the current relay's marker and
+return to nobody. Two waits in one assistant message: the first would take the marker, and the
+second would run its whole bound before the boundary. A message queued just as the job ended, before
+a continue restarted it, would find no marker at all. A marker that only an earlier boundary covers
+costs one extra wait call; it cannot cause another, because the next call comes after a new boundary.
 
 The module draws nothing, so it runs wherever the plugin loads: the terminal, Desktop, `claude -p`
-and Agent SDK hosts.
+and Agent SDK hosts. Where it does not run, on a Claude Code below the 2.1.307 floor, a message
+waits for the relay's wait to end, up to 540 seconds. Its `session.send` hook waits for `wake`,
+about 80 ms, before the sender's `SendMessage` returns.
 
 ### The report
 

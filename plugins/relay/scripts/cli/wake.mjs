@@ -3,7 +3,6 @@ import { parseArgs } from "../lib/util/args.mjs";
 import { UsageError } from "../lib/util/errors.mjs";
 import { readRelayPointer } from "../lib/harness/relay.mjs";
 import { jobPaths, nowIso, readJob, writeJsonAtomic } from "../lib/jobs/store.mjs";
-import { isTerminalView, JobViewBusy, loadJobView } from "../lib/jobs/view.mjs";
 
 
 export function handleWake(argv) {
@@ -15,11 +14,6 @@ export function handleWake(argv) {
   if (!jobDir) return;
   const job = readJob(jobDir);
   if (!job || job.relay?.agentId !== agentId) return;
-  try {
-    if (isTerminalView(loadJobView(jobDir))) return;
-  } catch (error) {
-    if (!(error instanceof JobViewBusy)) return;
-  }
   try {
     writeJsonAtomic(jobPaths(jobDir).wake, { agentId, at: nowIso() });
   } catch (error) {

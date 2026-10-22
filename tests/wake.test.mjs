@@ -11,6 +11,7 @@ import { readRelayPointer, writeRelayPointer } from "../plugins/relay/scripts/li
 import { readProcessStartTime } from "../plugins/relay/scripts/lib/util/process.mjs";
 import { run } from "./support/helpers.mjs";
 
+const BEFORE = "2020-01-01T00:00:00.000Z";
 const STILL_RUNNING = "still running: not an error. Run the same wait again.";
 const BUSY_IMPORT = `--import=${new URL("./support/busy-view.mjs", import.meta.url).href}`;
 
@@ -45,7 +46,7 @@ function mark({ ctx, wake }) {
   return marker;
 }
 
-function relayWait({ ctx, jobId }, seconds, extra = []) {
+function relayWait({ ctx, jobId }, seconds, extra = ["--wake-after", BEFORE]) {
   return companion(ctx, ["wait", jobId, "--exit-zero-while-running", "--timeout-seconds", String(seconds), ...extra]);
 }
 
@@ -81,7 +82,7 @@ test("wake writes an agent and timestamp for the running job's current relay", a
 
 for (const scenario of [
   "unknown agent with no pointer", "pointer without jobDir", "gone job directory", "previous relay after adoption",
-  "completed job", "failed job", "cancelled job", "dead job", "missing job record", "unreadable job record", "missing jobs home"
+  "missing job record", "unreadable job record", "missing jobs home"
 ]) test(`wake writes nothing and exits zero for ${scenario}`, () => {
   const job = recorded();
   const { ctx, dir } = job;
@@ -92,10 +93,6 @@ for (const scenario of [
     writeJsonAtomic(jobPaths(dir).relay, { agentId: "new-relay", previous: [{ agentId: ctx.agentId }] });
     assert.equal(readJob(dir).relay.agentId, "new-relay");
   }
-  if (["completed job", "failed job", "cancelled job"].includes(scenario)) {
-    writeJob(dir, { ...readJob(dir), state: scenario.split(" ")[0] });
-  }
-  if (scenario === "dead job") writeJob(dir, { ...readJob(dir), worker: { pid: 1073741823 } });
   if (scenario === "missing job record") fs.rmSync(jobPaths(dir).job);
   if (scenario === "unreadable job record") fs.writeFileSync(jobPaths(dir).job, "{broken");
   if (scenario === "missing jobs home") ctx.env.RELAY_JOBS_HOME = path.join(ctx.home, "missing-home");
@@ -109,6 +106,20 @@ for (const scenario of [
   assert.equal(readRelayPointer(ctx.env, ctx.agentId).jobDir ?? null,
     scenario === "unknown agent with no pointer" || scenario === "pointer without jobDir" || scenario === "missing jobs home" ? null : dir);
 });
+
+for (const state of ["completed", "failed", "cancelled", "dead"]) {
+  test(`wake writes a marker for the current relay on a ${state} job`, () => {
+    const job = recorded(state === "dead" ? "running" : state);
+    if (state === "dead") writeJob(job.dir, { ...readJob(job.dir), worker: { pid: 1073741823 } });
+    const before = Date.now();
+    const result = companion(job.ctx, ["wake", "--agent", job.ctx.agentId]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `wake: ${job.jobId}\n`);
+    const marker = JSON.parse(fs.readFileSync(job.wake, "utf8"));
+    assert.equal(marker.agentId, job.ctx.agentId);
+    assert.ok(Date.parse(marker.at) >= before && Date.parse(marker.at) <= Date.now());
+  });
+}
 
 test("wake without --agent exits one and writes nothing", () => {
   const { ctx } = recorded();
@@ -130,7 +141,7 @@ test("wake writes a marker when the job view is busy", () => {
   assert.equal(JSON.parse(fs.readFileSync(job.wake, "utf8")).agentId, job.ctx.agentId);
 });
 
-test("relay wait returns within two seconds of a marker written while it waits and consumes it", async t => {
+test("relay wait returns within two seconds of a marker written while it waits and leaves it in place", async t => {
   const job = await running(t);
   const ready = path.join(job.ctx.work, "wait-ready");
   const preload = path.join(job.ctx.work, "wait-ready.mjs");
@@ -143,7 +154,7 @@ fs.readFileSync = function (file, ...args) {
 };
 `);
   const child = spawn(process.execPath, ["--import", preload, COMPANION, "wait", job.jobId,
-    "--exit-zero-while-running", "--timeout-seconds", "60"], { cwd: job.ctx.work, env: job.ctx.env });
+    "--exit-zero-while-running", "--wake-after", BEFORE, "--timeout-seconds", "60"], { cwd: job.ctx.work, env: job.ctx.env });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
@@ -162,25 +173,58 @@ fs.readFileSync = function (file, ...args) {
   })]);
   assert.ok(Date.now() - sent < 2000, `wake took ${Date.now() - sent} ms`);
   assertRunning(result);
-  assert.equal(fs.existsSync(job.wake), false);
+  assert.equal(fs.existsSync(job.wake), true);
   assert.equal(readJobJson(job.ctx, job.jobId).state, "running");
 });
 
-test("a marker present before relay wait returns at once, and the next wait reaches its timeout", async t => {
-  const job = await running(t);
-  mark(job);
-  const start = Date.now();
-  const early = relayWait(job, 60);
-  assert.ok(Date.now() - start < 1500, `early wait took ${Date.now() - start} ms`);
-  assertRunning(early);
-  assert.equal(fs.existsSync(job.wake), false);
-  const nextStart = Date.now();
-  const next = relayWait(job, 0.3);
-  assert.ok(Date.now() - nextStart >= 300, "the next wait returned before its timeout");
-  assertRunning(next);
-  assert.equal(fs.existsSync(job.wake), false);
-  assert.equal(readJobJson(job.ctx, job.jobId).state, "running");
-});
+for (const scenario of ["two waits in one assistant message", "a leftover wait and the current relay's wait"]) {
+  test(`${scenario} both return at once on the same marker without consuming it`, () => {
+    const job = recorded();
+    const marker = mark(job);
+    for (let call = 0; call < 2; call += 1) {
+      const start = Date.now();
+      assertRunning(relayWait(job, 60));
+      assert.ok(Date.now() - start < 1500, `wait took ${Date.now() - start} ms`);
+      assert.deepEqual(JSON.parse(fs.readFileSync(job.wake, "utf8")), marker);
+    }
+  });
+}
+
+for (const at of [BEFORE, "2019-12-31T23:59:59.999Z", "not-a-date"]) {
+  test(`wait reaches its timeout and keeps a marker at ${at}`, () => {
+    const job = recorded();
+    const marker = { agentId: job.ctx.agentId, at };
+    writeJsonAtomic(job.wake, marker);
+    const start = Date.now();
+    assertRunning(relayWait(job, 0.3));
+    assert.ok(Date.now() - start >= 300, "wait returned before its timeout");
+    assert.deepEqual(JSON.parse(fs.readFileSync(job.wake, "utf8")), marker);
+  });
+}
+
+for (const extra of [[], ["--exit-zero-while-running"]]) {
+  test(`wait without --wake-after ignores a marker at timeout ${extra.join(" ")}`, () => {
+    const job = recorded();
+    const marker = mark(job);
+    const start = Date.now();
+    const result = companion(job.ctx, ["wait", job.jobId, "--timeout-seconds", "0.3", ...extra]);
+    assert.ok(Date.now() - start >= 300, "wait returned before its timeout");
+    if (extra.length) assertRunning(result);
+    else assert.equal(result.status, 4, result.stdout + result.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(job.wake, "utf8")), marker);
+  });
+}
+
+for (const value of ["not-a-date", ""]) {
+  test(`wait rejects an invalid --wake-after ${JSON.stringify(value)}`, () => {
+    const job = recorded();
+    const marker = mark(job);
+    const result = relayWait(job, 60, ["--wake-after", value]);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /--wake-after must be an ISO date/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(job.wake, "utf8")), marker);
+  });
+}
 
 test("wait without the relay flag ignores a marker and leaves it on disk at timeout", async t => {
   const job = await running(t);
@@ -194,17 +238,17 @@ test("wait without the relay flag ignores a marker and leaves it on disk at time
   assert.deepEqual(JSON.parse(fs.readFileSync(job.wake, "utf8")), marker);
 });
 
-test("relay wait consumes a marker when its timeout is already reached", () => {
+test("relay wait keeps a marker when its timeout is already reached", () => {
   const job = recorded();
   mark(job);
   const result = relayWait(job, 0);
   assertRunning(result);
-  assert.equal(fs.existsSync(job.wake), false);
+  assert.equal(fs.existsSync(job.wake), true);
   assert.equal(readJob(job.dir).state, "running");
 });
 
 for (const [state, code] of [["completed", 0], ["failed", 3], ["cancelled", 5], ["dead", 3]]) {
-  test(`relay wait consumes a marker on a ${state} job and preserves its exit code`, () => {
+  test(`relay wait keeps a marker on a ${state} job and preserves its exit code`, () => {
     const job = recorded(state === "dead" ? "running" : state);
     if (state === "completed") fs.writeFileSync(jobPaths(job.dir).report, "Done.\n");
     if (state === "dead") writeJob(job.dir, { ...readJob(job.dir), worker: { pid: 1073741823 } });
@@ -213,21 +257,21 @@ for (const [state, code] of [["completed", 0], ["failed", 3], ["cancelled", 5], 
     assert.equal(result.status, code, result.stdout + result.stderr);
     assert.match(result.stdout, new RegExp(`^state: ${state}\\n`));
     assert.doesNotMatch(result.stdout, /still running:/);
-    assert.equal(fs.existsSync(job.wake), false);
+    assert.equal(fs.existsSync(job.wake), true);
   });
 }
 
-test("relay wait consumes a marker and exits zero on a busy view", () => {
+test("relay wait keeps a marker and exits zero on a busy view", () => {
   const job = recorded();
   mark(job);
   const start = Date.now();
   const result = run(process.execPath, [COMPANION, "wait", job.jobId,
-    "--exit-zero-while-running", "--timeout-seconds", "60"], {
+    "--exit-zero-while-running", "--wake-after", BEFORE, "--timeout-seconds", "60"], {
     cwd: job.ctx.work, env: { ...job.ctx.env, NODE_OPTIONS: BUSY_IMPORT, RELAY_TEST_BUSY_JOB: job.dir }
   });
   assert.ok(Date.now() - start < 1500);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(result.stdout, `${STILL_RUNNING}\n`);
   assert.match(result.stderr, /is busy/);
-  assert.equal(fs.existsSync(job.wake), false);
+  assert.equal(fs.existsSync(job.wake), true);
 });

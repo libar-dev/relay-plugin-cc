@@ -1,8 +1,7 @@
 import { parseCommandInput, envNumber, sleep, outputResult } from "./shared.mjs";
 import { default as process } from "node:process";
-import fs from "node:fs";
 import { resumeDeadJobOnce } from "../lib/worker/recovery.mjs";
-import { findJobDir, jobPaths } from "../lib/jobs/store.mjs";
+import { findJobDir, jobPaths, readJsonOrNull } from "../lib/jobs/store.mjs";
 import { UsageError } from "../lib/jobs/request.mjs";
 import { EXIT, exitCodeFor, isTerminalView, JobViewBusy, jobViewJson, loadJobView, renderJobBlock, renderJobWithReport } from "../lib/jobs/view.mjs";
 
@@ -21,9 +20,13 @@ const STILL_RUNNING_LINE = "still running: not an error. Run the same wait again
 
 export async function handleWait(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["timeout-seconds"],
+    valueOptions: ["timeout-seconds", "wake-after"],
     booleanOptions: ["json", "auto-resume", "state-only", "exit-zero-while-running"]
   });
+  const wakeAfter = options["wake-after"] == null ? null : Date.parse(options["wake-after"]);
+  if (wakeAfter !== null && !Number.isFinite(wakeAfter)) {
+    throw new UsageError("--wake-after must be an ISO date.");
+  }
   const jobDir = findJobDir(positionals[0]);
   const wake = jobPaths(jobDir).wake;
   const timeoutSeconds = options["timeout-seconds"] != null ? Number(options["timeout-seconds"]) : DEFAULT_WAIT_TIMEOUT_SECONDS;
@@ -51,12 +54,10 @@ export async function handleWait(argv) {
       view = read();
     }
     if ((view && isTerminalView(view)) || Date.now() >= deadline) break;
-    if (options["exit-zero-while-running"] && fs.existsSync(wake)) break;
+    if (wakeAfter !== null && Date.parse(readJsonOrNull(wake)?.at) > wakeAfter) break;
     await sleep(Math.max(10, Math.min(busy ? 20 : pollMs, deadline - Date.now())));
     view = read();
   }
-  // Each relay wait return lets queued messages enter its conversation.
-  if (options["exit-zero-while-running"]) fs.rmSync(wake, { force: true });
   if (!view) {
     // Still busy at the deadline: it is at work, as a job that still runs is.
     if (options["exit-zero-while-running"]) process.stdout.write(`${STILL_RUNNING_LINE}\n`);

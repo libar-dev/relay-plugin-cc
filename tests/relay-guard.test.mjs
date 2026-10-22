@@ -176,6 +176,44 @@ test("a half-written last line is left for the next check; a broken line elsewhe
   assert.deepEqual(parseRelayTranscript(`${good}{"type":"attach\n${JSON.stringify(ctx.queued("x"))}\n`).problems, ["line 2 is not JSON"]);
 });
 
+test("the wake boundary precedes the whole assistant message, including both tool uses", () => {
+  const ctx = relayContext();
+  const first = ctx.toolUse("wait", "wait-first", "same-message");
+  const second = ctx.toolUse("wait", "wait-second", "same-message");
+  const result = realEntry("bashToolResult");
+  result.timestamp = "2026-10-22T05:58:00.000Z";
+  const queued = ctx.peerQueued("A message at the boundary.");
+  queued.timestamp = "2026-10-22T05:58:01.000Z";
+  const request = { type: "api-request", timestamp: "2026-10-22T05:58:02.000Z" };
+  const thinking = { type: "assistant", timestamp: "2026-10-22T05:58:03.000Z", message: { id: "same-message", content: [{ type: "thinking", thinking: "Wait again." }] } };
+  const hook = { type: "attachment", timestamp: "2026-10-22T05:58:04.000Z", attachment: { type: "hook_success" } };
+  const entries = [ctx.prompt(PROMPT), result, queued, request, thinking, first, hook, second];
+  for (const id of ["wait-first", "wait-second"]) {
+    assert.equal(parseRelayTranscript(transcriptText(entries), id).wakeAfter, request.timestamp);
+  }
+  // Timestamp order need not match file order; the latest prior timestamp is the boundary.
+  queued.timestamp = "2026-10-22T05:58:02.500Z";
+  assert.equal(parseRelayTranscript(transcriptText(entries), "wait-second").wakeAfter, queued.timestamp);
+});
+
+test("a tool use without a message id uses the entries before that entry as its wake boundary", () => {
+  const ctx = relayContext();
+  const tool = ctx.toolUse("wait");
+  delete tool.message.id;
+  const before = { type: "api-request", timestamp: "2026-10-22T05:58:02.000Z" };
+  assert.equal(parseRelayTranscript(transcriptText([before, tool]), ctx.base.tool_use_id).wakeAfter, before.timestamp);
+});
+
+test("a missing tool use or a boundary without timestamps falls back to the current time", () => {
+  const ctx = relayContext();
+  const tool = ctx.toolUse("wait");
+  for (const [entries, id] of [[[tool], ctx.base.tool_use_id], [[ctx.prompt(PROMPT), tool], "missing-tool"]]) {
+    const before = Date.now();
+    const at = Date.parse(parseRelayTranscript(transcriptText(entries), id).wakeAfter);
+    assert.ok(at >= before && at <= Date.now() && Date.now() - at < 1000);
+  }
+});
+
 // ---------------------------------------------------------------------------------------
 
 test("start --from-relay is rewritten to carry the transcript and agent id, and Codex gets the prompt byte for byte", async () => {
@@ -206,9 +244,35 @@ test("start --from-relay is rewritten to carry the transcript and agent id, and 
 test("the relay's wait is rewritten to 540 s on its own job, with a 600 s Bash timeout", async () => {
   const ctx = relayContext("job", { turnMs: 200 });
   const jobId = await startedRelay(ctx, QUICK);
+  const boundary = "2026-10-22T05:58:02.000Z";
+  ctx.append({ type: "api-request", timestamp: boundary }, ctx.toolUse(`${RELAY_CMD} wait ${jobId} --timeout-seconds 240`));
   const input = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 240` }));
   assert.equal(input.timeout, 600000);
-  assert.ok(input.command.endsWith(`wait '${jobId}' --auto-resume --exit-zero-while-running --timeout-seconds 540`), input.command);
+  assert.ok(input.command.endsWith(`wait '${jobId}' --auto-resume --exit-zero-while-running --timeout-seconds 540 --wake-after '${boundary}'`), input.command);
+});
+
+test("the guard gives two waits in one assistant message the same wake boundary", async () => {
+  const ctx = relayContext("job", { turnMs: 200 });
+  const jobId = await startedRelay(ctx, QUICK);
+  const command = `${RELAY_CMD} wait ${jobId}`;
+  const boundary = "2026-10-22T05:58:02.000Z";
+  const first = ctx.toolUse(command, "wait-first", "same-message");
+  const second = ctx.toolUse(command, "wait-second", "same-message");
+  ctx.append({ type: "api-request", timestamp: boundary }, first,
+    { type: "attachment", timestamp: "2026-10-22T05:58:03.000Z", attachment: { type: "hook_success" } }, second);
+  for (const tool_use_id of ["wait-first", "wait-second"]) {
+    const hook = await handleRelayHook(hookInput(ctx, "PreToolUse", { tool_name: "Bash", tool_input: { command }, tool_use_id }), ctx.env);
+    assert.ok(updated(hook).command.endsWith(`--wake-after '${boundary}'`), updated(hook).command);
+  }
+});
+
+test("the guard uses the current time when its tool use id is absent from the transcript", async () => {
+  const ctx = relayContext("job", { turnMs: 200 });
+  const jobId = await startedRelay(ctx, QUICK);
+  const before = Date.now();
+  const input = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId}` }));
+  const at = Date.parse(/--wake-after '([^']+)'/.exec(input.command)?.[1]);
+  assert.ok(at >= before && at <= Date.now() && Date.now() - at < 1000, input.command);
 });
 
 // ---------------------------------------------------------------------------------------
@@ -616,7 +680,7 @@ test("Codex gets the unframed brief; the return is the state block, held by Suba
   assert.match(running.reason, new RegExp(`wait ${jobId} --timeout-seconds 540`));
   // wait and result are rewritten with --state-only: the relay never sees the report.
   const waitInput = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` }));
-  assert.ok(waitInput.command.endsWith(`wait '${jobId}' --auto-resume --exit-zero-while-running --timeout-seconds 540 --state-only`), waitInput.command);
+  assert.match(waitInput.command, /wait '[^']+' --auto-resume --exit-zero-while-running --timeout-seconds 540 --wake-after '[^']+' --state-only$/);
   assert.equal(waitJob(ctx, jobId).status, 0);
   assert.deepEqual(codexReceived(ctx).turns, [WORKFLOW_BRIEF]);
   const report = fs.readFileSync(path.join(jobDirOf(ctx, jobId), "report.md"), "utf8");
@@ -1078,7 +1142,7 @@ test("a relay started over in the same run with the call's key takes over the ru
 
   // The new relay's commands are rewritten to that job, state-only; a second start is denied.
   const waitInput = updated(await pre(retry, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` }));
-  assert.ok(waitInput.command.endsWith(`wait '${jobId}' --auto-resume --exit-zero-while-running --timeout-seconds 540 --state-only`), waitInput.command);
+  assert.match(waitInput.command, /wait '[^']+' --auto-resume --exit-zero-while-running --timeout-seconds 540 --wake-after '[^']+' --state-only$/);
   assert.equal(decision(await pre(retry, "Bash", { command: `${RELAY_CMD} start --from-relay` })), "deny");
   assert.equal((await stop(retry, "I am done."))?.decision, "block", "the job still runs");
   assert.equal(waitJob(retry, jobId).status, 0);
