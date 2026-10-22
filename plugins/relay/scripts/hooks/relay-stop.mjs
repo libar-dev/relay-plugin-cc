@@ -61,9 +61,17 @@ export function handleTaskStop(input, env = process.env) {
       result = { error };
     }
     let violationReason;
-    if (result.status === 0 && !result.error && !result.signal) {
+    // A zero exit says the job has ended, not that the cancel ended it: the job may have finished on its own
+    // between the state read above and the cancel, which then only records a no-op.
+    const exited = !result.error && !result.signal;
+    const endedAs = exited && result.status === 0 ? readJob(jobDir)?.state : null;
+    const withWorker = exited && (result.status === 0 ||
+      (result.status === 4 && [result.stdout, result.stderr].some(text => text?.includes("the cancel is with its"))));
+    if (endedAs === "cancelled") {
       context = `TaskStop stopped the relay:job agent ${agentId}, and the relay hook cancelled its job ${job.id}:\n${result.stdout}`;
-    } else if (result.status === 4 && !result.error && !result.signal && [result.stdout, result.stderr].some(text => text?.includes("the cancel is with its"))) {
+    } else if (TERMINAL_STATES.has(endedAs)) {
+      context = `TaskStop stopped the relay:job agent ${agentId}. Its job ${job.id} ended (${endedAs}) before the cancel reached it; nothing was cancelled:\n${result.stdout}`;
+    } else if (withWorker) {
       violationReason = `TaskStop stopped the relay, and the cancel had not ended the job: ${oneLine(result.stderr)}`;
       context = `TaskStop stopped the relay:job agent ${agentId}. The relay hook asked its job ${job.id} to cancel, and the job has not ended yet:\n${result.stdout}${result.stderr}\nCheck it with: node "${COMPANION}" status ${job.id}`;
     } else {

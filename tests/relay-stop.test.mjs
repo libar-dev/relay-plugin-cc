@@ -348,6 +348,20 @@ for (const [grace, timeout] of [[undefined, 60000], ["", 60000], ["25000", 90000
   });
 }
 
+test("TaskStop does not claim a cancel when the job ended on its own before the cancel reached it", t => {
+  const { ctx, dir, jobId } = recorded();
+  const mocked = t.mock.method(childProcess, "spawnSync", () => {
+    // The worker finishes between the hook's read and the cancel, which then records only a no-op.
+    writeJob(dir, { ...readJob(dir), state: "completed", completedAt: new Date().toISOString() });
+    return { status: 0, stdout: "state: completed\ncancel: already completed\n", stderr: "" };
+  });
+  syncBuiltinESMExports();
+  t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+  const output = handleTaskStop(input(ctx), ctx.env);
+  assert.equal(context(output), `TaskStop stopped the relay:job agent ${ctx.agentId}. Its job ${jobId} ended (completed) before the cancel reached it; nothing was cancelled:\nstate: completed\ncancel: already completed\n`);
+  assert.equal(fs.existsSync(path.join(dir, "relay-violations.jsonl")), false);
+});
+
 test("hooks.json registers the TaskStop command with its timeout and description", () => {
   const hooks = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, "hooks/hooks.json"), "utf8"));
   assert.deepEqual(hooks.hooks.PostToolUse, [{ matcher: "TaskStop", hooks: [{ type: "command",
