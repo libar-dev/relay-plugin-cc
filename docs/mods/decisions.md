@@ -657,7 +657,8 @@ No hook carries a typed line's recipient: at Enter, `session.send`, `prompt.subm
 `session.receive` do not fire; `prompt.change {clear}` does, naming neither the view nor the agent. So a line typed
 while the relay waits reaches the job at the relay's next tool call: when its wait returns, at most 540 s, or when
 the job ends, and then as a continue. One typed after the hand-back or after an interrupt arrives at once. The docs
-say so. A prototype measured the follow-up once: a pass-through `ui.render` hook on the `AbovePrompt` band reads the
+say so. Claude Code 2.1.309 (23 October) drops a finished agent from the footer's list within about 15 s, so
+the after-hand-back route exists on 2.1.308 only; a continue then goes through `SendMessage` or `C continue`. A prototype measured the follow-up once: a pass-through `ui.render` hook on the `AbovePrompt` band reads the
 view in force (`e.props.view.agentId`) and re-runs on every switch, and a `prompt.change {clear}` hook that woke the
 viewed relay ended its wait 0.19 s after Enter, with the typed entry in the transcript before the relay's next call.
 It changes `register.js`, so it comes after Phase 4's PR 2, with measurements of stale views, rapid switches and
@@ -672,6 +673,7 @@ and leaves the runner alone. Per backend it types into three relays' views: B, t
 itself, labelled as such, to prove the real `human` entry reaches the steer path; C, interrupted with one Esc at the
 view's prompt and redirected by the next line; A last, typed while its job runs and again after its hand-back, in a
 view held open throughout, since Claude Code drops a finished agent from the footer's list unless its view is open.
-Each A's job is sized by its backend's place, so it still runs when the check reaches it. The check judges by the
+Each A's job is sized by its backend's place, so it still runs when the check reaches it. Where Claude Code
+offers no route after the hand-back (2.1.309), A2 is recorded as a limit with the version, not judged. The check judges by the
 ledger, the inbox and the job's attempts, never by the report's wording, counts each task notification once, and
 uses no Esc but C's: Esc at a running relay's prompt stops it, and Esc in the main view interrupts the lead.

@@ -207,7 +207,8 @@ What worked in Phase 1:
   the `AbovePrompt` band and to a `Pane`, and none to `$.ui.status`. Measured for the band: opening an agent's view
   and going back re-run its hook with the agent's id and with none, and a hook that passes draws nothing.
 - The footer's agent list shows five agent rows under `main`, then `↓ N more`; the list scrolls as the cursor moves.
-  A finished agent leaves the list unless its view is open, where it stays as `idle`. Under load (several sessions
+  A finished agent leaves the list unless its view is open, where it stays as `idle` (2.1.308); on 2.1.309 it leaves
+  within about 15 s either way, so nothing can be typed to it after its hand-back. Under load (several sessions
   and their jobs) a key's effect can take more than 250 ms to draw: a script polls the screen for it and never
   sends a key twice.
 - Keys in the terminal: from the main prompt, `Down` moves into the agent list and `Up` from `main` gives the prompt

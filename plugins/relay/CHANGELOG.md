@@ -118,7 +118,7 @@ Messages typed into a relay's own view (a fix found by the Desktop and CLI passe
   any message: steered while the job runs, a new turn once it has ended, and `cancel` cancels the job.
   No hook names a typed line's recipient, so there is no wake: a line typed while the relay waits
   reaches the job at the relay's next step, at most nine minutes later, or as a new turn when the job
-  ends first. A line typed after the hand-back arrives at once. A relay that lives through the update
+  ends first. A line typed after the hand-back arrives at once (Claude Code 2.1.308; from 2.1.309 a finished agent leaves the footer's list, so there is no view to type into, and a continue goes through Claude's `SendMessage` or `C continue`). A relay that lives through the update
   delivers the lines it received before, since none of them has a delivery record.
 - A line typed right after Esc interrupted the relay in its view resumes the relay and reaches the job
   at once, steering it while it runs.

@@ -419,7 +419,9 @@ had passed it on. What shipped (D100 to D104):
   The exact compare accepts one code fence around the whole result, with no tag or a plain one (in the e2e suite's
   first full run a relay sent the result fenced nine times and was let go after eight blocks).
 - No wake: no hook names a typed line's recipient, so it reaches the job at the relay's next call, at most 540 s
-  later, or as a continue when the job ends first. A line typed after a hand-back or an interrupt arrives at once.
+  later, or as a continue when the job ends first. A line typed after an interrupt arrives at once, and so does one
+  typed after a hand-back on Claude Code 2.1.308; 2.1.309 drops a finished agent from the footer's list, so that
+  route is gone and a continue goes through Claude.
 - The live check `typed` (terminal only) types into three relays per backend: unassisted (in a view held open
   through the hand-back), with a hand-made wake, and after an interrupt. It passed on all four backends in one run.
 

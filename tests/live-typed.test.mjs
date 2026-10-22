@@ -512,10 +512,12 @@ test('typed evidence copy replays after the original transcripts and jobs are re
   assert.deepEqual(typed.analyze({ ...input, transcript: run.copy.transcript, jobsHome: run.copy.jobsHome }).results, analysis.results);
 });
 
-function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['codex'], afterA2 = () => {}, queuedA1 } = {}) {
+function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['codex'], afterA2 = () => {}, queuedA1,
+  a2Route, claudeCodeVersion = '2.1.308' } = {}) {
   const { dir, input } = setup(t), calls = [];
   const interjection = queuedA1?.action === 'interject-queued';
   const main = readers.readTranscript(input.transcript);
+  main[0].version = claudeCodeVersion;
   for (const backend of backends.filter(value => ['grok', 'zcode'].includes(value))) {
     const replace = text => text.replaceAll('codex', backend).replaceAll(readers.MODELS.codex, readers.MODELS[backend]);
     for (const file of readers.filesUnder(dir, file => file.includes('codex'))) {
@@ -538,6 +540,12 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
     for (const row of main) if (row.message?.content?.includes?.(`<task-id>agent-a-${backend}</task-id>`)) row.timestamp = shift(row.timestamp);
     const job = json(path.join(jobDir, 'job.json'));
     const handbacks = readers.readTranscript(path.join(jobDir, 'relay-handbacks.jsonl'));
+    if (a2Route && i === 0) {
+      for (let index = main.length - 1; index >= 0; index--) {
+        if (main[index].message?.content?.includes?.(`<task-id>agent-a-${backend}</task-id>`) &&
+            Date.parse(main[index].timestamp) >= Date.parse(handbacks[1].at)) main.splice(index, 1);
+      }
+    }
     const relayFile = path.join(dir, `transcript/subagents/agent-a-${backend}.jsonl`);
     const relay = shift(readers.readTranscript(relayFile));
     const ledger = ['A1', 'A2'].map(line => {
@@ -647,7 +655,9 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
         else {
           let idle = fs.readFileSync(path.join(fixture, 'screen-a-idle.txt'), 'utf8');
           if (failure === 'unfocused-a-prompt') idle = idle.replace('  ◯ main', '❯ ◯ main');
-          screens.splice(9, 0, screens[8], failure === 'lost-a-view' ? screens[0] : idle, screens[8]);
+          if (a2Route && backend === backends[0]) screens.splice(9, screens.length, screens[8],
+            ...json(path.join(fixture, 'screens-a-no-route.json'))[a2Route]);
+          else screens.splice(9, 0, screens[8], idle, screens[8]);
           time = Math.max(time, Date.parse('2026-10-22T10:00:45Z') + saved[backend].offset - saved[backend].queuedOffset);
           if (failure === 'a-completed') write(path.join(saved[backend].jobDir, 'job.json'), saved[backend].job);
         }
@@ -788,7 +798,7 @@ test('typed terminal finishes every B and C before visiting each backend A witho
   assert.equal(calls.filter(call => call.includes('Escape')).length, 2);
 });
 
-for (const failure of ['lost-a-view', 'unfocused-a-prompt']) test(`typed terminal saves the screen and fails before A2 without retries: ${failure}`, async t => {
+for (const failure of ['unfocused-a-prompt']) test(`typed terminal saves the screen and fails before A2 without retries: ${failure}`, async t => {
   const { ctx, dependencies, calls, dir } = terminal(t, { failure });
   await assert.rejects(typed.runTerminal(ctx, dependencies), /Navigation: expected typed-a-codex's focused prompt before A2/);
   assert.equal(ctx.run.completed, false);
@@ -797,11 +807,76 @@ for (const failure of ['lost-a-view', 'unfocused-a-prompt']) test(`typed termina
   const files = fs.readdirSync(dir).filter(file => file.startsWith('typed-typed-a-codex-A2-'));
   assert.deepEqual(files.sort(), ['typed-typed-a-codex-A2-10.txt', 'typed-typed-a-codex-A2-9.txt']);
   const screen = fs.readFileSync(path.join(dir, files.find(file => file.endsWith('-10.txt'))), 'utf8');
-  if (failure === 'lost-a-view') assert.equal(screen.includes('Message @typed-a-'), false);
-  else assert.match(screen, /❯ ◯ main/);
+  assert.match(screen, /❯ ◯ main/);
   const lastRead = calls.findLastIndex(call => call[0] === 'read');
   assert.ok(calls.slice(lastRead + 1).every(call => ['cancel', 'stop'].includes(call[0])));
   assert.deepEqual(calls.at(-1), ['stop', 'fixture-pane']);
+});
+
+for (const a2Route of ['main', 'closed', 'return']) test(`typed terminal records no A2 route after the held view disappears and continues: ${a2Route}`, async t => {
+  const { ctx, dependencies, calls, dir } = terminal(t, {
+    a2Route, claudeCodeVersion: '2.1.309', backends: ['codex', 'kimi'], pendingB: false, pendingC: false
+  });
+  const result = await typed.runTerminal(ctx, dependencies);
+  assert.deepEqual(result.results.map(row => [row.result, row.reason]), [['pass', null], ['pass', null]]);
+  const limit = ctx.run.typed.codex.a2;
+  assert.deepEqual(limit, { route: 'none', claudeCodeVersion: '2.1.309',
+    reason: "typed-a-codex's view prompt disappeared after the hand-back; screen saved in typed-typed-a-codex-A2-10.txt." });
+  assert.deepEqual(json(path.join(dir, 'run.json')).typed.codex.a2, limit);
+  assert.deepEqual(result.details[0].a2, limit);
+  assert.equal(ctx.run.typed.codex.A2, undefined);
+  assert.equal(fs.existsSync(path.join(dir, A, 'inbox/relay/entry-A2-codex.json')), false);
+  assert.deepEqual(calls.filter(call => call[0] === 'send').map(call => call[2]), [
+    ['codex', 'B1'], ['kimi', 'B1'], ['codex', 'C1'], ['kimi', 'C1'],
+    ['codex', 'A1'], ['kimi', 'A1'], ['kimi', 'A2']
+  ].map(([backend, line]) => typedLine('synthetic-run', backend, line)));
+  const a1 = calls.findIndex(call => call[0] === 'send' && call[2] === typedLine('synthetic-run', 'codex', 'A1'));
+  const nextVisit = calls.findIndex((call, i) => i > a1 && call[0] === 'send');
+  const keys = calls.slice(a1 + 1, nextVisit).filter(call => call[0] === 'keys').map(call => call[2]);
+  assert.deepEqual(keys, [...(a2Route === 'return' ? ['Down', 'Enter', 'Up'] : []),
+    'Down', 'Down', 'Down', 'Enter', 'Up', 'Up', 'Up']);
+  assert.equal(fs.readFileSync(path.join(dir, 'typed-typed-a-codex-A2-10.txt'), 'utf8'),
+    json(path.join(fixture, 'screens-a-no-route.json'))[a2Route][0]);
+  assert.deepEqual(result.results[0].timings.a2Seconds, []);
+  assert.equal(result.details[1].a2.kind, 'continue');
+  const replay = typed.analyze({ ...ctx, backends: ctx.run.backends });
+  assert.deepEqual(replay.results, result.results);
+  const records = makeRecords({ ...ctx.run, check: 'typed' }, typed, replay,
+    readers.readTranscript(ctx.transcript), readers, dir);
+  for (const row of [result.results[0], records[0]]) {
+    assert.match(typed.cell(row), /after the hand-back: no route in Claude Code 2\.1\.309/);
+    assert.doesNotMatch(typed.cell(row), /after the hand-back: a new turn/);
+  }
+  for (const line of ['A1', 'B1', 'C1']) {
+    const file = `jobs/repo/job-${line[0].toLowerCase()}-codex/inbox/outcomes/msg-${line}-codex.json`;
+    const original = json(path.join(dir, file));
+    edit(dir, file, outcome => { outcome.action = 'wrong'; });
+    assert.equal(typed.analyze(ctx).results[0].result, 'fail', `${line} is still judged`);
+    write(path.join(dir, file), original);
+  }
+});
+
+test('typed terminal still fails when returning to main after the A2 route disappears', async t => {
+  const { ctx, dependencies, calls } = terminal(t, { a2Route: 'bad-return', claudeCodeVersion: '2.1.309' });
+  const sleep = dependencies.sleep;
+  dependencies.sleep = async ms => { await sleep(ms === 200 ? 500 : ms); };
+  await assert.rejects(typed.runTerminal(ctx, dependencies), /Navigation: expected a selected footer row/);
+  assert.equal(ctx.run.completed, false);
+  assert.equal(ctx.run.typed.codex.a2.route, 'none');
+  assert.equal(calls.filter(call => call[0] === 'send').length, 3);
+  assert.equal(calls.filter(call => call.includes('Escape')).length, 1);
+  assert.match(typed.analyze(ctx).results[0].reason, /Navigation:/);
+});
+
+test('typed terminal still requires and judges A2 when the held view stays in Claude Code 2.1.308', async t => {
+  const { ctx, dependencies, dir } = terminal(t);
+  const result = await typed.runTerminal(ctx, dependencies);
+  assert.equal(result.results[0].result, 'pass');
+  assert.equal(result.details[0].a2.kind, 'continue');
+  assert.equal(ctx.run.typed.codex.a2, undefined);
+  assert.match(typed.cell(result.results[0]), /after the hand-back: a new turn/);
+  edit(dir, 'run.json', run => { delete run.typed.codex.A2; });
+  assert.equal(typed.analyze(ctx).results[0].reason, 'Missing typing receipt for A2.');
 });
 
 test('typed terminal refuses A1 if its job ended during the earlier B and C visits', async t => {

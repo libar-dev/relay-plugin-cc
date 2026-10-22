@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { analyzeBackends, formatSeconds, hasMarker, inboxMessages, lastActiveAttempt, LIMIT_SECONDS, oneRelay,
+import { analyzeBackends, claudeCodeVersionOf, formatSeconds, hasMarker, inboxMessages, lastActiveAttempt, LIMIT_SECONDS, oneRelay,
   readJson, readJob, readTranscript, recordsFor, relayJob, requireBackend, requireVersion,
   scopeToRun, STEER_DELIVERY, textContent, transcriptCalls } from '../lib/evidence.mjs';
 import { pane } from '../lib/terminal.mjs';
@@ -180,8 +180,8 @@ function cleanupWarnings(analysis, run) {
 
 function footer(screen) {
   const rows = screen.split('\n').flatMap(line => {
-    const match = line.match(/^\s*(❯?)\s*([●◯○])\s+(\S+)/u);
-    return match ? [{ name: match[3], viewed: match[2] === '●', selected: Boolean(match[1]), idle: /\bidle\s*$/.test(line) }] : [];
+    const match = line.match(/^\s*(❯?)\s*([●⏺◯○])\s+(\S+)/u);
+    return match ? [{ name: match[3], viewed: ['●', '⏺'].includes(match[2]), selected: Boolean(match[1]), idle: /\bidle\s*$/.test(line) }] : [];
   });
   const main = rows.findLastIndex(row => row.name === 'main');
   return main < 0 ? [] : rows.slice(main);
@@ -261,15 +261,26 @@ export async function typeInView(ctx, name, text, { agentCount, drive = pane, sl
     await followup.ready();
     text = followup.text;
     const idleBy = now() + 30000;
+    let noRoute = false;
     while (true) {
       const value = screen();
+      if (!viewPrompt(value) && followup.noRoute) {
+        followup.noRoute(`${name}'s view prompt disappeared after the hand-back; screen saved in ${screenFile}.`);
+        // A closed footer leaves only main; Left would open the session manager.
+        if (prompt('main')(value) || (!footer(value).length && value.includes('← for agents') &&
+            /^\s*❯\s*$/m.test(value) && !value.includes('Message @'))) return;
+        noRoute = true;
+        break;
+      }
       verify(value, prompt(name), `${name}'s focused prompt before A2`);
       if (footer(value).some(row => row.name === name && row.viewed && row.idle)) break;
       verify(value, () => now() < idleBy, `${name}'s idle row within 30 seconds`);
       await sleep(Math.min(1000, idleBy - now()));
     }
-    check(); followup.beforeSend(); await send();
-    await followup.delivered();
+    if (!noRoute) {
+      check(); followup.beforeSend(); await send();
+      await followup.delivered();
+    }
   }
   const returning = await key('Down', value => cursor(value) !== null, 'a selected footer row');
   await walk(returning, 'Up', selected('main'), 'selector on main');
@@ -437,6 +448,10 @@ export default {
             handback(item.A, item.a, entries(), delivered.postedAt);
           },
           beforeSend: () => receipt(item, 'A2'),
+          noRoute: reason => {
+            run.typed[item.backend].a2 = { route: 'none', claudeCodeVersion: claudeCodeVersionOf(entries()), reason };
+            ctx.save();
+          },
           delivered: async () => {
             await waitFor(() => ledgerPending(item, 'A2'), now() + 60000, `${item.a.name}-A2-ledger`);
             item.a2 = await waitDelivery(item, 'A2');
@@ -444,6 +459,7 @@ export default {
         });
       }
       for (const item of jobs) {
+        if (run.typed[item.backend].a2?.route === 'none') continue;
         const diagnostic = await waitFor(() => handbackPending(item, item.a2.postedAt), Date.parse(item.a2.at) + 120000,
           `${item.a.name}-A2-handback`, false);
         if (diagnostic) { run.typed[item.backend].A2.settleError = diagnostic; ctx.save(); }
@@ -536,7 +552,8 @@ export default {
       const receipt = run.typed?.[backend];
       for (const line of ['A2', 'B1', 'C1']) if (receipt?.[line]?.settleError) throw new Error(receipt[line].settleError);
       const a1 = delivery(input, A, receipt?.A1, 'A1', backend);
-      const a2 = delivery(input, A, receipt?.A2, 'A2', backend);
+      const noRoute = receipt?.a2?.route === 'none';
+      const a2 = noRoute ? receipt.a2 : delivery(input, A, receipt?.A2, 'A2', backend);
       const b1 = delivery(input, B, receipt?.B1, 'B1', backend);
       const c1 = delivery(input, C, receipt?.C1, 'C1', backend);
       const stop = notices(entries, c).find(notice => notice.text.includes('was stopped by user</summary>'));
@@ -548,27 +565,38 @@ export default {
           C.job.attempts.some(attempt => attempt.state === 'cancelled' && !(afterCheck && Date.parse(attempt.endedAt) >= cleanup))) {
         throw new Error(`${c.name}'s job was cancelled before cleanup.`);
       }
-      const before = { ...A, job: { ...A.job, attempts: A.job.attempts.filter(attempt => Date.parse(attempt.startedAt) < Date.parse(receipt.A2.sentAt)) } };
-      // The first hand-back must be after A1, and before the idle-view send resumes the relay.
-      const prior = readTranscript(path.join(A.jobDir, 'relay-handbacks.jsonl')).filter(item => Date.parse(item.at) < Date.parse(receipt.A2.sentAt));
-      const previous = prior.at(-1), active = before.job.attempts.at(-1);
-      if (previous?.agentId !== a.agentId || previous.state !== 'completed' || previous.attempts !== before.job.attempts.length ||
-          !(Date.parse(previous.at) >= Date.parse(a1.postedAt)) || active?.state !== 'completed' ||
-          !(Date.parse(active.endedAt) <= Date.parse(previous.at)) || !notices(entries, a).some(notice =>
-            notice.text.includes('<status>completed</status>') && Date.parse(notice.at) >= Date.parse(previous.at) && Date.parse(notice.at) < Date.parse(receipt.A2.sentAt))) {
-        throw new Error('A2 was not typed after the A1 hand-back.');
+      if (noRoute) {
+        if (receipt.A2 || a2.claudeCodeVersion !== claudeCodeVersionOf(entries) || !a2.reason) {
+          throw new Error('Invalid A2 no-route limit.');
+        }
+        handback(A, a, entries, a1.postedAt);
+      } else {
+        const before = { ...A, job: { ...A.job, attempts: A.job.attempts.filter(attempt => Date.parse(attempt.startedAt) < Date.parse(receipt.A2.sentAt)) } };
+        // The first hand-back must be after A1, and before the idle-view send resumes the relay.
+        const prior = readTranscript(path.join(A.jobDir, 'relay-handbacks.jsonl')).filter(item => Date.parse(item.at) < Date.parse(receipt.A2.sentAt));
+        const previous = prior.at(-1), active = before.job.attempts.at(-1);
+        if (previous?.agentId !== a.agentId || previous.state !== 'completed' || previous.attempts !== before.job.attempts.length ||
+            !(Date.parse(previous.at) >= Date.parse(a1.postedAt)) || active?.state !== 'completed' ||
+            !(Date.parse(active.endedAt) <= Date.parse(previous.at)) || !notices(entries, a).some(notice =>
+              notice.text.includes('<status>completed</status>') && Date.parse(notice.at) >= Date.parse(previous.at) && Date.parse(notice.at) < Date.parse(receipt.A2.sentAt))) {
+          throw new Error('A2 was not typed after the A1 hand-back.');
+        }
+        handback(A, a, entries, a2.postedAt);
       }
-      handback(A, a, entries, a2.postedAt);
-      Object.assign(row, { a1, a2, b1, c1, assistance: 'manual-wake', delivery: `${a1.kind}; assisted-steer:${b1.delivery}; interrupt-steer:${c1.delivery}` });
-      row.timings = { a1Seconds: [a1.seconds], a2Seconds: [a2.seconds], b1WakeSeconds: [b1.seconds], c1Seconds: [c1.seconds] };
+      Object.assign(row, { a1, a2, b1, c1, assistance: 'manual-wake', delivery: `${a1.kind}; ${noRoute ? 'a2:none; ' : ''}assisted-steer:${b1.delivery}; interrupt-steer:${c1.delivery}` });
+      row.timings = { a1Seconds: [a1.seconds], a2Seconds: noRoute ? [] : [a2.seconds], b1WakeSeconds: [b1.seconds], c1Seconds: [c1.seconds] };
     });
-    analysis.results.forEach((row, i) => { row.delivery = analysis.details[i].delivery ?? null; });
+    analysis.results.forEach((row, i) => {
+      row.delivery = analysis.details[i].delivery ?? null;
+      if (analysis.details[i].a2?.route === 'none') row.a2 = analysis.details[i].a2;
+    });
     cleanupWarnings(analysis, readJson(path.join(input.evidenceDir, 'run.json')));
     return analysis;
   },
   cell(record) {
     return `typed while it runs: at the relay's next call (${formatSeconds(record.timings.a1Seconds ?? [])}, a ${record.delivery?.split(';')[0] ?? 'continue'}); ` +
-      `after the hand-back: a new turn in ${formatSeconds(record.timings.a2Seconds ?? [])}; ` +
+      (record.delivery?.includes('a2:none') ? `after the hand-back: no route in Claude Code ${record.a2?.claudeCodeVersion ?? record.claudeCodeVersion}; ` :
+        `after the hand-back: a new turn in ${formatSeconds(record.timings.a2Seconds ?? [])}; `) +
       `woken by hand: a steer in ${formatSeconds(record.timings.b1WakeSeconds ?? [])}${record.delivery?.includes('assisted-steer:next-turn') ? ' (next turn)' : ''}; ` +
       `typed after an interrupt: a steer in ${formatSeconds(record.timings.c1Seconds ?? [])}${record.delivery?.endsWith('interrupt-steer:next-turn') ? ' (next turn)' : ''}` +
       (record.reason ? `; ${record.reason}` : '');
