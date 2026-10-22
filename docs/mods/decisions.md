@@ -333,8 +333,9 @@ agent id, or with `companion cancel`. Reopen if Claude Code adds a TaskStop for 
 
 ### D43. The TaskStop hook waits for the cancel and tells the caller (Phase 3 thread)
 
-The hook runs `companion cancel` and waits for it (hook timeout 60 s, above cancel's 10 s grace and its process
-sweep), then returns the cancelled job's block as the hook's `additionalContext`, which the caller reads beside
+The hook runs `companion cancel` and waits for it, as long as `/relay:cancel` would (twice
+`RELAY_JOBS_CANCEL_GRACE_MS` and 40 s, 60 s at the default; the hook's own timeout is 600 s), then returns the
+cancelled job's block as the hook's `additionalContext`, which the caller reads beside
 the TaskStop result. Measured: Codex and Kimi jobs were `cancelled` 0.2 s and 0.4 s after the call. A cancel that
 fails, or that leaves a newer worker still running (exit 4), is told to the caller with the command to retry,
 and recorded as a relay violation, so `status` and `result` show it. Rejected: running the cancel detached (an

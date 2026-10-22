@@ -159,7 +159,8 @@ for (const scenario of ["cancel still running on stdout", "cancel still running 
       assert.equal(options.cwd, process.cwd());
       assert.equal(options.env.RELAY_JOBS_HOME, ctx.home);
       assert.equal(options.encoding, "utf8");
-      assert.equal(options.timeout, 55000);
+      // The relay fixture sets its own grace; the bound is twice it and 40 s.
+      assert.equal(options.timeout, 2 * Number(ctx.env.RELAY_JOBS_CANCEL_GRACE_MS ?? 10000) + 40000);
       return results[scenario];
     });
     syncBuiltinESMExports();
@@ -330,10 +331,27 @@ test("TaskStop script exits zero without stdout on bad JSON and non-TaskStop inp
   assert.deepEqual(diskTree(ctx.home), before);
 });
 
+for (const [grace, timeout] of [[undefined, 60000], ["", 60000], ["25000", 90000], ["0", 40000], ["1000000", 590000], ["soon", 60000]]) {
+  test(`TaskStop gives cancel the /relay:cancel bound for grace ${JSON.stringify(grace)}`, t => {
+    const { ctx } = recorded();
+    const mocked = t.mock.method(childProcess, "spawnSync", (executable, args, options) => {
+      assert.equal(options.timeout, timeout);
+      return { status: 0, stdout: "state: cancelled\n", stderr: "" };
+    });
+    syncBuiltinESMExports();
+    t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+    const env = { ...ctx.env };
+    if (grace === undefined) delete env.RELAY_JOBS_CANCEL_GRACE_MS;
+    else env.RELAY_JOBS_CANCEL_GRACE_MS = grace;
+    handleTaskStop(input(ctx), env);
+    assert.equal(mocked.mock.callCount(), 1);
+  });
+}
+
 test("hooks.json registers the TaskStop command with its timeout and description", () => {
   const hooks = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, "hooks/hooks.json"), "utf8"));
   assert.deepEqual(hooks.hooks.PostToolUse, [{ matcher: "TaskStop", hooks: [{ type: "command",
-    command: 'node "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/relay-stop.mjs"', timeout: 60 }] }]);
+    command: 'node "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/relay-stop.mjs"', timeout: 600 }] }]);
   assert.match(hooks.description, /a TaskStop hook that cancels a stopped relay's job/);
   assert.match(hooks.description, /checks a relay:job prompt's header at the spawn/);
 });

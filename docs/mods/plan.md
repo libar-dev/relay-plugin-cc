@@ -375,8 +375,9 @@ What changed, and where:
 
 The later phases, in this light:
 
-- **Phase 2** is unchanged. Whichever of Phases 2 and 3 merges second rebases `register.js` (two hooks there now)
-  and `register.test.ts`.
+- **Phase 2** merged first (PR #10), and this PR took it in: `register.js` holds `agent.spawn`, `session.send` and
+  the four `command.run` hooks, the version is 3.0.0-dev.4, and the TaskStop hook gives its cancel the bound
+  `/relay:cancel` uses (twice the grace and 40 s).
 - **Phase 4.** The board's Cancel stays `companion cancel`: a module cannot call TaskStop, and a press is the user's
   explicit cancel. The board should show what TaskStop leaves for a person to decide: jobs of a stopped Workflow
   that run on with no relay (running and not handed back), and the `relay-violation:` line of a cancel the

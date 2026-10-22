@@ -13,6 +13,17 @@ import { appendRelayViolation } from "../lib/jobs/messages.mjs";
 const COMPANION = fileURLToPath(new URL("../companion.mjs", import.meta.url));
 const oneLine = value => String(value ?? "").replace(/\s+/g, " ").trim();
 const nonempty = value => typeof value === "string" && value.trim();
+
+// How long the cancel may take: the bound /relay:cancel uses. Cancel waits up to the grace for the
+// worker, and a delegated cancel waits it again; the rest is the process sweep and the busy-view
+// retries. The grace is read as the companion's envNumber reads it, and the hook's own timeout in
+// hooks.json (600 s) stays above the largest bound.
+function cancelTimeoutMs(env) {
+  const raw = env.RELAY_JOBS_CANCEL_GRACE_MS;
+  const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+  const grace = Number.isFinite(value) && value >= 0 ? value : 10000;
+  return Math.min(590000, 2 * grace + 40000);
+}
 const hookOutput = context => ({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: context } });
 
 export function handleTaskStop(input, env = process.env) {
@@ -44,7 +55,7 @@ export function handleTaskStop(input, env = process.env) {
     let result;
     try {
       result = spawnSync(process.execPath, [COMPANION, "cancel", jobDir], {
-        cwd, env: absoluteJobsHomeEnv(env), encoding: "utf8", timeout: 55000
+        cwd, env: absoluteJobsHomeEnv(env), encoding: "utf8", timeout: cancelTimeoutMs(env)
       });
     } catch (error) {
       result = { error };

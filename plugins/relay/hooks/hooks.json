@@ -45,7 +45,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/relay-stop.mjs\"",
-            "timeout": 60
+            "timeout": 600
           }
         ]
       }
