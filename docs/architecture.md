@@ -12,8 +12,8 @@ module runtime, not in Node: it has no imports and reaches the companion through
 agents/job.md, commands/*.md, skills/       what Claude Code sees
 scripts/companion.mjs                        the command line: one dispatcher
 scripts/cli/                                 one module per command
-scripts/hooks/                               Claude Code hooks: relay guard, stop gate, session start
-hooks/mod/register.js                        the hooks module: wakes a waiting relay when a message is sent to it
+scripts/hooks/                               Claude Code hooks: relay guard, TaskStop, stop gate, session start
+hooks/mod/register.js                        the hooks module: checks a relay's header at the spawn, wakes a waiting relay
 scripts/lib/harness/                         everything that reads Claude Code's own files
 scripts/lib/worker/                          the detached worker that runs a job's turns
 scripts/lib/review/                          review targets, prompts, rendering

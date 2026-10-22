@@ -311,6 +311,109 @@ and the line reads `relay-version: <version> (<commit>)` for such a build; a T3 
 the run's. A released install has no stamp. `status <job>` and `--json` are unchanged; Phase 4 gives every `--json`
 output a `relayVersion`.
 
+### D41. TaskStop is mapped to its job by the id in the tool's result (Phase 3 thread)
+
+The plan asked to check first what TaskStop names. Measured on 2.1.308: `tool_input.task_id` is what the caller
+wrote, an agent id or the agent's `name`, while the `PostToolUse` result always carries the stopped agent's id
+(`task_id`, with `task_type: "local_agent"`). The hook reads the result's id, falls back to the input's, and finds
+the job through that id's relay pointer. It cancels only when the agent is the job's current relay, the rule
+`wake` follows, so a TaskStop on a relay that a resume replaced never cancels the job its new relay holds. Claude
+Code kills the relay's running Bash call, and no `SubagentStop` fires for a stopped relay, so nothing else of the
+guard runs. Reopen if TaskStop's result stops naming the agent by id.
+
+### D42. A TaskStop on a whole Workflow cancels nothing (Phase 3 thread; amended by D48)
+
+D2 covers a TaskStop on a relay agent. Claude Code offers no TaskStop for one agent of a Workflow (`No task found
+with ID`), and a TaskStop on the Workflow's own task (`task_type: "local_workflow"`) ends all its relays at once.
+Those jobs keep running: the Workflow tool tells a caller to stop a run with TaskStop before a `resumeFromRunId`,
+the resume adopts the running jobs (design.md, "Adoption by journal key"), and adoption never takes a cancelled
+job, so cancelling them would make every resume start the work over. The hook needs no rule for this: a
+Workflow's task id has no relay pointer. A Workflow job is cancelled with the message `cancel` to its relay's
+agent id, or with `companion cancel`. Reopen if Claude Code adds a TaskStop for one Workflow agent.
+
+### D43. The TaskStop hook waits for the cancel and tells the caller (Phase 3 thread)
+
+The hook runs `companion cancel` and waits for it, as long as `/relay:cancel` would (twice
+`RELAY_JOBS_CANCEL_GRACE_MS` and 40 s, 60 s at the default; the hook's own timeout is 600 s), then returns the
+cancelled job's block as the hook's `additionalContext`, which the caller reads beside
+the TaskStop result. Measured: Codex and Kimi jobs were `cancelled` 0.2 s and 0.4 s after the call. A cancel that
+fails, or that leaves a newer worker still running (exit 4), is told to the caller with the command to retry,
+and recorded as a relay violation, so `status` and `result` show it. Rejected: running the cancel detached (an
+`async` hook or a background child), which returns sooner but tells the caller nothing, and leaves a failed
+cancel unseen until someone reads the job.
+
+### D44. The message `cancel` stays beside TaskStop (Phase 3 thread; amended by D48)
+
+Rule 4 asks for one solution for each thing. These are two: TaskStop ends the agent and cancels the job, and the
+caller gets no hand-back; the message `cancel` cancels the job and the relay hands back the cancelled job's
+result, as a Claude agent that is asked to stop reports. The message is also the only way to cancel the job of one
+Workflow agent (D42). The docs say when to use which.
+
+### D45. The spawn check fails open and skips the prompts it cannot judge (Phase 3 thread)
+
+The module's `agent.spawn` hook denies a spawn only when `companion check-header` ran and refused the prompt
+(exit 1 and an `error:` line); a timeout, a crash, a truncated output or a refused process start lets the spawn
+through, because `start --from-relay` runs the same checks and fails the relay as before. It skips a resumed
+agent (its prompt is the resuming message) and a Workflow agent whose prompt has no `---` line. Claude Code puts a
+placeholder in a Workflow agent's prompt when the run keeps its script from hooks (`(withheld: this workflow run
+does not share its script)` on 2.1.308), and its wording is not an interface; the first version matched that exact
+string, and Opus 5.5's review showed that another build's wording would refuse every relay of such a run. A
+header-less Workflow prompt is still refused, by `start`. The deny text is the parser's message alone; Claude Code
+puts `Subagent spawn denied by a plugin: ` or `Workflow agent spawn denied by a plugin: ` before it. Measured: a
+Workflow agent's `agent.spawn` carries the script's prompt as written, not the framed task the relay reads from
+its transcript, so the check needs no unframing.
+
+### D46. The spawn check leaves relative paths to `start` (Phase 3 thread)
+
+`start` resolves a relative `cd:`, `add-dir:` or `brief:` against the relay's working directory, which is not
+known at the spawn: an agent started with worktree isolation runs in a worktree that does not exist yet, and an
+agent spawned with no `cwd` runs in its parent agent's directory, while the module's `$.process.run` defaults to
+the session's. So `check-header` checks absolute paths and leaves relative ones to `start`. The first version
+resolved them against the spawn's directory; both reviewers (GPT-6.1 Sol and Opus 5.5) showed launches it would
+have refused that `start` accepts (a `cd:` that climbs out of a worktree, a brief file that exists only in a
+subagent's worktree). Their second round found the same through `mode: write`'s linked-worktree roots, which
+`buildLaunchRequest` infers from the job's directory and Grok refuses: from a linked worktree, as every T3 thread
+runs in, a relative `cd:` was refused. Check mode infers no such roots unless `cd:` is absolute. The documented
+forms are absolute, so the common mistake, a wrong absolute `cd:`, still fails at the spawn.
+
+### D47. A TaskStop on a whole Workflow tells the caller which jobs run on (Phase 3 thread)
+
+D42 stands: such a TaskStop cancels nothing, so a resume adopts the jobs. But the relays are gone, so the message
+`cancel` can no longer reach one, and a caller who stopped the run to abandon it would not know its jobs still
+run. Opus 5.5's review raised it. The TaskStop hook finds the run id from the Workflow tool's result in the
+caller's transcript (`taskId` to `runId`), lists that run's jobs that have not ended, and, when there are any,
+tells the caller they keep running for a `resumeFromRunId`, with the command to cancel one. A Workflow without
+relay jobs gets no output.
+
+### D48. A relay never hands Claude Code's interrupt note to its job (Phase 3 thread)
+
+When Claude Code interrupts an agent's turn (TaskStop, a stopped Workflow), it writes a user entry,
+`[Request interrupted by user for tool use]` or `[Request interrupted by user]`, with no origin and no `isMeta`.
+The guard took every plain user turn for a message. So a stopped relay that ran again handed the note to its job,
+and on a cancelled job a message is a continue: the job TaskStop had just cancelled started again.
+
+A stopped relay runs again in two ways. A message resumes it. Or, as the Phase 6 thread found, a `SendMessage` to a
+running Workflow relay starts a second loop under the same agent id while the first runs on; that second loop is a
+`local_agent` task TaskStop can stop, and the TaskStop hook then cancels the job, as D2 and D41 say. A live probe
+showed the rest: the first loop's guard delivered the note, and the job came back `completed` in a second attempt.
+
+The notes are now harness markers, kept with the others in `lib/harness/workflow.mjs`: the two above and a third
+that 2.1.308 substitutes when it resumes an agent the session's end interrupted, read from the binary. The parser
+skips them only on an entry with no origin, as every real one is, so a person who types those words is still
+heard. With the fix the same probe left the job `cancelled`, and both Workflow agents returned `state: cancelled`.
+GPT-6.1 Sol and Opus 5.5 reviewed it.
+
+What this amends:
+
+- D44: the probe measured the message `cancel` to a running Workflow relay. The wake ended the first loop's wait,
+  its guard delivered the cancel at the next call, and the job was `cancelled` 1.8 s and 2.7 s after the send.
+- D42: "no TaskStop for one Workflow agent" holds except while a second loop a message started still runs; a
+  TaskStop on its id then cancels the job like any relay's.
+
+Open, from before Phase 3 (the plan, "After Phase 6"): a fork splits the agent's entries between the Workflow
+transcript the job records, which the guard reads, and `subagents/agent-<id>.jsonl`, which it does not, and not the
+same way each time. A message that lands in the second file is not delivered.
+
 ### D51. Phase 6's PR raises no version (Phase 6 thread)
 
 Phase 6 is a report. No code of the plugin changes, only its CHANGELOG, so no build gets a new `3.0.0-dev.N`.

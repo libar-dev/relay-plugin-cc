@@ -227,6 +227,8 @@ export function makeRecords(run, check, analysis, entries, readers, root = evide
   entries = (check.scope ?? readers.scopeToRun)(entries, run.runId);
   const span = readers.runSpan(entries, run.runId, check.marker);
   if (check.commands) span.finishedAt = entries.findLast(entry => entry?.timestamp)?.timestamp ?? span.finishedAt;
+  // A check that goes on after its session (session-end follows the jobs) records when it finished.
+  if (Number.isFinite(Date.parse(run.checkFinishedAt))) span.finishedAt = run.checkFinishedAt;
   // A command-only scope need not contain a Live suite prompt.
   if (check.scope) span.startedAt ??= entries.find(entry => entry.timestamp)?.timestamp ?? null;
   const duration = span.startedAt && span.finishedAt ? (Date.parse(span.finishedAt) - Date.parse(span.startedAt)) / 1000 : null;
@@ -302,7 +304,8 @@ export function copyEvidence(run, analysis, evidenceDir) {
       if (!available(source)) continue;
       const relative = relativeInside(run.jobsHome, source) ?? path.join('external', createHash('sha256').update(source).digest('hex'));
       const target = path.join(jobsHome, relative);
-      fs.cpSync(source, target, { recursive: true,
+      // A check may judge a file by its mtime (spawn-check scopes meta files to the run), so copies keep it.
+      fs.cpSync(source, target, { recursive: true, preserveTimestamps: true,
         filter: file => {
           if (path.basename(file).endsWith('.lock.d') || path.basename(file) === 'worker.lease.d') return false;
           sources.add(path.resolve(file));
@@ -324,6 +327,8 @@ export function copyEvidence(run, analysis, evidenceDir) {
       target ??= path.join(session, 'external', createHash('sha256').update(file).digest('hex'), path.basename(file));
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.copyFileSync(file, target);
+      const { atime, mtime } = fs.statSync(file);
+      fs.utimesSync(target, atime, mtime);
       sources.add(path.resolve(file));
       paths.set(path.resolve(file), target);
     }

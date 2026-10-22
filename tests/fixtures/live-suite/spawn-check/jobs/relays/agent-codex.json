@@ -1,0 +1,6 @@
+{
+  "agentId": "agent-codex",
+  "jobId": "codex-job",
+  "jobDir": "repo/codex-job",
+  "transcriptPath": "../transcript/subagents/workflows/wf-synthetic/agent-codex.jsonl"
+}

@@ -3,8 +3,9 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: install-local.sh DIR [--ref REF] [--repo PATH] [--worktree]
-Install relay@relay-smoke for DIR only. REF defaults to HEAD.
+Usage: install-local.sh DIR [--name NAME] [--ref REF] [--repo PATH] [--worktree]
+Install relay@NAME for DIR only. NAME defaults to relay-smoke; REF defaults to HEAD.
+NAME must match ^relay-smoke(-[a-z0-9]+)*$. A second folder needs its own --name.
 DIR must be a git work tree root or outside any git work tree.
 The default build uses git archive and excludes uncommitted edits.
 --worktree copies plugins/relay, including uncommitted edits, except the declarations Claude Code
@@ -18,19 +19,23 @@ if [[ ${1:-} == --help || ${1:-} == -h ]]; then usage; exit 0; fi
 dir=$1; shift
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 repo=$(cd -- "$script_dir/../.." && pwd -P)
+name=relay-smoke
 ref=HEAD
 ref_set=false
 worktree=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --ref|--repo)
+    --name|--ref|--repo)
       [[ $# -ge 2 && -n $2 && $2 != --* ]] || die "$1 requires a value."
-      if [[ $1 == --ref ]]; then ref=$2; ref_set=true; else repo=$2; fi
+      if [[ $1 == --name ]]; then name=$2
+      elif [[ $1 == --ref ]]; then ref=$2; ref_set=true
+      else repo=$2; fi
       shift 2 ;;
     --worktree) worktree=true; shift ;;
     *) die "Unknown argument: $1" ;;
   esac
 done
+[[ $name =~ ^relay-smoke(-[a-z0-9]+)*$ ]] || die '--name must match ^relay-smoke(-[a-z0-9]+)*$.'
 [[ $worktree == false || $ref_set == false ]] || die '--ref and --worktree cannot be combined.'
 [[ -d $dir ]] || die "Directory does not exist: $dir"
 dir=$(cd -- "$dir" && pwd -P)
@@ -55,11 +60,12 @@ console.log(path.resolve(state, 'relay-plugin-cc/smoke-installs', `${hash}.json`
 NODE
 )
 export RELAY_SMOKE_RECEIPT
-node - "$dir" <<'NODE'
+node - "$dir" "$name" <<'NODE'
 // A refusal is one line for the person, not a stack trace.
 process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
-const dir = process.argv[2], home = fs.realpathSync(os.homedir());
+const [dir, name] = process.argv.slice(2), home = fs.realpathSync(os.homedir());
+const pluginId = `relay@${name}`;
 const config = process.env.RELAY_SMOKE_CONFIG;
 const read = file => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 if (dir === home || dir === (fs.existsSync(config) ? fs.realpathSync(config) : config)) {
@@ -70,17 +76,17 @@ for (const name of ['.claude', '.claude/settings.local.json']) {
     throw new Error(`Refusing project symlink: ${name}`);
   }
 }
-const entries = read(path.join(config, 'plugins/installed_plugins.json')).plugins?.['relay@relay-smoke'] ?? [];
+const entries = read(path.join(config, 'plugins/installed_plugins.json')).plugins?.[pluginId] ?? [];
 const settings = read(path.join(dir, '.claude/settings.local.json'));
 if (entries.some(e => e.projectPath && path.resolve(e.projectPath) === dir) ||
-    Object.hasOwn(settings.enabledPlugins ?? {}, 'relay@relay-smoke') ||
-    Object.hasOwn(settings.extraKnownMarketplaces ?? {}, 'relay-smoke') ||
+    Object.hasOwn(settings.enabledPlugins ?? {}, pluginId) ||
+    Object.hasOwn(settings.extraKnownMarketplaces ?? {}, name) ||
     fs.lstatSync(process.env.RELAY_SMOKE_RECEIPT, { throwIfNoEntry: false }) ||
     fs.lstatSync(path.join(dir, '.claude/relay-smoke-local.json'), { throwIfNoEntry: false })) {
-  throw new Error('relay@relay-smoke is already installed here. Run uninstall-local.sh first.');
+  throw new Error(`relay@${name} is already installed here. Run uninstall-local.sh first.`);
 }
-if (entries.length || read(path.join(config, 'plugins/known_marketplaces.json'))['relay-smoke']) {
-  throw new Error('relay-smoke is registered elsewhere. Uninstall that smoke build first.');
+if (entries.length || read(path.join(config, 'plugins/known_marketplaces.json'))[name]) {
+  throw new Error(`${name} is registered elsewhere. Uninstall that smoke build first.`);
 }
 NODE
 sha=$(git -C "$repo" rev-parse --verify --end-of-options "${ref}^{commit}")
@@ -93,18 +99,18 @@ if [[ $worktree == true ]]; then
 else
   git -C "$repo" archive "$sha" plugins/relay | tar -C "$mkt/relay" --strip-components=2 -xf -
 fi
-node - "$mkt" "$dir" "$temp_dir" "$sha" "$worktree" <<'NODE'
+node - "$mkt" "$dir" "$temp_dir" "$sha" "$worktree" "$name" <<'NODE'
 // A refusal is one line for the person, not a stack trace.
 process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path');
-const [mkt, dir, tempDirectory, commit, worktree] = process.argv.slice(2);
+const [mkt, dir, tempDirectory, commit, worktree, name] = process.argv.slice(2);
 const plugin = JSON.parse(fs.readFileSync(path.join(mkt, 'relay/.claude-plugin/plugin.json'), 'utf8'));
 if (plugin.name !== 'relay' || !plugin.version) throw new Error('Export is not a versioned relay plugin.');
 fs.writeFileSync(path.join(mkt, 'relay/.claude-plugin/build.json'), JSON.stringify({
   commit: commit.slice(0, 12) + (worktree === 'true' ? '-dirty' : '')
 }, null, 2) + '\n');
 fs.writeFileSync(path.join(mkt, '.claude-plugin/marketplace.json'), JSON.stringify({
-  name: 'relay-smoke', owner: { name: 'Relay smoke test' }, metadata: { version: plugin.version },
+  name, owner: { name: 'Relay smoke test' }, metadata: { version: plugin.version },
   plugins: [{ name: 'relay', version: plugin.version, source: './relay' }]
 }, null, 2) + '\n');
 const createdClaudeDirectory = !fs.existsSync(path.join(dir, '.claude'));
@@ -116,9 +122,9 @@ fs.mkdirSync(path.dirname(receipt), { recursive: true, mode: 0o700 });
 fs.chmodSync(path.dirname(receipt), 0o700);
 fs.writeFileSync(receipt, JSON.stringify({
   tool: 'relay-plugin-cc/scripts/smoke/install-local.sh',
-  dir, tempDirectory, config: process.env.RELAY_SMOKE_CONFIG,
+  dir, name, tempDirectory, config: process.env.RELAY_SMOKE_CONFIG,
   marketplace: mkt, createdMarketplace: true, commit, worktree: worktree === 'true',
-  cacheExisted: fs.existsSync(path.join(process.env.RELAY_SMOKE_CONFIG, 'plugins/cache/relay-smoke')),
+  cacheExisted: fs.existsSync(path.join(process.env.RELAY_SMOKE_CONFIG, 'plugins/cache', name)),
   createdCache: false,
   createdSettingsFile: !fs.existsSync(file), createdClaudeDirectory,
   hadPreviousRelay: Object.hasOwn(settings.enabledPlugins ?? {}, 'relay@libar-relay'),
@@ -144,14 +150,14 @@ const [file, step] = process.argv.slice(2);
 const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
 saved[step] = true;
 if (step === 'createdCache') {
-  saved.createdCache = !saved.cacheExisted && fs.existsSync(require('node:path').join(saved.config, 'plugins/cache/relay-smoke'));
+  saved.createdCache = !saved.cacheExisted && fs.existsSync(require('node:path').join(saved.config, 'plugins/cache', saved.name));
 }
 fs.writeFileSync(file, JSON.stringify(saved, null, 2) + '\n');
 NODE
 }
 claude plugin marketplace add "$mkt" --scope local
 record_step addedMarketplace
-if claude plugin install relay@relay-smoke --scope local; then
+if claude plugin install "relay@$name" --scope local; then
   record_step installedPlugin
   record_step createdCache
 else
@@ -171,4 +177,4 @@ else
     *) exit "$status" ;;
   esac
 fi
-printf 'Installed relay@relay-smoke locally in %s\n' "$dir"
+printf 'Installed relay@%s locally in %s\n' "$name" "$dir"

@@ -1,11 +1,12 @@
 # Relay and Claude Code Mods: the plan
 
 Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. Phase 1, Phase 5's suite
-runner and Phase 2 are done on the branch `release/3.0`, Phase 6's investigation is reported, and the later phases
-were reviewed in the light of each ([After Phase 1](#after-phase-1-what-held-and-what-changed),
+runner, Phase 2 and Phase 3 are done on the branch `release/3.0`, Phase 6's investigation is reported, and the
+later phases were reviewed in the light of each ([After Phase 1](#after-phase-1-what-held-and-what-changed),
 [After the suite runner](#after-the-suite-runner-what-held-and-what-changed),
 [After Phase 2](#after-phase-2-what-held-and-what-changed),
-[After Phase 6](#after-phase-6-what-held-and-what-changed)). Phases 1 to 5 ship together as relay 3.0.0
+[After Phase 6](#after-phase-6-what-held-and-what-changed),
+[After Phase 3](#after-phase-3-what-held-and-what-changed)). Phases 1 to 5 ship together as relay 3.0.0
 ([release-3.0.md](release-3.0.md)); every decision taken on the way is in [decisions.md](decisions.md).
 It combines three independent plans in this directory:
 
@@ -293,23 +294,112 @@ The later phases, in this light:
   `transfer` run imports a session into the user's Codex home. The README's capability table gains the three rows,
   with `n/a` for `transfer` off Codex.
 
-## Phase 3: spawn and stop like a Claude agent (one PR)
+## Phase 3: spawn and stop like a Claude agent (done, on `release/3.0`)
 
-- **Spawn check.** The module adds an `agent.spawn` hook for `subagentType: "relay:job"`. It runs `companion
-  check-header` on the prompt, which uses `parseHeaderPrompt` and `buildLaunchRequest` (`lib/jobs/request.mjs:29`,
-  `:123`) and creates nothing. A bad header returns `{ deny: <parser message> }`. `start` keeps the same parser,
-  because it builds the job from it. The check only moves the failure to the spawn.
-- **TaskStop cancels the job.** Add a `PostToolUse` command hook with the matcher `TaskStop`. When the stopped
-  task is a relay agent with a running job, it runs `companion cancel` for that job. This reverses design.md's
-  "TaskStop stops only the agent, and the job keeps running". An orchestrator's TaskStop is an explicit stop, and
-  the job is what it means to stop. A relay that dies without a TaskStop (session end, a killed process) still
-  leaves its job running, so jobs still outlive Claude.
-- The design table and the `agents/job.md` description change to match.
+What shipped:
 
-Acceptance: a Workflow `agent()` with a bad header throws the parser's message, and a valid one starts as before.
-In the live suite, TaskStop on a running relay leaves the job `cancelled` within 15 s for each backend. Ending the
-Claude session during a job leaves the job running. Check first that TaskStop's input names the agent the hook
-needs. If it doesn't, record what it does name and how the hook maps it.
+- **Spawn check.** The module's `agent.spawn` hook runs `companion check-header` on a `relay:job` prompt:
+  `readLaunchPrompt` (`lib/jobs/request.mjs`), the parser and request builder `start` uses, creating nothing. A
+  bad header is denied with the parser's message, and Claude Code puts `Subagent spawn denied by a plugin: ` (the
+  Agent tool's error) or `Workflow agent spawn denied by a plugin: ` (the error a Workflow `agent()` throws) before
+  it. The check leaves relative `cd:`, `add-dir:` and `brief:` paths to `start`, and infers no linked-worktree
+  roots unless `cd:` is absolute, since the relay's directory is not known at the spawn (D46). It lets a resumed
+  agent and a Workflow prompt with no `---` line through (D45), and fails open on anything but its own refusal.
+  `check-header` takes about 80 ms, which every relay spawn now waits for.
+- **TaskStop cancels the job** (D2). A `PostToolUse` command hook on `TaskStop` (`scripts/hooks/relay-stop.mjs`)
+  takes the stopped agent's id from the tool's result: the input names the agent by id or by name, the result
+  always by id (D41). When the agent is its job's current relay and the job has not ended, the hook runs
+  `companion cancel`, waits, and gives the caller the cancelled job's block as its context (D43); a failed cancel
+  is told to the caller and recorded as a relay violation. Claude Code has no TaskStop for one Workflow agent (D48
+  has the exception), and a TaskStop on a whole Workflow cancels nothing, so a resume adopts its jobs (D42); the
+  hook lists the run's jobs that keep running (D47). The message `cancel` stays (D44). A stopped relay that runs
+  again never hands Claude Code's interrupt note to its job (D48).
+- design.md, the relay:jobs skill and internals, `agents/job.md`, the README and architecture.md describe both.
+- The live suite: `stop`, `session-end` (a `runTerminal` check that ends the pane's Claude process mid-job,
+  waits for its pid to go, and follows the jobs to their end) and `spawn-check`.
+- Smoke tooling: `install-local.sh --name` gives a second folder its own install, since Claude Code keeps one
+  marketplace registry per config; `uninstall-local.sh` changes nothing of a name whose ownership it cannot verify.
+- Two review rounds by GPT-6.1 Sol and Opus 5.5, and a third on the interrupt-note fix (D48). Both rounds found, in
+  both families, a way the spawn check could refuse a launch `start` accepts (a relative path, then `mode: write`'s
+  worktree roots), and the first found the `stop` check crediting a cancel the hook had not made.
+
+Live results (the Fedora machine, Claude Code 2.1.308, Sonnet 5.5 lead; records in `docs/live/records/`, table in
+[docs/live/capabilities.md](../live/capabilities.md)), on 3.0.0-dev.4, with Phase 2 merged in. The whole suite ran
+on d90fd59, Phase 2's checks included; `stop` ran again on the final build, 7a0d4b7, which differs only in how the
+TaskStop hook words a job that ended before its cancel:
+
+| Check | Terminal | T3 Code |
+|---|---|---|
+| `stop` | cancelled 0.2–0.4 s after the TaskStop | 0.2–0.4 s |
+| `session-end` | ran on, and completed 148–176 s after the session ended | terminal only |
+| `spawn-check` | refused at the spawn with the parser's message, all four backends | the same |
+| `steer-main` | 2.4–4.4 s to the job's ledger | 1.5–6.4 s |
+| `steer-workflow`, `steer-plugin`, `continue` | 2.5–3.9 s | Phase 5's records stand |
+| Phase 2's `commands`, `transfer`, `headless` | pass | Phase 2's records stand |
+
+57 of 57 records passed on 3.0.0-dev.4. Before Phase 2 merged, the same checks passed on 3.0.0-dev.3 builds
+(9487e38, f7e474b, 1f274c4; 104 records). The smoke kit passed on the final build (workflow `wf_a060662f-a89`, then
+the plain fan-out, whose `hi-refused` was refused at the spawn with the parser's message). In one T3 run of
+`steer-main`, Kimi's model took the three steers, as the next turns they are on Kimi, for instructions, and ran
+`companion steer` on its own job three times; the lead withheld its marker until told the check judges the
+records, not the reports.
+
+### After Phase 3: what held and what changed
+
+Assumptions that held:
+
+- TaskStop's `PostToolUse` names the agent the hook needs: the result carries the agent id whatever the caller
+  wrote. Claude Code kills the stopped relay's Bash call and fires no `SubagentStop` for it, so nothing of the guard
+  runs after a stop.
+- `agent.spawn` fires for the Agent tool and for a Workflow `agent()`, with the prompt as the caller wrote it, and a
+  deny reaches the caller at once as an error, in the terminal and in T3.
+- Command hooks and the module run in T3 as in the terminal; both new checks passed there on all four backends.
+- The job's files and the lead's transcript are enough to judge the new checks. A `PostToolUse` hook's output is a
+  `hook_additional_context` attachment in the transcript, with the tool call's id.
+
+What changed, and where:
+
+- **A Workflow agent cannot be TaskStopped alone**, and a TaskStop on the Workflow ends all its relays at once.
+  Cancelling their jobs would break the resume Claude Code tells callers to do next, so it cancels nothing and says
+  which jobs run on (D42, D47).
+- **The spawn check judges only what does not depend on the relay's directory** (D46). Both review rounds found a
+  false refusal through the directory, the second through Grok's refusal of inferred worktree roots, which every T3
+  thread (a linked worktree) would have hit.
+- **A Workflow prompt can be a placeholder**: a run that keeps its script from hooks shows the spawn a fixed text,
+  so the check leaves a Workflow prompt with no `---` line to `start` (D45).
+- **Two smoke installs need two marketplace names.** Phases running side by side each have their own smoke folder,
+  and now their own `--name`.
+- **A stopped relay can run again** (D48): a message resumes it, or, for a Workflow relay a message has forked, its
+  other loop runs on. Claude Code's interrupt note in its transcript was delivered to the job as a message, which
+  restarted a job TaskStop had cancelled; the note is now a harness marker. A probe after Phase 6's finding showed
+  it; the review rounds had not.
+- `pane.sh pid` gives a check the pane's process id: a scan of process arguments for the session id also matched the
+  tmux server, which keeps the command line of the session that started it.
+
+The later phases, in this light:
+
+- **Phase 2** merged first (PR #10), and this PR took it in: `register.js` holds `agent.spawn`, `session.send` and
+  the four `command.run` hooks, the version is 3.0.0-dev.4, and the TaskStop hook gives its cancel the bound
+  `/relay:cancel` uses (twice the grace and 40 s).
+- **Phase 4.** The board's Cancel stays `companion cancel`: a module cannot call TaskStop, and a press is the user's
+  explicit cancel. The board should show what TaskStop leaves for a person to decide: jobs of a stopped Workflow
+  that run on with no relay (running and not handed back), and the `relay-violation:` line of a cancel the
+  TaskStop hook could not finish. A job cancelled by TaskStop shows `not handed back` in `status` today, since its
+  relay never handed back, though the caller saw the cancelled block in the hook's context; the board should not
+  flag it as a lost result (the hook could record the hand-back). The companion JSON changed in place must keep `check-header`'s text interface
+  (`ok`, or `error: <message>`, exit 1), which the module reads; it has no `--json` and needs none. Steer and
+  Continue by the recorded agent id are unchanged.
+- **Phase 6** is reported. Its finding that a message by id forks a running Workflow relay was measured here with
+  a probe, not a suite check: the message `cancel` reaches the job through the second loop and cancels it, and a
+  TaskStop on the forked id cancels the job as D41 says (D48). Its other open point stands: after a fork, Claude
+  Code can write later entries to `subagents/agent-<id>.jsonl`, which the guard does not read. The release can turn
+  the probe into a check of the message `cancel` to a Workflow relay.
+- **The release.** `suite.mjs run all` now has ten checks; `steer-plugin`, `headless` and `session-end` run only in
+  the terminal, and `session-end` takes about four minutes. The T3 checks are `steer-main`, `steer-workflow`,
+  `continue`, `commands`, `transfer`, `stop` and `spawn-check`. The
+  capability table gains the stop and spawn rows the funding notes list. The smoke kit's `hi-refused` agent is now
+  refused at the spawn (`Subagent spawn denied by a plugin: model: glm-5.3-flash is a ZCode model…`), not handed
+  back as `state: not started`; the kit's SMOKE-TEST.md says the old form and needs the new one for 3.0.
 
 ## Phase 4: the terminal and Desktop board (separate PRs)
 
@@ -595,7 +685,7 @@ The module's `session.send` hook works in T3: Phase 1's live check ran in a T3 t
 Phase 1). T3 loads a plugin installed at local scope in the thread's project directory, which is how an unreleased
 build is checked there without reaching other threads. A Monitor the lead arms does not start a new turn in a T3
 thread once its turn has ended, so a scripted T3 check is driven by messages to the thread. Phase 2's commands
-work in T3 (its live suite checked them there), and Phase 3 is expected to. Phase 4 needs two things
+and Phase 3's spawn check and TaskStop hook work in T3: their live checks passed there. Phase 4 needs two things
 from T3: it has to render the `ui_*` messages, and it has to attach a surface. The module refreshes the status
 line only while `$.session.surfaces()` is non-empty. [t3-code.md](t3-code.md) explains what relay would need from T3 and why relay complements T3's
 own delegates. It is the article to link from a post to the T3 community.

@@ -231,6 +231,15 @@ test('records have the exact keys, canonical backend order and no paths', () => 
   assert.equal(makeRecords(run, check, result, [], readers)[0].durationSeconds, null);
 });
 
+test('a record of a check that goes on after its session ends when the check recorded it finished', () => {
+  const later = new Date(Date.parse(finish) + 120000).toISOString();
+  const [row] = makeRecords(baseRun({ checkFinishedAt: later }), check, analyzed(), entries(), readers);
+  assert.equal(row.startedAt, start);
+  assert.equal(row.finishedAt, later);
+  assert.equal(row.durationSeconds, 123.5);
+  assert.equal(makeRecords(baseRun({ checkFinishedAt: 'never' }), check, analyzed(), entries(), readers)[0].finishedAt, finish);
+});
+
 test('a missing marker fails every backend and keeps each check reason', () => {
   const result = analyzed();
   result.results[0].result = 'fail';
@@ -454,6 +463,18 @@ test('evidence copy preserves workflow paths, rewrites pointers and skips lock f
   assert.equal(fs.existsSync(pointer.transcriptPath), true);
   assert.deepEqual(readJson(path.join(pointer.jobDir, 'job.json')), { state: 'completed' });
   for (const lock of ['job.lock.d', 'worker.lease.d', 'nested/other.lock.d']) assert.equal(fs.existsSync(path.join(pointer.jobDir, lock)), false);
+});
+
+test('evidence copy keeps the mtimes of session files and job files', t => {
+  const ctx = scratch(t);
+  const input = evidenceFixture(ctx);
+  const past = new Date('2026-01-02T03:04:05.000Z');
+  for (const file of [input.workflow, path.join(input.jobDir, 'job.json')]) fs.utimesSync(file, past, past);
+  const result = { ...analyzed(), evidence: { transcripts: [input.transcript, input.workflow, input.relayTranscript],
+    agents: [{ agentId: 'codex', pointer: input.pointer, jobDir: input.jobDir }] } };
+  const copied = copyEvidence(baseRun(input), result, path.join(ctx.dir, 'evidence'));
+  assert.equal(fs.statSync(path.join(ctx.dir, 'evidence/copy/session/session/subagents/workflows/one/agent-workflow.jsonl')).mtimeMs, past.getTime());
+  assert.equal(fs.statSync(path.join(copied.jobsHome, 'repo/job/job.json')).mtimeMs, past.getTime());
 });
 
 test('analyze CLI discovers prepared runs, uses overrides, and replays exactly from the copy', t => {

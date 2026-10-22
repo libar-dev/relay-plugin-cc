@@ -14,6 +14,10 @@ import { analyzeRun } from '../scripts/live/lib/runs.mjs';
 import { setupJobs, requireCommand, requireBuild } from '../scripts/live/checks/commands.mjs';
 import { headlessCommands, runHeadless, executeHeadless } from '../scripts/live/checks/headless.mjs';
 import { workflowScript } from '../scripts/live/checks/steer-workflow.mjs';
+import { agentCalls, waitLoop } from '../scripts/live/checks/steer-main.mjs';
+import { badPrompts, goodPrompt, workflowScript as spawnScript, checkHeader, expectedMessage } from '../scripts/live/checks/spawn-check.mjs';
+import { copyEvidence } from '../scripts/live/lib/runs.mjs';
+import { postInboxMessage, claimInboxMessages, recordReceipt, writeOutcome } from '../plugins/relay/scripts/lib/jobs/messages.mjs';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/live-suite');
 const first = 'jobs/repo/codex-job/inbox/relay/one.json';
@@ -549,10 +553,10 @@ test('formatSeconds uses one decimal and an en dash for a range', () => {
   assert.equal(formatSeconds([]), '—');
 });
 
-test('registry keeps the original four interfaces and appends the command checks', () => {
-  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless']);
-  assert.equal(new Set(checks.map(check => check.id)).size, 7);
-  for (const check of checks.slice(0, 4)) {
+test('registry keeps the prompt checks\' interface, with the command checks between continue and stop', () => {
+  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless', 'stop', 'session-end', 'spawn-check']);
+  assert.equal(new Set(checks.map(check => check.id)).size, 10);
+  for (const check of checks.filter(check => !['commands', 'transfer', 'headless'].includes(check.id))) {
     assert.match(check.id, /^[a-z0-9-]+$/);
     assert.equal(typeof check.title, 'string');
     assert.ok(check.title.length > 0);
@@ -564,7 +568,7 @@ test('registry keeps the original four interfaces and appends the command checks
     assert.ok(Array.isArray(check.surfaces));
     assert.ok(Array.isArray(check.probes));
     assert.equal(check.timeoutMinutes, check.id === 'steer-main' ? 20 : 15);
-    assert.deepEqual(check.surfaces, check.id === 'steer-plugin' ? ['terminal'] : ['terminal', 't3']);
+    assert.deepEqual(check.surfaces, ['steer-plugin', 'session-end'].includes(check.id) ? ['terminal'] : ['terminal', 't3']);
     assert.deepEqual(check.probes, check.id === 'steer-plugin' ? ['wake-probe'] : []);
     assert.equal(getCheck(check.id), check);
     if (check.probes.length) assert.deepEqual(check.surfaces, ['terminal']);
@@ -1243,6 +1247,691 @@ test('run span uses the same normalized first prompt line as scoping', () => {
     assert.equal(runSpan([quoted, finish], 'wanted', 'DONE').startedAt, null);
     assert.deepEqual(scopeToRun([quoted, finish], 'wanted'), []);
   }
+});
+
+const phaseJob = 'jobs/repo/codex-job/job.json';
+const phaseJournal = 'transcript/subagents/workflows/wf-synthetic/journal.jsonl';
+const phaseWorkflow = 'transcript/workflows/wf-synthetic.json';
+const parserMessages = {
+  codex: 'Unknown header key "efort". Known keys: model, effort, mode, network, cd, add-dir, brief, web-search, fast, backend, grok-home, kimi-home.',
+  grok: 'web-search: cached is not supported for Grok; disabling web_search and web_fetch has not been proved in agent mode.',
+  zcode: 'mode: write is not supported for ZCode: it has no workspace sandbox, and its edit mode lets shell commands write anywhere. Use mode: yolo, or mode: read-only.',
+  kimi: "effort is required. Use `effort: default` to use Kimi's own default."
+};
+const fakeHeader = prompt => ({ status: 1, stderr: '', stdout: `error: ${parserMessages[Object.keys(badPrompts).find(backend => badPrompts[backend] === prompt)]}\n` });
+function phaseInput(dir, backends = ['codex']) { return { ...input(dir, backends), evidenceDir: dir }; }
+function phaseAnalyze(name, dir, backends = ['codex']) {
+  return getCheck(name).analyze(phaseInput(dir, backends), { checkHeaderRunner: fakeHeader });
+}
+function changeEntries(dir, change, file = 'transcript.jsonl') {
+  const target = path.join(dir, file), entries = readTranscript(target);
+  lines(target, change(entries) ?? entries);
+}
+const callBlock = (entries, id) => entries.flatMap(e => Array.isArray(e.message?.content) ? e.message.content : []).find(b => b.type === 'tool_use' && b.id === id);
+const resultEntry = (entries, id) => entries.find(e => e.message?.content?.some?.(b => b.type === 'tool_result' && b.tool_use_id === id));
+const hookEntry = entries => entries.find(e => e.attachment?.toolUseID === 'stop-codex');
+const at = value => `2026-10-22T10:${value}Z`;
+
+for (const backends of [BACKENDS, ['grok', 'kimi']]) {
+  test(`stop prompt holds the contract calls for ${backends}`, () => {
+    const prompt = getCheck('stop').prompt({ runId: 'prompt-run', backends });
+    assert.ok(prompt.includes(agentCalls(backends, { prefix: 'stop', seconds: 240 })));
+    assert.deepEqual(prompt.split('\n').filter(line => line.startsWith('TaskStop(')), backends.map(backend => `TaskStop({"task_id":"stop-${backend}"})`));
+    assert.ok(prompt.includes(waitLoop(20)));
+    assert.match(prompt, /state "running" and an attempt/);
+    assert.match(prompt, /Do not send messages, spawn replacements or wait for completion notices/);
+    assert.equal(prompt.trimEnd().split('\n').at(-1), 'LIVE-STOP-DONE');
+  });
+  test(`session-end prompt holds the contract calls for ${backends}`, () => {
+    const prompt = getCheck('session-end').prompt({ runId: 'prompt-run', backends });
+    const calls = prompt.split('\n').filter(line => line.startsWith('Agent(')).map(line => JSON.parse(line.slice(6, -1)));
+    assert.deepEqual(calls, backends.map(backend => ({ subagent_type: 'relay:job', name: `session-end-${backend}`,
+      description: `session-end-${backend}`, run_in_background: true,
+      prompt: `${backend === 'codex' ? '' : `backend: ${backend}\n`}model: ${MODELS[backend]}\neffort: low\n---\nRun the shell command \`sleep 150\` exactly once and wait for it. Then reply with exactly one line: session-end done for ${backend}` })));
+    assert.match(prompt, /state "running" and an attempt/);
+    assert.match(prompt, /end the turn without waiting for any completion notice/);
+    assert.equal(prompt.trimEnd().split('\n').at(-1), 'LIVE-SESSION-END-READY');
+  });
+  test(`spawn-check prompt holds the exact Agent calls and exported Workflow script for ${backends}`, () => {
+    const prompt = getCheck('spawn-check').prompt({ runId: 'prompt-run', backends });
+    assert.deepEqual(prompt.split('\n').filter(line => line.startsWith('Agent(')).map(line => JSON.parse(line.slice(6, -1))),
+      backends.map(backend => ({ subagent_type: 'relay:job', name: `spawn-bad-${backend}`, description: `spawn-bad-${backend}`, run_in_background: true, prompt: badPrompts[backend] })));
+    assert.equal(prompt.split('with no args:\n\n')[1].split('\n\nThen wait')[0], spawnScript(backends));
+    assert.match(prompt, /explicit request to use the Workflow tool/);
+    assert.match(prompt, /verbatim; do not retry/);
+    assert.ok(prompt.includes(waitLoop(60)));
+    assert.equal(prompt.trimEnd().split('\n').at(-1), 'LIVE-SPAWN-CHECK-DONE');
+  });
+}
+
+test('spawn-check bad prompts are the four distinct contract errors', () => {
+  assert.deepEqual(badPrompts, {
+    codex: 'model: gpt-6.1-sol\nefort: low\n---\nSay hi.',
+    grok: 'backend: grok\nmodel: grok-4.7\neffort: low\nweb-search: cached\n---\nSay hi.',
+    zcode: 'backend: zcode\nmodel: glm-5.3-flash\neffort: low\nmode: write\n---\nSay hi.',
+    kimi: 'backend: kimi\nmodel: kimi-code/kimi-for-coding\n---\nSay hi.'
+  });
+});
+
+test('spawn-check Workflow catches each bad call before its good call and runs backends in parallel', async () => {
+  const script = spawnScript(BACKENDS), seen = [];
+  const execute = new (Object.getPrototypeOf(async function () {}).constructor)('parallel', 'agent', script.replace('export const meta', 'const meta'));
+  const result = await execute(tasks => Promise.all(tasks.map(task => task())), async (prompt, options) => {
+    seen.push({ prompt, options });
+    const backend = BACKENDS.find(b => options.label.endsWith(`-${b}`));
+    assert.equal(options.agentType, 'relay:job');
+    if (options.label.startsWith('spawn-bad')) {
+      assert.equal(prompt, badPrompts[backend]);
+      if (backend === 'kimi') return 'unexpected return';
+      throw new Error(`denied ${backend}`);
+    }
+    assert.equal(prompt, goodPrompt(backend));
+    return `completed ${backend}`;
+  });
+  assert.deepEqual(seen.slice(0, 4).map(item => item.options.label), BACKENDS.map(b => `spawn-bad-${b}`));
+  for (const backend of BACKENDS) {
+    assert.deepEqual(result[backend], { bad: backend === 'kimi' ? { returned: 'unexpected return' } : { error: `denied ${backend}` }, good: `completed ${backend}` });
+  }
+});
+
+for (const [name, backends, timings] of [
+  ['stop', ['codex', 'kimi'], [{ cancelledSeconds: [0.2] }, { cancelledSeconds: [0.4] }]],
+  ['session-end', ['codex'], [{ ranOnSeconds: [130] }]], ['spawn-check', ['codex'], [{}]]
+]) {
+  test(`${name} reduced live fixture passes on ${backends}`, () => {
+    const analyzed = phaseAnalyze(name, path.join(fixture, name), backends);
+    assert.deepEqual(analyzed.results.map(row => row.reason), backends.map(() => null));
+    assert.deepEqual(analyzed.results.map(row => row.result), backends.map(() => 'pass'));
+    assert.deepEqual(analyzed.results.map(row => row.timings), timings);
+  });
+}
+
+const stopMutations = [
+  ...[
+    'TaskStop stopped the relay:job agent agent-codex. Its job codex-job had already ended (cancelled); nothing was cancelled.',
+    'TaskStop stopped the relay:job agent agent-codex. The relay hook asked its job codex-job to cancel, and the job has not ended yet:\npending',
+    'TaskStop stopped the relay:job agent agent-codex, and the relay hook could not cancel its job codex-job: failure. The job may still be running. Cancel it with: node "/plugin/scripts/companion.mjs" cancel codex-job'
+  ].map((text, i) => [`${['already-ended', 'pending', 'failed'][i]} hook context`, dir => changeEntries(dir, e => {
+    hookEntry(e).attachment.content = [text];
+  }), /successful hook context/]),
+  ['cancel posted after hook attachment', dir => edit(dir, 'jobs/repo/codex-job/inbox/claimed/cancel-codex.json', m => { m.createdAt = at('00:31.001'); }), /[Cc]ancel message/],
+  ['hook attachment without timestamp', dir => changeEntries(dir, e => { delete hookEntry(e).timestamp; }), /[Cc]ancel message/],
+  ['missing relay', dir => changeEntries(dir, e => e.filter(x => !x.message?.content?.some?.(b => b.id === 'spawn-codex'))), /one relay/],
+  ['wrong relay name', dir => changeEntries(dir, e => { callBlock(e, 'spawn-codex').input.name = 'other'; }), /one relay/],
+  ['second relay', dir => changeEntries(dir, e => { const c = structuredClone(e[1]), r = structuredClone(e[2]); c.message.content[0].id = 'second'; r.message.content[0].tool_use_id = 'second'; e.push(c, r); }), /one relay/],
+  ['missing agent id', dir => changeEntries(dir, e => { const r = resultEntry(e, 'spawn-codex'); delete r.toolUseResult; r.message.content[0].content = ''; }), /one relay/],
+  ['another pointer binding', dir => edit(dir, phaseJob, j => { j.relay.agentId = 'other'; }), /another relay/],
+  ['no hook context', dir => changeEntries(dir, e => e.filter(x => x !== hookEntry(e))), /hook context/],
+  ['hook context for another call', dir => changeEntries(dir, e => { hookEntry(e).attachment.toolUseID = 'other'; }), /hook context/],
+  ['hook context naming another job', dir => changeEntries(dir, e => { hookEntry(e).attachment.content = ['other-job']; }), /hook context/],
+  ['TaskStop naming another relay', dir => changeEntries(dir, e => { callBlock(e, 'stop-codex').input.task_id = 'other'; }), /one TaskStop/],
+  ['missing TaskStop result', dir => changeEntries(dir, e => e.filter(x => x !== resultEntry(e, 'stop-codex'))), /TaskStop result/],
+  ['TaskStop result error', dir => changeEntries(dir, e => { resultEntry(e, 'stop-codex').message.content[0].is_error = true; }), /TaskStop result/],
+  ['TaskStop result naming another relay', dir => changeEntries(dir, e => { resultEntry(e, 'stop-codex').toolUseResult.task_id = 'other'; }), /another relay/],
+  ['job not cancelled', dir => edit(dir, phaseJob, j => { j.state = 'running'; }), /not cancelled/],
+  ['cancelled 15.001 seconds later', dir => edit(dir, phaseJob, j => { j.completedAt = at('00:45.001'); }), /0 to 15 seconds/],
+  ['completion before TaskStop', dir => edit(dir, phaseJob, j => { j.completedAt = at('00:29.999'); }), /0 to 15 seconds/],
+  ['cancel posted before TaskStop', dir => edit(dir, 'jobs/repo/codex-job/inbox/claimed/cancel-codex.json', m => { m.createdAt = at('00:29.999'); }), /[Cc]ancel message/],
+  ['missing cancel', dir => fs.rmSync(path.join(dir, 'jobs/repo/codex-job/inbox/claimed/cancel-codex.json')), /[Cc]ancel message/],
+  ['wrong message kind', dir => edit(dir, 'jobs/repo/codex-job/inbox/claimed/cancel-codex.json', m => { m.kind = 'steer'; }), /[Cc]ancel message/],
+  ['wrong cancel outcome', dir => edit(dir, 'jobs/repo/codex-job/inbox/outcomes/cancel-codex.json', m => { m.action = 'interrupt-sent'; }), /[Cc]ancel message/],
+  ['attempt ended before TaskStop', dir => edit(dir, phaseJob, j => { j.attempts[0].endedAt = at('00:29.999'); }), /not active/],
+  ['attempt started at TaskStop', dir => edit(dir, phaseJob, j => { j.attempts[0].startedAt = at('00:30.000'); }), /not active/],
+  ['attempt not cancelled', dir => edit(dir, phaseJob, j => { j.attempts[0].state = 'completed'; }), /attempt is not cancelled/],
+  ['later attempt', dir => edit(dir, phaseJob, j => { j.attempts.push({ ...j.attempts[0], attempt: 2, startedAt: at('00:31.000') }); }), /not active/],
+  ['another relay version', dir => edit(dir, phaseJob, j => { j.attempts[0].relayVersion = 'other'; }), /relayVersion/],
+  ['second TaskStop', dir => changeEntries(dir, e => { e.push(callEntry('second-stop', 'TaskStop', { task_id: 'agent-codex' }, at('00:30.100'))); }), /one TaskStop/],
+  ['TaskStop outside the run scope', dir => changeEntries(dir, e => { e.splice(3, 0, textEntry('user', 'Live suite run other-run.')); }), /one TaskStop/],
+  ['hook outside the run scope', dir => changeEntries(dir, e => { e.splice(e.indexOf(hookEntry(e)), 0, textEntry('user', 'Live suite run other-run.')); }), /hook context/]
+];
+for (const [label, mutate, reason] of stopMutations) {
+  test(`stop rejects ${label}`, t => {
+    const dir = copy(t, 'stop'); mutate(dir);
+    const result = phaseAnalyze('stop', dir).results[0];
+    assert.equal(result.result, 'fail'); assert.match(result.reason, reason);
+  });
+}
+
+test('stop accepts agent id, JSON result fallback and inclusive 15 second cancellation', t => {
+  const dir = copy(t, 'stop');
+  changeEntries(dir, e => { callBlock(e, 'stop-codex').input.task_id = 'agent-codex'; delete resultEntry(e, 'stop-codex').toolUseResult; });
+  edit(dir, phaseJob, j => { j.completedAt = at('00:45.000'); });
+  assert.equal(phaseAnalyze('stop', dir).results[0].result, 'pass');
+  assert.equal(getCheck('stop').cell({ timings: { cancelledSeconds: [15] } }), 'cancelled in 15.0 s');
+});
+
+function cancelEvidence(dir, form, id, createdAt, action = 'cancelled') {
+  const jobDir = path.join(dir, 'jobs/repo/codex-job');
+  const message = { id, kind: 'cancel', text: '' };
+  if (form === 'receipt') recordReceipt(jobDir, message, { action });
+  else {
+    postInboxMessage(jobDir, message);
+    if (form === 'claimed') claimInboxMessages(jobDir);
+    writeOutcome(jobDir, id, { action });
+  }
+  const file = `jobs/repo/codex-job/inbox/${form === 'pending' ? '' : 'claimed/'}${id}.json`;
+  edit(dir, file, m => { m.createdAt = createdAt; });
+}
+
+for (const form of ['pending', 'claimed', 'receipt']) {
+  test(`stop accepts one ${form} cancel with a cancelled outcome`, t => {
+    const dir = copy(t, 'stop');
+    fs.rmSync(path.join(dir, 'jobs/repo/codex-job/inbox/claimed/cancel-codex.json'));
+    cancelEvidence(dir, form, 'cancel-codex', at('00:30.100'));
+    assert.equal(phaseAnalyze('stop', dir).results[0].result, 'pass');
+  });
+  for (const [when, timestamp] of [['before TaskStop', at('00:29.999')], ['during the hook', at('00:30.150')], ['after the hook', at('00:31.001')]]) {
+    test(`stop rejects a second ${form} cancel ${when}`, t => {
+      const dir = copy(t, 'stop');
+      cancelEvidence(dir, form, 'second-cancel', timestamp, form === 'receipt' ? 'no-op' : 'cancelled');
+      const result = phaseAnalyze('stop', dir).results[0];
+      assert.equal(result.result, 'fail');
+      assert.match(result.reason, /exactly one cancel message, found 2/);
+    });
+  }
+}
+
+for (const command of ['node /plugin/scripts/companion.mjs cancel codex-job',
+  'C(){ node "$CLAUDE_PLUGIN_ROOT/scripts/companion.mjs" "$@"; }; C cancel codex-job']) {
+  test(`stop rejects manual cancellation followed by a hook no-op: ${command}`, t => {
+    const dir = copy(t, 'stop');
+    changeEntries(dir, entries => { entries.push(callEntry('manual-cancel', 'Bash', { command }, at('00:30.050'))); });
+    cancelEvidence(dir, 'receipt', 'hook-no-op', at('00:30.250'), 'no-op');
+    assert.match(phaseAnalyze('stop', dir).results[0].reason, /exactly one cancel message, found 2/);
+  });
+}
+
+test('stop rejects a lone no-op cancel receipt', t => {
+  const dir = copy(t, 'stop');
+  cancelEvidence(dir, 'receipt', 'cancel-codex', at('00:30.100'), 'no-op');
+  assert.match(phaseAnalyze('stop', dir).results[0].reason, /no cancelled outcome/);
+});
+
+test('stop rejects a second cancel known only to the job ledger', t => {
+  const dir = copy(t, 'stop');
+  edit(dir, phaseJob, job => { job.messages.push({ id: 'second-cancel', kind: 'cancel', action: 'cancelled' }); });
+  assert.match(phaseAnalyze('stop', dir).results[0].reason, /exactly one cancel message, found 2/);
+});
+
+const sessionMutations = [
+  ['missing claudePid', dir => edit(dir, 'run.json', r => { delete r.claudePid; }), /claudePid/],
+  ['pid without start time', dir => edit(dir, 'run.json', r => { delete r.claudePid.startedAt; }), /claudePid/],
+  ['lead transcript entry after sessionEndedAt', dir => changeEntries(dir, e => {
+    e.push(textEntry('assistant', 'Still here.', at('00:30.001')));
+  }), /later than sessionEndedAt/],
+  ['later lead entry outside run scope', dir => changeEntries(dir, e => {
+    e.push(textEntry('user', 'Live suite run later-run.', at('00:30.001')));
+  }), /later than sessionEndedAt/],
+  ['missing relay', dir => changeEntries(dir, e => e.filter(x => !x.message?.content?.some?.(b => b.id === 'spawn-codex'))), /one relay/],
+  ['wrong relay name', dir => changeEntries(dir, e => { callBlock(e, 'spawn-codex').input.name = 'other'; }), /one relay/],
+  ['missing agent id', dir => changeEntries(dir, e => { const r = resultEntry(e, 'spawn-codex'); delete r.toolUseResult; r.message.content[0].content = ''; }), /one relay/],
+  ['running read at 14.999 seconds', dir => edit(dir, 'run.json', r => { r.afterEnd['agent-codex'].at = at('00:44.999'); }), /15 seconds/],
+  ['afterEnd not running', dir => edit(dir, 'run.json', r => { r.afterEnd['agent-codex'].state = 'completed'; }), /running observation/],
+  ['cancel in messages', dir => edit(dir, phaseJob, j => { j.messages = [{ kind: 'cancel' }]; }), /cancel message/],
+  ['cancel in pending inbox', dir => write(path.join(dir, 'jobs/repo/codex-job/inbox/cancel.json'), { kind: 'cancel' }), /cancel message/],
+  ['cancel in claimed inbox', dir => write(path.join(dir, 'jobs/repo/codex-job/inbox/claimed/cancel.json'), { kind: 'cancel' }), /cancel message/],
+  ['second attempt', dir => edit(dir, phaseJob, j => { j.attempts.push({ ...j.attempts[0], attempt: 2, startedAt: at('02:41.000') }); }), /not active/],
+  ['attempt starts at session end', dir => edit(dir, phaseJob, j => { j.attempts[0].startedAt = at('00:30.000'); }), /not active/],
+  ['attempt ends at session end', dir => edit(dir, phaseJob, j => { j.attempts[0].endedAt = at('00:30.000'); }), /not active/],
+  ['completed before session end', dir => edit(dir, phaseJob, j => { j.completedAt = at('00:29.999'); }), /did not complete/],
+  ['job not completed', dir => edit(dir, phaseJob, j => { j.state = 'running'; }), /did not complete/],
+  ['attempt not completed', dir => edit(dir, phaseJob, j => { j.attempts[0].state = 'failed'; }), /did not complete/],
+  ['missing report line', dir => fs.writeFileSync(path.join(dir, 'jobs/repo/codex-job/report.md'), 'other'), /Report/],
+  ['missing sessionEndedAt', dir => edit(dir, 'run.json', r => { delete r.sessionEndedAt; }), /sessionEndedAt/],
+  ['missing afterEnd', dir => edit(dir, 'run.json', r => { delete r.afterEnd; }), /running observation/],
+  ['another relay version', dir => edit(dir, phaseJob, j => { j.attempts[0].relayVersion = 'other'; }), /relayVersion/],
+  ['spawn outside the run scope', dir => changeEntries(dir, e => { e.splice(1, 0, textEntry('user', 'Live suite run other-run.')); }), /one relay/],
+  ['another run metadata', dir => edit(dir, 'run.json', r => { r.runId = 'other'; }), /this run/]
+];
+for (const [label, mutate, reason] of sessionMutations) {
+  test(`session-end rejects ${label}`, t => {
+    const dir = copy(t, 'session-end'); mutate(dir);
+    const result = phaseAnalyze('session-end', dir).results[0];
+    assert.equal(result.result, 'fail'); assert.match(result.reason, reason);
+  });
+}
+
+test('session-end accepts running at exactly 15 seconds and report case and full stop', t => {
+  const dir = copy(t, 'session-end');
+  edit(dir, 'run.json', r => { r.afterEnd['agent-codex'].at = at('00:45.000'); });
+  assert.equal(phaseAnalyze('session-end', dir).results[0].result, 'pass');
+  assert.equal(getCheck('session-end').cell({ timings: { ranOnSeconds: [130] } }), 'ran on and completed 130.0 s after the session ended');
+});
+
+function extraSpawnJob(dir, session = true) {
+  const job = read(path.join(dir, phaseJob));
+  job.id = 'extra-job'; job.relay.agentId = 'extra-agent';
+  if (!session) job.relay.transcriptPath = '../other-session/subagents/agent-extra.jsonl';
+  write(path.join(dir, 'jobs/repo/extra-job/job.json'), job);
+}
+const spawnMutations = [
+  ['missing Agent call', dir => changeEntries(dir, e => e.filter(x => !x.message?.content?.some?.(b => b.id === 'bad-codex'))), /one bad Agent/],
+  ['repeated Agent call', dir => changeEntries(dir, e => { const c = structuredClone(e[1]); c.message.content[0].id = 'second'; e.push(c); }), /one bad Agent/],
+  ['wrong bad prompt', dir => changeEntries(dir, e => { callBlock(e, 'bad-codex').input.prompt = goodPrompt('codex'); }), /expected prompt/],
+  ['Agent result not an error', dir => changeEntries(dir, e => { resultEntry(e, 'bad-codex').message.content[0].is_error = false; }), /Agent result/],
+  ['Agent deny text with another message', dir => changeEntries(dir, e => { resultEntry(e, 'bad-codex').message.content[0].content = 'Subagent spawn denied by a plugin: other'; }), /Agent result/],
+  ['meta file with bad name', dir => write(path.join(dir, 'transcript/subagents/agent-bad.meta.json'), { name: 'spawn-bad-codex' }), /meta file/],
+  ['nested meta file with bad description', dir => write(path.join(dir, 'transcript/subagents/workflows/other/agent-bad.meta.json'), { description: 'spawn-bad-codex' }), /meta file/],
+  ['wrong Workflow script', dir => changeEntries(dir, e => { const c = callBlock(e, 'workflow'); c.input.script = c.input.script.replace('spawn-good-codex', 'spawn-good-other'); }), /expected script/],
+  ['Workflow script with leading text', dir => changeEntries(dir, e => { callBlock(e, 'workflow').input.script = '// note\n' + callBlock(e, 'workflow').input.script; }), /expected script/],
+  ['Workflow args', dir => changeEntries(dir, e => { callBlock(e, 'workflow').input.args = {}; }), /no args/],
+  ['second Workflow', dir => changeEntries(dir, e => { e.push(callEntry('second-workflow', 'Workflow', { script: spawnScript(['codex']) })); }), /one Workflow/],
+  ['Workflow result error', dir => changeEntries(dir, e => { resultEntry(e, 'workflow').message.content[0].is_error = true; }), /Workflow launch/],
+  ['Workflow bad.error with another message', dir => edit(dir, phaseWorkflow, r => { r.result.codex.bad.error = 'other'; }), /bad.error/],
+  ['Workflow result of another run', dir => edit(dir, phaseWorkflow, r => { r.runId = 'other'; }), /another run/],
+  ['bad label started', dir => changeEntries(dir, e => { e.push({ type: 'started', label: 'spawn-bad-codex', agentId: 'bad' }); }, phaseJournal), /bad Workflow label/],
+  ['missing failed line', dir => changeEntries(dir, e => e.filter(x => x.type !== 'failed'), phaseJournal), /failed journal/],
+  ['failed line with an agent id', dir => changeEntries(dir, e => { e[0].agentId = 'bad'; }, phaseJournal), /failed journal/],
+  ['extra failed line', dir => changeEntries(dir, e => { e.push({ type: 'failed', key: 'extra', agentId: '' }); }, phaseJournal), /failed journal/],
+  ['missing good started line', dir => changeEntries(dir, e => e.filter(x => x.type !== 'started'), phaseJournal), /started journal/],
+  ['second good started line', dir => changeEntries(dir, e => { e.push({ ...e[1] }); }, phaseJournal), /started journal/],
+  ['good block not completed', dir => edit(dir, phaseWorkflow, r => { r.result.codex.good = r.result.codex.good.replace('completed', 'running'); }), /state block/],
+  ['good block job outside jobs home', dir => edit(dir, phaseWorkflow, r => { r.result.codex.good = r.result.codex.good.replace('repo/codex-job', '/tmp/other-job'); }), /dir does not match/],
+  ['good job of another run', dir => edit(dir, phaseJob, j => { j.relay.workflowRunId = 'other'; }), /another Workflow/],
+  ['good job with another label', dir => edit(dir, phaseJob, j => { j.relay.label = 'other'; }), /another Workflow/],
+  ['good job with another agent', dir => edit(dir, phaseJob, j => { j.relay.agentId = 'other'; }), /another Workflow/],
+  ['good job not completed', dir => edit(dir, phaseJob, j => { j.state = 'running'; }), /not completed/],
+  ['good report missing', dir => fs.writeFileSync(path.join(dir, 'jobs/repo/codex-job/report.md'), 'other'), /report/],
+  ['another relay version', dir => edit(dir, phaseJob, j => { j.attempts[0].relayVersion = 'other'; }), /relayVersion/],
+  ['extra job of this session', dir => extraSpawnJob(dir), /extra job/],
+  ['Agent call outside the run scope', dir => changeEntries(dir, e => { e.splice(1, 0, textEntry('user', 'Live suite run other-run.', at('00:00.500'))); }), /one bad Agent/],
+  ['Workflow outside the run scope', dir => changeEntries(dir, e => { e.splice(3, 0, textEntry('user', 'Live suite run other-run.', at('00:04.000'))); }), /one Workflow/]
+];
+for (const [label, mutate, reason] of spawnMutations) {
+  test(`spawn-check rejects ${label}`, t => {
+    const dir = copy(t, 'spawn-check'); mutate(dir);
+    const result = phaseAnalyze('spawn-check', dir).results[0];
+    assert.equal(result.result, 'fail'); assert.match(result.reason, reason);
+  });
+}
+
+test('spawn-check accepts tool_use_error wrappers and ignores jobs of other sessions', t => {
+  const dir = copy(t, 'spawn-check'); extraSpawnJob(dir, false);
+  changeEntries(dir, e => { const b = resultEntry(e, 'bad-codex').message.content[0]; b.content = `\n <tool_use_error>\n${b.content}\n</tool_use_error> \n`; delete resultEntry(e, 'workflow').toolUseResult; });
+  assert.equal(phaseAnalyze('spawn-check', dir).results[0].result, 'pass');
+  assert.equal(getCheck('spawn-check').cell(), "refused at the spawn with the parser's message; a valid header runs");
+});
+
+for (const [label, result] of [
+  ['valid header result', { status: 0, stdout: 'ok\n', stderr: '' }],
+  ['usage error', { status: 1, stdout: '', stderr: 'Unknown command' }],
+  ['empty parser message', { status: 1, stdout: 'error: \n', stderr: '' }],
+  ['blank parser message', { status: 1, stdout: 'error:   \n', stderr: '' }],
+  ['process failure', { error: new Error('timeout'), status: null, stdout: '' }]
+]) {
+  test(`spawn-check fails when check-header returns ${label}`, () => {
+    const row = getCheck('spawn-check').analyze(phaseInput(path.join(fixture, 'spawn-check')), { checkHeaderRunner: () => result }).results[0];
+    assert.equal(row.result, 'fail'); assert.match(row.reason, /check-header did not refuse/);
+  });
+}
+
+test('spawn-check runs the real repository check-header for all bad and good prompts', t => {
+  const first = checkHeader(badPrompts.codex);
+  if (/Unknown command.*check-header/i.test(first.stderr ?? '')) {
+    t.skip('companion check-header does not exist yet; the injected runner covers analysis.'); return;
+  }
+  for (const backend of BACKENDS) {
+    assert.equal(expectedMessage(badPrompts[backend]), parserMessages[backend]);
+    const good = checkHeader(goodPrompt(backend));
+    assert.equal(good.status, 0, good.stderr); assert.equal(good.stdout, 'ok\n'); assert.equal(good.stderr, '');
+  }
+  assert.equal(getCheck('spawn-check').analyze(phaseInput(path.join(fixture, 'spawn-check'))).results[0].result, 'pass');
+});
+
+function allSpawnBackends(t) {
+  const dir = copy(t, 'spawn-check');
+  const original = readTranscript(path.join(dir, 'transcript.jsonl'));
+  const entries = [original[0]], journal = [], result = {};
+  for (const backend of BACKENDS) {
+    const job = read(path.join(dir, phaseJob));
+    job.id = `${backend}-job`; job.request = { backend, model: MODELS[backend] };
+    job.relay = { ...job.relay, agentId: `agent-${backend}`, label: `spawn-good-${backend}`,
+      transcriptPath: `../transcript/subagents/workflows/wf-synthetic/agent-${backend}.jsonl` };
+    write(path.join(dir, `jobs/repo/${backend}-job/job.json`), job);
+    fs.writeFileSync(path.join(dir, `jobs/repo/${backend}-job/report.md`), `Spawn check ok for ${backend}.\n`);
+    entries.push(callEntry(`bad-${backend}`, 'Agent', { subagent_type: 'relay:job', name: `spawn-bad-${backend}`, prompt: badPrompts[backend] }, at('00:01.000')),
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `bad-${backend}`, is_error: true, content: `Subagent spawn denied by a plugin: ${parserMessages[backend]}` }] } });
+    journal.push({ type: 'failed', key: `bad-${backend}`, agentId: '' }, { type: 'started', key: `good-${backend}`, agentId: `agent-${backend}`, label: `spawn-good-${backend}` });
+    result[backend] = { bad: { error: `Workflow agent spawn denied by a plugin: ${parserMessages[backend]}` }, good: `state: completed\njob: ${backend}-job\ndir: repo/${backend}-job` };
+  }
+  entries.push(callEntry('workflow', 'Workflow', { script: spawnScript(BACKENDS) }, at('00:05.000')), original[4], original[5]);
+  lines(path.join(dir, 'transcript.jsonl'), entries); lines(path.join(dir, phaseJournal), journal);
+  write(path.join(dir, phaseWorkflow), { runId: 'wf-synthetic', result });
+  return dir;
+}
+
+test('spawn-check counts unlabeled failed entries across all four backends', t => {
+  const dir = allSpawnBackends(t);
+  assert.deepEqual(phaseAnalyze('spawn-check', dir, BACKENDS).results.map(r => r.reason), BACKENDS.map(() => null));
+  changeEntries(dir, e => { e.splice(0, 1); }, phaseJournal);
+  assert.ok(phaseAnalyze('spawn-check', dir, BACKENDS).results.every(r => r.result === 'fail'));
+});
+
+function sessionDriver(t, failure) {
+  const dir = copy(t, 'session-end'), run = { ...read(path.join(dir, 'run.json')), backends: ['codex'], surface: 'terminal',
+    relayVersion: '3.0.0-test', transcript: path.join(dir, 'transcript.jsonl'), sessionId: 'fake-session' };
+  delete run.sessionEndedAt; delete run.afterEnd; delete run.claudePid;
+  let clock = Date.parse(at('00:29.000')), saves = [], polls = 0, statusCalls = 0, paneCalls = 0, stopped = false;
+  const identity = { pid: 12345, startedAt: 'Thu Oct 22 10:00:00 2026' };
+  const ctx = { runId: run.runId, backends: run.backends, run, evidenceDir: dir, jobsHome: path.join(dir, 'jobs'), pluginDir: '/tmp/fake-plugin',
+    keep: true, save() { saves.push(structuredClone(run)); write(path.join(dir, 'run.json'), run); },
+    async paneDriver(input, check, options) {
+      paneCalls++; assert.equal(input, ctx); assert.equal(check.id, 'session-end'); assert.equal(options.keep, false); assert.equal(typeof options.drive, 'function');
+      assert.equal(check.completed(readTranscript(run.transcript)), true);
+      if (failure === 'missing marker') changeEntries(dir, e => e.slice(0, -1));
+      if (failure === 'pane timeout') throw new Error('Timed out waiting for marker.');
+      if (failure !== 'no pid recorded') options.drive(['stop', 'fake-pane']);
+    } };
+  const dependencies = { now: () => clock, sleep: async ms => { clock += ms; },
+    drive(args) {
+      assert.equal(args[1], 'fake-pane');
+      if (args[0] === 'pid') { assert.equal(stopped, false); return failure === 'missing pid' ? '' : '12345\n'; }
+      assert.equal(args[0], 'stop');
+      if (!['missing pid', 'missing start time'].includes(failure)) {
+        assert.deepEqual(run.claudePid, identity);
+        assert.deepEqual(saves.at(-1).claudePid, identity);
+      }
+      stopped = true;
+    },
+    processRunner({ pid, timeoutMs }) {
+      assert.equal(pid, identity.pid); assert.ok(timeoutMs > 0 && timeoutMs <= 5000);
+      assert.equal(run.sessionEndedAt, undefined);
+      if (!stopped) return failure === 'missing start time' ? '' : identity.startedAt;
+      polls++;
+      return failure === 'process timeout' || polls <= 4 ? identity.startedAt :
+        failure === 'pid reused' ? 'Thu Oct 22 10:00:30 2026' : '';
+    },
+    companionRunner: async (input, args) => {
+      assert.equal(input, ctx); assert.equal(args[0], 'status'); assert.equal(args[1], path.join(dir, 'jobs/repo/codex-job')); assert.equal(args[2], '--json');
+      assert.ok(clock - Date.parse(run.sessionEndedAt) >= 20000);
+      assert.ok(saves.some(saved => saved.sessionEndedAt)); statusCalls++;
+      if (statusCalls === 1 || failure === 'job timeout') return JSON.stringify({ state: 'running' });
+      if (statusCalls === 2) return JSON.stringify({ state: 'running' });
+      clock = Date.parse(at('02:40.000'));
+      return JSON.stringify({ state: 'completed' });
+    } };
+  return { ctx, dependencies, state: () => ({ saves, polls, statusCalls, paneCalls, stopped }) };
+}
+
+test('session-end runTerminal records pid before stop, closes even under keep, waits for process exit, saves observations, waits for jobs and analyzes', async t => {
+  const { ctx, dependencies, state } = sessionDriver(t);
+  const result = await getCheck('session-end').runTerminal(ctx, dependencies);
+  assert.equal(result.results[0].result, 'pass', result.results[0].reason);
+  assert.equal(ctx.run.sessionEndedAt, at('00:30.000'));
+  assert.deepEqual(ctx.run.afterEnd, { 'agent-codex': { at: at('00:50.000'), state: 'running' } });
+  assert.ok(Date.parse(ctx.run.checkFinishedAt) >= Date.parse(ctx.run.afterEnd['agent-codex'].at));
+  assert.equal(state().paneCalls, 1); assert.equal(state().polls, 5); assert.equal(state().statusCalls, 3);
+  assert.ok(state().saves.some(saved => saved.afterEnd?.['agent-codex']?.state === 'running'));
+  assert.deepEqual(read(path.join(ctx.evidenceDir, 'run.json')), ctx.run);
+});
+for (const [failure, message] of [
+  ['missing marker', /Session ended without LIVE-SESSION-END-READY/], ['pane timeout', /Timed out waiting for marker/],
+  ['missing pid', /Missing Claude pane pid/], ['no pid recorded', /Missing Claude pane pid/],
+  ['missing start time', /Missing Claude process start time/],
+  ['process timeout', /Timed out waiting for the Claude process/], ['job timeout', /Timed out waiting for jobs/]
+]) {
+  test(`session-end runTerminal saves and throws on ${failure}`, async t => {
+    const { ctx, dependencies, state } = sessionDriver(t, failure);
+    const listeners = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => process.listeners(signal));
+    await assert.rejects(getCheck('session-end').runTerminal(ctx, dependencies), message);
+    assert.deepEqual(['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => process.listeners(signal)), listeners);
+    if (failure === 'missing pid' || failure === 'missing start time') assert.equal(state().stopped, true);
+    assert.match(state().saves.at(-1).error, message);
+    assert.deepEqual(read(path.join(ctx.evidenceDir, 'run.json')), ctx.run);
+    if (failure === 'job timeout') assert.equal(ctx.run.afterEnd['agent-codex'].state, 'running');
+    else assert.equal(ctx.run.sessionEndedAt, undefined);
+  });
+}
+
+for (const name of ['stop', 'session-end', 'spawn-check']) {
+  test(`${name} analysis replays from a copy after original evidence is removed`, t => {
+    const dir = copy(t, name), destination = temp(t), backends = name === 'stop' ? ['codex', 'kimi'] : ['codex'];
+    const run = { ...(name === 'session-end' ? read(path.join(dir, 'run.json')) : {}), runId: 'synthetic-run', jobsHome: path.join(dir, 'jobs'), transcript: path.join(dir, 'transcript.jsonl') };
+    if (name === 'spawn-check') edit(dir, phaseWorkflow, r => { r.result.codex.good = r.result.codex.good.replace('repo/codex-job', path.join(dir, 'jobs/repo/codex-job')); });
+    const before = phaseAnalyze(name, dir, backends);
+    assert.ok(before.results.every(r => r.result === 'pass'));
+    run.copy = copyEvidence(run, before, destination);
+    write(path.join(destination, 'run.json'), run);
+    fs.rmSync(dir, { recursive: true });
+    const after = getCheck(name).analyze({ ...phaseInput(destination, backends), transcript: run.copy.transcript, jobsHome: run.copy.jobsHome }, { checkHeaderRunner: fakeHeader });
+    assert.deepEqual(after.results, before.results);
+  });
+}
+
+for (const failure of ['meta file with bad name', 'extra job of this session', 'extra job without a transcript file']) {
+  test(`spawn-check copy preserves failure evidence for ${failure}`, t => {
+    const dir = copy(t, 'spawn-check'), destination = temp(t);
+    if (failure === 'extra job without a transcript file') {
+      extraSpawnJob(dir);
+      edit(dir, 'jobs/repo/extra-job/job.json', job => { job.relay.transcriptPath = '../transcript/subagents/agent-missing.jsonl'; });
+    } else spawnMutations.find(([label]) => label === failure)[1](dir);
+    const before = phaseAnalyze('spawn-check', dir);
+    const run = { runId: 'synthetic-run', jobsHome: path.join(dir, 'jobs'), transcript: path.join(dir, 'transcript.jsonl') };
+    run.copy = copyEvidence(run, before, destination); write(path.join(destination, 'run.json'), run);
+    fs.rmSync(dir, { recursive: true });
+    const after = getCheck('spawn-check').analyze({ ...phaseInput(destination), transcript: run.copy.transcript, jobsHome: run.copy.jobsHome }, { checkHeaderRunner: fakeHeader });
+    assert.equal(after.results[0].result, 'fail'); assert.equal(after.results[0].reason, before.results[0].reason);
+  });
+}
+
+test('spawn-check accepts the Workflow script with a trailing newline, as a lead copied it live', t => {
+  const dir = copy(t, 'spawn-check');
+  changeEntries(dir, e => { callBlock(e, 'workflow').input.script += '\n'; });
+  assert.equal(phaseAnalyze('spawn-check', dir).results[0].result, 'pass');
+});
+
+test('stop accepts cancellation and cancel posting at the exact TaskStop timestamp', t => {
+  const dir = copy(t, 'stop');
+  edit(dir, phaseJob, j => { j.completedAt = at('00:30.000'); j.attempts[0].endedAt = at('00:30.000'); });
+  edit(dir, 'jobs/repo/codex-job/inbox/claimed/cancel-codex.json', m => { m.createdAt = at('00:30.000'); });
+  assert.deepEqual(phaseAnalyze('stop', dir).results[0].timings, { cancelledSeconds: [0] });
+  assert.equal(phaseAnalyze('stop', dir).results[0].result, 'pass');
+});
+
+test('session-end rejects a second relay for the backend', t => {
+  const dir = copy(t, 'session-end');
+  changeEntries(dir, entries => {
+    const call = structuredClone(entries[1]), result = structuredClone(entries[2]);
+    call.message.content[0].id = 'second'; result.message.content[0].tool_use_id = 'second';
+    entries.push(call, result);
+  });
+  assert.match(phaseAnalyze('session-end', dir).results[0].reason, /one relay/);
+});
+
+for (const name of ['stop', 'session-end', 'spawn-check']) {
+  for (const field of ['backend', 'model']) {
+    test(`${name} rejects a job with another ${field}`, t => {
+      const dir = copy(t, name);
+      edit(dir, phaseJob, job => { job.request[field] = field === 'backend' ? 'kimi' : MODELS.kimi; });
+      const result = phaseAnalyze(name, dir).results[0];
+      assert.equal(result.result, 'fail');
+      assert.match(result.reason, new RegExp(`Job ${field}`));
+    });
+  }
+}
+
+test('stop accepts cancel posting at the hook attachment timestamp', t => {
+  const dir = copy(t, 'stop');
+  edit(dir, 'jobs/repo/codex-job/inbox/claimed/cancel-codex.json', m => { m.createdAt = at('00:31.000'); });
+  assert.equal(phaseAnalyze('stop', dir).results[0].result, 'pass');
+});
+
+for (const command of [
+  "printf '%s\\n' 'node /plugin/scripts/companion.mjs cancel codex-job'",
+  'node /plugin/scripts/companion.mjs status cancel-job --json'
+]) {
+  test(`stop accepts Bash text without a second cancel message: ${command}`, t => {
+    const dir = copy(t, 'stop');
+    changeEntries(dir, entries => { entries.push(callEntry('printed-cancel', 'Bash', { command }, at('00:30.100'))); });
+    assert.equal(phaseAnalyze('stop', dir).results[0].result, 'pass');
+  });
+}
+
+test('session-end accepts a lead entry at sessionEndedAt and ignores later sidechain entries', t => {
+  const dir = copy(t, 'session-end');
+  changeEntries(dir, entries => {
+    entries.push(textEntry('assistant', 'Ended.', at('00:30.000')),
+      textEntry('assistant', 'Sidechain.', at('00:31.000'), { isSidechain: true }));
+  });
+  assert.equal(phaseAnalyze('session-end', dir).results[0].result, 'pass');
+});
+
+test('session-end runTerminal accepts a reused pid with a different start time and removes handlers', async t => {
+  const { ctx, dependencies } = sessionDriver(t, 'pid reused');
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'], listeners = signals.map(signal => process.listeners(signal));
+  const result = await getCheck('session-end').runTerminal(ctx, dependencies);
+  assert.equal(result.results[0].result, 'pass', result.results[0].reason);
+  assert.equal(ctx.run.sessionEndedAt, at('00:30.000'));
+  assert.deepEqual(signals.map(signal => process.listeners(signal)), listeners);
+});
+
+for (const stage of ['pane pid', 'process start time']) {
+  for (const driverFails of [false, true]) {
+    test(`session-end records a failed ${stage} read and stops the pane${driverFails ? ' without hiding the driver error' : ''}`, async t => {
+      const { ctx, dependencies } = sessionDriver(t);
+      const pidError = new Error(`${stage} read failed.`), driverError = new Error('Session startup failed.');
+      let stopped = false;
+      dependencies.drive = args => {
+        if (args[0] === 'pid') {
+          if (stage === 'pane pid') throw pidError;
+          return '12345';
+        }
+        assert.equal(args[0], 'stop');
+        assert.equal(ctx.run.claudePidError, pidError.message);
+        stopped = true;
+      };
+      dependencies.processRunner = () => { throw pidError; };
+      ctx.paneDriver = async (input, check, { drive }) => {
+        try { if (driverFails) throw driverError; }
+        finally { drive(['stop', 'fake-pane']); }
+      };
+      await assert.rejects(getCheck('session-end').runTerminal(ctx, dependencies), error => {
+        if (driverFails) assert.equal(error, driverError);
+        else {
+          assert.match(error.message, /Missing Claude pane pid and start time/);
+          assert.ok(error.message.includes(pidError.message));
+        }
+        return true;
+      });
+      assert.equal(stopped, true);
+      assert.equal(ctx.run.claudePid, undefined);
+      assert.equal(ctx.run.claudePidError, pidError.message);
+      assert.deepEqual(read(path.join(ctx.evidenceDir, 'run.json')), ctx.run);
+    });
+  }
+}
+
+for (const kind of ['Promise', 'thenable']) {
+  test(`session-end rejects a ${kind} from processRunner in the synchronous stop wrapper`, async t => {
+    const { ctx, dependencies, state } = sessionDriver(t, 'missing start time');
+    dependencies.processRunner = () => kind === 'Promise' ? Promise.resolve('start time') : { then() {} };
+    await assert.rejects(getCheck('session-end').runTerminal(ctx, dependencies), /processRunner must be synchronous in the stop wrapper/);
+    assert.equal(state().stopped, true);
+    assert.equal(ctx.run.claudePid, undefined);
+    assert.equal(ctx.run.sessionEndedAt, undefined);
+    assert.match(ctx.run.claudePidError, /must be synchronous/);
+    assert.deepEqual(read(path.join(ctx.evidenceDir, 'run.json')), ctx.run);
+  });
+}
+
+test('session-end awaits an asynchronous processRunner in the process wait loop', async t => {
+  const { ctx, dependencies, state } = sessionDriver(t);
+  const runner = dependencies.processRunner;
+  dependencies.processRunner = args => state().stopped ? Promise.resolve(runner(args)) : runner(args);
+  const result = await getCheck('session-end').runTerminal(ctx, dependencies);
+  assert.equal(result.results[0].result, 'pass', result.results[0].reason);
+  assert.equal(state().polls, 5);
+});
+
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGKILL']) {
+  for (const stage of ['process wait', 'status call']) {
+    test(`session-end classifies a child ${signal} during ${stage} before its signal handler runs`, async t => {
+      const { ctx, dependencies, state } = sessionDriver(t);
+      const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'], listeners = signals.map(name => process.listeners(name));
+      const childError = Object.assign(new Error('Child command failed.'), { signal, status: null });
+      if (stage === 'process wait') {
+        const runner = dependencies.processRunner;
+        dependencies.processRunner = args => {
+          if (state().stopped) throw childError;
+          return runner(args);
+        };
+      } else dependencies.companionRunner = () => { throw childError; };
+      await assert.rejects(getCheck('session-end').runTerminal(ctx, dependencies), error => {
+        if (signal === 'SIGKILL') assert.equal(error, childError);
+        else assert.equal(error.message, 'Interrupted.');
+        return true;
+      });
+      assert.equal(Boolean(ctx.run.interrupted), signal !== 'SIGKILL');
+      assert.deepEqual(read(path.join(ctx.evidenceDir, 'run.json')), ctx.run);
+      assert.deepEqual(signals.map(name => process.listeners(name)), listeners);
+    });
+  }
+}
+
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  for (const stage of ['process wait', 'observation delay', 'job wait']) {
+    test(`session-end runTerminal handles ${signal} during ${stage} after pane close and removes handlers`, async t => {
+      const { ctx, dependencies, state } = sessionDriver(t);
+      const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'], listeners = signals.map(name => process.listeners(name));
+      const sleep = dependencies.sleep;
+      let signalled = false;
+      dependencies.sleep = async ms => {
+        const ready = stage === 'process wait' ? !ctx.run.sessionEndedAt :
+          stage === 'observation delay' ? ctx.run.sessionEndedAt && !ctx.run.afterEnd : state().statusCalls >= 2;
+        if (ready && !signalled) {
+          assert.equal(state().stopped, true);
+          signalled = true; process.emit(signal);
+        }
+        await sleep(ms);
+      };
+      await assert.rejects(getCheck('session-end').runTerminal(ctx, dependencies), { message: 'Interrupted.' });
+      assert.equal(signalled, true);
+      assert.equal(ctx.run.interrupted, true);
+      assert.equal(read(path.join(ctx.evidenceDir, 'run.json')).interrupted, true);
+      assert.deepEqual(signals.map(name => process.listeners(name)), listeners);
+    });
+  }
+}
+
+for (const artifact of ['job', 'meta file']) {
+  for (const boundary of ['before run', 'at run start', 'inside run', 'at next run', 'after next run']) {
+    test(`spawn-check scopes an earlier session's ${artifact}: ${boundary}`, t => {
+      const dir = copy(t, 'spawn-check');
+      changeEntries(dir, entries => {
+        entries.unshift(textEntry('user', 'Live suite run earlier-run.', '2026-10-22T09:59:00.000Z'));
+        entries.push(textEntry('user', 'Live suite run next-run.', at('01:00.000')));
+      });
+      const when = { 'before run': '2026-10-22T09:59:59.999Z', 'at run start': at('00:00.000'),
+        'inside run': at('00:10.000'), 'at next run': at('01:00.000'), 'after next run': at('01:00.001') }[boundary];
+      if (artifact === 'job') {
+        extraSpawnJob(dir);
+        edit(dir, 'jobs/repo/extra-job/job.json', job => { job.createdAt = when; job.relay.workflowRunId = 'wf-earlier'; });
+      } else {
+        const file = path.join(dir, 'transcript/subagents/agent-earlier.meta.json');
+        write(file, { name: 'spawn-bad-codex' });
+        fs.utimesSync(file, new Date(when), new Date(when));
+      }
+      const result = phaseAnalyze('spawn-check', dir).results[0];
+      if (boundary === 'at run start' || boundary === 'inside run') {
+        assert.equal(result.result, 'fail'); assert.match(result.reason, artifact === 'job' ? /extra job/ : /meta file/);
+      } else assert.equal(result.result, 'pass', result.reason);
+    });
+  }
+}
+
+
+test('session-end runTerminal reports Interrupted when a signalled process read rejects', async t => {
+  const { ctx, dependencies, state } = sessionDriver(t);
+  const processRunner = dependencies.processRunner;
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'], listeners = signals.map(signal => process.listeners(signal));
+  dependencies.processRunner = options => {
+    if (!state().stopped) return processRunner(options);
+    process.emit('SIGTERM');
+    throw new Error('Process read interrupted.');
+  };
+  await assert.rejects(getCheck('session-end').runTerminal(ctx, dependencies), { message: 'Interrupted.' });
+  assert.equal(ctx.run.interrupted, true);
+  assert.deepEqual(signals.map(signal => process.listeners(signal)), listeners);
 });
 
 function commandSource(shape) {

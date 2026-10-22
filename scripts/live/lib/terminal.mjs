@@ -37,7 +37,7 @@ export function paneStartArgs(ctx, name, sessionId, env = process.env) {
     '--env', `RELAY_JOBS_CANCEL_GRACE_MS=${cancelGrace(env)}`, '--', ...claudeArgs({ ...ctx, sessionId })];
 }
 
-function pane(args, input) {
+export function pane(args, input) {
   return execFileSync('bash', [paneScript, ...args], { encoding: 'utf8', input, timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
 }
 

@@ -60,6 +60,29 @@ export function parseHeaderPrompt(text) {
   return { header, brief };
 }
 
+export function readLaunchPrompt(text, { baseDir = process.cwd(), env = process.env, relativePaths = true } = {}) {
+  const { header, brief } = parseHeaderPrompt(text);
+  const deferredBrief = header.brief && !relativePaths && !path.isAbsolute(header.brief.trim());
+  let briefText = brief;
+  if (header.brief) {
+    if (brief.trim()) {
+      throw new UsageError("The header names a brief file, so nothing may follow the dashes.");
+    }
+    if (!deferredBrief) briefText = fs.readFileSync(path.resolve(baseDir, header.brief), "utf8");
+  }
+  if (!deferredBrief && !briefText.trim()) {
+    throw new UsageError("The brief is empty.");
+  }
+  // The spawn cannot know the relay's final directory, including an uncreated worktree.
+  if (!relativePaths) {
+    if (!path.isAbsolute((header.cd ?? "").trim())) delete header.cd;
+    header.addDirs = header.addDirs.filter(dir => path.isAbsolute(dir.trim()));
+  }
+  return { request: buildLaunchRequest(header, {
+    baseDir, env, skipLinkedWorktreeRoots: !relativePaths && !path.isAbsolute((header.cd ?? "").trim())
+  }), brief: briefText };
+}
+
 function parseBoolean(value, name) {
   if (value == null || value === "") {
     return false;
@@ -120,6 +143,7 @@ function normalizeModelOrEffort(value, name, backend = DEFAULT_BACKEND) {
 // Build the stored launch request from header values. `baseDir` resolves a relative cd.
 // `env` locates the user config: when `fastTier` there is "off", `fast: true` is ignored
 // with a note, never an error, and the backend config sets the tier.
+// `skipLinkedWorktreeRoots` defers inferred roots when the job's directory is unknown.
 export function buildLaunchRequest(values, options = {}) {
   const baseDir = options.baseDir ?? process.cwd();
   const env = options.env ?? process.env;
@@ -181,7 +205,7 @@ export function buildLaunchRequest(values, options = {}) {
       notes.push("network and add-dir are ignored in yolo mode: the sandbox is off.");
     }
   } else if (mode === "write") {
-    writableRoots = [...new Set([...addDirs, ...linkedWorktreeRoots(cwd)])];
+    writableRoots = [...new Set([...addDirs, ...(options.skipLinkedWorktreeRoots ? [] : linkedWorktreeRoots(cwd))])];
   } else if (addDirs.length > 0) {
     notes.push("add-dir is ignored in read-only mode.");
   }

@@ -45,6 +45,31 @@ Phase 2, commands answered by the module:
 - The live suite has checks for the commands: `commands` (status, result and cancel on each backend,
   in the terminal and in T3), `transfer`, and `headless` (`claude -p`, `num_turns: 0`).
 
+Phase 3, spawn and stop like a Claude agent:
+
+- **`TaskStop` on a `relay:job` agent cancels its job.** A `PostToolUse` hook on `TaskStop` runs
+  `companion cancel` for the job of the relay it stopped, and the TaskStop result comes with the
+  cancelled job's block. Until now TaskStop stopped only the relay, and the job ran on. A relay that
+  ends any other way (the Claude session ends, its process is killed, its Workflow is stopped) still
+  leaves its job running, so a `resumeFromRunId` after a stopped Workflow still adopts its jobs; a
+  TaskStop on a Workflow comes back with the list of its jobs that keep running. A cancel the hook
+  could not finish is told to the caller and shown as a `relay-violation:` line. The
+  message `cancel` still cancels a job and lets its relay hand back the cancelled state; it is also
+  how to cancel one Workflow agent's job, since TaskStop has no task for one agent of a Workflow.
+- **A bad header fails at the spawn.** The hooks module has an `agent.spawn` hook: before a
+  `relay:job` agent starts, it runs the new `companion check-header`, the parser and request
+  builder `start` uses, and refuses the spawn with the parser's message. The Agent call fails, or a
+  Workflow script's `agent()` throws, at once (`Subagent spawn denied by a plugin: <reason>`).
+  Until now a relay started, its start failed, and the relay handed the error back. `start` keeps
+  every check, and checks relative `cd:`, `add-dir:` and `brief:` paths alone, since the relay's
+  directory is not known at the spawn. A Workflow script that runs agents in `parallel` should catch
+  the error per call.
+- A relay never hands Claude Code's interrupt note (`[Request interrupted by user for tool use]`) to its job.
+  A relay stopped by TaskStop that ran again, resumed by a message or as a Workflow relay's second loop, handed
+  it over, and on a cancelled job that restarted the job.
+- The live suite has three more checks: `stop` (TaskStop cancels the job within 15 s), `session-end`
+  (the job runs on after the Claude session ends, terminal only) and `spawn-check`.
+
 Phase 5, the live suite (development tooling; the plugin itself does not change):
 
 - `scripts/live/suite.mjs` runs live checks against the real backends, in the terminal and in T3 Code, and

@@ -1,9 +1,9 @@
 import { analyzeCheck, formatSeconds, JOBS_HOME_EXPR, MODELS } from '../lib/evidence.mjs';
 
-export function agentCalls(backends, { prefix = 'steer', seconds = 180 } = {}) {
+export function agentCalls(backends, { prefix = 'steer', seconds = 180, brief: briefOf } = {}) {
   return backends.map(backend => {
     const header = `${backend === 'codex' ? '' : `backend: ${backend}\n`}model: ${MODELS[backend]}\neffort: low\n---\n`;
-    const brief = prefix === 'continue' ? `Reply with exactly one line: first turn for ${backend}. Do not run any command.` :
+    const brief = briefOf ? briefOf(backend) : prefix === 'continue' ? `Reply with exactly one line: first turn for ${backend}. Do not run any command.` :
       `Run the shell command \`sleep ${seconds}\` exactly once, and wait for it to finish. ` +
       'Do not shorten, interrupt or restart the sleep when messages arrive. ' +
       'Then list every message received during this job verbatim, one per line, and stop. ' +

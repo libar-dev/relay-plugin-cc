@@ -1,0 +1,6 @@
+{
+  "agentId": "agent-kimi",
+  "jobId": "kimi-job",
+  "jobDir": "repo/kimi-job",
+  "transcriptPath": "../transcript/subagents/agent-kimi.jsonl"
+}

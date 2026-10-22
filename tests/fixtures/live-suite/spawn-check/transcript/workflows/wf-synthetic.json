@@ -1,0 +1,11 @@
+{
+  "runId": "wf-synthetic",
+  "result": {
+    "codex": {
+      "bad": {
+        "error": "Workflow agent spawn denied by a plugin: Unknown header key \"efort\". Known keys: model, effort, mode, network, cd, add-dir, brief, web-search, fast, backend, grok-home, kimi-home."
+      },
+      "good": "state: completed\njob: codex-job\ndir: repo/codex-job"
+    }
+  }
+}

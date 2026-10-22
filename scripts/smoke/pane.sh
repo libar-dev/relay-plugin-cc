@@ -10,6 +10,7 @@ Usage: pane.sh start NAME DIR [--env VAR=value]... -- command [args...]
        pane.sh wait NAME REGEX [SECONDS]  An extended regex matched against each screen line. Default: 30 seconds
        pane.sh trust NAME
        pane.sh attach-command NAME
+       pane.sh pid NAME
        pane.sh stop NAME
        pane.sh list
 
@@ -21,7 +22,7 @@ die() { printf '%s\n' "$*" >&2; exit 2; }
 [[ $# -gt 0 ]] || { usage >&2; exit 2; }
 action=$1; shift
 case "$action" in -h|--help) usage; exit 0 ;; esac
-case "$action" in start|send|keys|read|wait|trust|attach-command|stop|list) ;; *) die "Unknown command: $action" ;; esac
+case "$action" in start|send|keys|read|wait|trust|attach-command|pid|stop|list) ;; *) die "Unknown command: $action" ;; esac
 name=
 if [[ "$action" == list ]]; then
   [[ $# == 0 ]] || die 'Usage: pane.sh list'
@@ -52,7 +53,7 @@ case "$action" in
     [[ $# -ge 1 && $# -le 2 && ${2:-30} =~ ^[0-9]+$ ]] || die 'Usage: pane.sh wait NAME REGEX [SECONDS]'
     regex=$1
     grep -Eq -- "$regex" <<<'' || [[ $? != 2 ]] || die 'Invalid regular expression.' ;;
-  trust|attach-command|stop) [[ $# == 0 ]] || die "Usage: pane.sh $action NAME" ;;
+  trust|attach-command|pid|stop) [[ $# == 0 ]] || die "Usage: pane.sh $action NAME" ;;
 esac
 
 socket_dir=${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/claude-tmux}
@@ -115,6 +116,7 @@ case "$action" in
       tmux -S "$SOCK" send-keys -t "$target" Down Enter
       printf 'Accepted folder trust in %s\n' "$name"
     fi ;;
+  pid) tmux -S "$SOCK" display-message -p -t "$target" '#{pane_pid}' ;;
   stop)
     if tmux -S "$SOCK" has-session -t "=$name" 2>/dev/null; then
       tmux -S "$SOCK" kill-session -t "=$name"

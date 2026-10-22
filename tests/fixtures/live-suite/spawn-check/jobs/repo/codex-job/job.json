@@ -1,0 +1,26 @@
+{
+  "id": "codex-job",
+  "state": "completed",
+  "completedAt": "2026-10-22T10:00:15.000Z",
+  "request": {
+    "backend": "codex",
+    "model": "gpt-6.1-sol"
+  },
+  "relay": {
+    "agentId": "agent-codex",
+    "transcriptPath": "../transcript/subagents/workflows/wf-synthetic/agent-codex.jsonl",
+    "label": "spawn-good-codex",
+    "workflowRunId": "wf-synthetic"
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "startedAt": "2026-10-22T10:00:10.000Z",
+      "endedAt": "2026-10-22T10:00:15.000Z",
+      "state": "completed",
+      "relayVersion": "3.0.0-test"
+    }
+  ],
+  "messages": [],
+  "createdAt": "2026-10-22T10:00:10.000Z"
+}

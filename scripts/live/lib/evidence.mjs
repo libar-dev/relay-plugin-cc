@@ -22,7 +22,7 @@ function content(entry) {
   return Array.isArray(entry?.message?.content) ? entry.message.content : [];
 }
 
-function textContent(value) {
+export function textContent(value) {
   if (typeof value === 'string') return value;
   return Array.isArray(value) ? value.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n') : '';
 }
@@ -53,7 +53,7 @@ function hasLine(text, line) {
 
 // A backend's model writes the requested line in its own way ("Second turn for zcode.", in a live
 // run); the words decide, not their case or a closing full stop.
-function hasReportLine(text, line) {
+export function hasReportLine(text, line) {
   const words = value => value.trim().replace(/[.!]+$/, '').toLowerCase();
   return typeof text === 'string' && text.split('\n').some(value => words(value) === words(line));
 }
@@ -139,7 +139,7 @@ function sendOf(call, names, agents, plugin = false) {
     sentAt: call.timestamp, agent: agents.get(agentId) };
 }
 
-function readJson(file, optional = false) {
+export function readJson(file, optional = false) {
   try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected an object.');
@@ -173,7 +173,7 @@ export function recordsFor(jobDir) {
   }).sort((a, b) => String(a.at).localeCompare(String(b.at)) || a.file.localeCompare(b.file));
 }
 
-function toolResults(entries, sidechain = false) {
+export function toolResults(entries, sidechain = false) {
   const results = new Map();
   for (const entry of entries) {
     if (entry?.type !== 'user' || Boolean(entry.isSidechain) !== sidechain) continue;
@@ -217,7 +217,7 @@ function relayTranscriptPath(input, job, pointer) {
   return binding ?? pointed;
 }
 
-function requireVersion(attempt, version, label = 'Attempt') {
+export function requireVersion(attempt, version, label = 'Attempt') {
   if (!attempt?.relayVersion || attempt.relayVersion !== version) {
     throw new Error(`${label} relayVersion ${attempt?.relayVersion ?? 'missing'} does not match ${version}.`);
   }
@@ -461,6 +461,121 @@ export function analyzeCheck(input, { source = 'main', messages, kind = 'steer',
       timings, result: reason ? 'fail' : 'pass', reason: reason ?? null };
   });
   return { results, details, evidence };
+}
+
+export function filesUnder(dir, accept) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile())
+    .map(entry => path.join(entry.parentPath ?? entry.path, entry.name)).filter(accept).sort();
+}
+
+export function inside(root, file) {
+  const relative = path.relative(path.resolve(root), path.resolve(file));
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+export function rememberJob(input, evidence, jobDir, job, pointer) {
+  if (!evidence.agents.some(item => item.jobDir === jobDir)) {
+    evidence.agents.push({ agentId: job.relay?.agentId ?? job.id, jobDir, pointer });
+  }
+  const transcript = job.relay?.transcriptPath;
+  if (typeof transcript === 'string') {
+    const file = path.resolve(input.jobsHome, transcript);
+    if (fs.existsSync(file) && !evidence.transcripts.includes(file)) evidence.transcripts.push(file);
+  }
+}
+
+export function relayJob(input, evidence, agentId) {
+  if (typeof agentId !== 'string' || !/^[\w.-]+$/.test(agentId)) throw new Error('Missing or invalid relay agent id.');
+  const pointerFile = path.join(input.jobsHome, 'relays', `${agentId}.json`);
+  const pointer = readJson(pointerFile);
+  if (!pointer.jobDir) throw new Error('No jobDir in relay pointer.');
+  const jobDir = path.resolve(input.jobsHome, pointer.jobDir), job = readJob(jobDir);
+  rememberJob(input, evidence, jobDir, job, pointerFile);
+  if (job.relay?.agentId !== agentId) throw new Error('Job belongs to another relay.');
+  return { jobDir, job };
+}
+
+export function oneRelay(parsed, backend, prefix) {
+  const spawns = parsed.spawns.filter(agent => agent.backend === backend);
+  if (spawns.length !== 1 || spawns[0].name !== `${prefix}-${backend}`) {
+    throw new Error(`Expected exactly one relay named ${prefix}-${backend}, found ${spawns.length}.`);
+  }
+  return spawns[0];
+}
+
+export function requireBackend(job, backend) {
+  if (job.request?.backend !== backend) throw new Error(`Job backend is not ${backend}.`);
+  if (job.request?.model !== MODELS[backend]) throw new Error(`Job model is not ${MODELS[backend]}.`);
+}
+
+export function lastActiveAttempt(job, at, version, { endedAtBoundary = false } = {}) {
+  const time = Date.parse(at), attempts = job.attempts ?? [];
+  const active = attempts.filter(attempt => Date.parse(attempt.startedAt) < time &&
+    (attempt.endedAt == null || (endedAtBoundary ? Date.parse(attempt.endedAt) >= time : Date.parse(attempt.endedAt) > time)));
+  if (active.length !== 1 || active[0] !== attempts.at(-1)) throw new Error('The last attempt was not active at the boundary.');
+  requireVersion(active[0], version);
+  return active[0];
+}
+
+export function inboxMessages(jobDir) {
+  return filesUnder(path.join(jobDir, 'inbox'), file => file.endsWith('.json') &&
+    ['inbox', 'claimed'].includes(path.basename(path.dirname(file))))
+    .map(file => ({ ...readJson(file), file }));
+}
+
+export function analyzeBackends(input, scope, inspect) {
+  const evidence = { transcripts: [path.resolve(input.transcript)], agents: [] }, details = [];
+  const allEntries = readTranscript(input.transcript);
+  const entries = (scope ?? scopeToRun)(allEntries, input.runId);
+  const parsed = transcriptCalls(entries), results = toolResults(entries);
+  for (const backend of input.backends) {
+    const row = { backend, model: MODELS[backend], relayVersion: input.relayVersion, timings: {}, pass: false };
+    try { inspect({ backend, row, entries, allEntries, parsed, results, evidence }); row.pass = true; }
+    catch (error) { row.error = error.message; }
+    details.push(row);
+  }
+  return { evidence, details, results: details.map(row => ({ backend: row.backend, model: row.model,
+    relayVersion: row.relayVersion, timings: row.timings, delivery: null,
+    result: row.pass ? 'pass' : 'fail', reason: row.error ?? null })) };
+}
+
+export function workflowEvidence(input, evidence, call, result) {
+  if (!result || result.is_error) throw new Error('Missing or failed Workflow launch result.');
+  const runId = result.result?.runId ?? textContent(result.content).match(/^Run ID:\s*([\w.-]+)\s*$/m)?.[1];
+  if (typeof runId !== 'string' || !/^[\w-][\w.-]*$/.test(runId)) throw new Error('Missing Workflow run id.');
+  const session = input.transcript.replace(/\.jsonl$/, '');
+  const resultFile = path.join(session, 'workflows', `${runId}.json`);
+  const journalFile = path.join(session, 'subagents/workflows', runId, 'journal.jsonl');
+  for (const file of [resultFile, journalFile]) if (fs.existsSync(file)) evidence.transcripts.push(file);
+  const saved = readJson(resultFile);
+  if (saved.runId !== runId) throw new Error('Workflow result belongs to another run.');
+  return { runId, result: saved.result, journal: readTranscript(journalFile) };
+}
+
+export function jobsUnder(jobsHome) {
+  return filesUnder(jobsHome, file => path.basename(file) === 'job.json')
+    .map(file => ({ jobDir: path.dirname(file), job: readJob(path.dirname(file)) }));
+}
+
+export function stateBlockJob(input, block, inventory) {
+  if (typeof block !== 'string' || !/^state: completed\s*$/m.test(block)) throw new Error('Good result is not a completed state block.');
+  const id = block.match(/^job:\s*(\S+)\s*$/m)?.[1];
+  const dir = block.match(/^dir:[\t ]*(.+)$/m)?.[1]?.trim();
+  const matches = inventory.filter(item => item.job.id === id);
+  if (!id || !dir || matches.length !== 1) throw new Error('Good state block does not identify one job under the jobs home.');
+  const loaded = matches[0], resolved = path.resolve(input.jobsHome, dir);
+  if (resolved !== loaded.jobDir) {
+    // The runner copies files verbatim, but records the source directories in run.json.
+    const run = input.evidenceDir && readJson(path.join(input.evidenceDir, 'run.json'), true);
+    const copied = run?.copy;
+    if (!copied || path.resolve(copied.jobsHome) !== path.resolve(input.jobsHome) ||
+        !copied.originalJobDirs?.includes(resolved) || !inside(run.jobsHome, resolved) ||
+        path.relative(run.jobsHome, resolved) !== path.relative(input.jobsHome, loaded.jobDir)) {
+      throw new Error('Good state block dir does not match its job under the jobs home.');
+    }
+  }
+  return loaded;
 }
 
 function commandInput(entry) {

@@ -1,0 +1,4 @@
+{"type":"user","timestamp":"2026-10-22T10:00:00.000Z","entrypoint":"cli","version":"2.1.308","message":{"content":"Live suite run synthetic-run."}}
+{"type":"assistant","timestamp":"2026-10-22T10:00:01.000Z","message":{"content":[{"type":"tool_use","id":"spawn-codex","name":"Agent","input":{"subagent_type":"relay:job","name":"session-end-codex","description":"session-end-codex","run_in_background":true,"prompt":"model: gpt-6.1-sol\neffort: low\n---\nRun the shell command `sleep 150` exactly once and wait for it. Then reply with exactly one line: session-end done for codex"}}]}}
+{"type":"user","message":{"content":[{"tool_use_id":"spawn-codex","type":"tool_result","content":"agentId: agent-codex"}]},"toolUseResult":{"agentId":"agent-codex"}}
+{"type":"assistant","timestamp":"2026-10-22T10:00:29.000Z","message":{"content":[{"type":"text","text":"LIVE-SESSION-END-READY"}]}}
