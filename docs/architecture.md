@@ -68,10 +68,11 @@ $RELAY_JOBS_HOME (default ~/.relay-jobs) / <repo-slug> / <job-id> /
   worker.lease.d/         the worker lease: numbered records 1, 2, 3 ...
   relay.json              the current relay binding, once a second relay adopts the job
   relay-guard.json        the relay hook's state: its consecutive blocks and the last hand-back
+  relay-handbacks.jsonl   every result a relay handed back, appended and never rewritten
   relay-violations.jsonl  every relay violation, appended and never rewritten
 ```
 
-`inbox/relay/`, `inbox/relay.lock.d/`, `relay-guard.json` and `relay-violations.jsonl` exist
+`inbox/relay/`, `inbox/relay.lock.d/`, `relay-guard.json`, `relay-handbacks.jsonl` and `relay-violations.jsonl` exist
 only for a job a `relay:job` agent started. `worker.lease` and `inbox/relay.lock` are lock names,
 not files. [design.md](design.md#leases) explains the numbered records.
 

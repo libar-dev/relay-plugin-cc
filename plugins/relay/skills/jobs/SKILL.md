@@ -39,6 +39,9 @@ cd: /abs/path/to/repo
 | `add-dir` | no | absolute extra writable root, repeatable; `write` only | none |
 | `brief` | no | absolute path of the brief file; nothing follows the dashes | none |
 
+- A model named like another backend's (`glm-*`, `grok-*`, `kimi-code/*`) with no `backend:` is refused before launch, since the job would run on Codex. `backend: codex` sends it to Codex as written.
+- A `read-only` job writes no file anywhere: ask for the report as its final answer, not in a file. Kimi and ZCode in `read-only` have no shell at all; Codex and Grok run commands that cannot write.
+- In `mode: write`, a command that keeps its own state under `~` (a CLI's sign-in file, say) cannot write it there. Name that directory with `add-dir:`.
 - `yolo` is the default, so existing headers keep running as they did. `mode: write` with `network: true` covers web search, installs, commits and child processes on Codex and Grok, but not `ps` or writes outside the working directory. `yolo` ignores `network` and `add-dir` and the state block says so. The brief is then the only fence: name where the job may write.
 
 ## GLM jobs
@@ -112,6 +115,9 @@ ignored with a `note:`.
 - The outcome and the report come from the session's own record (`wire.jsonl`), because Kimi
   answers `end_turn` over ACP for a turn that failed. Kimi retries model calls itself, so a
   capacity failure fails the job at once; `resume` continues it.
+- Kimi's record of the session, with every tool call it made, web searches included, is
+  `<home>/sessions/<bucket>/<session>/agents/main/wire.jsonl`, where `<session>` is the block's
+  `session:`.
 - The chosen home's MCP servers, plugins (with their session-start skills), hooks, skills and
   `AGENTS.md` load in every job. For a home without them, read [`kimi-home.md`](kimi-home.md).
   `/relay:setup --backend kimi [--kimi-home H]` prints the binary, version, sign-in and models
@@ -151,7 +157,9 @@ dir: ~/.relay-jobs/<repo>/<job>
 
 - `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the worker died and its automatic retry was spent), or `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
 - `completed` means the job finished its answer, not that its commands passed. Read the report.
-- Lines that may appear: `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (acknowledged messages not run yet; `resume` runs them), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
+- Lines that may appear: `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (messages to the job, acknowledged and not run yet; `resume` runs them; it says nothing about the report), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
+
+`status` marks a relay job that ended with no hand-back of its result `not handed back` (`handedBackAt: null` in `--json`): its caller died or gave up, and `C result <job>` has the report.
 
 A failed cancel stays pending while the job runs and tries remain. A terminal job closes it as done, and three started tries close it as failed.
 
@@ -178,6 +186,8 @@ A message reaches the job within about two minutes, when the relay's current wai
     const r = jobReturn(await agent(prompt, { agentType: 'relay:job', label: 'writer-3' }))
     if (r.state !== 'completed' || r.undelivered) return { step: 'writer-3', state: r.state, undelivered: r.undelivered, error: r.error, job: r.job }
 
+- The relay retypes the block. The hook accepts it with a line left out that restates the request or only informs (`relay:`, `model:`, `mode:`, `cwd:`, `session:`, `note:` and the like), never with an outcome line left out (`state:`, `job:`, `duration:`, `report:`, `dir:`, `error:`, `undelivered:` and the like) or any line changed. A return with no `state:` line comes from a relay that was let go or a Claude Code failure such as a usage limit, and its job may still run: find it by label with `C status --workflow <run> --json`.
+- A relay is a Claude agent and spends Claude usage for its job's whole run. When Claude's usage limit ends the relays, their jobs run on; collect them with `C status --workflow <run>` or `C status --all`.
 - Give a `relay:job` agent no `schema`. A script cannot read files either: for structured data, ask the brief for the shape, then hand `r.report` to a Claude agent that has the schema: `agent(\`Read ${r.report} and return its findings.\`, { schema: FINDINGS })`.
 - The agent holds its slot for the job's whole run, so size a launch by job length. `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` caps how many run at once.
 - A retried or resumed call takes over its running job. Two calls with the same prompt and label are two jobs. Adoption is not a follow-up: a script cannot send a new turn to a job it names. To continue a finished job from a workflow, give a Claude agent the job id and have it run `C continue <job> --message-file F`.
@@ -188,13 +198,13 @@ A message reaches the job within about two minutes, when the relay's current wai
 
 You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:status`, `/relay:result`, `/relay:setup` and `/relay:rescue` yourself. A review you start never asks the user a question: without `--wait` or `--background` it runs in the foreground. `/relay:cancel` and `/relay:transfer` are the user's: cancel a job by sending its agent the message `cancel`. The `C` commands below are for scripts and Workflow steps.
 
-`C` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs"`. A job lives in `$RELAY_JOBS_HOME` (default `~/.relay-jobs`) under `<repo-slug>/<job-id>/`; any command takes a job id or a unique prefix, or the job's directory inside that home.
+`C` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs"`. In your own Bash, define it as a function, `C() { node "<that path>" "$@"; }`: a variable that holds the command does not split into words in zsh. A job lives in `$RELAY_JOBS_HOME` (default `~/.relay-jobs`) under `<repo-slug>/<job-id>/`; any command takes a job id or a unique prefix, or the job's directory inside that home.
 
 | Command | What it does |
 |---|---|
 | `C start --prompt-file <header+brief>` | start a job, print `job: <id>`, return at once |
 | `C wait <job> [--timeout-seconds N] [--state-only]` | block until the job ends or N seconds pass (default 240); print the block and the report |
-| `C status [<job>] [--all] [--json]` | this repository's newest 20 jobs, every repository's with `--all`, or one job's block |
+| `C status [<job>] [--all] [--workflow <run>] [--json]` | this repository's newest 20 jobs, every repository's with `--all`, every job of one Workflow run with `--workflow`, or one job's block |
 | `C result [<job>] [--state-only]` | the block and report, without waiting; without a job, the newest finished job of this repository |
 | `C steer <job> --message-file F` | steer the running turn, or queue the message as the next turn |
 | `C continue <job> --message-file F` | a new turn on the same thread |

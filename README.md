@@ -35,7 +35,7 @@ Requirements:
 - Claude Code 2.1.271 or later, for hooks on `SubagentHandback`.
 - Node.js 22 or later.
 - macOS or Linux. The process sweep reads the process table with `ps`.
-- At least one backend CLI, signed in: the Codex CLI, Grok Build, ZCode or Kimi Code. This release
+- At least one backend CLI, signed in: the Codex CLI, Grok Build, ZCode or Kimi Code. Release 2.1.2
   was checked live with Codex 0.163.0, Grok Build 1.0.60, ZCode 3.15.3 and Kimi Code 2.2.0.
 
 ```bash
@@ -302,4 +302,5 @@ them); the version named above in this section is set by hand.
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
 [docs/backends.md](docs/backends.md) for the backend contract,
 [docs/design.md](docs/design.md) for the behavior and the reasons behind it, and
-[docs/kimi.md](docs/kimi.md) for what the Kimi backend rests on and how to check a new Kimi version.
+[docs/kimi.md](docs/kimi.md) for what the Kimi backend rests on and how to check a new Kimi version, and
+[docs/thread-surveys.md](docs/thread-surveys.md) for the surveys of real use that fixes came from.
