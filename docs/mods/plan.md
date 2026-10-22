@@ -224,20 +224,20 @@ What shipped:
   `headless` runs the commands in `claude -p` and requires `num_turns: 0`, the plugin path in the stream's init
   event, and exit 4 for a running job. Checks may now name their backends, a setup and the commands to send.
 
-Live results (the Fedora machine, Claude Code 2.1.308, 3.0.0-dev.3 at c94417e, Sonnet 5.5 lead; the records are in
+Live results (the Fedora machine, Claude Code 2.1.308, 3.0.0-dev.3 at f9d0c35, Sonnet 5.5 lead; the records are in
 `docs/live/records/` and the table in [docs/live/capabilities.md](../live/capabilities.md)):
 
 | Check | Terminal | T3 Code |
 |---|---|---|
-| `commands` | answered in 0.6 to 0.7 s, cancelled in 0.9 to 3.9 s | answered in 0.1 s, cancelled in 0.5 to 3.4 s |
-| `transfer` (Codex) | imported in 0.9 s | imported in 0.4 s |
-| `headless` (`claude -p`) | `num_turns: 0`, 0.1 to 0.2 s; exit 4 for a running job | terminal only |
+| `commands` | answered in 0.6 to 0.7 s, cancelled in 1.0 to 5.4 s | answered in 0.1 s, cancelled in 0.3 to 3.3 s |
+| `transfer` (Codex) | imported in 0.9 s | imported in 0.3 s |
+| `headless` (`claude -p`) | `num_turns: 0`, 0.1 to 0.3 s; exit 4 for a running job | terminal only |
 
 Every record passed, on all four backends, 22 of 22. A terminal time runs from the runner's paste into the pane,
 which costs about half a second; a T3 time from the SDK's `enqueue` record. `steer-main` passed again in the
-terminal on the same build (2.0 to 3.6 s), since the module's `session.send` hook shares the file. The smoke kit
-passed on the same build (workflow `wf_7a054b64-284`, then the plain fan-out, whose `status` named
-`relay-version: 3.0.0-dev.3 (c94417e0c273)`). The PR's later commits change no plugin code.
+terminal on the same build (2.4 to 4.7 s), since the module's `session.send` hook shares the file. The smoke kit
+passed on the same build (workflow `wf_da36d661-804`, then the plain fan-out, whose `status` named
+`relay-version: 3.0.0-dev.3 (f9d0c3526839)`). The PR's later commits change no plugin code.
 
 ## After Phase 2: what held and what changed
 
