@@ -215,6 +215,18 @@ given a "send to lead" tool (an MCP server the relay adds to the job) whose mess
 `$.session.send` as the relay agent's own. Report what each backend allows, and how a reply would find its way
 back, before writing any code.
 
+## Later plans
+
+These features are being considered and will get plans of their own. They are listed here so that this plan
+leaves room for them:
+
+- **Model-family guidance.** How each model family behaves, what it does well, and how families complement each
+  other in one piece of work.
+- **Orchestration strategies for different kinds of work**, such as planning a coding session, executing one,
+  architecture design, UX and UI work, and deep research.
+- **Orchestration templates.** Skills and UI together: for example, choosing a template on the board to start a
+  strategy. The template picker would build on Phase 4's board and its companion JSON.
+
 ## What stays where it is
 
 | Responsibility | Where it stays | Why |
