@@ -1,2 +1,13 @@
-  ❯
-  relay: 4 running · bypass permissions on
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⚠ relay: 4 running
+  relay-live-work-tgvr3u | Sonnet 5.5 . medium | [█░░░░░░░░░] 57.4k/1.0M (6%)                                                                                                                    Debug
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+
+  ● main
+  ◯ board-agent-codex  Starting the relay job                                                                                                                                      37s · ↓ 7.3k tokens
+  ◯ board-agent-grok   Starting the relay job                                                                                                                                      36s · ↓ 7.3k tokens
+  ◯ board-agent-zcode  Starting Relay job via companion.mjs                                                                                                                        35s · ↓ 7.3k tokens
+  ◯ board-agent-kimi   Starting the relay job in companion.mjs                                                                                                                     34s · ↓ 7.3k tokens
+  ◯ live-board         ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  0/4 · 31s · ↓ 29.7k tokens

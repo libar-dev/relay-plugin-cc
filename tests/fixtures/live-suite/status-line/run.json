@@ -11,7 +11,7 @@
   "relayVersion": "3.0.0-test",
   "completed": true,
   "promptSentAt": "2026-10-22T10:00:00.000Z",
-  "checkFinishedAt": "2026-10-22T10:00:16.000Z",
+  "checkFinishedAt": "2026-10-22T10:00:22.000Z",
   "setup": {
     "jobs": {
       "codex": {
@@ -58,6 +58,11 @@
         "phase": "cleared",
         "file": "screen-cleared.txt",
         "at": "2026-10-22T10:00:16.000Z"
+      },
+      {
+        "phase": "cleared",
+        "file": "screen-cleared-confirmed.txt",
+        "at": "2026-10-22T10:00:22.000Z"
       }
     ]
   }

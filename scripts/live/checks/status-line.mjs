@@ -7,8 +7,47 @@ import { cancelUnfinishedJobs } from '../lib/runs.mjs';
 import { pane, sessionEnvironment } from '../lib/terminal.mjs';
 import { commandResult, setupEvidence, setupJob } from './commands.mjs';
 
-const counted = screen => screen.split('\n').some(line => /\brelay:[ \t]+\d+\b/.test(line));
-const running = (screen, count) => screen.split('\n').some(line => new RegExp(`\\brelay:[ \\t]+${count}[ \\t]+running\\b`).test(line));
+// The prompt's rules separate the pinned footer from quotations in the transcript.
+function pinned(screen) {
+  const lines = screen.split('\n'), rule = line => /^\s*─+\s*$/.test(line ?? '');
+  const prompt = lines.findLastIndex(line => /^\s*❯\s*$/.test(line));
+  if (prompt < 1 || !rule(lines[prompt - 1]) || !rule(lines[prompt + 1])) return null;
+  return lines.slice(prompt + 2).map(line => line.trim());
+}
+const prefix = /^⚠\uFE0F?\s+relay:\s*/;
+const cleared = screen => {
+  const footer = pinned(screen);
+  return footer !== null && !footer.some(line => prefix.test(line));
+};
+function running(screen, count) {
+  const footer = pinned(screen);
+  if (!footer || footer.filter(line => prefix.test(line)).length !== 1) return false;
+  const at = footer.findIndex(line => prefix.test(line));
+  let text = footer[at].replace(prefix, '');
+  // Only count words can continue the line; never join a transcript or another footer widget.
+  for (const line of footer.slice(at + 1)) {
+    if (!/^(?:\d+\+?|running|dead|owed|·)(?:\s+(?:\d+\+?|running|dead|owed|·))*$/.test(line)) break;
+    text += ` ${line}`;
+  }
+  return new RegExp(`^${count}\\s+running(?:\\s*·\\s*\\d+\\s+(?:dead|owed))*$`).test(text.trim());
+}
+function confirmedClear() {
+  let first = null;
+  return (screen, at) => {
+    if (!cleared(screen)) { first = null; return false; }
+    first ??= at;
+    return at - first > 5000;
+  };
+}
+function homeJobs(home) {
+  const directories = dir => fs.readdirSync(dir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory()).map(entry => path.join(dir, entry.name));
+  return directories(home).flatMap(directories).filter(dir => fs.existsSync(path.join(dir, 'job.json'))).map(dir => {
+    let job;
+    try { job = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8')); } catch { /* Cancel can retry a busy record. */ }
+    return { id: job?.id ?? path.basename(dir), jobDir: path.relative(home, dir) };
+  });
+}
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export default {
@@ -17,10 +56,11 @@ export default {
   prompt({ runId }) {
     return `Live suite run ${runId}.\nDo not run any tool. Reply with exactly this line and nothing else:\n${this.marker}\n`;
   },
-  completed(entries, run) { return hasMarker(entries, this.marker) && run.completed === true; },
+  completed(entries) { return hasMarker(entries, this.marker); },
   async runTerminal(ctx, { env = process.env, signal, execute = promisify(execFile), drive = pane,
     sleep = pause, now = Date.now } = {}) {
     const run = ctx.run, stamp = () => new Date(now()).toISOString();
+    let ownsHome = false, stopRequested = false;
     const cleanEnv = { ...sessionEnvironment(env).env, RELAY_JOBS_HOME: ctx.jobsHome };
     const options = { cwd: ctx.workDir, env: cleanEnv, encoding: 'utf8', timeout: 60000,
       maxBuffer: 8 * 1024 * 1024, detached: true };
@@ -41,25 +81,54 @@ export default {
       while (true) {
         checkAbort();
         const screen = capture(phase);
-        if (now() <= deadline && matches(screen)) return;
-        if (now() >= deadline) throw new Error(`Status line did not ${phase === 'running' ? 'show the running count' : 'clear'} within 60 seconds.`);
+        if (now() <= deadline && matches(screen, Date.parse(run.statusLine.screens.at(-1).at))) return;
+        if (now() >= deadline) {
+          let detail = '';
+          if (phase === 'running') {
+            let jobs;
+            try {
+              // A dead worker can leave "running" in job.json; the companion computes its state.
+              const output = await execute(process.execPath, [path.join(ctx.pluginDir, 'scripts/companion.mjs'),
+                'status', '--json', '--limit', '200'], { ...options, timeout: 10000 });
+              const answer = JSON.parse(output.stdout);
+              if (answer.schema !== 'relay.status/1' || answer.error || !Array.isArray(answer.jobs)) throw new Error('Invalid status listing.');
+              jobs = answer.jobs;
+            } catch (error) { run.statusLine.deadlineError = error.message; }
+            run.statusLine.jobsAtDeadline = Object.values(run.setup.jobs).map(({ running: job }) => ({ id: job.id,
+              state: jobs?.find(found => found.id === job.id)?.state ?? (jobs ? 'missing' : 'unreadable') }));
+            const inactive = run.statusLine.jobsAtDeadline.filter(job => !['starting', 'running'].includes(job.state));
+            detail = ` Jobs not starting or running: ${inactive.map(job => `${job.id} (${job.state})`).join(', ') || 'none'}.`;
+            if (run.statusLine.deadlineError) detail += ` Status read failed: ${run.statusLine.deadlineError}`;
+            ctx.save();
+          }
+          throw new Error(`Status line did not ${phase === 'running' ? 'show the running count' : 'clear'} within 60 seconds.${detail}`);
+        }
         await sleep(Math.min(1000, deadline - now()));
       }
     };
     const cancel = async () => {
-      const receipts = await cancelUnfinishedJobs(run, { env: cleanEnv, execute });
+      // This home was empty: receipts are not needed to own a job a failed start left behind.
+      const receipts = await cancelUnfinishedJobs({ ...run, cancellations: run.cancellations ??= [],
+        setup: { jobs: { discovered: homeJobs(ctx.jobsHome) } } }, { env: cleanEnv, execute });
       ctx.save();
       if (receipts.some(receipt => receipt.status === 'failed')) throw new Error('Could not cancel status-line jobs; see run.json.');
     };
     try {
       if (fs.readdirSync(ctx.jobsHome).length) throw new Error('status-line requires an empty jobs home.');
+      ownsHome = true;
       // The ordinary driver proves module loading and a ready lead; no count text is sent to it.
-      await ctx.paneDriver(ctx, { ...this, completed: entries => hasMarker(entries, this.marker) }, { keep: true, drive });
+      // It owns --keep; defer its stop until the observations and job cleanup have finished.
+      await ctx.paneDriver(ctx, this, { drive(args, input) {
+        if (args[0] === 'stop') { stopRequested = true; return ''; }
+        return drive(args, input);
+      } });
       run.completed = false;
       checkAbort();
       run.setup = { jobs: {} };
       run.statusLine = { screens: [] };
       capture('before');
+      run.statusLine.startedAt = stamp();
+      ctx.save();
       for (const backend of ctx.backends) {
         checkAbort();
         const file = path.join(ctx.evidenceDir, `${backend}-running.txt`);
@@ -71,31 +140,33 @@ export default {
           const jobDir = path.relative(ctx.jobsHome, path.resolve(ctx.workDir, dir));
           if (jobDir.startsWith('..') || path.isAbsolute(jobDir)) throw new Error('Started job is outside jobsHome.');
           run.setup.jobs[backend] = { running: { id, jobDir } };
-          run.statusLine.startedAt = stamp();
           ctx.save();
         };
         let output;
-        // A start interrupted after creating its job can still supply the receipt cleanup needs.
+        // Keep a complete receipt as evidence even when start fails after printing it.
         try { output = await execute(process.execPath, [path.join(ctx.pluginDir, 'scripts/companion.mjs'), 'start', '--prompt-file', file], options); }
-        catch (error) { if (error.stdout) remember(error.stdout); throw error; }
+        catch (error) {
+          if (/^job: .+$/m.test(error.stdout ?? '') && /^dir: .+$/m.test(error.stdout ?? '')) remember(error.stdout);
+          throw error;
+        }
         remember(output.stdout);
       }
       await waitFor('running', run.statusLine.startedAt, screen => running(screen, ctx.backends.length));
       checkAbort();
-      await cancel();
       run.statusLine.cancelledAt = stamp();
       ctx.save();
-      await waitFor('cleared', run.statusLine.cancelledAt, screen => !counted(screen));
+      await cancel();
+      await waitFor('cleared', run.statusLine.cancelledAt, confirmedClear());
       run.completed = true;
     } catch (error) {
       run.completed = false;
       run.error = error.message;
       throw error;
     } finally {
-      try { if (run.setup) await cancel(); }
+      try { if (ownsHome) await cancel(); }
       catch (error) { run.completed = false; run.error = error.message; throw error; }
       finally {
-        try { if (run.pane) drive(['stop', run.pane]); }
+        try { if (run.pane && stopRequested) drive(['stop', run.pane]); }
         catch (error) { run.completed = false; run.error = error.message; throw error; }
         finally { run.checkFinishedAt = stamp(); ctx.save(); }
       }
@@ -112,15 +183,18 @@ export default {
         return { ...row, text: fs.readFileSync(input.evidencePath ? input.evidencePath(file) : file, 'utf8') };
       });
       const before = screens.find(row => row.phase === 'before');
-      if (!before || counted(before.text)) throw new Error('Missing empty screen before the jobs started.');
+      if (!before || !cleared(before.text)) throw new Error('Missing clear pinned region under a visible prompt before the jobs started.');
       const shown = screens.find(row => row.phase === 'running' && running(row.text, input.backends.length));
       if (!shown) throw new Error(`No screen shows relay: ${input.backends.length} running.`);
-      const cleared = screens.find(row => row.phase === 'cleared' && !counted(row.text));
-      if (!cleared) throw new Error('The status line never clears.');
+      const confirmsClear = confirmedClear();
+      const clear = screens.find(row => row.phase === 'cleared' && confirmsClear(row.text, Date.parse(row.at)));
+      if (!clear) throw new Error('The status line never clears on two captures more than 5 seconds apart.');
       const shownSeconds = (Date.parse(shown.at) - Date.parse(saved.startedAt)) / 1000;
-      const clearedSeconds = (Date.parse(cleared.at) - Date.parse(saved.cancelledAt)) / 1000;
+      const clearedSeconds = (Date.parse(clear.at) - Date.parse(saved.cancelledAt)) / 1000;
       if (![shownSeconds, clearedSeconds].every(value => Number.isFinite(value) && value >= 0 && value <= 60) ||
-          !(Date.parse(before.at) <= Date.parse(saved.startedAt)) || !(Date.parse(shown.at) <= Date.parse(saved.cancelledAt))) {
+          !(Date.parse(before.at) <= Date.parse(saved.startedAt)) || !(Date.parse(shown.at) <= Date.parse(saved.cancelledAt)) ||
+          screens.some((row, i) => !Number.isFinite(Date.parse(row.at)) || (i > 0 && Date.parse(row.at) < Date.parse(screens[i - 1].at)) ||
+            (row.phase === 'cleared' && Date.parse(row.at) < Date.parse(saved.cancelledAt)))) {
         throw new Error('Status line observations are out of order or outside the 60 second bounds.');
       }
       timings = { shownSeconds: [shownSeconds], clearedSeconds: [clearedSeconds] };
@@ -128,6 +202,7 @@ export default {
     const results = input.backends.map(backend => {
       const result = commandResult(backend);
       try {
+        if (run.completed !== true || run.error) throw new Error(run.error || 'The status-line run did not complete.');
         const { job } = setupJob(input, backend, 'running', evidence, result);
         if (screenError) throw new Error(screenError);
         if (job.state !== 'cancelled') throw new Error('The setup job was not cancelled.');

@@ -18,8 +18,10 @@
 //
 // The status line counts the repository's jobs that are running, dead or owed messages, from
 // `companion status --json --active`, read every five seconds while a surface draws the session.
-// Under an Agent SDK host (T3) nothing draws, so no process runs there. The timer starts at
-// session.start, which fires again in the fresh copy after a reload ends the old copy's timers.
+// While the line is cleared it reads every thirty seconds, and every five for thirty after a relay event
+// the module sees. Under an Agent SDK host (T3) nothing draws, so status polling starts no process
+// there. The timer starts at session.start, which fires again in the fresh copy after a reload
+// ends the old copy's timers.
 
 // A line that is `---`, trailing spaces or tabs allowed: the line parseHeaderPrompt (in
 // scripts/lib/jobs/request.mjs) ends a header with. Its two patterns, `---` before a line break
@@ -252,16 +254,27 @@ async function statusLine($) {
   return statusText(ran);
 }
 
-// One tick: a read only while a surface draws the session and no read is in flight.
-async function poll($, poller) {
+// While the line is cleared, the ticks between reads: thirty seconds at one tick in five.
+const CLEARED_TICKS = 6;
+
+// One tick: a read only while a surface draws the session and no read is in flight. While the
+// last good answer cleared the line, a job can only appear through a start the module rarely
+// sees, so a tick reads only every CLEARED_TICKS ticks, or at every tick for CLEARED_TICKS ticks
+// after a relay event it did see (a relay's job exists only once its start has run).
+async function poll($, poller, tick) {
   if ((await $.session.surfaces()).length === 0 || poller.isReading) {
     return;
   }
+  if (poller.isCleared && tick > poller.fastUntil && tick - poller.readTick < CLEARED_TICKS) {
+    return;
+  }
   poller.isReading = true;
+  poller.readTick = tick;
   try {
     const text = await statusLine($);
     if (text !== null) {
       $.ui.status(text);
+      poller.isCleared = text === undefined;
     }
   } finally {
     poller.isReading = false;
@@ -269,19 +282,23 @@ async function poll($, poller) {
 }
 
 export function register(on) {
-  // One timer and one read in flight per load of the module.
-  const poller = { timer: null, isReading: false };
+  // One timer and one read in flight per load of the module. `fastUntil` is the last tick of the
+  // every-tick reads a relay event (a relay:job spawn, a wake, one of the commands below) asks for.
+  const poller = { timer: null, ticks: 0, isReading: false, isCleared: false, readTick: 0, fastUntil: 0 };
   on("session.start", ($, e, next) => {
     // session.start fires again without a reload (an enable, another plugin's engine.create),
     // and this copy's timer is still running then.
     poller.timer ??= $.clock.every(5000, () => {
       // A tick that failed leaves the line as it is; the next one reads again.
-      poll($, poller).catch(() => {});
+      poll($, poller, ++poller.ticks).catch(() => {});
     });
     return next(e);
   });
 
   on("agent.spawn", async ($, e, next) => {
+    if (e?.subagentType === "relay:job") {
+      poller.fastUntil = poller.ticks + CLEARED_TICKS;
+    }
     if (!isCheckedSpawn(e)) {
       return next(e);
     }
@@ -315,6 +332,7 @@ export function register(on) {
       const matches = agents.filter((a) => a.id === e.to || a.name === e.to);
       const ids = matches.length > 0 ? matches.filter((a) => a.type === "relay:job").map((a) => a.id) : [e.to];
       for (const id of ids) {
+        poller.fastUntil = poller.ticks + CLEARED_TICKS;
         await $.process.run(["node", $.plugin.root + "/scripts/companion.mjs", "wake", "--agent", id], { timeoutMs: 10000 });
       }
     } catch {
@@ -324,14 +342,18 @@ export function register(on) {
     return result;
   });
 
-  on("command.run", { command: "relay:status" }, ($, e) => answerCommand($, e, "status", 30000))
+  // A command marks the event when it ends, after the change it made to a job.
+  const marked = () => {
+    poller.fastUntil = poller.ticks + CLEARED_TICKS;
+  };
+  on("command.run", { command: "relay:status" }, ($, e) => answerCommand($, e, "status", 30000).finally(marked))
     .catch(($, e, next) => moduleFailed($, e, next, "status"));
-  on("command.run", { command: "relay:result" }, ($, e) => answerCommand($, e, "result", 30000))
+  on("command.run", { command: "relay:result" }, ($, e) => answerCommand($, e, "result", 30000).finally(marked))
     .catch(($, e, next) => moduleFailed($, e, next, "result"));
   // Cancel's timeout follows the grace it waits for the worker (cancelTimeoutMs), transfer's sits
   // above the two minutes it allows Codex's import.
-  on("command.run", { command: "relay:cancel" }, async ($, e) => answerCommand($, e, "cancel", await cancelTimeoutMs($)))
+  on("command.run", { command: "relay:cancel" }, async ($, e) => answerCommand($, e, "cancel", await cancelTimeoutMs($)).finally(marked))
     .catch(($, e, next) => moduleFailed($, e, next, "cancel"));
-  on("command.run", { command: "relay:transfer" }, ($, e) => answerCommand($, e, "transfer", 180000, true))
+  on("command.run", { command: "relay:transfer" }, ($, e) => answerCommand($, e, "transfer", 180000, true).finally(marked))
     .catch(($, e, next) => moduleFailed($, e, next, "transfer"));
 }

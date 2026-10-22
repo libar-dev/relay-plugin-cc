@@ -2608,22 +2608,43 @@ test('status-line is terminal only and run all includes it', async () => {
   assert.doesNotMatch(check.prompt({ runId: 'synthetic-run' }), /relay: /);
 });
 
-test('status-line reduced screen fixture passes for all four backends with both timings', () => {
+const statusScreen = text => `────────────────────\n❯ \n────────────────────\n${text ? `  ${text}\n` : ''}  ⏵⏵ bypass permissions on\n`;
+
+test('status-line captured footer fixture passes for all four backends with both timings', () => {
   const data = statusInput(path.join(fixture, 'status-line')), check = getCheck('status-line');
   const analyzed = check.analyze(data);
   assert.deepEqual(analyzed.results, BACKENDS.map(backend => ({ backend, model: MODELS[backend],
-    relayVersion: '3.0.0-test', delivery: null, timings: { shownSeconds: [3], clearedSeconds: [4] }, result: 'pass', reason: null })));
-  assert.equal(analyzed.evidence.files.length, 3);
+    relayVersion: '3.0.0-test', delivery: null, timings: { shownSeconds: [3], clearedSeconds: [10] }, result: 'pass', reason: null })));
+  assert.equal(analyzed.evidence.files.length, 4);
   assert.equal(analyzed.evidence.agents.length, 4);
-  assert.equal(check.cell(analyzed.results[0]), 'count shown in 3.0 s, cleared in 4.0 s');
+  assert.equal(check.cell(analyzed.results[0]), 'count shown in 3.0 s, cleared in 10.0 s');
 });
 
 for (const [failure, file, text, reason] of [
-  ['never appears', 'running', '  ❯\n', /No screen shows relay: 4 running/],
-  ['shows another count', 'running', 'relay: 3 running\n', /No screen shows relay: 4 running/],
-  ['never clears', 'cleared', 'relay: 1 dead · 2 owed\n', /never clears/],
-  ['keeps a wrapped count', 'cleared', 'relay: 4\nrunning\n', /never clears/],
-  ['wraps the words', 'running', 'relay: 4\nrunning\n', /No screen shows relay: 4 running/]
+  ['never appears', 'running', statusScreen(''), /No screen shows relay: 4 running/],
+  ['shows another count', 'running', statusScreen('⚠ relay: 3 running'), /No screen shows relay: 4 running/],
+  ['is quoted by the assistant', 'running', `● The previous run said relay: 4 running.\n${statusScreen('')}`, /No screen shows/],
+  ['has a warning quoted above the prompt', 'running', `  ⚠ relay: 4 running\n${statusScreen('')}`, /No screen shows/],
+  ['lacks the warning prefix', 'running', statusScreen('relay: 4 running'), /No screen shows/],
+  ['has two pinned relay lines', 'running', statusScreen('⚠ relay: 4 running\n  ⚠ relay: 4 running'), /No screen shows/],
+  ['has another relay error line', 'running', statusScreen('⚠ relay: 4 running\n  ⚠ relay: status unavailable'), /No screen shows/],
+  ['has a second relay line below a blank row', 'running', statusScreen('⚠ relay: 4 running\n\n  ⚠ relay: 4 running'), /No screen shows/],
+  ['has the old double prefix', 'running', statusScreen('⚠ relay: relay: 4 running'), /No screen shows/],
+  ['has a wrong count prefix', 'running', statusScreen('⚠ relay: 40 running'), /No screen shows/],
+  ['uses the wrong part separator', 'running', statusScreen('⚠ relay: 4 running | 1 dead'), /No screen shows/],
+  ['has unavailable instead of a count', 'running', statusScreen('⚠ relay: status unavailable'), /No screen shows/],
+  ['joins across a blank footer boundary', 'running', statusScreen('⚠ relay: 4\n\nrunning'), /No screen shows/],
+  ['joins across another widget', 'running', statusScreen('⚠ relay: 4\n  other widget\n  running'), /No screen shows/],
+  ['joins a transcript count to a footer word', 'running', `⚠ relay: 4\n${statusScreen('running')}`, /No screen shows/],
+  ['never clears', 'cleared', statusScreen('⚠ relay: 1 dead · 2 owed'), /never clears/],
+  ['keeps a wrapped count', 'cleared', statusScreen('⚠ relay: 4\n  running'), /never clears/],
+  ['becomes unavailable', 'cleared', statusScreen('⚠ relay: status unavailable'), /never clears/],
+  ['is below a blank footer row', 'cleared', statusScreen('\n  ⚠ relay: status unavailable'), /never clears/],
+  ['has an empty capture', 'cleared', '', /never clears/],
+  ['loses its prompt', 'cleared', 'How did this session go?\n', /never clears/],
+  ['has only a transcript prompt', 'cleared', '● Example:\n❯\n', /never clears/],
+  ['has a blank before capture', 'before', '', /visible prompt/],
+  ['starts with unavailable', 'before', statusScreen('⚠ relay: status unavailable'), /visible prompt/]
 ]) {
   test(`status-line rejects a screen where the line ${failure}`, t => {
     const dir = copy(t, 'status-line');
@@ -2633,17 +2654,63 @@ for (const [failure, file, text, reason] of [
   });
 }
 
-test('status-line judges the words without depending on the separator punctuation', t => {
+for (const text of ['⚠ relay: 4\n  running', '⚠ relay:\n  4 running', '⚠ relay: 4 running · 1 dead · 2 owed',
+  '⚠ relay: 4\n  running · 1\n  dead · 2 owed']) {
+  test(`status-line accepts pinned count parts, including physical wrapping: ${JSON.stringify(text)}`, t => {
+    const dir = copy(t, 'status-line');
+    fs.writeFileSync(path.join(dir, 'screen-running.txt'), statusScreen(text));
+    assert.ok(getCheck('status-line').analyze(statusInput(dir)).results.every(row => row.result === 'pass'));
+  });
+}
+
+for (const gap of [0, 5, 5.001, 6]) {
+  test(`status-line requires clear captures strictly more than five seconds apart: ${gap}`, t => {
+    const data = statusInput(copy(t, 'status-line'));
+    data.run.statusLine.screens.at(-1).at = new Date(Date.parse(data.run.statusLine.screens.at(-2).at) + gap * 1000).toISOString();
+    const results = getCheck('status-line').analyze(data).results;
+    assert.ok(results.every(row => row.result === (gap > 5 ? 'pass' : 'fail')));
+  });
+}
+
+test('status-line restarts clear confirmation after a redraw or a returning line', t => {
+  const data = statusInput(copy(t, 'status-line'));
+  for (const text of ['', statusScreen('⚠ relay: status unavailable')]) {
+    fs.writeFileSync(path.join(data.evidenceDir, 'redraw.txt'), text);
+    const changed = structuredClone(data);
+    changed.run.statusLine.screens.splice(-1, 0, { phase: 'cleared', file: 'redraw.txt', at: '2026-10-22T10:00:20.000Z' });
+    assert.ok(getCheck('status-line').analyze(changed).results.every(row => row.result === 'fail' && /never clears/.test(row.reason)));
+  }
+});
+
+test('status-line ignores transcript quotations when judging a cleared footer', t => {
   const dir = copy(t, 'status-line');
-  fs.writeFileSync(path.join(dir, 'screen-running.txt'), '  relay: 4 running | bypass permissions on\n');
+  for (const phase of ['cleared', 'cleared-confirmed']) {
+    fs.writeFileSync(path.join(dir, `screen-${phase}.txt`), `● The previous run said ⚠ relay: 4 running.\n${statusScreen('')}`);
+  }
   assert.ok(getCheck('status-line').analyze(statusInput(dir)).results.every(row => row.result === 'pass'));
 });
+
+for (const state of [{ completed: false, error: 'Could not cancel status-line jobs; see run.json.' },
+  { completed: true, error: 'Could not stop pane.' }, { completed: false }, { completed: undefined }]) {
+  test(`status-line separates the lead marker from run failure: ${JSON.stringify(state)}`, t => {
+    const data = statusInput(copy(t, 'status-line')), check = getCheck('status-line');
+    Object.assign(data.run, state);
+    assert.equal(check.completed(readTranscript(data.transcript), data.run), true);
+    const analyzed = analyzeRun(data.run, data.evidenceDir, [check], evidenceReaders,
+      { recordsDir: path.join(data.evidenceDir, 'records') });
+    for (const row of analyzed.records) {
+      assert.equal(row.result, 'fail');
+      assert.equal(row.reason, state.error ?? 'The status-line run did not complete.');
+      assert.doesNotMatch(row.reason, /did not print/);
+    }
+  });
+}
 
 test('status-line rejects observations beyond either 60 second bound', t => {
   const data = statusInput(copy(t, 'status-line')), check = getCheck('status-line');
   for (const phase of ['running', 'cleared']) {
     const changed = structuredClone(data);
-    changed.run.statusLine.screens.find(row => row.phase === phase).at = '2026-10-22T10:02:00.000Z';
+    changed.run.statusLine.screens.filter(row => row.phase === phase).at(-1).at = '2026-10-22T10:02:00.000Z';
     for (const row of check.analyze(changed).results) {
       assert.equal(row.result, 'fail'); assert.match(row.reason, /60 second bounds/);
     }
@@ -2662,7 +2729,7 @@ test('status-line records replay from copied screens and jobs after the original
   assert.deepEqual(analyzeRun(data.run, dir, [check], evidenceReaders, { recordsDir, fromCopy: true }).records, first.records);
 });
 
-function statusDriver(t, failure) {
+function statusDriver(t, failure, { keep = false, startMs = 1000, cancelMs = 1000 } = {}) {
   const dir = temp(t), jobsHome = path.join(dir, 'jobs'), controller = new AbortController();
   fs.mkdirSync(jobsHome);
   const run = { runId: 'synthetic-run', check: 'status-line', backends: BACKENDS, surface: 'terminal',
@@ -2671,12 +2738,14 @@ function statusDriver(t, failure) {
   let clock = Date.parse('2026-10-22T10:00:00.000Z'), ready = false, starts = 0, cancels = 0, runningReads = 0, clearedReads = 0;
   const ctx = { ...run, run, evidenceDir: dir, save() { write(path.join(dir, 'run.json'), run); },
     async paneDriver(input, selected, options) {
-      assert.equal(input, ctx); assert.equal(options.keep, true);
+      assert.equal(input, ctx); assert.equal(options.keep, undefined, 'the suite owns --keep');
       assert.equal(selected.completed([{ type: 'assistant', message: { content: [{ type: 'text', text: check.marker }] } }]), true);
       run.pane = 'fake-pane'; run.promptSentAt = new Date(clock).toISOString();
       fs.copyFileSync(path.join(fixture, 'status-line/transcript.jsonl'), path.join(dir, 'transcript.jsonl'));
       run.transcript = path.join(dir, 'transcript.jsonl');
       run.completed = ready = true;
+      if (!keep) options.drive(['stop', run.pane]);
+      assert.equal(calls.some(args => args[0] === 'stop'), false, 'the pane must stay open for the observations');
     } };
   const dependencies = { env: { RELAY_JOBS_CANCEL_GRACE_MS: '0', CLAUDECODE: '1' }, signal: controller.signal,
     now: () => clock, sleep: async ms => { clock += ms; },
@@ -2684,21 +2753,42 @@ function statusDriver(t, failure) {
       calls.push(args);
       if (args[0] === 'stop') return '';
       assert.deepEqual(args, ['screen', 'fake-pane']);
-      if (!starts) return '  ❯\n';
+      if (!starts) return statusScreen('');
       if (!cancels) {
         if (failure === 'interrupted') controller.abort(new Error('Interrupted.'));
-        return ++runningReads > 2 && failure !== 'never appears' ? 'relay: 4 running · bypass permissions on\n' : '  ❯\n';
+        if (failure === 'missing job') fs.rmSync(path.join(jobsHome, 'repo/grok-job'), { recursive: true, force: true });
+        return ++runningReads > 2 && !['never appears', 'dead job', 'missing job', 'status failure'].includes(failure) ? statusScreen('⚠ relay: 4 running') : statusScreen('');
       }
-      return ++clearedReads > 3 && failure !== 'never clears' ? '  ❯\n' : 'relay: 1 running\n';
+      if (failure === 'unavailable') return statusScreen('⚠ relay: status unavailable');
+      if (failure === 'blank cleared') return '';
+      if (failure === 'clear redraw' && clearedReads === 5) { clearedReads++; return ''; }
+      return ++clearedReads > 3 && failure !== 'never clears' ? statusScreen('') : statusScreen('⚠ relay: 1 running');
     },
     async execute(command, args, options) {
       assert.equal(command, process.execPath); assert.equal(args[0], '/build/relay/scripts/companion.mjs');
       assert.equal(options.cwd, dir); assert.equal(options.env.RELAY_JOBS_HOME, jobsHome);
       assert.equal(options.env.CLAUDECODE, undefined); assert.equal(options.detached, true);
       assert.equal(ready, true);
+      if (args[1] === 'status') {
+        assert.deepEqual(args.slice(1), ['status', '--json', '--limit', '200']);
+        assert.equal(options.timeout, 10000);
+        if (failure === 'status failure') throw new Error('Listing timed out.');
+        const jobs = BACKENDS.flatMap(backend => {
+          const file = path.join(jobsHome, 'repo', `${backend}-job`, 'job.json');
+          if (!fs.existsSync(file)) return [];
+          const job = read(file);
+          if (failure === 'dead job' && backend === 'grok') {
+            assert.equal(job.state, 'running', 'dead is computed, never stored');
+            job.state = 'dead';
+          }
+          return [job];
+        });
+        return { stdout: JSON.stringify({ schema: 'relay.status/1', jobs, nextCursor: null }) };
+      }
       if (args[1] === 'cancel') {
         assert.equal(options.timeout, 40000); assert.equal(options.signal, undefined);
-        cancels++; clock += 1000;
+        cancels++; clock += cancelMs;
+        if (failure === 'cancel failure') throw new Error('Cancel failed.');
         edit(dir, `jobs/repo/${args[2]}/job.json`, job => { job.state = 'cancelled'; });
         return { stdout: '' };
       }
@@ -2709,9 +2799,12 @@ function statusDriver(t, failure) {
       assert.match(prompt, /`sleep 150` exactly once and wait for it/);
       assert.doesNotMatch(prompt, /relay: /);
       write(path.join(jobDir, 'job.json'), { id, state: 'running', request: { backend, model: MODELS[backend] }, attempts: [{ relayVersion: run.relayVersion }] });
-      clock += 1000;
+      clock += startMs;
       const stdout = `job: ${id}\ndir: ${jobDir}\n`;
       if (failure === 'partial start') throw Object.assign(new Error('Start failed after its receipt.'), { stdout });
+      if (starts === 2 && ['missing receipt', 'incomplete receipt'].includes(failure)) {
+        throw Object.assign(new Error('Second start timed out.'), { stdout: failure === 'missing receipt' ? undefined : `job: ${id}\n` });
+      }
       return { stdout };
     } };
   return { ctx, dependencies, state: () => ({ calls, starts, cancels, runningReads, clearedReads }) };
@@ -2722,26 +2815,90 @@ test('status-line runTerminal starts all backends in one ready pane, captures sc
   await getCheck('status-line').runTerminal(ctx, dependencies);
   const analyzed = getCheck('status-line').analyze(statusInput(ctx.evidenceDir));
   assert.ok(analyzed.results.every(row => row.result === 'pass'));
-  assert.deepEqual(analyzed.results[0].timings, { shownSeconds: [2], clearedSeconds: [3] });
+  assert.deepEqual(analyzed.results[0].timings, { shownSeconds: [6], clearedSeconds: [13] });
   assert.equal(state().starts, 4); assert.equal(state().cancels, 4);
   assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
-  assert.equal(ctx.run.statusLine.screens.length, 8);
+  assert.equal(ctx.run.statusLine.screens.length, 14);
   assert.equal(ctx.run.completed, true);
 });
 
-for (const failure of ['never appears', 'never clears', 'interrupted', 'partial start']) {
+for (const failure of ['never appears', 'never clears', 'unavailable', 'blank cleared', 'interrupted', 'partial start',
+  'missing receipt', 'incomplete receipt', 'dead job', 'status failure']) {
   test(`status-line runTerminal cleans up when ${failure}`, async t => {
     const { ctx, dependencies, state } = statusDriver(t, failure);
     await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies),
-      failure === 'interrupted' ? /Interrupted/ : failure === 'partial start' ? /Start failed/ : /within 60 seconds/);
+      failure === 'interrupted' ? /Interrupted/ : failure === 'partial start' ? /Start failed/ :
+        failure.includes('receipt') ? /Second start timed out/ : /within 60 seconds/);
     assert.equal(state().cancels, state().starts);
     assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
     assert.equal(ctx.run.completed, false);
     assert.ok(ctx.run.error);
-    if (failure === 'never appears') assert.equal(state().runningReads, 61);
-    if (failure === 'never clears') assert.equal(state().clearedReads, 61);
+    if (failure === 'never appears') assert.equal(state().runningReads, 57);
+    if (failure === 'never clears') assert.equal(state().clearedReads, 57);
+    if (failure === 'dead job') assert.match(ctx.run.error, /Jobs not starting or running: grok-job \(dead\)/);
+    if (failure === 'status failure') {
+      for (const backend of BACKENDS) assert.ok(ctx.run.error.includes(`${backend}-job (unreadable)`));
+      assert.match(ctx.run.error, /Status read failed: Listing timed out/);
+    }
+    if (failure.includes('receipt')) assert.deepEqual(ctx.run.cancellations.map(row => row.jobId), ['codex-job', 'grok-job']);
   });
 }
+
+test('status-line includes every sequential start and cancel in its timings', async t => {
+  const { ctx, dependencies } = statusDriver(t, undefined, { startMs: 10000, cancelMs: 10000 });
+  await getCheck('status-line').runTerminal(ctx, dependencies);
+  const results = getCheck('status-line').analyze(statusInput(ctx.evidenceDir)).results;
+  assert.ok(results.every(row => row.result === 'pass'));
+  assert.deepEqual(results[0].timings, { shownSeconds: [42], clearedSeconds: [49] });
+});
+
+test('status-line names a missing setup job at the running deadline', async t => {
+  const { ctx, dependencies, state } = statusDriver(t, 'missing job');
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Jobs not starting or running: grok-job \(missing\)/);
+  assert.equal(state().cancels, 3);
+});
+
+test('status-line also cleans receiptless jobs in a supplied empty home', async t => {
+  const { ctx, dependencies, state } = statusDriver(t, 'missing receipt');
+  ctx.run.jobsHomeCreated = ctx.jobsHomeCreated = false;
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Second start timed out/);
+  assert.equal(state().cancels, 2);
+});
+
+test('status-line runTerminal waits a fresh poll interval after an empty redraw', async t => {
+  const { ctx, dependencies, state } = statusDriver(t, 'clear redraw');
+  await getCheck('status-line').runTerminal(ctx, dependencies);
+  assert.equal(state().clearedReads, 13);
+  assert.deepEqual(getCheck('status-line').analyze(statusInput(ctx.evidenceDir)).results[0].timings,
+    { shownSeconds: [6], clearedSeconds: [16] });
+});
+
+for (const failure of [undefined, 'never appears', 'cancel failure']) {
+  test(`status-line honours --keep through cleanup: ${failure ?? 'success'}`, async t => {
+    const { ctx, dependencies, state } = statusDriver(t, failure, { keep: true });
+    const check = getCheck('status-line');
+    if (failure) await assert.rejects(check.runTerminal(ctx, dependencies), /within 60 seconds|Could not cancel/);
+    else await check.runTerminal(ctx, dependencies);
+    assert.equal(state().calls.some(args => args[0] === 'stop'), false);
+    assert.ok(state().cancels >= state().starts);
+  });
+}
+
+test('status-line stops after failed cleanup when --keep is absent', async t => {
+  const { ctx, dependencies, state } = statusDriver(t, 'cancel failure');
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Could not cancel/);
+  assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
+  assert.equal(ctx.run.completed, false);
+});
+
+test('status-line rejects an occupied home without cancelling its jobs', async t => {
+  const { ctx, dependencies, state } = statusDriver(t);
+  write(path.join(ctx.jobsHome, 'repo/existing/job.json'), { id: 'existing', state: 'running' });
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /empty jobs home/);
+  assert.equal(state().starts, 0);
+  assert.equal(state().cancels, 0);
+  assert.deepEqual(state().calls, []);
+});
 
 test('pane screen captures visible physical lines without joining or scrollback', t => {
   const dir = temp(t), bin = path.join(dir, 'bin'), log = path.join(dir, 'args.json');
