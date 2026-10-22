@@ -1,13 +1,14 @@
 import "./support/isolate-env.mjs";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { renderJobList } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { repoSlugFor } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { PLUGIN_VERSION } from "../plugins/relay/scripts/lib/util/plugin.mjs";
 import { makeTempDir, run } from "./support/helpers.mjs";
-import { SCRIPT } from "./support/runtime-fixture.mjs";
+import { PLUGIN_ROOT } from "./support/runtime-fixture.mjs";
 
 function view(job = {}, fields = {}) {
   return {
@@ -108,6 +109,23 @@ test("summaries keep the existing 80-character truncation", () => {
   ].join("\n"));
 });
 
+test("GFM cells escape backslashes before pipes and preserve backticks", () => {
+  assert.equal(renderJobList([
+    view({ id: "job-1", summary: "a\\|b" }),
+    view({ id: "job-2", summary: "ends\\" }),
+    view({ id: "job-3", summary: "`ticks`" })
+  ]), [
+    "jobs: 3",
+    "",
+    "| job   | state     | kind | backend | model/effort | duration | summary | relay |",
+    "|-------|-----------|------|---------|--------------|----------|---------|-------|",
+    String.raw`| job-1 | completed | task | codex   | gpt-test/low | 7s       | a\\\|b  |       |`,
+    String.raw`| job-2 | completed | task | codex   | gpt-test/low | 7s       | ends\\  |       |`,
+    "| job-3 | completed | task | codex   | gpt-test/low | 7s       | `ticks` |       |",
+    ""
+  ].join("\n"));
+});
+
 test("review jobs retain their kind and longer duration", () => {
   assert.equal(renderJobList([view({ id: "review-1", kind: "review", completedAt: "2026-01-01T01:02:03Z" })]), [
     "jobs: 1",
@@ -119,31 +137,76 @@ test("review jobs retain their kind and longer duration", () => {
   ].join("\n"));
 });
 
-test("companion status prints its headers, then jobs and a blank line before the table", () => {
-  const root = makeTempDir("relay-status-table-");
-  const work = path.join(root, "work");
-  const jobs = path.join(root, "jobs");
-  fs.mkdirSync(work);
-  fs.mkdirSync(jobs);
-  const slug = repoSlugFor(work);
-  const jobDir = path.join(jobs, slug, "job-1");
-  fs.mkdirSync(jobDir, { recursive: true });
-  fs.writeFileSync(path.join(jobDir, "job.json"), JSON.stringify({ ...view().job, state: "completed" }));
-  fs.writeFileSync(path.join(jobs, "config.json"), JSON.stringify({ fastTier: "allowed" }));
-  const result = run(process.execPath, [SCRIPT, "status"], { cwd: work, env: { ...process.env, RELAY_JOBS_HOME: jobs } });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stderr, "");
-  assert.equal(result.stdout, [
-    `jobs-home: ${jobs}`,
-    `repo: ${slug}`,
-    "review-gate: disabled",
-    "fast-tier: allowed",
-    `relay-version: ${PLUGIN_VERSION}`,
-    "jobs: 1",
-    "",
-    "| job   | state     | kind | backend | model/effort | duration | summary | relay |",
-    "|-------|-----------|------|---------|--------------|----------|---------|-------|",
-    "| job-1 | completed | task | codex   | gpt-test/low | 7s       | Done.   |       |",
-    ""
-  ].join("\n"));
+for (const build of [null, "a3801ed01234-dirty"]) {
+  test(`companion status prints its headers ${build === null ? "without" : "with"} a build stamp, then the table`, () => {
+    const root = makeTempDir("relay-status-table-");
+    const plugin = path.join(root, "plugin");
+    fs.cpSync(path.join(PLUGIN_ROOT, "scripts"), path.join(plugin, "scripts"), { recursive: true });
+    fs.mkdirSync(path.join(plugin, ".claude-plugin"));
+    fs.copyFileSync(path.join(PLUGIN_ROOT, ".claude-plugin/plugin.json"), path.join(plugin, ".claude-plugin/plugin.json"));
+    if (build !== null) fs.writeFileSync(path.join(plugin, ".claude-plugin/build.json"), JSON.stringify({ commit: build }));
+    const work = path.join(root, "work");
+    const jobs = path.join(root, "jobs");
+    fs.mkdirSync(work);
+    fs.mkdirSync(jobs);
+    const slug = repoSlugFor(work);
+    const jobDir = path.join(jobs, slug, "job-1");
+    fs.mkdirSync(jobDir, { recursive: true });
+    fs.writeFileSync(path.join(jobDir, "job.json"), JSON.stringify({ ...view().job, state: "completed" }));
+    fs.writeFileSync(path.join(jobs, "config.json"), JSON.stringify({ fastTier: "allowed" }));
+    const script = path.join(plugin, "scripts/companion.mjs");
+    const env = { ...process.env, RELAY_JOBS_HOME: jobs };
+    const result = run(process.execPath, [script, "status"], { cwd: work, env });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdout, [
+      `jobs-home: ${jobs}`,
+      `repo: ${slug}`,
+      "review-gate: disabled",
+      "fast-tier: allowed",
+      `relay-version: ${PLUGIN_VERSION}${build !== null ? ` (${build})` : ""}`,
+      "jobs: 1",
+      "",
+      "| job   | state     | kind | backend | model/effort | duration | summary | relay |",
+      "|-------|-----------|------|---------|--------------|----------|---------|-------|",
+      "| job-1 | completed | task | codex   | gpt-test/low | 7s       | Done.   |       |",
+      ""
+    ].join("\n"));
+    for (const args of [["status", "job-1"], ["status", "--json"]]) {
+      const output = run(process.execPath, [script, ...args], { cwd: work, env });
+      assert.equal(output.status, 0, output.stderr);
+      assert.ok(!output.stdout.includes("relay-version:"));
+      assert.ok(!output.stdout.includes("-dirty"));
+    }
+  });
+}
+
+test("plugin build reads strings and treats absent, invalid or unreadable stamps as null", async () => {
+  const root = makeTempDir("relay-plugin-build-");
+  const moduleDir = path.join(root, "scripts/lib/util");
+  fs.mkdirSync(moduleDir, { recursive: true });
+  fs.mkdirSync(path.join(root, ".claude-plugin"));
+  fs.copyFileSync(path.join(PLUGIN_ROOT, "scripts/lib/util/plugin.mjs"), path.join(moduleDir, "plugin.mjs"));
+  fs.copyFileSync(path.join(PLUGIN_ROOT, ".claude-plugin/plugin.json"), path.join(root, ".claude-plugin/plugin.json"));
+  const stamp = path.join(root, ".claude-plugin/build.json");
+  const cases = [
+    [undefined, null],
+    ['{"commit":"0123456789ab"}', "0123456789ab"],
+    ['{"commit":"0123456789ab-dirty"}', "0123456789ab-dirty"],
+    ['{"commit":""}', ""],
+    ["{", null],
+    ["null", null],
+    ["{}", null],
+    ['{"commit":123}', null],
+    ['{"commit":null}', null]
+  ];
+  for (const [index, [content, expected]] of cases.entries()) {
+    if (content !== undefined) fs.writeFileSync(stamp, content);
+    const module = await import(`${pathToFileURL(path.join(moduleDir, "plugin.mjs"))}?case=${index}`);
+    assert.equal(module.PLUGIN_BUILD, expected);
+  }
+  fs.rmSync(stamp);
+  fs.mkdirSync(stamp);
+  const module = await import(`${pathToFileURL(path.join(moduleDir, "plugin.mjs"))}?case=unreadable`);
+  assert.equal(module.PLUGIN_BUILD, null);
 });

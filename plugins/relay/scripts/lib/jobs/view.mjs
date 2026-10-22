@@ -345,7 +345,7 @@ export function renderJobList(views, options = {}) {
         ...(view.job.automaticResumes?.length ? [`automatic-resumes: ${view.job.automaticResumes.length}`] : [])
       ].join(", ")
     ];
-  }).map((row) => row.map((cell) => String(cell).replace(/\s+/g, " ").trim().replaceAll("|", "\\|")));
+  }).map((row) => row.map((cell) => String(cell).replace(/\s+/g, " ").trim().replaceAll("\\", "\\\\").replaceAll("|", "\\|")));
   const widths = header.map((cell, index) => Math.max(Array.from(cell).length, ...rows.map((row) => Array.from(row[index]).length)));
   const renderRow = (row) => `| ${row.map((cell, index) => cell + " ".repeat(widths[index] - Array.from(cell).length)).join(" | ")} |`;
   const separator = `|${widths.map((width) => "-".repeat(width + 2)).join("|")}|`;

@@ -407,14 +407,16 @@ records a command a plugin answered without its arguments (`/relay:result`, not 
 gets them. So the answer's first line is the command as typed, which the person reads as `relay: /relay:result
 <job>`. The companion's own lines follow in a code block, exactly as printed, with anything it wrote to stderr
 after them, up to the first line that is `---` or starts with `|`. After a `---` comes the job's report, which the
-backend wrote as Markdown; after a `|` comes the job table, drawn as a table. The model reads the same text. In a
+backend wrote as Markdown; after a `|` comes the job table, drawn as a table, its cells as Markdown (a table wider
+than the terminal is drawn as one block per job). The model reads the same text. In a
 headless run the command exits with the companion's exit code (the table under [The state block](#the-state-block)
-for `result`), except under `--output-format stream-json`, where Claude Code exits 0. `status` names the relay version in its header (`relay-version:`), the build that answers.
+for `result`), except under `--output-format stream-json`, where Claude Code exits 0. `status` names the relay version in its header (`relay-version:`), with the commit for a build
+`scripts/smoke/install-local.sh` installed.
 
 Each call has a timeout above its command's own deadline: 30 seconds for `status` and `result`, which read in under
 a second, twice `RELAY_JOBS_CANCEL_GRACE_MS` (10 s by default) and 40 seconds more for `cancel`, which can wait the
-grace once for its own worker and once for a worker that took the job over, and 180 for `transfer`, which gives
-Codex's import two minutes. A call that timed out or could not start, and output that `$.process.run` cut at 4 MiB,
+grace once for its own worker and once for a worker that took the job over, up to the ten minutes `$.process.run`
+allows (a grace above 280 s outlasts it), and 180 for `transfer`, which gives Codex's import two minutes. A call that timed out or could not start, and output that `$.process.run` cut at 4 MiB,
 answer an error text that names the shell command to run instead, never a partial list. The markdown files keep
 the names, descriptions and argument hints for the command picker, and their body only says that the module
 answers the command: Claude Code runs it when the module did not load. Claude does not call these four itself. A

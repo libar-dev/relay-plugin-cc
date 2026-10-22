@@ -34,7 +34,7 @@ Phase 2, commands answered by the module:
 - `C status` prints the job list as a Markdown table with a header row (job, state, kind, backend,
   model/effort, duration, summary, relay); every row names its backend, Codex included. It replaces
   the two-space-separated lines, and is the list `/relay:status` shows. Its header names the relay
-  version (`relay-version:`). `--json` is unchanged.
+  version (`relay-version:`), with the commit for a build `scripts/smoke/install-local.sh` installed. `--json` is unchanged.
 - Claude no longer calls `/relay:status` and `/relay:result` itself: a model's call of a command
   never reaches the module. It reads jobs with `C status` and `C result` in Bash, which print the
   same text; in `default` permission mode Claude Code asks before that Bash call.
