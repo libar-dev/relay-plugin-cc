@@ -151,6 +151,14 @@ test("not-found and usage errors are JSON on stdout or unchanged text on stderr"
   }
 });
 
+test("--json=false asks for text, so an error stays text on stderr", t => {
+  const ctx = setup(t);
+  const result = companion(ctx, ["status", "no-such-job", "--json=false"]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^No job found for "no-such-job"/);
+});
+
 test("missing option values return JSON usage errors in both JSON flag orders", t => {
   const ctx = setup(t);
   for (const [command, args, flag] of [
