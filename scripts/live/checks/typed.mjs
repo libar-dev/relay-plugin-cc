@@ -117,13 +117,13 @@ function delivery(input, loaded, receipt, line, backend) {
 function footer(screen) {
   const rows = screen.split('\n').flatMap(line => {
     const match = line.match(/^\s*(❯?)\s*([●◯○])\s+(\S+)/u);
-    return match ? [{ name: match[3], viewed: match[2] === '●', selected: Boolean(match[1]) }] : [];
+    return match ? [{ name: match[3], viewed: match[2] === '●', selected: Boolean(match[1]), idle: /\bidle\s*$/.test(line) }] : [];
   });
   const main = rows.findLastIndex(row => row.name === 'main');
   return main < 0 ? [] : rows.slice(main);
 }
 
-export async function typeInView(ctx, name, text, { drive = pane, sleep = pause, beforeSend = () => {}, check = () => {}, interrupt = false } = {}) {
+export async function typeInView(ctx, name, text, { drive = pane, sleep = pause, beforeSend = () => {}, check = () => {}, interrupt = false, followup } = {}) {
   let step = 0;
   const screen = () => {
     check();
@@ -135,7 +135,8 @@ export async function typeInView(ctx, name, text, { drive = pane, sleep = pause,
   const selected = name => value => footer(value).some(row => row.name === name && row.selected);
   const prompt = name => value => name === 'main' ? /^\s*❯\s*[^\n]*$/m.test(value) && !value.includes('Message @') &&
     footer(value).some(row => row.name === 'main' && row.viewed) && !footer(value).some(row => row.selected) :
-    value.includes(`Message @${name}`) && footer(value).some(row => row.name === name && row.viewed) && !footer(value).some(row => row.selected);
+    value.split('\n').some(line => line.trim().replace(/\s+/g, ' ') === `❯ Message @${name}…`) &&
+    footer(value).some(row => row.name === name && row.viewed) && !footer(value).some(row => row.selected);
   const key = async (key, expected, why) => {
     check(); drive(['keys', ctx.run.pane, key]); await sleep(250);
     verify(screen(), expected, why);
@@ -154,6 +155,20 @@ export async function typeInView(ctx, name, text, { drive = pane, sleep = pause,
   }
   check(); beforeSend(); drive(['send', ctx.run.pane, text]); await sleep(250);
   verify(screen(), value => value.includes(`Message @${name}`), `${name}'s view after typing`);
+  if (followup) {
+    // A finished relay can disappear from the footer unless its view stays open.
+    await followup.ready();
+    text = followup.text;
+    while (true) {
+      const value = screen();
+      verify(value, prompt(name), `${name}'s focused prompt before A2`);
+      if (footer(value).some(row => row.name === name && row.viewed && row.idle)) break;
+      await sleep(1000);
+    }
+    check(); followup.beforeSend(); drive(['send', ctx.run.pane, text]); await sleep(250);
+    verify(screen(), value => value.includes(`Message @${name}`), `${name}'s view after typing`);
+    await followup.delivered();
+  }
   await key('Down', selected('main'), 'selector on main');
   await key('Enter', value => footer(value).some(row => row.name === 'main' && row.viewed) && !value.includes('Message @'), 'the main view');
   await key('Up', prompt('main'), 'the main prompt');
@@ -206,16 +221,16 @@ export default {
         jobs.push({ backend, a, b, c, A: relayJob(input(), evidence, a.agentId), B: relayJob(input(), evidence, b.agentId), C: relayJob(input(), evidence, c.agentId) });
         run.typed[backend] = {};
       }
-      const type = async (item, line) => {
+      const receipt = (item, line) => {
         const scenario = line[0], agent = item[scenario.toLowerCase()], loaded = item[scenario];
         const text = typedLine(run.runId, item.backend, line);
-        await typeInView(ctx, agent.name, text, { drive, sleep, check, interrupt: line === 'C1', beforeSend() {
-          const job = readJob(loaded.jobDir);
-          if (line !== 'A2' && job.state !== 'running') throw new Error(`${agent.name} is no longer running before ${line}.`);
-          run.typed[item.backend][line] = { text, sentAt: new Date(now()).toISOString() }; ctx.save();
-        } });
+        const job = readJob(loaded.jobDir);
+        if (line !== 'A2' && job.state !== 'running') throw new Error(`${agent.name} is no longer running before ${line}.`);
+        run.typed[item.backend][line] = { text, sentAt: new Date(now()).toISOString() }; ctx.save();
       };
-      for (const item of jobs) await type(item, 'A1');
+      const type = (item, line, followup) => typeInView(ctx, item[line[0].toLowerCase()].name,
+        typedLine(run.runId, item.backend, line), { drive, sleep, check, interrupt: line === 'C1',
+          beforeSend: () => receipt(item, line), followup });
       for (const item of jobs) {
         await type(item, 'B1');
         check();
@@ -224,14 +239,19 @@ export default {
       }
       for (const item of jobs) await type(item, 'C1');
       for (const item of jobs) {
-        await waitFor(() => {
-          item.A = relayJob(input(), evidence, item.a.agentId);
-          try {
-            const delivered = delivery(input(), item.A, run.typed[item.backend].A1, 'A1', item.backend);
-            handback(item.A, item.a, entries(), delivered.postedAt); return true;
-          } catch { return false; }
+        await type(item, 'A1', {
+          text: typedLine(run.runId, item.backend, 'A2'),
+          ready: () => waitFor(() => {
+            item.A = relayJob(input(), evidence, item.a.agentId);
+            try {
+              const delivered = delivery(input(), item.A, run.typed[item.backend].A1, 'A1', item.backend);
+              handback(item.A, item.a, entries(), delivered.postedAt); return true;
+            } catch { return false; }
+          }),
+          beforeSend: () => receipt(item, 'A2'),
+          delivered: () => waitFor(() => recordsFor(item.A.jobDir).some(record =>
+            record.message === run.typed[item.backend].A2.text))
         });
-        await type(item, 'A2');
       }
       let analysis;
       await waitFor(() => {
