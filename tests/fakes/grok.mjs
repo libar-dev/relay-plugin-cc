@@ -45,6 +45,12 @@ fs.appendFileSync(file + '.invocations', JSON.stringify({ args: process.argv.sli
 if (process.argv[2] === '--version' && options.versionFail) { console.error('VERSION DENIED'); process.exit(9); }
 if (process.argv[2] === '--version') { console.log('grok 1.0.fake'); process.exit(0); }
 if (process.argv[2] === 'models' && options.modelsHangMs) { setTimeout(() => process.exit(0), options.modelsHangMs); return; }
+if (process.argv[2] === 'models' && options.signedOutOnce) {
+  const counter = file + '.models';
+  const calls = fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8')) : 0;
+  fs.writeFileSync(counter, String(calls + 1));
+  if (calls === 0) { console.log('You are not authenticated'); process.exit(1); }
+}
 if (process.argv[2] === 'models') { console.log(options.signedOut ? 'Not signed in' : 'You are logged in with grok.com.\\n\\nDefault model: grok-4.7\\n\\nAvailable models:\\n  * grok-4.7 (default)\\n  - grok-4.6'); process.exit(options.signedOut ? 1 : 0); }
 state.starts.push({ args: process.argv.slice(2), env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('GROK_'))), cwd: process.cwd() }); save();
 if (options.sandboxFail && process.env.GROK_SANDBOX) { console.error('Refusing to start with its protections missing'); process.exit(1); }

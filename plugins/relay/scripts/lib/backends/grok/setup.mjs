@@ -43,6 +43,10 @@ function grokScriptNote(binary, env) {
   };
 }
 
+// `grok models` once answered "You are not authenticated" for a signed-in home, and the next call
+// said signed in (the end-to-end suite, 22 October 2026), so a signed-out answer is asked again.
+const SIGNED_OUT_RECHECK_MS = 1000;
+
 async function checkGrokHome(cwd, home, env, shared, limits) {
   const started = Date.now();
   const block = emptyBlock(home, grokBackend.capabilities);
@@ -53,10 +57,12 @@ async function checkGrokHome(cwd, home, env, shared, limits) {
   block.realBinary = script.realBinary;
   if (script.note) block.warnings.push(script.note);
   const grokEnv = grokEnvironment({ grokHome: home.home, mode: "yolo" }, env);
-  const [version, listing] = await Promise.all([
-    shared.version,
-    runLimited(shared.binary, ["models"], { cwd, env: grokEnv, timeoutMs: limits.commandMs })
-  ]);
+  const listModels = () => runLimited(shared.binary, ["models"], { cwd, env: grokEnv, timeoutMs: limits.commandMs });
+  let [version, listing] = await Promise.all([shared.version, listModels()]);
+  if (!version.error && !listing.timedOut && !listing.error && !parseGrokModels(listing.stdout).signedIn) {
+    await new Promise(resolve => setTimeout(resolve, SIGNED_OUT_RECHECK_MS));
+    listing = await listModels();
+  }
   block.elapsedMs = Date.now() - started;
   block.version = version.text;
   const config = grokConfigDefaults(home.home);

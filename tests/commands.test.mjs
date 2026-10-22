@@ -358,6 +358,7 @@ test("review and adversarial-review are model-invocable; status, result, cancel 
     assert.match(frontmatter(name), /^description: .{40,}$/m, name);
     assert.match(frontmatter(name), /^argument-hint: /m, name);
   }
+  assert.match(frontmatter("status"), /^argument-hint: '\[job-id\] \[--all\] \[--workflow <run>\]'$/m);
   for (const name of ["review", "adversarial-review"]) {
     const source = read(`commands/${name}.md`);
     assert.match(source, /If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground/, name);

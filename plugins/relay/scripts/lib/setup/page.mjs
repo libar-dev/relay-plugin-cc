@@ -19,12 +19,15 @@ const REVIEW_GATE_NEXT_STEP = backendWith("stopGate").setup.reviewGateNextStep;
 const REVIEW_FEATURES = [["review", "review"], ["adversarialReview", "adversarial review"], ["stopGate", "stop gate"], ["transfer", "transfer"]];
 
 // The `can:` line: modes, steer, resume, web search off, then each review feature the backend
-// has. What it lacks is listed with its note, or as `reviews: not yet` when it lacks them all.
+// has. What it lacks is listed with its note, or as `reviews: not yet` when it lacks them all. A
+// backend that takes a message only as its next turn says so beside "steer": `can.steer` in the
+// JSON stays the in-turn steer.
 /** @param {Pick<import("../backends/types").Backend, "capabilities" | "capabilityNotes">} declaration */
 function capabilityWords({ capabilities: can, capabilityNotes: notes = {} }) {
   const noted = (words, note) => (note ? `${words} (${note})` : words);
   const parts = [noted(can.modes.join(", "), notes.modes)];
   if (can.steer) parts.push("steer");
+  else if (notes.steer) parts.push(noted("steer", notes.steer));
   if (can.resume) parts.push("resume");
   if (can.webSearch.includes("disabled")) parts.push(noted("web search off", notes.webSearchOff));
   const lacking = [];
