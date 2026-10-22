@@ -68,23 +68,31 @@ export function pluginCommit(pluginDir) {
   } catch { return null; }
 }
 
+export function cancelTimeout(env = process.env) {
+  const value = Number(env.RELAY_JOBS_CANCEL_GRACE_MS);
+  const grace = Number.isFinite(value) && value >= 0 ? value : 10000;
+  return Math.min(600000, 2 * grace + 40000);
+}
+
 export async function cancelUnfinishedJobs(run, { env = process.env, execute = promisify(execFile) } = {}) {
-  const owned = Object.values(run.setup?.jobs ?? {}).flatMap(jobs => Object.values(jobs));
+  const owned = [...Object.values(run.setup?.jobs ?? {}).flatMap(jobs => Object.values(jobs)),
+    ...Object.values(run.setup?.decoys ?? {})];
   if (!owned.length && (!run.jobsHomeCreated || !run.promptSentAt)) return [];
   const directories = dir => fs.readdirSync(dir, { withFileTypes: true })
     .filter(entry => entry.isDirectory()).map(entry => path.join(dir, entry.name));
-  const jobs = (owned.length ? owned.map(job => path.resolve(run.jobsHome, job.jobDir)) : directories(run.jobsHome).flatMap(directories))
-    .filter(dir => fs.existsSync(path.join(dir, 'job.json'))).sort();
+  const jobs = owned.length ? owned.map(job => ({ id: job.id, dir: path.resolve(run.jobsHome, job.jobDir) })) :
+    directories(run.jobsHome).flatMap(directories).filter(dir => fs.existsSync(path.join(dir, 'job.json'))).map(dir => ({ dir }));
+  jobs.sort((a, b) => a.dir.localeCompare(b.dir));
   run.cancellations = [];
-  for (const dir of jobs) {
+  for (const { id, dir } of jobs) {
     let job;
     try { job = readJson(path.join(dir, 'job.json')); } catch { /* Let cancel read a busy job. */ }
     if (['completed', 'failed', 'cancelled'].includes(job?.state)) continue;
-    const jobId = job?.id ?? path.basename(dir);
+    const jobId = id ?? job?.id ?? path.basename(dir);
     const receipt = { jobId, status: 'cancelled' };
     try {
       await execute(process.execPath, [path.join(run.pluginDir, 'scripts/companion.mjs'), 'cancel', jobId],
-        { env: { ...env, RELAY_JOBS_HOME: run.jobsHome }, timeout: 60000, encoding: 'utf8' });
+        { cwd: run.workDir, env: { ...env, RELAY_JOBS_HOME: run.jobsHome }, timeout: cancelTimeout(env), encoding: 'utf8' });
     } catch (error) {
       receipt.status = 'failed';
       receipt.error = error.message;
@@ -401,7 +409,7 @@ export function analyzeRun(run, evidenceDir, registry, readers, options = {}) {
   run.promptSentAt ??= readers.runSpan(entries, run.runId, check.marker).startedAt ??
     (check.scope ? entries.find(entry => entry.timestamp)?.timestamp : null) ?? run.preparedAt;
   const input = { runId: run.runId, backends: run.backends, surface: run.surface, transcript,
-    jobsHome: path.resolve(jobsHome), relayVersion: run.relayVersion, evidenceDir, run,
+    jobsHome: path.resolve(jobsHome), relayVersion: run.relayVersion, evidenceDir, run, env, fromCopy: Boolean(options.fromCopy),
     evidencePath: file => {
       if (!options.fromCopy) return file;
       const copied = run.copy?.files?.[file];

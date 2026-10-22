@@ -78,15 +78,16 @@ export function parseArgs(args, registry, backends) {
   if (command === 'run') {
     if (!positional.length) throw new UsageError('run requires at least one check or all.');
     if (positional.includes('all') && positional.length !== 1) throw new UsageError('all cannot be combined with check names.');
-    options.checks = positional[0] === 'all' ? registry.filter(check => check.surfaces.includes('terminal')).map(check => check.id) : positional;
+    options.all = positional[0] === 'all';
+    options.checks = options.all ? registry.filter(check => check.surfaces.includes('terminal')).map(check => check.id) : positional;
     if (new Set(options.checks).size !== options.checks.length) throw new UsageError('A check must not be repeated.');
     for (const id of options.checks) {
       const check = registry.find(item => item.id === id);
       if (!check) throw new UsageError(`Unknown check: ${id}`);
       if (!check.surfaces.includes('terminal')) throw new UsageError(`${id} does not support terminal.`);
-      selectedBackends(check, options.backends);
+      if (!options.all) selectedBackends(check, options.backends);
     }
-    if (options.checks.length === 1) options.backends = selectedBackends(registry.find(check => check.id === options.checks[0]), options.backends);
+    if (!options.all && options.checks.length === 1) options.backends = selectedBackends(registry.find(check => check.id === options.checks[0]), options.backends);
     if (options.checks.length > 1 && (options.workDir || options.jobsHome)) throw new UsageError('--work-dir and --jobs-home require a single check.');
   } else if (command === 'prepare') {
     if (positional.length !== 1) throw new UsageError('prepare requires one check.');
@@ -119,12 +120,32 @@ function requireWorkTree(workDir) {
   throw new UsageError(`--work-dir must already be inside a git work tree: ${workDir}`);
 }
 
+async function cleanupRun(run, evidenceDir, { env, warn, cancelJobs = cancelUnfinishedJobs }) {
+  let failed = false;
+  try {
+    const cancellations = await cancelJobs(run, { env });
+    for (const item of cancellations.filter(item => item.status === 'failed')) {
+      warn(`Could not cancel ${item.jobId}: ${item.error}`);
+      failed = true;
+    }
+  } catch (error) {
+    run.cancellationError = error.message;
+    warn(error.message);
+    failed = true;
+  } finally { writeJson(path.join(evidenceDir, 'run.json'), run); }
+  return failed;
+}
+
 export async function runChecks(options, registry, readers, { env = process.env, log = console.log,
   warn = console.error, driver = runTerminal, commitOf = pluginCommit, cancelJobs = cancelUnfinishedJobs } = {}) {
   if (options.workDir) requireWorkTree(options.workDir);
   let status = 0;
   for (const id of options.checks) {
     const check = registry.find(item => item.id === id);
+    if (options.all && check.backends && !options.backends.some(backend => check.backends.includes(backend))) {
+      log(`Skipping ${id}: does not apply to any selected backend.`);
+      continue;
+    }
     const pluginDir = fs.realpathSync(options.pluginDir);
     const relayVersion = pluginVersion(pluginDir);
     const workDir = options.workDir ?? fs.mkdtempSync('/tmp/relay-live-work-');
@@ -162,36 +183,30 @@ export async function runChecks(options, registry, readers, { env = process.env,
     } finally {
       const after = commitOf(pluginDir);
       if (run.relayCommit && after !== run.relayCommit) run.relayCommit = run.relayCommit.replace(/-dirty$/, '') + '-dirty';
-      if (!run.setupFailed && ((run.promptSentAt && run.jobsHomeCreated) || run.setup?.jobs) && (sessionFailed || run.interrupted || run.completed === false)) {
-        try {
-          const cancellations = await cancelJobs(run, { env });
-          for (const item of cancellations.filter(item => item.status === 'failed')) {
-            warn(`Could not cancel ${item.jobId}: ${item.error}`);
-            status = 1;
-          }
-        } catch (error) {
-          run.cancellationError = error.message;
-          warn(error.message);
-          status = 1;
-        }
-      }
       if (guard(run, evidenceDir, warn)) status = 1;
       save();
     }
-    if (run.promptSentAt) {
-      try {
-        const result = analyzeRun(run, evidenceDir, registry, readers, { recordsDir: options.recordsDir, analysis, env });
-        summaries(result, registry, log);
-        if (result.records.some(record => record.result !== 'pass')) status = 1;
-      } catch (error) {
-        run.error = error.message;
-        save();
-        warn(error.message);
-        status = 1;
-        const records = unanalyzedRecords(run, error.message, readers, evidenceRoot(env));
-        summaries({ records, file: writeRecords(run, records, evidenceDir, options.recordsDir) }, registry, log);
+    try {
+      if (run.promptSentAt) {
+        try {
+          const result = analyzeRun(run, evidenceDir, registry, readers, { recordsDir: options.recordsDir, analysis, env });
+          summaries(result, registry, log);
+          if (result.records.some(record => record.result !== 'pass')) status = 1;
+        } catch (error) {
+          run.error = error.message;
+          save();
+          warn(error.message);
+          status = 1;
+          const records = unanalyzedRecords(run, error.message, readers, evidenceRoot(env));
+          summaries({ records, file: writeRecords(run, records, evidenceDir, options.recordsDir) }, registry, log);
+        }
+      } else status = 1;
+    } finally {
+      if (!run.setupFailed && (run.setup || (run.promptSentAt && run.jobsHomeCreated &&
+        (sessionFailed || run.interrupted || run.completed === false)))) {
+        if (await cleanupRun(run, evidenceDir, { env, warn, cancelJobs })) status = 1;
       }
-    } else status = 1;
+    }
     if (run.interrupted) break;
   }
   return status;
@@ -224,9 +239,16 @@ export async function main(args, registry, readers, dependencies = {}) {
     if (options.command === 'analyze') {
       const evidenceDir = runDirectory(evidenceRoot(env), options.runId);
       const run = readJson(path.join(evidenceDir, 'run.json'));
-      const result = analyzeRun(run, evidenceDir, registry, readers, { ...options, env });
-      summaries(result, registry, log);
-      return run.settingsChanged || result.records.some(record => record.result !== 'pass') ? 1 : 0;
+      let result, cleanupFailed = false;
+      try {
+        result = analyzeRun(run, evidenceDir, registry, readers, { ...options, env });
+        summaries(result, registry, log);
+      } finally {
+        if (!options.fromCopy && !run.setupFailed && run.setup) {
+          cleanupFailed = await cleanupRun(run, evidenceDir, { env, warn, cancelJobs: dependencies.cancelJobs });
+        }
+      }
+      return cleanupFailed || run.settingsChanged || result.records.some(record => record.result !== 'pass') ? 1 : 0;
     }
     return await runChecks(options, registry, readers, dependencies);
   } catch (error) {

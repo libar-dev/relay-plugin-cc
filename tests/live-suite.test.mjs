@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { main, parseArgs, runChecks, usage, UsageError } from '../scripts/live/suite.mjs';
 import { analyzeRun, cancelUnfinishedJobs, copyEvidence, createRun, evidenceRoot, findRunTranscript, findTranscript, makeRecords,
   pluginCommit, readJson, recordKeys, runDirectory, runId, smokeInstall, writeJson, writeRecords } from '../scripts/live/lib/runs.mjs';
-import { claudeArgs, inspectDebug, paneStartArgs, runTerminal } from '../scripts/live/lib/terminal.mjs';
+import { claudeArgs, inspectDebug, paneStartArgs, runTerminal, runCommands } from '../scripts/live/lib/terminal.mjs';
 import { readRecords, renderTable, staleMessage } from '../scripts/live/lib/table.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -1245,13 +1245,13 @@ for (const after of ['0123456789ab', '0123456789ab-dirty', 'abcdef012345', null]
 }
 
 for (const mode of ['timeout', 'interrupt', 'failure', 'complete', 'startup', 'caller-owned', 'cancel-failure']) {
-  test(`unfinished terminal job cleanup before analysis: ${mode}`, async t => {
+  test(`unfinished terminal job cleanup after analysis: ${mode}`, async t => {
     const ctx = scratch(t), pluginDir = receipt(ctx);
     const calls = [], warnings = [];
-    let seen, analyzedAfterCleanup = false;
+    let seen, analyzedBeforeCleanup = false;
     const custom = { ...check, analyze(input) {
-      if (!['complete', 'caller-owned'].includes(mode)) assert.equal(calls.length, 2);
-      analyzedAfterCleanup = true;
+      assert.equal(calls.length, 0);
+      analyzedBeforeCleanup = true;
       return { ...analyzed(baseRun({ backends: input.backends })), evidence: { transcripts: [input.transcript], agents: [] } };
     } };
     const status = await main(['run', 'fake', '--plugin-dir', pluginDir, '--work-dir', ctx.workDir,
@@ -1263,7 +1263,7 @@ for (const mode of ['timeout', 'interrupt', 'failure', 'complete', 'startup', 'c
         assert.deepEqual(args.slice(0, 2), [path.join(pluginDir, 'scripts/companion.mjs'), 'cancel']);
         assert.equal(settings.env.RELAY_JOBS_HOME, run.jobsHome);
         assert.equal(settings.env.CLAUDE_CONFIG_DIR, ctx.env.CLAUDE_CONFIG_DIR);
-        assert.equal(analyzedAfterCleanup, false);
+        assert.equal(analyzedBeforeCleanup, true);
         if (mode === 'cancel-failure' && calls.length === 1) throw new Error('Simulated cancel failure.');
       } }),
       driver(input, selected, { run }) {
@@ -1285,7 +1285,7 @@ for (const mode of ['timeout', 'interrupt', 'failure', 'complete', 'startup', 'c
     assert.equal(status, mode === 'complete' ? 0 : 1);
     const shouldCancel = !['complete', 'startup', 'caller-owned'].includes(mode);
     assert.deepEqual(calls, shouldCancel ? ['a-running', 'b-starting'] : []);
-    assert.equal(analyzedAfterCleanup, mode !== 'startup');
+    assert.equal(analyzedBeforeCleanup, mode !== 'startup');
     const saved = readJson(path.join(runDirectory(ctx.env.RELAY_LIVE_HOME, seen.runId), 'run.json'));
     if (shouldCancel) assert.deepEqual(saved.cancellations, [
       { jobId: 'a-running', status: mode === 'cancel-failure' ? 'failed' : 'cancelled',
@@ -1444,11 +1444,11 @@ for (const mode of ['complete', 'missing answer', 'partial line', 'interrupt']) 
     };
     const action = runTerminal(input, selected, { run, readers, env: ctx.env, drive, log() {}, warn() {},
       save() { saved.push(structuredClone(run)); }, pause: async () => {
-        if (mode === 'missing answer' && run.commands?.length) now += 120001;
+        if (mode === 'missing answer' && run.commands?.length) now += 200001;
         else now += 1000;
         if (pending) { rows.push(pending); pending = null; writeTranscript(transcript, rows); }
       } });
-    if (mode === 'missing answer') await assert.rejects(action, /No answer to \/relay:status within 120 seconds/);
+    if (mode === 'missing answer') await assert.rejects(action, /No answer to \/relay:status within 200 seconds/);
     else if (mode === 'interrupt') await assert.rejects(action, /Interrupted/);
     else await action;
     assert.equal(calls.filter(args => args[0] === 'stop').length, 1);
@@ -1506,3 +1506,141 @@ test('the terminal completion predicate receives its run', async t => {
   });
   assert.equal(completed, 1);
 });
+
+for (const surface of ['terminal', 't3']) {
+  for (const failure of [null, 'analysis', 'cleanup']) {
+    test(`setup cleanup follows analysis and copying on ${surface} (${failure})`, async t => {
+      const ctx = scratch(t), pluginDir = receipt(ctx), cancelled = [];
+      let analyzedFirst = false, seen, evidenceDir;
+      const selected = { ...check,
+        setup({ run, jobsHome }) {
+          run.setup = { jobs: { codex: { done: { id: 'done', jobDir: 'repo/done' }, running: { id: 'target', jobDir: 'repo/target' } } },
+            decoys: { done: { id: 'decoy-done', jobDir: 'repo/decoy-done' }, running: { id: 'decoy-running', jobDir: 'repo/decoy-running' } } };
+          for (const [id, state] of [['done', 'completed'], ['target', 'running'], ['decoy-done', 'completed'], ['decoy-running', 'running'], ['unrelated', 'running']]) {
+            writeJson(path.join(jobsHome, 'repo', id, 'job.json'), { id, state });
+          }
+        },
+        analyze(input) {
+          assert.equal(cancelled.length, 0, 'analysis precedes cancellation');
+          assert.equal(readJson(path.join(input.jobsHome, 'repo/target/job.json')).state, 'running');
+          analyzedFirst = true;
+          if (failure === 'analysis') throw new Error('Analysis failed.');
+          return { ...analyzed(baseRun({ backends: input.backends })), evidence: { transcripts: [input.transcript],
+            agents: ['done', 'target', 'decoy-done', 'decoy-running'].map(id => ({ jobDir: `repo/${id}` })) } };
+        }
+      };
+      const dependencies = { env: ctx.env, log() {}, warn() {},
+        cancelJobs(run, options) {
+          assert.equal(analyzedFirst, true);
+          return cancelUnfinishedJobs(run, { ...options, async execute(command, args, settings) {
+            const id = args.at(-1);
+            cancelled.push(id);
+            assert.equal(args[0], path.join(pluginDir, 'scripts/companion.mjs'));
+            assert.equal(settings.cwd, ctx.workDir);
+            if (failure === 'cleanup' && id === 'target') throw new Error('Cannot cancel target.');
+            writeJson(path.join(run.jobsHome, 'repo', id, 'job.json'), { id, state: 'cancelled' });
+          } });
+        },
+        driver(input, check, { run }) {
+          seen = run;
+          evidenceDir = input.evidenceDir;
+          run.completed = true;
+          run.promptSentAt = start;
+          run.transcript = path.join(evidenceDir, 'session.jsonl');
+          writeTranscript(run.transcript, entries(run.runId));
+        }
+      };
+      let args;
+      if (surface === 'terminal') args = ['run', 'fake', '--plugin-dir', pluginDir, '--work-dir', ctx.workDir,
+        '--jobs-home', ctx.env.RELAY_JOBS_HOME, '--records-dir', ctx.recordsDir, '--backends', 'codex'];
+      else {
+        ({ run: seen, evidenceDir } = createRun(ctx.env.RELAY_LIVE_HOME, selected, { surface, backends: ['codex'], pluginDir,
+          relayVersion: '3.0.0-test', workDir: ctx.workDir, jobsHome: ctx.env.RELAY_JOBS_HOME, jobsHomeCreated: false }));
+        selected.setup({ run: seen, jobsHome: seen.jobsHome });
+        dependencies.driver({ evidenceDir }, selected, { run: seen });
+        writeJson(path.join(evidenceDir, 'run.json'), seen);
+        args = ['analyze', seen.runId, '--records-dir', ctx.recordsDir];
+      }
+      assert.equal(await main(args, [selected], readers, dependencies), failure ? 1 : 0);
+      assert.deepEqual(cancelled, ['decoy-running', 'target']);
+      const saved = readJson(path.join(evidenceDir, 'run.json'));
+      assert.equal(saved.cancellations.length, 2);
+      assert.equal(saved.cancellations[1].status, failure === 'cleanup' ? 'failed' : 'cancelled');
+      assert.equal(readJson(path.join(seen.jobsHome, 'repo/unrelated/job.json')).state, 'running');
+      if (failure !== 'analysis') {
+        assert.equal(readJson(path.join(saved.copy.jobsHome, 'repo/decoy-running/job.json')).state, 'running');
+        const records = readRecords(ctx.recordsDir);
+        cancelled.length = 0;
+        fs.rmSync(seen.jobsHome, { recursive: true });
+        fs.rmSync(seen.transcript);
+        assert.equal(await main(['analyze', seen.runId, '--from-copy', '--records-dir', ctx.recordsDir], [selected], readers,
+          { ...dependencies, cancelJobs() { assert.fail('copy replay must not cancel jobs'); } }), 0);
+        assert.deepEqual(readRecords(ctx.recordsDir), records);
+      }
+    });
+  }
+}
+
+test('run all skips backend-inapplicable checks without allocating runs, but explicit names fail', async t => {
+  const ctx = scratch(t), pluginDir = receipt(ctx), logs = [], driven = [];
+  const restricted = { ...check, id: 'restricted', backends: ['codex'] };
+  const registry = [check, restricted];
+  const args = ['--backends', 'grok', '--plugin-dir', pluginDir, '--records-dir', ctx.recordsDir];
+  assert.throws(() => parseArgs(['run', 'restricted', ...args], registry, readers.BACKENDS), UsageError);
+  const dependencies = { env: ctx.env, log: line => logs.push(line), warn() {}, driver(input, selected, { run }) {
+    driven.push(selected.id);
+    t.after(() => { fs.rmSync(input.workDir, { recursive: true, force: true }); fs.rmSync(input.jobsHome, { recursive: true, force: true }); });
+    assert.deepEqual(input.backends, ['grok']);
+    run.promptSentAt = start;
+    run.completed = true;
+    run.transcript = path.join(input.evidenceDir, 'session.jsonl');
+    writeTranscript(run.transcript, entries(run.runId));
+  } };
+  assert.equal(await main(['run', 'all', ...args], registry, readers, dependencies), 0);
+  assert.deepEqual(driven, ['fake']);
+  assert.ok(logs.includes('Skipping restricted: does not apply to any selected backend.'));
+  assert.equal(fs.readdirSync(path.join(ctx.env.RELAY_LIVE_HOME, 'runs')).length, 1);
+  assert.equal(await main(['run', 'all', ...args], [restricted], readers, dependencies), 0);
+  assert.equal(fs.readdirSync(path.join(ctx.env.RELAY_LIVE_HOME, 'runs')).length, 1);
+});
+
+for (const mode of ['repaired', 'still incomplete', 'late answer', 'timeout', 'read failure']) {
+  test(`terminal command phase retries initial reads and allows 200 seconds (${mode})`, async t => {
+    const ctx = scratch(t), sent = [], run = { transcript: 'synthetic', pane: 'fake' };
+    let now = 0, started, reads = 0;
+    const selected = { commands: () => [{ text: '/relay:transfer' }] };
+    const action = runCommands({ evidenceDir: ctx.dir }, selected, { run, save() {}, now: () => now,
+      pause: async ms => { now += ms; },
+      readers: { readTranscript() {
+        reads++;
+        if (mode === 'read failure') throw new Error('Permission denied.');
+        if (mode === 'still incomplete' || (mode === 'repaired' && now < 1000)) throw new Error('Invalid JSON at synthetic:1');
+        if (started !== undefined && (mode === 'repaired' || (mode === 'late answer' && now - started >= 190000))) {
+          return [{ type: 'system', subtype: 'local_command', commandRun: {} }];
+        }
+        return [];
+      } },
+      drive(args) { if (args[0] === 'send') { started = now; sent.push(args[2]); } return ''; }
+    });
+    if (mode === 'still incomplete') { await assert.rejects(action, /Incomplete transcript/); assert.equal(now, 5000); }
+    else if (mode === 'read failure') { await assert.rejects(action, /Permission denied/); assert.equal(reads, 1); }
+    else if (mode === 'timeout') { await assert.rejects(action, /within 200 seconds/); assert.equal(now, 200000); }
+    else await action;
+    assert.deepEqual(sent, ['still incomplete', 'read failure'].includes(mode) ? [] : ['/relay:transfer']);
+    if (mode === 'repaired') assert.equal(started, 1000);
+    if (mode === 'late answer') assert.equal(now, 190000);
+  });
+}
+
+for (const [grace, timeout] of [[undefined, 60000], ['30000', 100000], ['garbage', 60000], ['-1', 60000], ['Infinity', 60000], ['0', 40000], ['99999999', 600000]]) {
+  test(`setup cleanup uses the grace budget and tries missing job files (${grace})`, async t => {
+    const ctx = scratch(t), calls = [];
+    const run = { pluginDir: '/build/relay', workDir: ctx.workDir, jobsHome: ctx.env.RELAY_JOBS_HOME,
+      setup: { decoys: { running: { id: 'decoy', jobDir: 'repo/decoy' } } } };
+    const results = await cancelUnfinishedJobs(run, { env: { RELAY_JOBS_CANCEL_GRACE_MS: grace },
+      async execute(command, args, options) { calls.push(args.at(-1)); assert.equal(options.timeout, timeout); }
+    });
+    assert.deepEqual(calls, ['decoy']);
+    assert.deepEqual(results, [{ jobId: 'decoy', status: 'cancelled' }]);
+  });
+}

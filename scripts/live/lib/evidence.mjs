@@ -496,7 +496,7 @@ export function commandRuns(entries, run = {}) {
     if (endIndex < 0) endIndex = entries.length;
     // Claude Code 2.1.308 records a command a plugin answered without its arguments, in the input
     // entry and in `commandRun` alike, so the answer is matched by the command's name; a check reads
-    // which job a command reached from its output.
+    // the echoed command to prove its arguments.
     const answerIndex = entries.findIndex((entry, index) => index > i && index < endIndex && !entry.isSidechain &&
       entry.type === 'system' && entry.subtype === 'local_command' && entry.commandRun?.command === input.command);
     const answer = answerIndex < 0 ? null : entries[answerIndex];
@@ -520,23 +520,24 @@ export function commandRuns(entries, run = {}) {
 export function moduleText(text) {
   if (typeof text !== 'string') return null;
   text = text.replace(/^relay: /, '');
-  const opening = text.match(/^\n(`{3,})text\n/);
+  const opening = text.match(/^(\/[^\s]+(?: [^\n]+)?)\n(`{3,})text\n/);
   if (!opening) return null;
-  const fence = opening[1], rest = text.slice(opening[0].length);
+  const command = opening[1], fence = opening[2], rest = text.slice(opening[0].length);
   const end = rest.indexOf(`\n${fence}\n`);
   if (end < 0) return null;
   const verbatim = rest.slice(0, end + 1), tail = rest.slice(end + fence.length + 2);
   if ((verbatim.match(/`+/g) ?? []).some(run => run.length >= fence.length)) return null;
-  if (tail && !tail.startsWith('---\n')) return null;
-  return { verbatim, report: tail ? tail.slice(4) : null };
+  if (tail && !tail.startsWith('---\n') && !tail.startsWith('|')) return null;
+  return { command, verbatim, report: tail.startsWith('---\n') ? tail.slice(4) : null,
+    table: tail.startsWith('|') ? tail : null };
 }
 
-export function statusRows(verbatim) {
+export function statusRows(table) {
   const cells = line => {
     if (!line.startsWith('|') || !line.endsWith('|')) return null;
     return line.slice(1, -1).split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, '|'));
   };
-  const lines = verbatim.split('\n');
+  const lines = (table ?? '').split('\n');
   const start = lines.findIndex(line => cells(line)?.[0] === 'job');
   if (start < 0) return [];
   const header = cells(lines[start]), separator = cells(lines[start + 1] ?? '');

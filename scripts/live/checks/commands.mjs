@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { commandRuns, moduleText, statusRows, readJob, readTranscript, scopeToRun, MODELS, formatSeconds } from '../lib/evidence.mjs';
 import { sessionEnvironment } from '../lib/terminal.mjs';
+import { cancelTimeout } from '../lib/runs.mjs';
 
 export function commandPrompt(runId, marker) {
   return `Live suite run ${runId}.\nThis run checks relay's slash commands, which come as the next messages. Do not run any tool. Reply with exactly this line and nothing else:\n${marker}\n`;
@@ -14,34 +15,36 @@ export async function setupJobs(ctx, running, { env = process.env, execute = pro
   const companion = path.join(ctx.pluginDir, 'scripts/companion.mjs');
   const options = { cwd: ctx.workDir, env: { ...sessionEnvironment(env).env, RELAY_JOBS_HOME: ctx.jobsHome },
     encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024 };
-  ctx.run.setup = { jobs: {} };
+  ctx.run.setup = { jobs: {}, decoys: {} };
   const started = [];
-  const remember = (stdout, backend, kind) => {
+  const remember = (stdout, backend, kind, decoy) => {
     const id = stdout?.match(/^job: (.+)$/m)?.[1], dir = stdout?.match(/^dir: (.+)$/m)?.[1];
     if (id && !started.includes(id)) started.push(id);
     if (!id || !dir) throw new Error(`No job id or directory from start for ${backend} ${kind}.`);
     const jobDir = path.relative(ctx.jobsHome, path.resolve(ctx.workDir, dir));
     if (jobDir.startsWith('..') || path.isAbsolute(jobDir)) throw new Error('Started job is outside jobsHome.');
     const receipt = { id, jobDir };
-    (ctx.run.setup.jobs[backend] ??= {})[kind] = receipt;
+    (decoy ? ctx.run.setup.decoys : (ctx.run.setup.jobs[backend] ??= {}))[kind] = receipt;
     ctx.save();
     return receipt;
   };
   try {
-    for (const kind of running ? ['done', 'running'] : ['done']) {
-      for (const backend of ctx.backends) {
+    for (const kind of ['done', 'running']) {
+      const targets = (kind === 'done' || running ? ctx.backends : []).map(backend => ({ backend, decoy: false }));
+      targets.push({ backend: ctx.backends[0], decoy: true });
+      for (const { backend, decoy } of targets) {
         const prompt = `${backend === 'codex' ? '' : `backend: ${backend}\n`}model: ${MODELS[backend]}\neffort: low\n---\n` +
-          (kind === 'done' ? `Reply with exactly one line: done for ${backend}. Do not run any command.` :
+          (kind === 'done' ? (decoy ? 'Reply with exactly one line: decoy.' : `Reply with exactly one line: done for ${backend}. Do not run any command.`) :
             'Run the shell command `sleep 600` exactly once, and wait for it to finish. Then reply with one line: slept.');
-        const file = path.join(ctx.evidenceDir, `${backend}-${kind}.txt`);
+        const file = path.join(ctx.evidenceDir, `${backend}-${decoy ? 'decoy-' : ''}${kind}.txt`);
         fs.writeFileSync(file, prompt + '\n');
         let output;
         try { output = await execute(process.execPath, [companion, 'start', '--prompt-file', file], options); }
         catch (error) {
-          if (error.stdout) remember(error.stdout, backend, kind);
+          if (error.stdout) remember(error.stdout, backend, kind, decoy);
           throw error;
         }
-        const receipt = remember(output.stdout, backend, kind), deadline = now() + 240000;
+        const receipt = remember(output.stdout, backend, kind, decoy), deadline = now() + 240000;
         let ready = false;
         while (now() < deadline) {
           const job = readJob(path.join(ctx.jobsHome, receipt.jobDir));
@@ -56,7 +59,7 @@ export async function setupJobs(ctx, running, { env = process.env, execute = pro
     ctx.run.setup.cancellations = [];
     for (const id of started) {
       const receipt = { jobId: id, status: 'cancelled' };
-      try { await execute(process.execPath, [companion, 'cancel', id], options); }
+      try { await execute(process.execPath, [companion, 'cancel', id], { ...options, timeout: cancelTimeout(env) }); }
       catch (failure) { receipt.status = 'failed'; receipt.error = failure.message; }
       ctx.run.setup.cancellations.push(receipt);
     }
@@ -80,6 +83,7 @@ export function requireCommand(row, text) {
   if (row.seconds === null || row.seconds < 0) throw new Error(`Missing or invalid start time for ${text}.`);
   const parsed = moduleText(row.text);
   if (!parsed) throw new Error(`Invalid module text for ${text}.`);
+  if (parsed.command !== text) throw new Error(`Echoed command ${JSON.stringify(parsed.command)} does not match ${text}.`);
   return parsed;
 }
 
@@ -110,14 +114,20 @@ export function requireResult(parsed, job) {
 }
 
 export function requireStatus(parsed, job, state) {
-  const rows = statusRows(parsed.verbatim).filter(row => row.job === job.id);
+  const rows = statusRows(parsed.table).filter(row => row.job === job.id);
   if (rows.length !== 1 || rows[0].state !== state) throw new Error(`Status for ${job.id} is not ${state}.`);
 }
 
 export function setupEvidence(run) {
-  return Object.values(run.setup?.jobs ?? {}).flatMap(jobs => Object.values(jobs))
+  return [...Object.values(run.setup?.jobs ?? {}).flatMap(jobs => Object.values(jobs)), ...Object.values(run.setup?.decoys ?? {})]
     .filter(job => typeof job.jobDir === 'string' && !path.isAbsolute(job.jobDir) && !job.jobDir.split(path.sep).includes('..'))
     .map(({ jobDir }) => ({ jobDir }));
+}
+
+export function requireBuild(parsed, version) {
+  const lines = parsed.verbatim.split('\n').filter(line => line.startsWith('relay-version:'));
+  if (lines.length !== 1 || lines[0] !== `relay-version: ${version}`) throw new Error(`Status relay-version does not match ${version}.`);
+  return lines[0].slice('relay-version: '.length);
 }
 
 export function commandResult(backend) {
@@ -142,6 +152,7 @@ export default {
         if (rows.length !== plan.length) throw new Error(`Expected ${plan.length} command inputs, found ${rows.length}.`);
         const relevant = plan.map((command, index) => ({ ...command, index })).filter(command => command.backend === null || command.backend === backend);
         const parsed = relevant.map(command => requireCommand(rows[command.index], command.text));
+        requireBuild(parsed[0], input.relayVersion);
         requireStatus(parsed[0], done, 'completed');
         requireStatus(parsed[0], running, 'running');
         requireResult(parsed[1], done);

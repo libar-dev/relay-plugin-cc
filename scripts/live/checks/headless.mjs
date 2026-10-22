@@ -6,10 +6,11 @@ import { promisify } from 'node:util';
 import { commandRuns, moduleText, readTranscript, formatSeconds } from '../lib/evidence.mjs';
 import { configDirectory } from '../lib/runs.mjs';
 import { sessionEnvironment } from '../lib/terminal.mjs';
-import { setupJobs, setupJob, setupEvidence, commandResult, requireCommand, requireResult, requireStatus } from './commands.mjs';
+import { setupJobs, setupJob, setupEvidence, commandResult, requireCommand, requireResult, requireStatus, requireBuild } from './commands.mjs';
 
 export function headlessCommands(run) {
   return [...run.backends.map(backend => ({ text: `/relay:result ${run.setup?.jobs[backend]?.done?.id}`, backend })),
+    { text: `/relay:result ${run.setup?.decoys?.running?.id}`, backend: null, running: true },
     { text: '/relay:status', backend: null }];
 }
 
@@ -81,16 +82,22 @@ export default {
         if (entries.find(entry => !entry.isSidechain && entry.entrypoint)?.entrypoint !== 'sdk-cli') throw new Error('Headless transcript entrypoint is not sdk-cli.');
         if (commands.length !== 1) throw new Error(`Missing or repeated command input for ${command.text}.`);
         const parsed = requireCommand(commands[0], command.text);
-        const events = readTranscript(stream), results = events.filter(event => event.type === 'result');
+        const events = readTranscript(stream);
+        if (!events.some(event => event.type === 'system' && event.subtype === 'init' &&
+          event.plugins?.some(plugin => plugin.name === 'relay' && plugin.path === input.run.pluginDir))) {
+          throw new Error('Headless init does not list relay at the run pluginDir.');
+        }
+        const results = events.filter(event => event.type === 'result');
         if (results.length !== 1) throw new Error('Missing or repeated result event.');
         const result = results[0];
         if (result.num_turns !== 0 || result.total_cost_usd !== 0 || result.is_error !== false) throw new Error('Headless result requires num_turns 0, total_cost_usd 0 and is_error false.');
-        if (receipt.exitCode !== 0) throw new Error(`Headless exit code is ${receipt.exitCode}.`);
+        if (receipt.exitCode !== (command.running ? 4 : 0)) throw new Error(`Headless exit code is ${receipt.exitCode}.`);
         if (result.session_id !== receipt.sessionId || entries.some(entry => entry.sessionId && entry.sessionId !== receipt.sessionId)) throw new Error('Headless session id does not match its receipt.');
         if (events.some(event => event.type === 'assistant' && event.message?.model !== '<synthetic>')) throw new Error('Model reply in headless stream.');
         const streamed = moduleText(result.result);
-        if (!streamed || streamed.verbatim !== parsed.verbatim || streamed.report !== parsed.report) throw new Error('Stream result differs from the module answer.');
+        if (!streamed || streamed.command !== parsed.command || streamed.verbatim !== parsed.verbatim || streamed.report !== parsed.report || streamed.table !== parsed.table) throw new Error('Stream result differs from the module answer.');
         if (!Number.isFinite(result.duration_ms) || result.duration_ms < 0) throw new Error('Missing or invalid result duration_ms.');
+        // The SDK enqueue precedes module loading in claude -p; duration_ms times the command itself.
         row.seconds = result.duration_ms / 1000;
         row.parsed = parsed;
       } catch (error) { row.reason = error.code ? `Cannot read command evidence: ${error.code}.` : error.message; }
@@ -102,7 +109,13 @@ export default {
       try {
         const done = setupJob(input, backend, 'done', evidence, result);
         const own = executions.find(row => row.backend === backend), status = executions.at(-1);
-        if (own.reason || status.reason) throw new Error(own.reason || status.reason);
+        const running = executions.find(row => row.running);
+        if (own.reason || status.reason || running.reason) throw new Error(own.reason || status.reason || running.reason);
+        if (!running.parsed.verbatim.split('\n').includes('state: running') ||
+          !running.parsed.verbatim.split('\n').includes(`job: ${input.run.setup?.decoys?.running?.id}`)) {
+          throw new Error('Running result has the wrong job or state.');
+        }
+        requireBuild(status.parsed, input.relayVersion);
         requireResult(own.parsed, done);
         // The shared status command must cover every requested backend.
         for (const selected of input.backends) {
@@ -110,7 +123,7 @@ export default {
           if (!other) throw new Error(`Missing setup job for ${selected} done.`);
           requireStatus(status.parsed, other, 'completed');
         }
-        result.timings = { answeredSeconds: [own.seconds, status.seconds] };
+        result.timings = { answeredSeconds: [own.seconds, running.seconds, status.seconds] };
         result.result = 'pass';
       } catch (error) { result.reason = error.message; }
       return result;

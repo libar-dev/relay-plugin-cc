@@ -176,12 +176,18 @@ export async function runCommands(ctx, check, { run, save, readers, drive = pane
   run.commands = [];
   for (const command of check.commands(run)) {
     if (aborted()) throw new Error('Interrupted.');
-    const before = answers();
+    const readDeadline = now() + 5000;
+    let before = answers();
+    while (before === null && now() < readDeadline && !aborted()) {
+      await pause(250);
+      before = answers();
+    }
+    if (aborted()) throw new Error('Interrupted.');
     if (before === null) throw new Error('Incomplete transcript before command send.');
     run.commands.push({ text: command.text, sentAt: new Date(now()).toISOString() });
     save();
     drive(['send', run.pane, command.text]);
-    const deadline = now() + 120000;
+    const deadline = now() + 200000;
     let answered = false;
     while (now() < deadline && !aborted()) {
       fs.writeFileSync(path.join(ctx.evidenceDir, 'screen.txt'), drive(['read', run.pane, '2000']));
@@ -190,6 +196,6 @@ export async function runCommands(ctx, check, { run, save, readers, drive = pane
       await pause(1000);
     }
     if (aborted()) throw new Error('Interrupted.');
-    if (!answered) throw new Error(`No answer to ${command.text} within 120 seconds. Available evidence will be analyzed.`);
+    if (!answered) throw new Error(`No answer to ${command.text} within 200 seconds. Available evidence will be analyzed.`);
   }
 }
