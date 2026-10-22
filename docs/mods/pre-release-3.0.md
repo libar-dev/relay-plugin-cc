@@ -179,11 +179,11 @@ Claude to list them with their Workflow runs: the plain list is too long to read
 `status --all --json` lists every job. From pre.2, `status --all --active --json` lists only those jobs, a page at a
 time: Claude reads every page, following `nextCursor`.
 
-To a cut (its tag):
+To a cut: replace `N` with the cut's number, so `v3.0.0-pre.1` for pre.1.
 
 ```bash
 claude plugin marketplace remove libar-relay
-claude plugin marketplace add 'libar-dev/relay-plugin-cc#v3.0.0-pre.1'
+claude plugin marketplace add 'libar-dev/relay-plugin-cc#v3.0.0-pre.N'
 claude plugin install relay@libar-relay
 ```
 
