@@ -18,6 +18,7 @@ import { headlessCommands, runHeadless, executeHeadless } from '../scripts/live/
 import { workflowScript } from '../scripts/live/checks/steer-workflow.mjs';
 import { agentCalls, waitLoop } from '../scripts/live/checks/steer-main.mjs';
 import { badPrompts, goodPrompt, workflowScript as spawnScript, checkHeader, expectedMessage } from '../scripts/live/checks/spawn-check.mjs';
+import { boardWorkflow, steerText, continueText, focusedText } from '../scripts/live/checks/board.mjs';
 import { copyEvidence } from '../scripts/live/lib/runs.mjs';
 import { postInboxMessage, claimInboxMessages, recordReceipt, writeOutcome } from '../plugins/relay/scripts/lib/jobs/messages.mjs';
 
@@ -556,8 +557,8 @@ test('formatSeconds uses one decimal and an en dash for a range', () => {
 });
 
 test('registry keeps the prompt checks\' interface, with the command checks between continue and stop', () => {
-  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless', 'stop', 'session-end', 'spawn-check', 'status-line']);
-  assert.equal(new Set(checks.map(check => check.id)).size, 11);
+  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless', 'stop', 'session-end', 'spawn-check', 'status-line', 'board']);
+  assert.equal(new Set(checks.map(check => check.id)).size, 12);
   for (const check of checks.filter(check => !['commands', 'transfer', 'headless'].includes(check.id))) {
     assert.match(check.id, /^[a-z0-9-]+$/);
     assert.equal(typeof check.title, 'string');
@@ -569,8 +570,8 @@ test('registry keeps the prompt checks\' interface, with the command checks betw
     assert.equal(typeof check.cell, 'function');
     assert.ok(Array.isArray(check.surfaces));
     assert.ok(Array.isArray(check.probes));
-    assert.equal(check.timeoutMinutes, check.id === 'steer-main' ? 20 : 15);
-    assert.deepEqual(check.surfaces, ['steer-plugin', 'session-end', 'status-line'].includes(check.id) ? ['terminal'] : ['terminal', 't3']);
+    assert.equal(check.timeoutMinutes, check.id === 'board' ? 25 : check.id === 'steer-main' ? 20 : 15);
+    assert.deepEqual(check.surfaces, ['steer-plugin', 'session-end', 'status-line', 'board'].includes(check.id) ? ['terminal'] : ['terminal', 't3']);
     assert.deepEqual(check.probes, check.id === 'steer-plugin' ? ['wake-probe'] : []);
     assert.equal(getCheck(check.id), check);
     if (check.probes.length) assert.deepEqual(check.surfaces, ['terminal']);
@@ -2911,4 +2912,223 @@ test('pane screen captures visible physical lines without joining or scrollback'
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, 'relay: 4\nrunning\n');
   assert.deepEqual(read(log), ['-S', path.join(dir, 'claude-tmux/tmux.sock'), 'capture-pane', '-p', '-t', '=test-pane:']);
+});
+
+function boardInput(dir) {
+  return { ...input(dir, ['codex', 'kimi']), evidenceDir: dir, run: read(path.join(dir, 'run.json')) };
+}
+
+test('board is terminal only and prompts exact Agent and Workflow calls with a file-gated lead', async () => {
+  const check = getCheck('board'), prompt = check.prompt({ runId: 'synthetic-run', backends: BACKENDS });
+  assert.deepEqual(check.surfaces, ['terminal']);
+  assert.deepEqual(parseArgs(['run', 'board'], checks, BACKENDS).backends, BACKENDS);
+  assert.ok(parseArgs(['run', 'all'], checks, BACKENDS).checks.includes('board'));
+  const calls = prompt.split('\n').filter(line => line.startsWith('Agent(')).map(line => JSON.parse(line.slice(6, -1)));
+  assert.equal(calls.length, 4);
+  for (const [i, backend] of BACKENDS.entries()) {
+    assert.deepEqual(calls[i], { subagent_type: 'relay:job', name: `board-agent-${backend}`, description: `board-agent-${backend}`,
+      run_in_background: true, prompt: `${backend === 'codex' ? '' : `backend: ${backend}\n`}model: ${MODELS[backend]}\neffort: low\n---\n` +
+        `Run the shell command \`sleep 120\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Then reply with one line: board done ${backend}. If a queued message arrives as a later turn, reply with one line without sleeping again.` });
+    assert.ok(boardWorkflow(BACKENDS).includes(`agent(${JSON.stringify(calls[i].prompt)}, { agentType: 'relay:job', label: 'board-wf-${backend}' })`));
+  }
+  assert.ok(prompt.includes(boardWorkflow(BACKENDS)));
+  assert.match(prompt, /ALL 8 jobs/);
+  assert.match(prompt, /LIVE-BOARD-READY/);
+  assert.match(prompt, /Send no messages yourself/);
+  assert.ok(prompt.includes(waitLoop(60)));
+  assert.match(prompt, /at most 20 minutes/);
+  assert.match(prompt, /\.live-board-synthetic-run\.done/);
+  assert.match(prompt, /LIVE-BOARD-DONE/);
+  const warnings = [];
+  assert.equal(await main(['prepare', 'board', '--surface', 't3', '--work-dir', '/tmp'], checks, evidenceReaders,
+    { warn: text => warnings.push(text), log() {} }), 1);
+  assert.deepEqual(warnings, ['board does not support t3.']);
+});
+
+test('board reduced fixture passes for two backends with all five action timings', () => {
+  const result = getCheck('board').analyze(boardInput(path.join(fixture, 'board')));
+  assert.deepEqual(result.results.map(row => [row.backend, row.result, row.reason]), [['codex', 'pass', null], ['kimi', 'pass', null]]);
+  for (const row of result.results) {
+    assert.deepEqual(row.timings, { steerAgentSeconds: [2], continueAgentSeconds: [3], steerWorkflowSeconds: [2], continueWorkflowSeconds: [3], cancelSeconds: [3] });
+    assert.equal(getCheck('board').cell(row), 'steer agent 2.0 s, workflow 2.0 s; continue agent 3.0 s, workflow 3.0 s; cancel 3.0 s');
+  }
+});
+
+const boardAgent = 'jobs/repo/job-agent-codex', boardWorkflowJob = 'jobs/repo/job-workflow-codex';
+for (const [name, change, reason] of [
+  ['a steer with no outcome', dir => fs.rmSync(path.join(dir, boardAgent, 'inbox/outcomes/steer.json')), /Missing board message outcome/],
+  ['a steer outcome after 30 seconds', dir => edit(dir, `${boardAgent}/inbox/outcomes/steer.json`, value => { value.at = '2026-10-22T10:00:51Z'; }), /within 30 seconds/],
+  ['an Agent steer without an inbox/relay record', dir => fs.rmSync(path.join(dir, boardAgent, 'inbox/relay/steer-entry.json')), /no completed inbox\/relay record/],
+  ['a Workflow steer with an inbox/relay record', dir => write(path.join(dir, boardWorkflowJob, 'inbox/relay/extra.json'), { messageId: 'steer' }), /Workflow action has an inbox\/relay record/],
+  ['a Workflow steer that started a new relay loop', dir => lines(path.join(dir, 'transcript/subagents/workflows/wf-board/agent-fork.jsonl'), [textEntry('user', 'fork', '2026-10-22T10:00:21Z', { agentId: 'workflow-codex' })]), /new relay loop/],
+  ['a continue with no new attempt', dir => edit(dir, `${boardAgent}/job.json`, value => { value.attempts.pop(); }), /Continue has no new attempt/],
+  ['a cancel of another attempt', dir => edit(dir, `${boardWorkflowJob}/inbox/claimed/cancel.json`, value => { value.attempt = 1; }), /another attempt/],
+  ['a missing row in the wide capture', dir => fs.writeFileSync(path.join(dir, 'wide.txt'), 'Relay jobs\n'), /Missing job row in wide/],
+  ['a missing row in the narrow capture', dir => fs.writeFileSync(path.join(dir, 'narrow.txt'), 'Relay jobs\n'), /Missing job row in narrow/],
+  ['an action from another run', dir => edit(dir, 'run.json', value => { value.board.actions[0].runId = 'other-run'; }), /another run/],
+  ['a plugin delivery with the wrong origin', dir => {
+    const file = path.join(dir, 'transcript/subagents/agent-agent-codex.jsonl'), entries = readTranscript(file);
+    entries[0].attachment.origin.plugin = 'wake-probe'; lines(file, entries);
+  }, /main conversation origin/],
+  ['an action after the next run prompt', dir => {
+    const file = path.join(dir, 'transcript.jsonl'), entries = readTranscript(file);
+    entries.splice(entries.length - 1, 0, textEntry('user', 'Live suite run other-run.', '2026-10-22T10:00:19Z')); lines(file, entries);
+  }, /Missing board markers/],
+  ['missing selected details in the narrow capture', dir => fs.writeFileSync(path.join(dir, 'narrow-detail.txt'), 'Relay jobs\n'), /selected job details/]
+]) {
+  test(`board rejects ${name}`, t => {
+    const dir = copy(t, 'board'); change(dir);
+    const result = getCheck('board').analyze(boardInput(dir)).results.find(row => row.backend === 'codex');
+    assert.equal(result.result, 'fail'); assert.match(result.reason, reason);
+  });
+}
+
+test('board rejects a Kimi queue after 30 seconds and requires its later attempt', t => {
+  const dir = copy(t, 'board');
+  edit(dir, 'jobs/repo/job-agent-kimi/job.json', job => { job.messages[0].at = '2026-10-22T10:00:51Z'; });
+  let result = getCheck('board').analyze(boardInput(dir)).results[1];
+  assert.equal(result.result, 'fail'); assert.match(result.reason, /within 30 seconds/);
+  edit(dir, 'jobs/repo/job-agent-kimi/job.json', job => { job.messages[0].at = '2026-10-22T10:00:22Z'; job.attempts.splice(1, 1); });
+  result = getCheck('board').analyze(boardInput(dir)).results[1];
+  assert.equal(result.result, 'fail'); assert.match(result.reason, /queue and start a later attempt/);
+});
+
+test('board actions replay from copied job files, relay transcripts and captures', t => {
+  const dir = copy(t, 'board'), data = boardInput(dir), destination = temp(t), check = getCheck('board');
+  const run = { ...data.run, transcript: data.transcript, jobsHome: data.jobsHome };
+  const copied = copyEvidence(run, check.analyze(data), destination);
+  fs.rmSync(dir, { recursive: true });
+  const result = check.analyze({ ...data, transcript: copied.transcript, jobsHome: copied.jobsHome,
+    evidencePath: file => copied.files[file] });
+  assert.deepEqual(result.results.map(row => [row.result, row.reason]), [['pass', null], ['pass', null]]);
+});
+
+test('board focus follows inverse video through colors and combined resets', () => {
+  assert.equal(focusedText('\x1b[37mWrong\x1b[0m \x1b[1;7mCan\x1b[31mcel\x1b[27;39m No'), 'Cancel');
+  assert.equal(focusedText('\x1b[7mSteer:\x1b[m text'), 'Steer:');
+  assert.equal(focusedText('\x1b[38;2;7;0;27mWrong\x1b[0m \x1b[7mYes\x1b[38;5;0m!\x1b[27m'), 'Yes!');
+});
+
+function boardDriver(t, failure) {
+  const dir = temp(t), workDir = path.join(dir, 'work'), jobsHome = path.join(dir, 'jobs');
+  fs.mkdirSync(workDir); fs.mkdirSync(jobsHome);
+  const check = getCheck('board'), calls = [], run = { runId: 'synthetic-run', sessionId: 'board-session', completed: false };
+  let time = Date.parse('2026-10-22T10:00:10Z'), selected, focus = -1, confirm = false, count = 0, handled = 0, command = '';
+  const ids = ['agent-codex', 'workflow-codex', 'agent-kimi', 'workflow-kimi'];
+  const jobPath = id => path.join(jobsHome, `repo/job-${id}/job.json`);
+  const job = id => read(jobPath(id));
+  const saveJob = (id, value) => write(jobPath(id), value);
+  const field = () => job(selected).state === 'running' ? selected.endsWith('kimi') ? 'Queue next turn:' : 'Steer:' : 'Continue:';
+  const elements = () => [...ids.map(id => `job-${id}`), ...(selected ? [field(), ...(confirm ? ['Yes', 'No'] : job(selected).state === 'running' ? ['Cancel'] : [])] : [])];
+  const screen = () => {
+    const rows = ids.map(id => `${selected === id ? '> ' : '  '}job-${id} · ${job(id).request.backend} · ${job(id).state} · attempt ${job(id).attempts.length}`);
+    if (selected) rows.push(`model ${job(selected).request.model} · effort low`, `relay ${job(selected).relay.label}`, field());
+    if (confirm) rows.push(`Cancel job job-${selected}, attempt ${job(selected).attempts.length}?`);
+    rows.push(`\x1b[7m${elements()[focus] ?? ''}\x1b[0m`);
+    return rows.join('\n');
+  };
+  const tick = () => {
+    if (run.board.actions.filter(a => a.action === 'steer').length === 4 && handled >= 4) {
+      for (const id of ids) {
+        const value = job(id);
+        if (!run.board.actions.some(a => a.jobId === value.id && a.action === 'continue')) {
+          value.state = 'completed';
+          if (id.endsWith('kimi') && value.attempts.length === 1) value.attempts.push({ attempt: 2 });
+          saveJob(id, value);
+        }
+      }
+    }
+    if (run.board.actions.filter(a => a.action === 'cancel').length === 2 && handled >= 10) {
+      for (const id of ids.filter(id => id.startsWith('agent-'))) { const value = job(id); value.state = 'completed'; saveJob(id, value); }
+    }
+    if (fs.existsSync(path.join(workDir, '.live-board-synthetic-run.done')) && !hasMarker(readTranscript(run.transcript), check.marker)) {
+      fs.appendFileSync(run.transcript, JSON.stringify(textEntry('assistant', check.marker, new Date(time).toISOString())) + '\n');
+    }
+  };
+  const drive = (args, text) => {
+    calls.push({ args, text });
+    if (args[0] === 'screen-escapes') return failure === 'missing rows' ? 'Relay jobs' : screen();
+    if (args[0] === 'keys') command = args.at(-1);
+    if (args[0] !== 'bytes') return '';
+    for (const byte of args.slice(2)) {
+      if (byte === '09') focus = (focus + 1) % elements().length;
+      if (byte !== '0d') continue;
+      if (command === '/relay-board') { command = ''; continue; }
+      if (run.board.actions.length > handled) {
+        const action = run.board.actions.at(-1), id = action.jobId.slice(4), value = job(id);
+        handled = run.board.actions.length;
+        if (action.action === 'continue') { value.state = 'running'; value.attempts.push({ attempt: value.attempts.length + 1 }); }
+        if (action.action === 'cancel') { value.state = 'cancelled'; confirm = false; }
+        saveJob(id, value);
+        write(path.join(jobsHome, `repo/${value.id}/inbox/claimed/${action.action}.json`), { id: action.action, kind: action.action, text: action.text, createdAt: action.at });
+        write(path.join(jobsHome, `repo/${value.id}/inbox/outcomes/${action.action}.json`), { messageId: action.action, action: action.action === 'steer' ? 'steered' : 'turn-started' });
+      } else if (elements()[focus]?.startsWith('job-')) selected = elements()[focus].slice(4);
+      else if (elements()[focus] === 'Cancel') confirm = true;
+    }
+    return '';
+  };
+  const ctx = { runId: run.runId, run, backends: ['codex', 'kimi'], jobsHome, workDir, evidenceDir: dir, save() {},
+    async paneDriver(sessionCtx, selectedCheck, options) {
+      count++;
+      if (count === 1) {
+        fs.cpSync(path.join(fixture, 'board/jobs'), jobsHome, { recursive: true });
+        fs.cpSync(path.join(fixture, 'board/transcript'), path.join(dir, 'transcript'), { recursive: true });
+        lines(path.join(dir, 'transcript.jsonl'), readTranscript(path.join(fixture, 'board/transcript.jsonl')).slice(0, -1));
+        for (const id of ids) {
+          const value = job(id); value.state = 'running'; value.attempts = value.attempts.slice(0, 1); saveJob(id, value);
+          fs.rmSync(path.join(jobsHome, `repo/job-${id}/inbox`), { recursive: true });
+        }
+      }
+      Object.assign(run, { sessionId: count === 1 ? 'board-session' : 'narrow-session', pane: `board-${count}`, transcript: path.join(dir, 'transcript.jsonl') });
+      options.drive(['start', run.pane, workDir, '--', 'fake-claude']);
+      assert.equal(options.keep, true);
+      assert.equal(selectedCheck.completed([textEntry('assistant', count === 1 ? 'LIVE-BOARD-READY' : 'LIVE-BOARD-NARROW-READY')]), true);
+      if (count === 2) {
+        assert.match(fs.readFileSync(path.join(sessionCtx.evidenceDir, 'prompt.txt'), 'utf8'), /LIVE-BOARD-NARROW-READY/);
+        selected = undefined; focus = -1;
+      }
+      run.completed = true;
+    } };
+  return { ctx, calls, dependencies: { drive, now: () => time, sleep: async ms => { time += ms; tick(); } } };
+}
+
+test('board runTerminal drives raw-byte focus in wide and narrow sessions and saves each action', async t => {
+  const { ctx, calls, dependencies } = boardDriver(t);
+  await getCheck('board').runTerminal(ctx, dependencies);
+  assert.equal(ctx.run.completed, true);
+  const starts = calls.filter(call => call.args[0] === 'start').map(call => call.args);
+  assert.equal(starts.length, 2);
+  assert.ok(starts[0].includes('CLAUDE_CODE_NO_FLICKER=1'));
+  assert.deepEqual(starts[1].slice(starts[1].indexOf('--') + 1, -1), ['env', '-u', 'CLAUDE_CODE_NO_FLICKER']);
+  assert.deepEqual(calls.filter(call => call.args[0] === 'size').map(call => call.args.slice(2)), [['200', '60'], ['100', '60']]);
+  assert.equal(calls.filter(call => call.args[0] === 'keys' && call.args.at(-1) === '/relay-board').length, 2);
+  assert.equal(calls.filter(call => call.args[0] === 'stop' && call.args[1] === 'board-1').length, 2);
+  assert.equal(ctx.run.board.actions.length, 10);
+  assert.deepEqual(ctx.run.board.actions.filter(a => a.action === 'cancel').map(a => a.attempt), [2, 3]);
+  assert.ok(ctx.run.board.actions.every(a => a.sessionId === 'board-session'));
+  assert.equal(ctx.run.board.screens.length, 15);
+  for (const screen of ctx.run.board.screens) assert.ok(fs.readFileSync(path.join(ctx.evidenceDir, screen.file), 'utf8'));
+  assert.ok(fs.existsSync(path.join(ctx.workDir, '.live-board-synthetic-run.done')));
+  assert.equal(ctx.run.sessionId, 'board-session');
+  assert.equal(ctx.run.board.narrow.sessionId, 'narrow-session');
+  assert.ok(calls.filter(call => call.args[0] === 'keys').every(call => call.args[2] === '-l'));
+});
+
+test('board runTerminal times out missing rows, keeps captures and closes the pane', async t => {
+  const { ctx, calls, dependencies } = boardDriver(t, 'missing rows');
+  await assert.rejects(getCheck('board').runTerminal(ctx, dependencies), /every board row/);
+  assert.equal(ctx.run.completed, false);
+  assert.equal(calls.at(-1).args[0], 'stop');
+  assert.equal(ctx.run.board.actions.length, 0);
+  assert.equal(fs.readFileSync(path.join(ctx.evidenceDir, ctx.run.board.screens[0].file), 'utf8'), 'Relay jobs');
+  assert.equal(fs.existsSync(path.join(ctx.workDir, '.live-board-synthetic-run.done')), false);
+});
+
+test('board accepts a Continue delivered before the Agent relay finishes its hand-back', t => {
+  const dir = copy(t, 'board'), file = path.join(dir, 'transcript/subagents/agent-agent-codex.jsonl');
+  const entries = readTranscript(file), previous = entries[1];
+  entries[1] = { type: 'attachment', uuid: previous.uuid, timestamp: previous.timestamp,
+    attachment: { type: 'queued_command', prompt: continueText('agent', 'codex'), origin: previous.origin } };
+  lines(file, entries);
+  assert.equal(getCheck('board').analyze(boardInput(dir)).results[0].result, 'pass');
 });

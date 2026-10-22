@@ -1,0 +1,146 @@
+{
+  "runId": "synthetic-run",
+  "check": "board",
+  "surface": "terminal",
+  "sessionId": "board-session",
+  "backends": [
+    "codex",
+    "kimi"
+  ],
+  "relayVersion": "3.0.0-test",
+  "completed": true,
+  "board": {
+    "actions": [
+      {
+        "runId": "synthetic-run",
+        "sessionId": "board-session",
+        "jobId": "job-agent-codex",
+        "kind": "agent",
+        "backend": "codex",
+        "action": "steer",
+        "at": "2026-10-22T10:00:20.000Z",
+        "text": "board steer agent codex"
+      },
+      {
+        "runId": "synthetic-run",
+        "sessionId": "board-session",
+        "jobId": "job-agent-codex",
+        "kind": "agent",
+        "backend": "codex",
+        "action": "continue",
+        "at": "2026-10-22T10:02:30.000Z",
+        "text": "board continue agent codex: run the shell command `sleep 60` exactly once and wait for it. Then reply with one line: board continued agent codex."
+      },
+      {
+        "runId": "synthetic-run",
+        "sessionId": "board-session",
+        "jobId": "job-workflow-codex",
+        "kind": "workflow",
+        "backend": "codex",
+        "action": "steer",
+        "at": "2026-10-22T10:00:20.000Z",
+        "text": "board steer workflow codex",
+        "relayFiles": [
+          "subagents/workflows/wf-board/agent-workflow-codex.jsonl"
+        ]
+      },
+      {
+        "runId": "synthetic-run",
+        "sessionId": "board-session",
+        "jobId": "job-workflow-codex",
+        "kind": "workflow",
+        "backend": "codex",
+        "action": "continue",
+        "at": "2026-10-22T10:02:30.000Z",
+        "text": "board continue workflow codex: run the shell command `sleep 60` exactly once and wait for it. Then reply with one line: board continued workflow codex.",
+        "relayFiles": [
+          "subagents/workflows/wf-board/agent-workflow-codex.jsonl"
+        ]
+      },
+      {
+        "runId": "synthetic-run",
+        "sessionId": "board-session",
+        "jobId": "job-workflow-codex",
+        "kind": "workflow",
+        "backend": "codex",
+        "action": "cancel",
+        "at": "2026-10-22T10:02:40.000Z",
+        "attempt": 2
+      },
+      {
+        "runId": "synthetic-run",
+        "sessionId": "board-session",
+        "jobId": "job-agent-kimi",
+        "kind": "agent",
+        "backend": "kimi",
+        "action": "steer",
+        "at": "2026-10-22T10:00:20.000Z",
+        "text": "board steer agent kimi"
+      },
+      {
+        "runId": "synthetic-run",
+        "sessionId": "board-session",
+        "jobId": "job-agent-kimi",
+        "kind": "agent",
+        "backend": "kimi",
+        "action": "continue",
+        "at": "2026-10-22T10:02:30.000Z",
+        "text": "board continue agent kimi: run the shell command `sleep 60` exactly once and wait for it. Then reply with one line: board continued agent kimi."
+      },
+      {
+        "runId": "synthetic-run",
+        "sessionId": "board-session",
+        "jobId": "job-workflow-kimi",
+        "kind": "workflow",
+        "backend": "kimi",
+        "action": "steer",
+        "at": "2026-10-22T10:00:20.000Z",
+        "text": "board steer workflow kimi",
+        "relayFiles": [
+          "subagents/workflows/wf-board/agent-workflow-kimi.jsonl"
+        ]
+      },
+      {
+        "runId": "synthetic-run",
+        "sessionId": "board-session",
+        "jobId": "job-workflow-kimi",
+        "kind": "workflow",
+        "backend": "kimi",
+        "action": "continue",
+        "at": "2026-10-22T10:02:30.000Z",
+        "text": "board continue workflow kimi: run the shell command `sleep 60` exactly once and wait for it. Then reply with one line: board continued workflow kimi.",
+        "relayFiles": [
+          "subagents/workflows/wf-board/agent-workflow-kimi.jsonl"
+        ]
+      },
+      {
+        "runId": "synthetic-run",
+        "sessionId": "board-session",
+        "jobId": "job-workflow-kimi",
+        "kind": "workflow",
+        "backend": "kimi",
+        "action": "cancel",
+        "at": "2026-10-22T10:02:40.000Z",
+        "attempt": 3
+      }
+    ],
+    "selectedJob": "job-agent-codex",
+    "screens": [
+      {
+        "phase": "wide",
+        "file": "wide.txt",
+        "at": "2026-10-22T10:00:15.000Z"
+      },
+      {
+        "phase": "narrow",
+        "file": "narrow.txt",
+        "at": "2026-10-22T10:03:53.000Z"
+      },
+      {
+        "phase": "narrow-detail",
+        "file": "narrow-detail.txt",
+        "at": "2026-10-22T10:03:54.000Z"
+      }
+    ]
+  }
+}

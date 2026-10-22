@@ -1,0 +1,53 @@
+{
+  "id": "job-workflow-kimi",
+  "createdAt": "2026-10-22T10:00:03.000Z",
+  "claudeSessionId": "board-session",
+  "state": "cancelled",
+  "completedAt": "2026-10-22T10:02:43.000Z",
+  "request": {
+    "backend": "kimi",
+    "model": "kimi-code/kimi-for-coding"
+  },
+  "relay": {
+    "agentId": "workflow-kimi",
+    "label": "board-wf-kimi",
+    "workflowRunId": "wf-board",
+    "transcriptPath": "../transcript/subagents/workflows/wf-board/agent-workflow-kimi.jsonl"
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "startedAt": "2026-10-22T10:00:04.000Z",
+      "endedAt": "2026-10-22T10:02:05.000Z",
+      "state": "completed",
+      "relayVersion": "3.0.0-test",
+      "turnId": "first"
+    },
+    {
+      "attempt": 2,
+      "source": "steer",
+      "messageId": "steer",
+      "startedAt": "2026-10-22T10:02:06.000Z",
+      "endedAt": "2026-10-22T10:02:10.000Z",
+      "state": "completed",
+      "relayVersion": "3.0.0-test"
+    },
+    {
+      "attempt": 3,
+      "source": "continue",
+      "messageId": "continue",
+      "startedAt": "2026-10-22T10:02:33.000Z",
+      "endedAt": "2026-10-22T10:02:43.000Z",
+      "state": "cancelled",
+      "relayVersion": "3.0.0-test"
+    }
+  ],
+  "messages": [
+    {
+      "id": "steer",
+      "kind": "steer",
+      "action": "queued-next-turn",
+      "at": "2026-10-22T10:00:22.000Z"
+    }
+  ]
+}

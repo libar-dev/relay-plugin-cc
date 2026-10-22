@@ -1,0 +1,9 @@
+Relay jobs
+> job-agent-codex · codex · running · attempt 1
+  job-workflow-codex · codex · running · attempt 1
+  job-agent-kimi · kimi · running · attempt 1
+  job-workflow-kimi · kimi · running · attempt 1
+job-agent-codex · codex · completed · attempt 2
+model gpt-6.1-sol · effort low
+relay board-agent-codex
+Continue:

@@ -6,6 +6,9 @@ usage() {
 Usage: pane.sh start NAME DIR [--env VAR=value]... -- command [args...]
        pane.sh send NAME TEXT             TEXT - reads stdin
        pane.sh keys NAME KEY...
+       pane.sh bytes NAME HEX...          Raw bytes (two hex digits each)
+       pane.sh screen-escapes NAME        Visible screen with ANSI escapes
+       pane.sh size NAME COLS ROWS        Resize the tmux window
        pane.sh read NAME [LINES]          Default: 200 lines of scrollback
        pane.sh screen NAME                Whole visible screen, without joining wrapped lines
        pane.sh wait NAME REGEX [SECONDS]  An extended regex matched against each screen line. Default: 30 seconds
@@ -23,7 +26,7 @@ die() { printf '%s\n' "$*" >&2; exit 2; }
 [[ $# -gt 0 ]] || { usage >&2; exit 2; }
 action=$1; shift
 case "$action" in -h|--help) usage; exit 0 ;; esac
-case "$action" in start|send|keys|read|screen|wait|trust|attach-command|pid|stop|list) ;; *) die "Unknown command: $action" ;; esac
+case "$action" in start|send|keys|bytes|size|read|screen|screen-escapes|wait|trust|attach-command|pid|stop|list) ;; *) die "Unknown command: $action" ;; esac
 name=
 if [[ "$action" == list ]]; then
   [[ $# == 0 ]] || die 'Usage: pane.sh list'
@@ -49,12 +52,16 @@ case "$action" in
     shift ;;
   send) [[ $# == 1 ]] || die 'Usage: pane.sh send NAME TEXT' ;;
   keys) [[ $# -ge 1 ]] || die 'Usage: pane.sh keys NAME KEY...' ;;
+  bytes)
+    [[ $# -ge 1 ]] || die 'Usage: pane.sh bytes NAME HEX...'
+    for byte in "$@"; do [[ "$byte" =~ ^[0-9a-fA-F]{2}$ ]] || die 'HEX must be two hex digits.'; done ;;
+  size) [[ $# == 2 && $1 =~ ^[1-9][0-9]*$ && $2 =~ ^[1-9][0-9]*$ ]] || die 'Usage: pane.sh size NAME COLS ROWS' ;;
   read) [[ $# -le 1 && ${1:-200} =~ ^[0-9]+$ ]] || die 'LINES must be a nonnegative integer.' ;;
   wait)
     [[ $# -ge 1 && $# -le 2 && ${2:-30} =~ ^[0-9]+$ ]] || die 'Usage: pane.sh wait NAME REGEX [SECONDS]'
     regex=$1
     grep -Eq -- "$regex" <<<'' || [[ $? != 2 ]] || die 'Invalid regular expression.' ;;
-  screen|trust|attach-command|pid|stop) [[ $# == 0 ]] || die "Usage: pane.sh $action NAME" ;;
+  screen|screen-escapes|trust|attach-command|pid|stop) [[ $# == 0 ]] || die "Usage: pane.sh $action NAME" ;;
 esac
 
 socket_dir=${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/claude-tmux}
@@ -101,6 +108,9 @@ case "$action" in
     sleep 0.5
     tmux -S "$SOCK" send-keys -t "$target" Enter ;;
   keys) tmux -S "$SOCK" send-keys -t "$target" "$@" ;;
+  bytes) tmux -S "$SOCK" send-keys -H -t "$target" "$@" ;;
+  size) tmux -S "$SOCK" resize-window -t "$target" -x "$1" -y "$2" ;;
+  screen-escapes) tmux -S "$SOCK" capture-pane -p -e -t "$target" ;;
   read) tmux -S "$SOCK" capture-pane -p -J -t "$target" -S "-${1:-200}" ;;
   screen) tmux -S "$SOCK" capture-pane -p -t "$target" ;;
   wait)
