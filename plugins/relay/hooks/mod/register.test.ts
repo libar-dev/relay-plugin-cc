@@ -262,18 +262,55 @@ test('a check that gives no verdict lets the spawn through', async ($, on) => {
 
 // The kit's $.agent.spawn is typed for an Agent tool call's fields, but it hands the plugin the
 // whole input, so a Workflow's or a resume's fields reach the hook as the engine would set them.
-test('a Workflow agent with a bad header is denied, and a withheld prompt is not checked', async ($, on) => {
+test('a Workflow agent whose prompt has no --- line runs no check and reaches the engine', async ($, on) => {
   const seen = spawnEngine(on, () => ran(1, `error: ${REFUSAL}\n`))
-  const workflow = { runId: 'wf_7f3a', agentIndex: 1 }
-  const withheld = relay(WITHHELD, { workflow: { runId: 'wf_7f3a', agentIndex: 2 }, background: false })
+  // 2.1.308's placeholder on a run that keeps its script out of SDK events, and wording another
+  // build might use instead: neither is the script's prompt.
+  const withheld = relay(WITHHELD, { workflow: { runId: 'wf_7f3a', agentIndex: 1 }, background: false })
+  const other = relay('(script not shared)\n--- see the run ---', {
+    workflow: { runId: 'wf_7f3a', agentIndex: 2 },
+    background: false,
+  })
 
-  const denied = await $.agent.spawn(relay(BAD, { workflow, background: false }) as any)
-  const passed = await $.agent.spawn(withheld as any)
+  expect(await $.agent.spawn(withheld as any)).toEqual(STARTED)
+  expect(await $.agent.spawn(other as any)).toEqual(STARTED)
 
-  expect(denied).toEqual({ deny: REFUSAL })
-  expect(passed).toEqual(STARTED)
-  expect(seen.runs).toEqual([{ argv: checkArgv, init: { stdin: BAD, timeoutMs: 10000 } }])
-  expect(seen.spawns).toEqual([withheld])
+  expect(seen.runs).toHaveLength(0)
+  expect(seen.spawns).toEqual([withheld, other])
+
+  // The same hook denies an Agent tool spawn next, so it was loaded and passing the others above.
+  expect(await $.agent.spawn(relay(BAD))).toEqual({ deny: REFUSAL })
+  expect(seen.spawns).toHaveLength(2)
+})
+
+test('a Workflow agent with a --- line and a bad header is denied', async ($, on) => {
+  const seen = spawnEngine(on, () => ran(1, `error: ${REFUSAL}\n`))
+  // The dashes may carry trailing spaces or tabs, as the header parser reads them.
+  const padded = BAD.replace('\n---\n', '\n--- \t\n')
+  const workflow = (agentIndex: number) => ({ workflow: { runId: 'wf_7f3a', agentIndex }, background: false })
+
+  expect(await $.agent.spawn(relay(BAD, workflow(1)) as any)).toEqual({ deny: REFUSAL })
+  expect(await $.agent.spawn(relay(padded, workflow(2)) as any)).toEqual({ deny: REFUSAL })
+
+  expect(seen.runs).toEqual([
+    { argv: checkArgv, init: { stdin: BAD, timeoutMs: 10000 } },
+    { argv: checkArgv, init: { stdin: padded, timeoutMs: 10000 } },
+  ])
+  expect(seen.spawns).toHaveLength(0)
+})
+
+test('an Agent tool spawn with no --- line still runs the check', async ($, on) => {
+  const NO_HEADER = 'The prompt has no header: expected `key: value` lines, then a line `---`, then the brief.'
+  const seen = spawnEngine(on, () => ran(1, `error: ${NO_HEADER}\n`))
+
+  expect(await $.agent.spawn(relay(WITHHELD))).toEqual({ deny: NO_HEADER })
+  expect(await $.agent.spawn(relay('Fix the flaky test.'))).toEqual({ deny: NO_HEADER })
+
+  expect(seen.runs).toEqual([
+    { argv: checkArgv, init: { stdin: WITHHELD, timeoutMs: 10000 } },
+    { argv: checkArgv, init: { stdin: 'Fix the flaky test.', timeoutMs: 10000 } },
+  ])
+  expect(seen.spawns).toHaveLength(0)
 })
 
 test('a resumed relay:job agent is not checked and reaches the engine', async ($, on) => {

@@ -675,3 +675,29 @@ test('archive install receipt identifies the full exported commit and worktree f
   assert.equal(saved.worktree, false);
   assert.equal(smokeScript('uninstall', work, env).status, 0);
 });
+
+test('pane pid prints the pane process id on a private tmux socket', async t => {
+  const dir = fs.mkdtempSync('/tmp/relay-pane-pid-test-');
+  const env = { ...process.env, XDG_RUNTIME_DIR: dir };
+  const socket = path.join(dir, 'claude-tmux/tmux.sock');
+  t.after(() => {
+    spawnSync('tmux', ['-S', socket, 'kill-server']);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const pane = (...args) => spawnSync('bash', [path.join(root, 'scripts/smoke/pane.sh'), ...args], { env, encoding: 'utf8' });
+  for (const args of [[], ['invalid:name'], ['test', 'extra']]) assert.equal(pane('pid', ...args).status, 2);
+  const pidFile = path.join(dir, 'process-id'), script = path.join(dir, 'process.cjs');
+  fs.writeFileSync(script, 'require("node:fs").writeFileSync(process.argv[2], String(process.pid)); setInterval(() => {}, 1000);');
+  fs.mkdirSync(path.dirname(socket), { mode: 0o700 });
+  const started = spawnSync('tmux', ['-S', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'pid-test',
+    '--', process.execPath, script, pidFile], { env, encoding: 'utf8' });
+  assert.equal(started.status, 0, started.stderr);
+  const deadline = Date.now() + 5000;
+  while (!fs.existsSync(pidFile) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+  const result = pane('pid', 'pid-test');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^\d+\n$/);
+  assert.equal(result.stdout.trim(), fs.readFileSync(pidFile, 'utf8'));
+  assert.equal(pane('stop', 'pid-test').status, 0);
+  assert.notEqual(pane('pid', 'pid-test').status, 0);
+});

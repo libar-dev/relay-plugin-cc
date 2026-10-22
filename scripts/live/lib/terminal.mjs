@@ -34,7 +34,7 @@ export function paneStartArgs(ctx, name, sessionId) {
   return ['start', name, ctx.workDir, '--env', `RELAY_JOBS_HOME=${ctx.jobsHome}`, '--', ...claudeArgs({ ...ctx, sessionId })];
 }
 
-function pane(args, input) {
+export function pane(args, input) {
   return execFileSync('bash', [paneScript, ...args], { encoding: 'utf8', input, timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
 }
 

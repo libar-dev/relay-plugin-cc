@@ -60,17 +60,23 @@ export function parseHeaderPrompt(text) {
   return { header, brief };
 }
 
-export function readLaunchPrompt(text, { baseDir = process.cwd(), env = process.env } = {}) {
+export function readLaunchPrompt(text, { baseDir = process.cwd(), env = process.env, relativePaths = true } = {}) {
   const { header, brief } = parseHeaderPrompt(text);
+  const deferredBrief = header.brief && !relativePaths && !path.isAbsolute(header.brief.trim());
   let briefText = brief;
   if (header.brief) {
     if (brief.trim()) {
       throw new UsageError("The header names a brief file, so nothing may follow the dashes.");
     }
-    briefText = fs.readFileSync(path.resolve(baseDir, header.brief), "utf8");
+    if (!deferredBrief) briefText = fs.readFileSync(path.resolve(baseDir, header.brief), "utf8");
   }
-  if (!briefText.trim()) {
+  if (!deferredBrief && !briefText.trim()) {
     throw new UsageError("The brief is empty.");
+  }
+  // The spawn cannot know the relay's final directory, including an uncreated worktree.
+  if (!relativePaths) {
+    if (!path.isAbsolute((header.cd ?? "").trim())) delete header.cd;
+    header.addDirs = header.addDirs.filter(dir => path.isAbsolute(dir.trim()));
   }
   return { request: buildLaunchRequest(header, { baseDir, env }), brief: briefText };
 }

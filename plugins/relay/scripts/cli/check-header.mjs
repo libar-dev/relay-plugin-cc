@@ -6,7 +6,7 @@ export function handleCheckHeader(argv) {
   if (argv.length) throw new UsageError("check-header takes no arguments.");
   const text = fs.readFileSync(0, "utf8");
   try {
-    readLaunchPrompt(text, { baseDir: process.cwd(), env: process.env });
+    readLaunchPrompt(text, { baseDir: process.cwd(), env: process.env, relativePaths: false });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stdout.write(`error: ${message.replace(/\s+/g, " ").trim()}\n`);

@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { analyzeBackends, formatSeconds, hasMarker, hasReportLine, inboxMessages, lastActiveAttempt,
-  oneRelay, readJson, readTranscript, relayJob, scopeToRun, transcriptCalls } from '../lib/evidence.mjs';
+  oneRelay, readJson, readTranscript, relayJob, requireBackend, scopeToRun, transcriptCalls } from '../lib/evidence.mjs';
+import { pane } from '../lib/terminal.mjs';
 import { agentCalls, opening, waitRunning } from './steer-main.mjs';
 
 export function sessionEndCalls(backends) {
@@ -11,7 +12,15 @@ export function sessionEndCalls(backends) {
 }
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const processes = ({ timeoutMs }) => execFileSync('ps', ['-eo', 'args='], { encoding: 'utf8', timeout: timeoutMs });
+const processes = ({ pid, timeoutMs }) => {
+  const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: timeoutMs });
+  if (result.error) throw result.error;
+  if (result.status === 1 && !result.stdout.trim() && !result.stderr.trim()) return '';
+  if (result.status !== 0) throw new Error(`Could not read Claude process start time: ${result.stderr.trim() || result.signal || result.status}`);
+  return result.stdout.trim();
+};
+const validPid = identity => Number.isSafeInteger(identity?.pid) && identity.pid > 0 &&
+  typeof identity.startedAt === 'string' && Boolean(identity.startedAt.trim());
 const companion = (ctx, args, { timeoutMs = 10000 } = {}) => execFileSync(process.execPath, [path.join(ctx.pluginDir, 'scripts/companion.mjs'), ...args],
   { encoding: 'utf8', env: { ...process.env, RELAY_JOBS_HOME: ctx.jobsHome }, timeout: timeoutMs });
 
@@ -28,22 +37,53 @@ export default {
   },
   completed(entries) { return hasMarker(entries, this.marker); },
   async runTerminal(ctx, dependencies = {}) {
-    const { now = Date.now, sleep = pause, processRunner = processes, companionRunner = companion } = dependencies;
+    const { now = Date.now, sleep = pause, processRunner = processes, companionRunner = companion, drive = pane } = dependencies;
     const run = ctx.run;
+    let aborted = false, listening = false;
+    const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+    const abort = () => { aborted = true; };
+    const checkAbort = () => {
+      if (aborted || run.interrupted) { run.interrupted = true; throw new Error('Interrupted.'); }
+    };
+    const wait = async ms => {
+      const until = now() + ms;
+      while (now() < until) {
+        checkAbort();
+        await sleep(Math.min(250, until - now()));
+      }
+      checkAbort();
+    };
     try {
-      await ctx.paneDriver(ctx, this, { keep: false });
+      delete run.claudePid;
+      await ctx.paneDriver(ctx, this, { keep: false, drive(args, input) {
+        if (args[0] !== 'stop') return drive(args, input);
+        try {
+          const raw = String(drive(['pid', args[1]])).trim();
+          const pid = /^\d+$/.test(raw) ? Number(raw) : null;
+          if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Missing Claude pane pid.');
+          const startedAt = String(processRunner({ pid, timeoutMs: 5000 })).trim();
+          run.claudePid = { pid, startedAt };
+          if (!validPid(run.claudePid)) throw new Error('Missing Claude process start time.');
+          ctx.save();
+        } finally { drive(args, input); }
+      } });
+      for (const signal of signals) process.on(signal, abort);
+      listening = true;
+      checkAbort();
       const entries = (this.scope ?? scopeToRun)(readTranscript(run.transcript), run.runId);
       if (!this.completed(entries)) throw new Error(`Session ended without ${this.marker}.`);
-      if (!run.sessionId) throw new Error('Missing Claude session id.');
+      if (!validPid(run.claudePid)) throw new Error('Missing Claude pane pid and start time.');
       const deadline = now() + 15000;
-      while (String(await processRunner({ timeoutMs: Math.max(1, Math.min(5000, deadline - now())) })).split('\n').some(line => {
-        const words = line.trim().split(/\s+/);
-        return words.some((word, i) => word === '--session-id' && words[i + 1] === run.sessionId);
-      })) {
+      while (true) {
+        checkAbort();
+        const startedAt = String(await processRunner({ pid: run.claudePid.pid,
+          timeoutMs: Math.max(1, Math.min(5000, deadline - now())) })).trim();
+        checkAbort();
+        if (now() > deadline) throw new Error('Timed out waiting for the Claude process to end.');
+        if (startedAt !== run.claudePid.startedAt) break;
         if (now() >= deadline) throw new Error('Timed out waiting for the Claude process to end.');
-        await sleep(Math.min(250, deadline - now()));
+        await wait(Math.min(250, deadline - now()));
       }
-      if (now() > deadline) throw new Error('Timed out waiting for the Claude process to end.');
       run.sessionEndedAt = new Date(now()).toISOString();
       ctx.save();
       const input = { runId: run.runId, backends: run.backends, surface: run.surface, relayVersion: run.relayVersion,
@@ -53,9 +93,14 @@ export default {
         const agent = oneRelay(parsed, backend, 'session-end');
         return { ...agent, ...relayJob(input, evidence, agent.agentId) };
       });
-      await sleep(20000);
+      await wait(20000);
       run.afterEnd = {};
-      const status = async (job, timeoutMs = 10000) => JSON.parse(await companionRunner(ctx, ['status', job.jobDir, '--json'], { timeoutMs }));
+      const status = async (job, timeoutMs = 10000) => {
+        checkAbort();
+        const result = await companionRunner(ctx, ['status', job.jobDir, '--json'], { timeoutMs });
+        checkAbort();
+        return JSON.parse(result);
+      };
       for (const job of jobs) {
         const result = await status(job);
         run.afterEnd[job.agentId] = { at: new Date(now()).toISOString(), state: result.state };
@@ -72,23 +117,32 @@ export default {
           if (['completed', 'failed', 'cancelled'].includes(result.state)) pending.delete(job);
         }
         ctx.save();
-        if (pending.size) await sleep(Math.min(1000, waitDeadline - now()));
+        if (pending.size) await wait(Math.min(1000, waitDeadline - now()));
       }
       ctx.save();
-      return this.analyze(input);
+      const analysis = this.analyze(input);
+      checkAbort();
+      return analysis;
     } catch (error) {
+      if (aborted) { run.interrupted = true; error = new Error('Interrupted.'); }
       run.error = error.message;
       ctx.save();
       throw error;
+    } finally {
+      if (listening) for (const signal of signals) process.off(signal, abort);
     }
   },
   analyze(input) {
-    return analyzeBackends(input, this.scope, ({ backend, row, parsed, evidence }) => {
+    return analyzeBackends(input, this.scope, ({ backend, row, allEntries, parsed, evidence }) => {
       const run = readJson(path.join(input.evidenceDir, 'run.json'));
       if (run.runId !== input.runId || !Number.isFinite(Date.parse(run.sessionEndedAt))) throw new Error('Missing sessionEndedAt for this run.');
+      if (allEntries.some(entry => !entry.isSidechain && Date.parse(entry.timestamp) > Date.parse(run.sessionEndedAt))) {
+        throw new Error('Lead transcript entry is later than sessionEndedAt.');
+      }
       const agent = oneRelay(parsed, backend, 'session-end');
       const { job, jobDir } = relayJob(input, evidence, agent.agentId);
       Object.assign(row, { agentId: agent.agentId, jobDir });
+      requireBackend(job, backend);
       const attempt = lastActiveAttempt(job, run.sessionEndedAt, input.relayVersion);
       const after = run.afterEnd?.[agent.agentId];
       if (after?.state !== 'running' || !(Date.parse(after.at) - Date.parse(run.sessionEndedAt) >= 15000)) {
@@ -101,6 +155,7 @@ export default {
       }
       if ([...(job.messages ?? []), ...inboxMessages(jobDir)].some(message => message.kind === 'cancel')) throw new Error('Job has a cancel message.');
       if (!hasReportLine(fs.readFileSync(path.join(jobDir, 'report.md'), 'utf8'), `session-end done for ${backend}`)) throw new Error('Report is missing the session-end line.');
+      if (!validPid(run.claudePid)) throw new Error('Missing claudePid and process start time for this run.');
       row.timings.ranOnSeconds = [seconds];
     });
   },

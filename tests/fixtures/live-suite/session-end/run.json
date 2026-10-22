@@ -6,5 +6,9 @@
       "at": "2026-10-22T10:00:50.000Z",
       "state": "running"
     }
+  },
+  "claudePid": {
+    "pid": 12345,
+    "startedAt": "Thu Oct 22 10:00:00 2026"
   }
 }

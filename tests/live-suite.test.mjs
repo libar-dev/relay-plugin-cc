@@ -456,6 +456,18 @@ test('evidence copy preserves workflow paths, rewrites pointers and skips lock f
   for (const lock of ['job.lock.d', 'worker.lease.d', 'nested/other.lock.d']) assert.equal(fs.existsSync(path.join(pointer.jobDir, lock)), false);
 });
 
+test('evidence copy keeps the mtimes of session files and job files', t => {
+  const ctx = scratch(t);
+  const input = evidenceFixture(ctx);
+  const past = new Date('2026-01-02T03:04:05.000Z');
+  for (const file of [input.workflow, path.join(input.jobDir, 'job.json')]) fs.utimesSync(file, past, past);
+  const result = { ...analyzed(), evidence: { transcripts: [input.transcript, input.workflow, input.relayTranscript],
+    agents: [{ agentId: 'codex', pointer: input.pointer, jobDir: input.jobDir }] } };
+  const copied = copyEvidence(baseRun(input), result, path.join(ctx.dir, 'evidence'));
+  assert.equal(fs.statSync(path.join(ctx.dir, 'evidence/copy/session/session/subagents/workflows/one/agent-workflow.jsonl')).mtimeMs, past.getTime());
+  assert.equal(fs.statSync(path.join(copied.jobsHome, 'repo/job/job.json')).mtimeMs, past.getTime());
+});
+
 test('analyze CLI discovers prepared runs, uses overrides, and replays exactly from the copy', t => {
   const ctx = scratch(t);
   receipt(ctx);

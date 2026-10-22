@@ -6,12 +6,14 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { readRelayPointer } from "../lib/harness/relay.mjs";
-import { absoluteJobsHomeEnv, readJob, TERMINAL_STATES } from "../lib/jobs/store.mjs";
+import { readWorkflowRunId } from "../lib/harness/workflow.mjs";
+import { absoluteJobsHomeEnv, listJobDirs, readJob, TERMINAL_STATES } from "../lib/jobs/store.mjs";
 import { appendRelayViolation } from "../lib/jobs/messages.mjs";
 
 const COMPANION = fileURLToPath(new URL("../companion.mjs", import.meta.url));
 const oneLine = value => String(value ?? "").replace(/\s+/g, " ").trim();
 const nonempty = value => typeof value === "string" && value.trim();
+const hookOutput = context => ({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: context } });
 
 export function handleTaskStop(input, env = process.env) {
   if (input?.hook_event_name !== "PostToolUse" || input.tool_name !== "TaskStop") return null;
@@ -22,7 +24,15 @@ export function handleTaskStop(input, env = process.env) {
   const agentId = [response?.task_id, input.tool_input?.task_id, input.tool_input?.shell_id].find(nonempty);
   if (!agentId) return null;
   const { jobDir } = readRelayPointer(env, agentId);
-  if (!jobDir) return null;
+  if (!jobDir) {
+    if (response?.task_type !== "local_workflow") return null;
+    const runId = readWorkflowRunId(input.agent_transcript_path ?? input.transcript_path, agentId);
+    if (!runId) return null;
+    const jobs = listJobDirs({ env }).map(dir => readJob(dir))
+      .filter(job => job?.relay?.workflowRunId === runId && !TERMINAL_STATES.has(job.state));
+    if (!jobs.length) return null;
+    return hookOutput(`TaskStop stopped Workflow run ${runId}. Its ${jobs.length} relay job(s) keep running, so a resumeFromRunId adopts them: ${jobs.map(job => job.id).join(", ")}. To abandon one: node "${COMPANION}" cancel <job>.`);
+  }
   const job = readJob(jobDir);
   if (!job || job.relay?.agentId !== agentId) return null;
   let context;
@@ -38,19 +48,23 @@ export function handleTaskStop(input, env = process.env) {
     } catch (error) {
       result = { error };
     }
+    let violationReason;
     if (result.status === 0 && !result.error && !result.signal) {
       context = `TaskStop stopped the relay:job agent ${agentId}, and the relay hook cancelled its job ${job.id}:\n${result.stdout}`;
-    } else if (result.status === 4 && !result.error && !result.signal) {
-      const reason = `TaskStop stopped the relay, and the cancel had not ended the job: ${oneLine(result.stderr)}`;
-      appendRelayViolation(jobDir, { kind: "cancel", reason, agentId });
+    } else if (result.status === 4 && !result.error && !result.signal && [result.stdout, result.stderr].some(text => text?.includes("the cancel is with its"))) {
+      violationReason = `TaskStop stopped the relay, and the cancel had not ended the job: ${oneLine(result.stderr)}`;
       context = `TaskStop stopped the relay:job agent ${agentId}. The relay hook asked its job ${job.id} to cancel, and the job has not ended yet:\n${result.stdout}${result.stderr}\nCheck it with: node "${COMPANION}" status ${job.id}`;
     } else {
       const reason = oneLine(result.error?.message || result.stderr || (result.signal ? `cancel ended on signal ${result.signal}` : `cancel exited ${result.status}`));
-      appendRelayViolation(jobDir, { kind: "cancel", reason: `TaskStop stopped the relay, and the cancel failed: ${reason}`, agentId });
+      violationReason = `TaskStop stopped the relay, and the cancel failed: ${reason}`;
       context = `TaskStop stopped the relay:job agent ${agentId}, and the relay hook could not cancel its job ${job.id}: ${reason}. The job may still be running. Cancel it with: node "${COMPANION}" cancel ${job.id}`;
     }
+    if (violationReason) {
+      try { appendRelayViolation(jobDir, { kind: "cancel", reason: violationReason, agentId }); }
+      catch (error) { context += ` The cancel violation could not be recorded: ${oneLine(error instanceof Error ? error.message : error)}.`; }
+    }
   }
-  return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: context } };
+  return hookOutput(context);
 }
 
 async function main() {

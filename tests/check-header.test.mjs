@@ -45,10 +45,8 @@ const refusals = [
   ["an invalid web-search value", prompt("web-search: imaginary"), /web-search must be one of/],
   ["a web-search value refused by the backend", prompt("backend: grok\nweb-search: cached"), /web-search: cached is not supported for Grok/],
   ["network that is not boolean", prompt("network: maybe"), /network must be true or false/],
-  ["cd that is not a directory", prompt("cd: missing"), /cd is not a directory:/],
-  ["add-dir that does not exist", prompt("add-dir: missing"), /add-dir does not exist:/],
-  ["a missing brief file", prompt("brief: missing", ""), /ENOENT:.*missing/],
-  ["text after the dashes with brief", prompt("brief: missing"), /The header names a brief file, so nothing may follow the dashes\./],
+  ["text after the dashes with a relative brief", prompt("brief: missing"), /The header names a brief file, so nothing may follow the dashes\./],
+  ["an invalid backend with a relative brief", prompt("backend: imaginary\nbrief: missing", ""), /backend must be codex, grok, zcode or kimi/],
   ["an empty brief", prompt("", " \t\n"), /The brief is empty\./]
 ];
 
@@ -65,7 +63,7 @@ for (const [name, text, expected] of refusals) {
   });
 }
 
-test("readLaunchPrompt and check-header resolve cd, add-dir and brief against the working directory", () => {
+test("readLaunchPrompt resolves relative paths by default while check-header leaves them to start", () => {
   const ctx = context();
   fs.mkdirSync(path.join(ctx.work, "project"));
   fs.mkdirSync(path.join(ctx.work, "extra"));
@@ -82,18 +80,70 @@ test("readLaunchPrompt and check-header resolve cd, add-dir and brief against th
   assert.equal(fs.existsSync(ctx.home), false);
 });
 
-test("check-header collapses a newline in an error message to one line", () => {
+for (const key of ["cd", "add-dir", "brief"]) {
+  test(`check-header defers a missing relative ${key} while start --from-relay keeps its refusal message`, async () => {
+    const ctx = relayContext();
+    const text = prompt(`${key}: missing`, key === "brief" ? "" : "hi");
+    const checked = check(ctx, text);
+    assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+    assert.equal(checked.stdout, "ok\n");
+    assert.equal(checked.stderr, "");
+    const launch = readLaunchPrompt(text, { baseDir: ctx.work, env: ctx.env, relativePaths: false });
+    assert.equal(launch.request.cwd, ctx.work);
+    assert.deepEqual(launch.request.addDirs, []);
+    assert.equal(launch.brief, key === "brief" ? "" : "hi");
+    ctx.append(ctx.prompt(text));
+    const { started, jobId } = await relayStart(ctx);
+    assert.equal(jobId, null);
+    assert.equal(started.status, 1);
+    const missing = path.join(ctx.work, "missing");
+    const reason = key === "cd" ? `cd is not a directory: ${missing}` : key === "add-dir"
+      ? `add-dir does not exist: ${missing}` : `ENOENT: no such file or directory, open '${missing}'`;
+    assert.deepEqual(started.stdout.split("\n").filter(line => line.startsWith("error: ")), [`error: ${reason}`]);
+  });
+
+  test(`check-header refuses a missing absolute ${key} and creates nothing`, () => {
+    const ctx = context();
+    const result = check(ctx, prompt(`${key}:   ${path.join(ctx.work, "missing")}  `, key === "brief" ? "" : "hi"));
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, "");
+    assert.match(result.stdout, key === "cd" ? /^error: cd is not a directory:/ : key === "add-dir" ? /^error: add-dir does not exist:/ : /^error: ENOENT:/);
+    assert.deepEqual(fs.readdirSync(ctx.work), []);
+  });
+}
+
+test("check-header defers tilde paths and readLaunchPrompt retains absolute add-dir entries", () => {
   const ctx = context();
-  ctx.work = path.join(ctx.work, "line\nbreak");
-  fs.mkdirSync(ctx.work);
-  const result = check(ctx, prompt("cd: missing"));
+  const extra = path.join(ctx.work, "extra");
+  fs.mkdirSync(extra);
+  const text = prompt(`cd: ~/missing\nadd-dir: ~/missing\nadd-dir: ${extra}\nbrief: ~/missing`, "");
+  const launch = readLaunchPrompt(text, { baseDir: ctx.work, env: ctx.env, relativePaths: false });
+  assert.equal(launch.request.cwd, ctx.work);
+  assert.deepEqual(launch.request.addDirs, [extra]);
+  assert.equal(check(ctx, text).stdout, "ok\n");
+});
+
+test("check-header reads absolute brief files and refuses an empty one", () => {
+  const ctx = context();
+  const file = path.join(ctx.work, "brief.md");
+  fs.writeFileSync(file, "hi");
+  assert.equal(check(ctx, prompt(`brief: ${file}`, "")).stdout, "ok\n");
+  fs.writeFileSync(file, " \n");
+  const result = check(ctx, prompt(`brief: ${file}`, ""));
   assert.equal(result.status, 1);
-  assert.equal(result.stdout, `error: cd is not a directory: ${path.join(ctx.work, "missing").replace(/\s+/g, " ")}\n`);
+  assert.equal(result.stdout, "error: The brief is empty.\n");
+});
+
+test("check-header collapses a carriage return in an error message to one line", () => {
+  const ctx = context();
+  const result = check(ctx, prompt("mode: imaginary\rvalue"));
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, 'error: mode must be one of yolo, write, read-only, not "imaginary value".\n');
   assert.equal(result.stderr, "");
 });
 
 test("check-header errors equal start --from-relay errors for the same prompts", async () => {
-  for (const text of ["hi", prompt("efort: low"), prompt("backend: imaginary"), prompt("network: maybe"), prompt("brief: missing", ""), prompt("", "")]) {
+  for (const text of ["hi", prompt("efort: low"), prompt("backend: imaginary"), prompt("network: maybe"), prompt("", "")]) {
     const ctx = relayContext();
     ctx.append(ctx.prompt(text));
     const checked = check(ctx, text);

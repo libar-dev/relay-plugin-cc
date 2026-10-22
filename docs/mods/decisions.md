@@ -271,18 +271,31 @@ Workflow agent (D42). The docs say when to use which.
 The module's `agent.spawn` hook denies a spawn only when `companion check-header` ran and refused the prompt
 (exit 1 and an `error:` line); a timeout, a crash, a truncated output or a refused process start lets the spawn
 through, because `start --from-relay` runs the same checks and fails the relay as before. It skips a resumed
-agent (its prompt is the resuming message) and a Workflow agent whose prompt is the placeholder a run that keeps
-its script from hooks puts there (`(withheld: this workflow run does not share its script)`, read from the 2.1.308
-binary), since a denied placeholder would refuse a valid job. The deny text is the parser's message alone; Claude
-Code puts `Subagent spawn denied by a plugin: ` or `Workflow agent spawn denied by a plugin: ` before it. Measured:
-a Workflow agent's `agent.spawn` carries the script's prompt as written, not the framed task the relay reads from
+agent (its prompt is the resuming message) and a Workflow agent whose prompt has no `---` line. Claude Code puts a
+placeholder in a Workflow agent's prompt when the run keeps its script from hooks (`(withheld: this workflow run
+does not share its script)` on 2.1.308), and its wording is not an interface; the first version matched that exact
+string, and Opus 5.5's review showed that another build's wording would refuse every relay of such a run. A
+header-less Workflow prompt is still refused, by `start`. The deny text is the parser's message alone; Claude Code
+puts `Subagent spawn denied by a plugin: ` or `Workflow agent spawn denied by a plugin: ` before it. Measured: a
+Workflow agent's `agent.spawn` carries the script's prompt as written, not the framed task the relay reads from
 its transcript, so the check needs no unframing.
 
-### D46. The spawn check resolves relative paths against the spawn's directory (Phase 3 thread)
+### D46. The spawn check leaves relative paths to `start` (Phase 3 thread)
 
-`start` resolves a relative `cd:`, `add-dir:` or `brief:` against the relay's working directory. The hook knows
-only the spawn's (`cwd` when the call names one, else the session's); an agent started with worktree isolation
-runs in a worktree that does not exist yet at the spawn. The two differ only when a path exists in the worktree
-and not in the session's directory, which a worktree cut from the same commit makes rare; the opposite case lets a
-spawn through that `start` then refuses, as today. Rejected: skipping the path checks at the spawn. A wrong
-absolute `cd:` is a common mistake, and it would fail late again.
+`start` resolves a relative `cd:`, `add-dir:` or `brief:` against the relay's working directory, which is not
+known at the spawn: an agent started with worktree isolation runs in a worktree that does not exist yet, and an
+agent spawned with no `cwd` runs in its parent agent's directory, while the module's `$.process.run` defaults to
+the session's. So `check-header` checks absolute paths and leaves relative ones to `start`. The first version
+resolved them against the spawn's directory; both reviewers (GPT-6.1 Sol and Opus 5.5) showed launches it would
+have refused that `start` accepts (a `cd:` that climbs out of a worktree, a brief file that exists only in a
+subagent's worktree). The documented forms are absolute, so the common mistake, a wrong absolute `cd:`, still
+fails at the spawn.
+
+### D47. A TaskStop on a whole Workflow tells the caller which jobs run on (Phase 3 thread)
+
+D42 stands: such a TaskStop cancels nothing, so a resume adopts the jobs. But the relays are gone, so the message
+`cancel` can no longer reach one, and a caller who stopped the run to abandon it would not know its jobs still
+run. Opus 5.5's review raised it. The TaskStop hook finds the run id from the Workflow tool's result in the
+caller's transcript (`taskId` to `runId`), lists that run's jobs that have not ended, and, when there are any,
+tells the caller they keep running for a `resumeFromRunId`, with the command to cancel one. A Workflow without
+relay jobs gets no output.

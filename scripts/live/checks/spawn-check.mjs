@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { analyzeBackends, filesUnder, hasReportLine, inside, jobsUnder, MODELS, readJson, rememberJob,
-  requireVersion, stateBlockJob, textContent, workflowEvidence } from '../lib/evidence.mjs';
+  requireBackend, requireVersion, runSpan, stateBlockJob, textContent, workflowEvidence } from '../lib/evidence.mjs';
 import { opening, ending } from './steer-main.mjs';
 
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
@@ -52,10 +52,16 @@ export default {
   },
   analyze(input, { checkHeaderRunner = checkHeader } = {}) {
     let inventory, metadata, inventoryError;
-    return analyzeBackends(input, this.scope, ({ backend, row, parsed, results, evidence }) => {
+    return analyzeBackends(input, this.scope, ({ backend, row, entries, allEntries, parsed, results, evidence }) => {
       if (!inventory && !inventoryError) {
         try {
+          const started = Date.parse(runSpan(allEntries, input.runId, this.marker).startedAt);
+          const next = allEntries[allEntries.indexOf(entries.at(-1)) + 1];
+          const before = next ? Date.parse(next.timestamp) : Infinity;
+          if (!Number.isFinite(started) || Number.isNaN(before)) throw new Error('Missing run boundary timestamp.');
+          const inRun = time => time >= started && time < before;
           inventory = jobsUnder(input.jobsHome);
+          for (const item of inventory) item.inRun = inRun(Date.parse(item.job.createdAt));
           const session = input.transcript.replace(/\.jsonl$/, '');
           const saved = input.evidenceDir && readJson(path.join(input.evidenceDir, 'run.json'), true);
           const copied = saved?.copy && path.resolve(saved.copy.jobsHome) === path.resolve(input.jobsHome);
@@ -70,7 +76,8 @@ export default {
               rememberJob(input, evidence, item.jobDir, item.job, fs.existsSync(pointer) ? pointer : undefined);
             }
           }
-          const files = filesUnder(path.join(session, 'subagents'), file => /^agent-.*\.meta\.json$/.test(path.basename(file)));
+          const files = filesUnder(path.join(session, 'subagents'), file => /^agent-.*\.meta\.json$/.test(path.basename(file)))
+            .filter(file => inRun(fs.statSync(file).mtimeMs));
           evidence.transcripts.push(...files);
           metadata = files.map(file => readJson(file));
         } catch (error) { inventoryError = error; }
@@ -105,11 +112,12 @@ export default {
       if (job.relay?.workflowRunId !== workflow.runId || job.relay.label !== goodName || job.relay.agentId !== good[0].agentId) {
         throw new Error('Good job belongs to another Workflow run, label or relay.');
       }
+      requireBackend(job, backend);
       if (job.state !== 'completed') throw new Error('Good job is not completed.');
       requireVersion(job.attempts?.at(-1), input.relayVersion);
       if (!hasReportLine(fs.readFileSync(path.join(jobDir, 'report.md'), 'utf8'), `spawn check ok for ${backend}`)) throw new Error('Good report is missing the spawn check line.');
       const goodJobs = new Set(input.backends.map(name => stateBlockJob(input, workflow.result?.[name]?.good, inventory).jobDir));
-      if (inventory.some(item => item.inSession && !goodJobs.has(item.jobDir))) throw new Error('An extra job belongs to this session.');
+      if (inventory.some(item => item.inSession && item.inRun && !goodJobs.has(item.jobDir))) throw new Error('An extra job belongs to this session.');
     });
   },
   cell() { return "refused at the spawn with the parser's message; a valid header runs"; }

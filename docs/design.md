@@ -74,10 +74,10 @@ The keys are `backend`, `model`, `effort`, `mode`, `network`, `web-search`, `fas
   relay exists; Claude Code puts `Subagent spawn denied by a plugin: ` (or `Workflow agent spawn
   denied by a plugin: `) before the message. `start` keeps every check, because it builds the job
   from the same parser, and the hook lets a spawn through when it cannot run the check, when the
-  agent is being resumed (its prompt is then a message), and when a Workflow run keeps its script
-  from hooks (the prompt is then a placeholder). Relative `cd:`, `add-dir:` and `brief:` paths
-  resolve against the spawn's directory; an agent started in an isolated worktree has them checked
-  again by `start` where it runs.
+  agent is being resumed (its prompt is then a message), and when a Workflow agent's prompt has no
+  `---` line (a run that keeps its script from hooks puts a placeholder there). Relative `cd:`,
+  `add-dir:` and `brief:` paths are left to `start`: at the spawn the directory the relay will run
+  in is not known yet (an isolated worktree, or the directory of the agent that spawned it).
 - **`mode` defaults to `yolo`**: no sandbox and no approvals, so that every existing header and
   Workflow script keeps running as it did. A live check (Codex 0.162.0 and Grok Build 1.0.50, on
   macOS) found `write` with `network: true` enough for web search, package installs, git commits
@@ -325,8 +325,9 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   worker still running, is told to the caller and recorded as a relay violation. Claude Code has no
   TaskStop for one agent of a Workflow, and a TaskStop on a whole Workflow cancels nothing: its
   relays end, the jobs run on, and the `resumeFromRunId` that usually follows adopts them, which it
-  never does for a cancelled job. Cancel one Workflow job with the message `cancel` to its relay's
-  agent id, or with `companion cancel`.
+  never does for a cancelled job. The hook tells the caller which of the run's jobs keep running,
+  with the command to cancel one. Cancel one Workflow job while its relay runs with the message
+  `cancel` to the relay's agent id, or at any time with `companion cancel`.
 
 ### Prune
 
@@ -465,6 +466,11 @@ Violations are never removed; `result` and `status` print each as a `relay-viola
   without calling StructuredOutput`), because the harness accepts only a StructuredOutput call
   under `schema`. For structured data, a script hands the `report:` file to a Claude agent that has
   the schema.
+- **A bad header throws.** `agent()` throws `Workflow agent spawn denied by a plugin: <reason>`
+  before a relay starts ([The prompt](#the-prompt)). A script that runs agents in `parallel` catches
+  it per call (`agent(p, opts).catch((error) => ({ refused: error.message }))`), or the whole run
+  fails while the other agents' jobs run on; after fixing the header, a `resumeFromRunId` adopts
+  those jobs instead of starting them again.
 - **The return is the state block.** A workflow subagent's final text is its return value, and a
   small model cannot be trusted to retype a whole report. So the hook adds `--state-only` to its
   `wait` and `result`, and SubagentStop compares its final text with the state block, ignoring

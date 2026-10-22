@@ -1339,6 +1339,18 @@ for (const [name, backends, timings] of [
 }
 
 const stopMutations = [
+  ...[
+    'TaskStop stopped the relay:job agent agent-codex. Its job codex-job had already ended (cancelled); nothing was cancelled.',
+    'TaskStop stopped the relay:job agent agent-codex. The relay hook asked its job codex-job to cancel, and the job has not ended yet:\npending',
+    'TaskStop stopped the relay:job agent agent-codex, and the relay hook could not cancel its job codex-job: failure. The job may still be running. Cancel it with: node "/plugin/scripts/companion.mjs" cancel codex-job'
+  ].map((text, i) => [`${['already-ended', 'pending', 'failed'][i]} hook context`, dir => changeEntries(dir, e => {
+    hookEntry(e).attachment.content = [text];
+  }), /successful hook context/]),
+  ['cancel posted after hook attachment', dir => edit(dir, 'jobs/repo/codex-job/inbox/claimed/cancel-codex.json', m => { m.createdAt = at('00:31.001'); }), /claimed cancel/],
+  ['hook attachment without timestamp', dir => changeEntries(dir, e => { delete hookEntry(e).timestamp; }), /claimed cancel/],
+  ['main-thread companion cancel', dir => changeEntries(dir, e => { e.push(callEntry('manual-cancel', 'Bash', {
+    command: 'node "/plugin with spaces/scripts/companion.mjs" cancel codex-job'
+  }, at('00:31.000'))); }), /Main-thread Bash/],
   ['missing relay', dir => changeEntries(dir, e => e.filter(x => !x.message?.content?.some?.(b => b.id === 'spawn-codex'))), /one relay/],
   ['wrong relay name', dir => changeEntries(dir, e => { callBlock(e, 'spawn-codex').input.name = 'other'; }), /one relay/],
   ['second relay', dir => changeEntries(dir, e => { const c = structuredClone(e[1]), r = structuredClone(e[2]); c.message.content[0].id = 'second'; r.message.content[0].tool_use_id = 'second'; e.push(c, r); }), /one relay/],
@@ -1384,6 +1396,14 @@ test('stop accepts agent id, JSON result fallback and inclusive 15 second cancel
 });
 
 const sessionMutations = [
+  ['missing claudePid', dir => edit(dir, 'run.json', r => { delete r.claudePid; }), /claudePid/],
+  ['pid without start time', dir => edit(dir, 'run.json', r => { delete r.claudePid.startedAt; }), /claudePid/],
+  ['lead transcript entry after sessionEndedAt', dir => changeEntries(dir, e => {
+    e.push(textEntry('assistant', 'Still here.', at('00:30.001')));
+  }), /later than sessionEndedAt/],
+  ['later lead entry outside run scope', dir => changeEntries(dir, e => {
+    e.push(textEntry('user', 'Live suite run later-run.', at('00:30.001')));
+  }), /later than sessionEndedAt/],
   ['missing relay', dir => changeEntries(dir, e => e.filter(x => !x.message?.content?.some?.(b => b.id === 'spawn-codex'))), /one relay/],
   ['wrong relay name', dir => changeEntries(dir, e => { callBlock(e, 'spawn-codex').input.name = 'other'; }), /one relay/],
   ['missing agent id', dir => changeEntries(dir, e => { const r = resultEntry(e, 'spawn-codex'); delete r.toolUseResult; r.message.content[0].content = ''; }), /one relay/],
@@ -1455,8 +1475,8 @@ const spawnMutations = [
   ['good report missing', dir => fs.writeFileSync(path.join(dir, 'jobs/repo/codex-job/report.md'), 'other'), /report/],
   ['another relay version', dir => edit(dir, phaseJob, j => { j.attempts[0].relayVersion = 'other'; }), /relayVersion/],
   ['extra job of this session', dir => extraSpawnJob(dir), /extra job/],
-  ['Agent call outside the run scope', dir => changeEntries(dir, e => { e.splice(1, 0, textEntry('user', 'Live suite run other-run.')); }), /one bad Agent/],
-  ['Workflow outside the run scope', dir => changeEntries(dir, e => { e.splice(3, 0, textEntry('user', 'Live suite run other-run.')); }), /one Workflow/]
+  ['Agent call outside the run scope', dir => changeEntries(dir, e => { e.splice(1, 0, textEntry('user', 'Live suite run other-run.', at('00:00.500'))); }), /one bad Agent/],
+  ['Workflow outside the run scope', dir => changeEntries(dir, e => { e.splice(3, 0, textEntry('user', 'Live suite run other-run.', at('00:04.000'))); }), /one Workflow/]
 ];
 for (const [label, mutate, reason] of spawnMutations) {
   test(`spawn-check rejects ${label}`, t => {
@@ -1531,22 +1551,36 @@ test('spawn-check counts unlabeled failed entries across all four backends', t =
 function sessionDriver(t, failure) {
   const dir = copy(t, 'session-end'), run = { ...read(path.join(dir, 'run.json')), backends: ['codex'], surface: 'terminal',
     relayVersion: '3.0.0-test', transcript: path.join(dir, 'transcript.jsonl'), sessionId: 'fake-session' };
-  delete run.sessionEndedAt; delete run.afterEnd;
-  let clock = Date.parse(at('00:29.000')), saves = [], polls = 0, statusCalls = 0, paneCalls = 0;
+  delete run.sessionEndedAt; delete run.afterEnd; delete run.claudePid;
+  let clock = Date.parse(at('00:29.000')), saves = [], polls = 0, statusCalls = 0, paneCalls = 0, stopped = false;
+  const identity = { pid: 12345, startedAt: 'Thu Oct 22 10:00:00 2026' };
   const ctx = { runId: run.runId, backends: run.backends, run, evidenceDir: dir, jobsHome: path.join(dir, 'jobs'), pluginDir: '/tmp/fake-plugin',
     keep: true, save() { saves.push(structuredClone(run)); write(path.join(dir, 'run.json'), run); },
     async paneDriver(input, check, options) {
-      paneCalls++; assert.equal(input, ctx); assert.equal(check.id, 'session-end'); assert.deepEqual(options, { keep: false });
+      paneCalls++; assert.equal(input, ctx); assert.equal(check.id, 'session-end'); assert.equal(options.keep, false); assert.equal(typeof options.drive, 'function');
       assert.equal(check.completed(readTranscript(run.transcript)), true);
       if (failure === 'missing marker') changeEntries(dir, e => e.slice(0, -1));
       if (failure === 'pane timeout') throw new Error('Timed out waiting for marker.');
+      if (failure !== 'no pid recorded') options.drive(['stop', 'fake-pane']);
     } };
   const dependencies = { now: () => clock, sleep: async ms => { clock += ms; },
-    processRunner: async () => {
+    drive(args) {
+      assert.equal(args[1], 'fake-pane');
+      if (args[0] === 'pid') { assert.equal(stopped, false); return failure === 'missing pid' ? '' : '12345\n'; }
+      assert.equal(args[0], 'stop');
+      if (!['missing pid', 'missing start time'].includes(failure)) {
+        assert.deepEqual(run.claudePid, identity);
+        assert.deepEqual(saves.at(-1).claudePid, identity);
+      }
+      stopped = true;
+    },
+    processRunner({ pid, timeoutMs }) {
+      assert.equal(pid, identity.pid); assert.ok(timeoutMs > 0 && timeoutMs <= 5000);
       assert.equal(run.sessionEndedAt, undefined);
+      if (!stopped) return failure === 'missing start time' ? '' : identity.startedAt;
       polls++;
-      return failure === 'process timeout' || polls <= 4 ? 'claude --session-id fake-session --model sonnet\n' :
-        'claude --session-id fake-session-other\n';
+      return failure === 'process timeout' || polls <= 4 ? identity.startedAt :
+        failure === 'pid reused' ? 'Thu Oct 22 10:00:30 2026' : '';
     },
     companionRunner: async (input, args) => {
       assert.equal(input, ctx); assert.equal(args[0], 'status'); assert.equal(args[1], path.join(dir, 'jobs/repo/codex-job')); assert.equal(args[2], '--json');
@@ -1557,10 +1591,10 @@ function sessionDriver(t, failure) {
       clock = Date.parse(at('02:40.000'));
       return JSON.stringify({ state: 'completed' });
     } };
-  return { ctx, dependencies, state: () => ({ saves, polls, statusCalls, paneCalls }) };
+  return { ctx, dependencies, state: () => ({ saves, polls, statusCalls, paneCalls, stopped }) };
 }
 
-test('session-end runTerminal closes even under keep, waits for process exit, saves observations, waits for jobs and analyzes', async t => {
+test('session-end runTerminal records pid before stop, closes even under keep, waits for process exit, saves observations, waits for jobs and analyzes', async t => {
   const { ctx, dependencies, state } = sessionDriver(t);
   const result = await getCheck('session-end').runTerminal(ctx, dependencies);
   assert.equal(result.results[0].result, 'pass', result.results[0].reason);
@@ -1572,11 +1606,16 @@ test('session-end runTerminal closes even under keep, waits for process exit, sa
 });
 for (const [failure, message] of [
   ['missing marker', /Session ended without LIVE-SESSION-END-READY/], ['pane timeout', /Timed out waiting for marker/],
+  ['missing pid', /Missing Claude pane pid/], ['no pid recorded', /Missing Claude pane pid/],
+  ['missing start time', /Missing Claude process start time/],
   ['process timeout', /Timed out waiting for the Claude process/], ['job timeout', /Timed out waiting for jobs/]
 ]) {
   test(`session-end runTerminal saves and throws on ${failure}`, async t => {
     const { ctx, dependencies, state } = sessionDriver(t, failure);
+    const listeners = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => process.listeners(signal));
     await assert.rejects(getCheck('session-end').runTerminal(ctx, dependencies), message);
+    assert.deepEqual(['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => process.listeners(signal)), listeners);
+    if (failure === 'missing pid' || failure === 'missing start time') assert.equal(state().stopped, true);
     assert.match(state().saves.at(-1).error, message);
     assert.deepEqual(read(path.join(ctx.evidenceDir, 'run.json')), ctx.run);
     if (failure === 'job timeout') assert.equal(ctx.run.afterEnd['agent-codex'].state, 'running');
@@ -1631,4 +1670,125 @@ test('session-end rejects a second relay for the backend', t => {
     entries.push(call, result);
   });
   assert.match(phaseAnalyze('session-end', dir).results[0].reason, /one relay/);
+});
+
+for (const name of ['stop', 'session-end', 'spawn-check']) {
+  for (const field of ['backend', 'model']) {
+    test(`${name} rejects a job with another ${field}`, t => {
+      const dir = copy(t, name);
+      edit(dir, phaseJob, job => { job.request[field] = field === 'backend' ? 'kimi' : MODELS.kimi; });
+      const result = phaseAnalyze(name, dir).results[0];
+      assert.equal(result.result, 'fail');
+      assert.match(result.reason, new RegExp(`Job ${field}`));
+    });
+  }
+}
+
+test('stop accepts cancel posting at the hook attachment timestamp', t => {
+  const dir = copy(t, 'stop');
+  edit(dir, 'jobs/repo/codex-job/inbox/claimed/cancel-codex.json', m => { m.createdAt = at('00:31.000'); });
+  assert.equal(phaseAnalyze('stop', dir).results[0].result, 'pass');
+});
+
+for (const scope of ['before run', 'next run', 'sidechain', 'status command']) {
+  test(`stop ignores companion cancel outside main-thread execution: ${scope}`, t => {
+    const dir = copy(t, 'stop');
+    changeEntries(dir, entries => {
+      const call = callEntry('manual-cancel', 'Bash', {
+        command: scope === 'status command' ? 'node /plugin/scripts/companion.mjs status cancel-job --json' :
+          'node /plugin/scripts/companion.mjs cancel codex-job'
+      }, at('00:31.000'));
+      if (scope === 'before run') entries.unshift(call);
+      else {
+        if (scope === 'next run') entries.push(textEntry('user', 'Live suite run later-run.', at('01:00.000')));
+        if (scope === 'sidechain') call.isSidechain = true;
+        entries.push(call);
+      }
+    });
+    assert.equal(phaseAnalyze('stop', dir).results[0].result, 'pass');
+  });
+}
+
+test('session-end accepts a lead entry at sessionEndedAt and ignores later sidechain entries', t => {
+  const dir = copy(t, 'session-end');
+  changeEntries(dir, entries => {
+    entries.push(textEntry('assistant', 'Ended.', at('00:30.000')),
+      textEntry('assistant', 'Sidechain.', at('00:31.000'), { isSidechain: true }));
+  });
+  assert.equal(phaseAnalyze('session-end', dir).results[0].result, 'pass');
+});
+
+test('session-end runTerminal accepts a reused pid with a different start time and removes handlers', async t => {
+  const { ctx, dependencies } = sessionDriver(t, 'pid reused');
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'], listeners = signals.map(signal => process.listeners(signal));
+  const result = await getCheck('session-end').runTerminal(ctx, dependencies);
+  assert.equal(result.results[0].result, 'pass', result.results[0].reason);
+  assert.equal(ctx.run.sessionEndedAt, at('00:30.000'));
+  assert.deepEqual(signals.map(signal => process.listeners(signal)), listeners);
+});
+
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  for (const stage of ['process wait', 'observation delay', 'job wait']) {
+    test(`session-end runTerminal handles ${signal} during ${stage} after pane close and removes handlers`, async t => {
+      const { ctx, dependencies, state } = sessionDriver(t);
+      const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'], listeners = signals.map(name => process.listeners(name));
+      const sleep = dependencies.sleep;
+      let signalled = false;
+      dependencies.sleep = async ms => {
+        const ready = stage === 'process wait' ? !ctx.run.sessionEndedAt :
+          stage === 'observation delay' ? ctx.run.sessionEndedAt && !ctx.run.afterEnd : state().statusCalls >= 2;
+        if (ready && !signalled) {
+          assert.equal(state().stopped, true);
+          signalled = true; process.emit(signal);
+        }
+        await sleep(ms);
+      };
+      await assert.rejects(getCheck('session-end').runTerminal(ctx, dependencies), { message: 'Interrupted.' });
+      assert.equal(signalled, true);
+      assert.equal(ctx.run.interrupted, true);
+      assert.equal(read(path.join(ctx.evidenceDir, 'run.json')).interrupted, true);
+      assert.deepEqual(signals.map(name => process.listeners(name)), listeners);
+    });
+  }
+}
+
+for (const artifact of ['job', 'meta file']) {
+  for (const boundary of ['before run', 'at run start', 'inside run', 'at next run', 'after next run']) {
+    test(`spawn-check scopes an earlier session's ${artifact}: ${boundary}`, t => {
+      const dir = copy(t, 'spawn-check');
+      changeEntries(dir, entries => {
+        entries.unshift(textEntry('user', 'Live suite run earlier-run.', '2026-10-22T09:59:00.000Z'));
+        entries.push(textEntry('user', 'Live suite run next-run.', at('01:00.000')));
+      });
+      const when = { 'before run': '2026-10-22T09:59:59.999Z', 'at run start': at('00:00.000'),
+        'inside run': at('00:10.000'), 'at next run': at('01:00.000'), 'after next run': at('01:00.001') }[boundary];
+      if (artifact === 'job') {
+        extraSpawnJob(dir);
+        edit(dir, 'jobs/repo/extra-job/job.json', job => { job.createdAt = when; job.relay.workflowRunId = 'wf-earlier'; });
+      } else {
+        const file = path.join(dir, 'transcript/subagents/agent-earlier.meta.json');
+        write(file, { name: 'spawn-bad-codex' });
+        fs.utimesSync(file, new Date(when), new Date(when));
+      }
+      const result = phaseAnalyze('spawn-check', dir).results[0];
+      if (boundary === 'at run start' || boundary === 'inside run') {
+        assert.equal(result.result, 'fail'); assert.match(result.reason, artifact === 'job' ? /extra job/ : /meta file/);
+      } else assert.equal(result.result, 'pass', result.reason);
+    });
+  }
+}
+
+
+test('session-end runTerminal reports Interrupted when a signalled process read rejects', async t => {
+  const { ctx, dependencies, state } = sessionDriver(t);
+  const processRunner = dependencies.processRunner;
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'], listeners = signals.map(signal => process.listeners(signal));
+  dependencies.processRunner = options => {
+    if (!state().stopped) return processRunner(options);
+    process.emit('SIGTERM');
+    throw new Error('Process read interrupted.');
+  };
+  await assert.rejects(getCheck('session-end').runTerminal(ctx, dependencies), { message: 'Interrupted.' });
+  assert.equal(ctx.run.interrupted, true);
+  assert.deepEqual(signals.map(signal => process.listeners(signal)), listeners);
 });

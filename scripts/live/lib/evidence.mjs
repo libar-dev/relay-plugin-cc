@@ -504,6 +504,11 @@ export function oneRelay(parsed, backend, prefix) {
   return spawns[0];
 }
 
+export function requireBackend(job, backend) {
+  if (job.request?.backend !== backend) throw new Error(`Job backend is not ${backend}.`);
+  if (job.request?.model !== MODELS[backend]) throw new Error(`Job model is not ${MODELS[backend]}.`);
+}
+
 export function lastActiveAttempt(job, at, version, { endedAtBoundary = false } = {}) {
   const time = Date.parse(at), attempts = job.attempts ?? [];
   const active = attempts.filter(attempt => Date.parse(attempt.startedAt) < time &&
@@ -521,11 +526,12 @@ export function inboxMessages(jobDir) {
 
 export function analyzeBackends(input, scope, inspect) {
   const evidence = { transcripts: [path.resolve(input.transcript)], agents: [] }, details = [];
-  const entries = (scope ?? scopeToRun)(readTranscript(input.transcript), input.runId);
+  const allEntries = readTranscript(input.transcript);
+  const entries = (scope ?? scopeToRun)(allEntries, input.runId);
   const parsed = transcriptCalls(entries), results = toolResults(entries);
   for (const backend of input.backends) {
     const row = { backend, model: MODELS[backend], relayVersion: input.relayVersion, timings: {}, pass: false };
-    try { inspect({ backend, row, entries, parsed, results, evidence }); row.pass = true; }
+    try { inspect({ backend, row, entries, allEntries, parsed, results, evidence }); row.pass = true; }
     catch (error) { row.error = error.message; }
     details.push(row);
   }

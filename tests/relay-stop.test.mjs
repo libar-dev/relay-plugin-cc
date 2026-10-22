@@ -143,11 +143,13 @@ test("TaskStop records a cancel violation when cancel cannot read the job's repo
   assert.ok(context(output).includes(violation.reason.slice(FAILED.length)));
 });
 
-for (const scenario of ["cancel still running", "spawn error", "signal"]) {
+for (const scenario of ["cancel still running on stdout", "cancel still running on stderr", "exit 4 before a cancel was posted", "spawn error", "signal"]) {
   test(`TaskStop records a violation and recovery command for ${scenario}`, t => {
     const { ctx, dir, jobId } = recorded();
     const results = {
-      "cancel still running": { status: 4, stdout: "state: running\n", stderr: "cancel is\n  with a newer worker\n" },
+      "cancel still running on stdout": { status: 4, stdout: "state: running\ncancel: the cancel is with its newer worker\n", stderr: "" },
+      "cancel still running on stderr": { status: 4, stdout: "state: running\n", stderr: "the cancel is with its\n  newer worker\n" },
+      "exit 4 before a cancel was posted": { status: 4, stdout: "", stderr: "The job record is busy.\n" },
       "spawn error": { status: null, error: new Error("spawn failed"), stdout: "", stderr: "" },
       signal: { status: null, signal: "SIGTERM", stdout: "", stderr: "" }
     };
@@ -168,9 +170,9 @@ for (const scenario of ["cancel still running", "spawn error", "signal"]) {
     assert.equal(violation.kind, "cancel");
     assert.equal(violation.agentId, ctx.agentId);
     assert.equal(readJob(dir).state, "running");
-    if (scenario === "cancel still running") {
-      assert.equal(violation.reason, "TaskStop stopped the relay, and the cancel had not ended the job: cancel is with a newer worker");
-      assert.ok(context(output).includes("state: running\ncancel is\n  with a newer worker\n"));
+    if (scenario.startsWith("cancel still running")) {
+      assert.equal(violation.reason, `TaskStop stopped the relay, and the cancel had not ended the job: ${results[scenario].stderr.replace(/\s+/g, " ").trim()}`);
+      assert.ok(context(output).includes(results[scenario].stdout + results[scenario].stderr));
       assert.ok(context(output).endsWith(`Check it with: node "${COMPANION}" status ${jobId}`));
     } else {
       assert.ok(violation.reason.startsWith(FAILED));
@@ -179,6 +181,114 @@ for (const scenario of ["cancel still running", "spawn error", "signal"]) {
     }
   });
 }
+
+for (const [code, status] of [["EACCES", 1], ["ENOSPC", 4]]) {
+  test(`TaskStop returns the cancel warning when recording its violation fails with ${code}`, t => {
+    const { ctx, dir, jobId } = recorded();
+    const mocked = t.mock.method(childProcess, "spawnSync", () => ({ status, stdout: "", stderr:
+      status === 4 ? "the cancel is with its newer worker" : "cancel failed" }));
+    syncBuiltinESMExports();
+    t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+    const append = t.mock.method(fs, "appendFileSync", file => {
+      assert.equal(file, path.join(dir, "relay-violations.jsonl"));
+      throw Object.assign(new Error(`${code}: cannot append violation`), { code });
+    });
+    const output = handleTaskStop(input(ctx), ctx.env);
+    assert.equal(append.mock.callCount(), 1);
+    assert.ok(context(output).includes(jobId));
+    assert.match(context(output), status === 4 ? /asked its job .* to cancel/ : /could not cancel its job/);
+    assert.ok(context(output).includes(`node "${COMPANION}" ${status === 4 ? "status" : "cancel"} ${jobId}`));
+    assert.ok(context(output).includes(`The cancel violation could not be recorded: ${code}: cannot append violation.`));
+    assert.equal(fs.existsSync(path.join(dir, "relay-violations.jsonl")), false);
+    assert.equal(readJob(dir).state, "running");
+  });
+}
+
+// The toolUseResult cut from probe-run-2/session's Workflow result, with paths replaced.
+const WORKFLOW_RESULT = { toolUseResult: {
+  status: "async_launched", taskId: "wceoygoi3", taskType: "local_workflow", workflowName: "p3-probe-deny",
+  runId: "wf_6cfd5d48-93f", summary: "Phase 3 probe: a denied and a valid relay spawn",
+  transcriptDir: "/fixture/session/subagents/workflows/wf_6cfd5d48-93f",
+  scriptPath: "/fixture/session/workflows/scripts/p3-probe-deny-wf_6cfd5d48-93f.js"
+} };
+const WORKFLOW_RUN = WORKFLOW_RESULT.toolUseResult.runId;
+
+function workflowStop(ctx) {
+  const transcript = path.join(ctx.work, "caller.jsonl");
+  fs.writeFileSync(transcript, `${JSON.stringify(WORKFLOW_RESULT)}\n`);
+  return input(ctx, { transcript_path: transcript, tool_input: { task_id: "wceoygoi3" },
+    tool_response: { task_id: "wceoygoi3", task_type: "local_workflow" } });
+}
+
+function workflowJob(ctx, id, state, runId = WORKFLOW_RUN, work = ctx.work) {
+  const { jobDir } = createJobDir(work, id, ctx.env);
+  writeJob(jobDir, { id, state, attempts: [], relay: { agentId: `agent-${id}`, workflowRunId: runId } });
+  return jobDir;
+}
+
+test("TaskStop reports only nonterminal jobs of the stopped Workflow run without cancelling", t => {
+  const { ctx } = recorded();
+  const event = workflowStop(ctx);
+  workflowJob(ctx, "job-workflow-one", "running");
+  const otherWork = path.join(ctx.work, "other-repo");
+  fs.mkdirSync(otherWork);
+  const second = workflowJob(ctx, "job-workflow-two", "starting", "old-run", otherWork);
+  // A resumed binding in relay.json takes precedence over the run in job.json.
+  writeJsonAtomic(jobPaths(second).relay, { agentId: "new-agent", workflowRunId: WORKFLOW_RUN });
+  for (const state of TERMINAL_STATES) workflowJob(ctx, `job-ended-${state}`, state);
+  workflowJob(ctx, "job-other-run", "running", "other-run");
+  const before = diskTree(ctx.home);
+  const cancel = t.mock.method(childProcess, "spawnSync", () => { throw new Error("Workflow jobs must not be cancelled"); });
+  syncBuiltinESMExports();
+  t.after(() => { cancel.mock.restore(); syncBuiltinESMExports(); });
+  const output = handleTaskStop(event, ctx.env);
+  assert.equal(output.hookSpecificOutput.hookEventName, "PostToolUse");
+  const listed = context(output).match(/adopts them: ([^.]+)\./)[1].split(", ");
+  assert.deepEqual(listed.sort(), ["job-workflow-one", "job-workflow-two"]);
+  assert.ok(context(output).startsWith(`TaskStop stopped Workflow run ${WORKFLOW_RUN}. Its 2 relay job(s) keep running, so a resumeFromRunId adopts them: `));
+  assert.ok(context(output).endsWith(`To abandon one: node "${COMPANION}" cancel <job>.`));
+  assert.equal(cancel.mock.callCount(), 0);
+  assert.deepEqual(diskTree(ctx.home), before);
+});
+
+for (const scenario of ["no running jobs", "task absent from transcript", "unreadable transcript"]) {
+  test(`TaskStop ignores a Workflow with ${scenario}`, () => {
+    const { ctx } = recorded();
+    const event = workflowStop(ctx);
+    for (const state of TERMINAL_STATES) workflowJob(ctx, `job-ended-${state}`, state);
+    workflowJob(ctx, "job-other-run", "running", "other-run");
+    if (scenario !== "no running jobs") workflowJob(ctx, "job-running", "running");
+    if (scenario === "task absent from transcript") {
+      event.tool_response.task_id = "unknown-task";
+      event.tool_input.task_id = "unknown-task";
+    }
+    if (scenario === "unreadable transcript") event.transcript_path = ctx.work;
+    const before = diskTree(ctx.home);
+    assert.equal(handleTaskStop(event, ctx.env), null);
+    assert.deepEqual(diskTree(ctx.home), before);
+  });
+}
+
+test("TaskStop finds a Workflow run in agent_transcript_path before transcript_path", () => {
+  const { ctx } = recorded();
+  const event = workflowStop(ctx);
+  workflowJob(ctx, "job-agent-run", "running");
+  workflowJob(ctx, "job-session-run", "running", "session-run");
+  event.agent_transcript_path = path.join(ctx.work, "agent.jsonl");
+  fs.copyFileSync(event.transcript_path, event.agent_transcript_path);
+  fs.writeFileSync(event.transcript_path, JSON.stringify({ toolUseResult: { ...WORKFLOW_RESULT.toolUseResult, runId: "session-run" } }));
+  event.tool_response = JSON.stringify(event.tool_response);
+  const output = handleTaskStop(event, ctx.env);
+  assert.ok(context(output).includes(`Workflow run ${WORKFLOW_RUN}`));
+  assert.ok(context(output).includes("job-agent-run"));
+  assert.ok(!context(output).includes("job-session-run"));
+  // A supplied caller transcript is authoritative even when it cannot be read or has no match.
+  event.agent_transcript_path = ctx.work;
+  assert.equal(handleTaskStop(event, ctx.env), null);
+  event.agent_transcript_path = path.join(ctx.work, "agent.jsonl");
+  fs.writeFileSync(event.agent_transcript_path, "");
+  assert.equal(handleTaskStop(event, ctx.env), null);
+});
 
 test("TaskStop ignores other tools, other hook events and inputs without an agent", () => {
   const { ctx } = recorded();
