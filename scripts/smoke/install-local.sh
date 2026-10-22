@@ -46,6 +46,15 @@ fi
 RELAY_SMOKE_CONFIG=$(node -e 'const p = require("node:path"), fs = require("node:fs"); const dir = p.resolve(process.env.CLAUDE_CONFIG_DIR || p.join(require("node:os").homedir(), ".claude")); console.log(fs.existsSync(dir) ? fs.realpathSync(dir) : dir)')
 export RELAY_SMOKE_CONFIG
 if [[ -n ${CLAUDE_CONFIG_DIR:-} ]]; then export CLAUDE_CONFIG_DIR=$RELAY_SMOKE_CONFIG; fi
+# Resolve user state before changing cwd; project files never supply the receipt.
+RELAY_SMOKE_RECEIPT=$(node - "$dir" <<'NODE'
+const path = require('node:path'), os = require('node:os'), { createHash } = require('node:crypto');
+const state = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local/state');
+const hash = createHash('sha256').update(process.argv[2]).digest('hex');
+console.log(path.resolve(state, 'relay-plugin-cc/smoke-installs', `${hash}.json`));
+NODE
+)
+export RELAY_SMOKE_RECEIPT
 node - "$dir" <<'NODE'
 // A refusal is one line for the person, not a stack trace.
 process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
@@ -56,12 +65,18 @@ const read = file => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf
 if (dir === home || dir === (fs.existsSync(config) ? fs.realpathSync(config) : config)) {
   throw new Error('Refusing to install in HOME or the Claude config directory.');
 }
+for (const name of ['.claude', '.claude/settings.local.json']) {
+  if (fs.lstatSync(path.join(dir, name), { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw new Error(`Refusing project symlink: ${name}`);
+  }
+}
 const entries = read(path.join(config, 'plugins/installed_plugins.json')).plugins?.['relay@relay-smoke'] ?? [];
 const settings = read(path.join(dir, '.claude/settings.local.json'));
 if (entries.some(e => e.projectPath && path.resolve(e.projectPath) === dir) ||
     Object.hasOwn(settings.enabledPlugins ?? {}, 'relay@relay-smoke') ||
     Object.hasOwn(settings.extraKnownMarketplaces ?? {}, 'relay-smoke') ||
-    fs.existsSync(path.join(dir, '.claude/relay-smoke-local.json'))) {
+    fs.lstatSync(process.env.RELAY_SMOKE_RECEIPT, { throwIfNoEntry: false }) ||
+    fs.lstatSync(path.join(dir, '.claude/relay-smoke-local.json'), { throwIfNoEntry: false })) {
   throw new Error('relay@relay-smoke is already installed here. Run uninstall-local.sh first.');
 }
 if (entries.length || read(path.join(config, 'plugins/known_marketplaces.json'))['relay-smoke']) {
@@ -70,18 +85,19 @@ if (entries.length || read(path.join(config, 'plugins/known_marketplaces.json'))
 NODE
 sha=$(git -C "$repo" rev-parse --verify --end-of-options "${ref}^{commit}")
 short_sha=${sha:0:12}
-mkt=$(mktemp -d "${TMPDIR:-/tmp}/relay-smoke-mkt-${short_sha}-XXXXXX")
+temp_dir=$(cd -- "${TMPDIR:-/tmp}" && pwd -P)
+mkt=$(mktemp -d "$temp_dir/relay-smoke-mkt-${short_sha}-XXXXXX")
 mkdir -p "$mkt/relay" "$mkt/.claude-plugin"
 if [[ $worktree == true ]]; then
   tar -C "$repo/plugins/relay" --exclude='./.claude-plugin/types' --exclude='./tsconfig.json' -cf - . | tar -C "$mkt/relay" -xf -
 else
   git -C "$repo" archive "$sha" plugins/relay | tar -C "$mkt/relay" --strip-components=2 -xf -
 fi
-node - "$mkt" "$dir" <<'NODE'
+node - "$mkt" "$dir" "$temp_dir" <<'NODE'
 // A refusal is one line for the person, not a stack trace.
 process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path');
-const [mkt, dir] = process.argv.slice(2);
+const [mkt, dir, tempDirectory] = process.argv.slice(2);
 const plugin = JSON.parse(fs.readFileSync(path.join(mkt, 'relay/.claude-plugin/plugin.json'), 'utf8'));
 if (plugin.name !== 'relay' || !plugin.version) throw new Error('Export is not a versioned relay plugin.');
 fs.writeFileSync(path.join(mkt, '.claude-plugin/marketplace.json'), JSON.stringify({
@@ -92,9 +108,12 @@ const createdClaudeDirectory = !fs.existsSync(path.join(dir, '.claude'));
 fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
 const file = path.join(dir, '.claude/settings.local.json');
 const settings = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-fs.writeFileSync(path.join(dir, '.claude/relay-smoke-local.json'), JSON.stringify({
+const receipt = process.env.RELAY_SMOKE_RECEIPT;
+fs.mkdirSync(path.dirname(receipt), { recursive: true, mode: 0o700 });
+fs.chmodSync(path.dirname(receipt), 0o700);
+fs.writeFileSync(receipt, JSON.stringify({
   tool: 'relay-plugin-cc/scripts/smoke/install-local.sh',
-  config: process.env.RELAY_SMOKE_CONFIG,
+  dir, tempDirectory, config: process.env.RELAY_SMOKE_CONFIG,
   marketplace: mkt, createdMarketplace: true,
   cacheExisted: fs.existsSync(path.join(process.env.RELAY_SMOKE_CONFIG, 'plugins/cache/relay-smoke')),
   createdCache: false,
@@ -102,7 +121,7 @@ fs.writeFileSync(path.join(dir, '.claude/relay-smoke-local.json'), JSON.stringif
   hadPreviousRelay: Object.hasOwn(settings.enabledPlugins ?? {}, 'relay@libar-relay'),
   previousRelay: settings.enabledPlugins?.['relay@libar-relay'] ?? null,
   addedMarketplace: false, installedPlugin: false, disabledRelay: false
-}, null, 2) + '\n');
+}, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
 console.log(`Exported relay ${plugin.version} to ${mkt}`);
 NODE
 printf 'Source: %s at %s\n' "$repo" "$sha"
@@ -114,7 +133,7 @@ fi
 printf 'Undo: %q %q\n' "$script_dir/uninstall-local.sh" "$dir"
 cd -- "$dir"
 record_step() {
-  node - "$dir/.claude/relay-smoke-local.json" "$1" <<'NODE'
+  node - "$RELAY_SMOKE_RECEIPT" "$1" <<'NODE'
 // A refusal is one line for the person, not a stack trace.
 process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs');

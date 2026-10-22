@@ -18,51 +18,100 @@ fi
 RELAY_SMOKE_CONFIG=$(node -e 'const p = require("node:path"), fs = require("node:fs"); const dir = p.resolve(process.env.CLAUDE_CONFIG_DIR || p.join(require("node:os").homedir(), ".claude")); console.log(fs.existsSync(dir) ? fs.realpathSync(dir) : dir)')
 export RELAY_SMOKE_CONFIG
 if [[ -n ${CLAUDE_CONFIG_DIR:-} ]]; then export CLAUDE_CONFIG_DIR=$RELAY_SMOKE_CONFIG; fi
+# Resolve user state before changing cwd; project files never supply the receipt.
+RELAY_SMOKE_RECEIPT=$(node - "$dir" <<'NODE'
+const path = require('node:path'), os = require('node:os'), { createHash } = require('node:crypto');
+const state = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local/state');
+const hash = createHash('sha256').update(process.argv[2]).digest('hex');
+console.log(path.resolve(state, 'relay-plugin-cc/smoke-installs', `${hash}.json`));
+NODE
+)
+export RELAY_SMOKE_RECEIPT
+marketplace_guard=$(cat <<'NODE'
+function marketplaceProblem(saved, installLocation) {
+  const mkt = saved.marketplace, temp = saved.tempDirectory;
+  if (typeof mkt !== 'string' || !path.isAbsolute(mkt) || mkt !== installLocation) {
+    return 'receipt path does not match the registered relay-smoke installLocation';
+  }
+  if (typeof temp !== 'string' || !path.isAbsolute(temp) || path.dirname(mkt) !== temp ||
+      !path.basename(mkt).startsWith('relay-smoke-mkt-')) {
+    return 'path is not a relay-smoke-mkt-* direct child of the recorded temp directory';
+  }
+  try {
+    if (fs.realpathSync(temp) !== temp || fs.realpathSync(mkt) !== mkt) {
+      return 'marketplace or temp directory resolves to a different path';
+    }
+    const manifest = path.join(mkt, '.claude-plugin/marketplace.json');
+    if (JSON.parse(fs.readFileSync(manifest, 'utf8')).name !== 'relay-smoke') {
+      return 'marketplace manifest name is not relay-smoke';
+    }
+  } catch {
+    return 'marketplace directory or manifest is missing or unreadable';
+  }
+  return null;
+}
+NODE
+)
+# Feed the same guard to both checks without reading executable code from the project.
+cleanup_node() {
+  { printf '%s\n' "$marketplace_guard"; cat; } | node - "$@"
+}
 # Require ownership evidence before any mutation or Claude command.
-state=$(node - "$dir" <<'NODE'
+state=$(cleanup_node "$dir" <<'NODE'
 // A refusal is one line for the person, not a stack trace.
 process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const dir = process.argv[2], home = fs.realpathSync(os.homedir()), config = process.env.RELAY_SMOKE_CONFIG;
 if (dir === home || dir === config) throw new Error('Refusing HOME or the Claude config directory.');
 const read = file => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+if (fs.lstatSync(path.join(dir, '.claude/relay-smoke-local.json'), { throwIfNoEntry: false })) {
+  throw new Error('Legacy project install receipt found; leaving it and changing nothing.');
+}
+for (const name of ['.claude', '.claude/settings.local.json']) {
+  if (fs.lstatSync(path.join(dir, name), { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw new Error(`Refusing project symlink: ${name}`);
+  }
+}
 const entries = read(path.join(config, 'plugins/installed_plugins.json')).plugins?.['relay@relay-smoke'] ?? [];
 const marketplace = read(path.join(config, 'plugins/known_marketplaces.json'))['relay-smoke'];
 const settings = read(path.join(dir, '.claude/settings.local.json'));
-const marker = path.join(dir, '.claude/relay-smoke-local.json');
+const marker = process.env.RELAY_SMOKE_RECEIPT;
 const saved = read(marker);
 if (saved.tool !== 'relay-plugin-cc/scripts/smoke/install-local.sh') {
-  console.error('No valid install receipt. Found: ' + JSON.stringify({
+  throw new Error('No valid install receipt; refusing to change anything. Found: ' + JSON.stringify({
     receipt: fs.existsSync(marker), installations: entries, marketplace: marketplace ?? null,
     enabledPlugins: settings.enabledPlugins ?? {}, extraKnownMarketplaces: settings.extraKnownMarketplaces ?? {},
     cache: fs.existsSync(path.join(config, 'plugins/cache/relay-smoke'))
   }));
-  throw new Error('Refusing to change anything without this tool\'s install receipt.');
 }
+if (saved.dir !== dir) throw new Error('Receipt is for a different DIR; refusing to change anything.');
 if (saved.config !== config) throw new Error('Receipt uses a different Claude config directory; use the original CLAUDE_CONFIG_DIR.');
 for (const key of ['createdMarketplace', 'createdCache', 'createdSettingsFile', 'createdClaudeDirectory',
   'hadPreviousRelay', 'addedMarketplace', 'installedPlugin', 'disabledRelay']) {
   if (typeof saved[key] !== 'boolean') throw new Error(`Invalid receipt field: ${key}`);
 }
-if (typeof saved.marketplace !== 'string' || !path.isAbsolute(saved.marketplace) ||
-    !path.basename(saved.marketplace).startsWith('relay-smoke-mkt-')) throw new Error('Invalid marketplace receipt path.');
 if (entries.some(e => e.scope !== 'local' || !e.projectPath || path.resolve(e.projectPath) !== dir)) {
   throw new Error('relay-smoke has an installation outside this directory; refusing to remove its marketplace.');
 }
+const problem = saved.createdMarketplace || saved.addedMarketplace
+  ? marketplaceProblem(saved, marketplace?.installLocation) : null;
+if (problem) console.error(`Leaving scratch marketplace: ${problem}.`);
 console.log(saved.installedPlugin && entries.length ? 'installed' : 'absent');
-console.log(saved.addedMarketplace && marketplace ? 'marketplace' : 'absent');
+console.log(saved.addedMarketplace && marketplace && !problem ? 'marketplace' : 'absent');
+console.log(JSON.stringify({ saved, installLocation: marketplace?.installLocation, marketplaceVerified: !problem }));
 NODE
 )
+mapfile -t steps <<< "$state"
 cd -- "$dir"
-if [[ $state == installed$'\n'* ]]; then claude plugin uninstall relay@relay-smoke --scope local; fi
-if [[ $state == *$'\n'marketplace ]]; then claude plugin marketplace remove relay-smoke; fi
-node - "$dir" <<'NODE'
+if [[ ${steps[0]} == installed ]]; then claude plugin uninstall relay@relay-smoke --scope local; fi
+if [[ ${steps[1]} == marketplace ]]; then claude plugin marketplace remove relay-smoke; fi
+cleanup_node "$dir" "${steps[2]}" <<'NODE'
 // A refusal is one line for the person, not a stack trace.
 process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path');
 const dir = process.argv[2], file = path.join(dir, '.claude/settings.local.json');
-const marker = path.join(dir, '.claude/relay-smoke-local.json');
-const saved = JSON.parse(fs.readFileSync(marker, 'utf8'));
+const marker = process.env.RELAY_SMOKE_RECEIPT;
+const { saved, installLocation, marketplaceVerified } = JSON.parse(process.argv[3]);
 if (fs.existsSync(file)) {
   const original = fs.readFileSync(file, 'utf8'), settings = JSON.parse(original);
   const before = JSON.stringify(settings);
@@ -81,8 +130,14 @@ if (fs.existsSync(file)) {
   if (saved.createdSettingsFile && !Object.keys(settings).length) fs.rmSync(file);
   else if (JSON.stringify(settings) !== before) fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
 }
-if (saved.createdCache) fs.rmSync(path.join(saved.config, 'plugins/cache/relay-smoke'), { recursive: true, force: true });
-if (saved.createdMarketplace) fs.rmSync(saved.marketplace, { recursive: true, force: true });
+if (saved.createdCache) {
+  fs.rmSync(path.join(process.env.RELAY_SMOKE_CONFIG, 'plugins/cache/relay-smoke'), { recursive: true, force: true });
+}
+if (saved.createdMarketplace && marketplaceVerified && fs.existsSync(saved.marketplace)) {
+  const problem = marketplaceProblem(saved, installLocation);
+  if (problem) console.error(`Leaving scratch marketplace: ${problem}.`);
+  else fs.rmSync(saved.marketplace, { recursive: true, force: true });
+}
 fs.rmSync(marker);
 const local = path.join(dir, '.claude');
 if (saved.createdClaudeDirectory && fs.readdirSync(local).length === 0) fs.rmdirSync(local);

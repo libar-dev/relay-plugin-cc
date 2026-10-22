@@ -313,7 +313,9 @@ every other session there, the one that starts the test included, keeps the rele
 - `scripts/smoke/install-local.sh <dir>` installs `HEAD`'s `plugins/relay` (`--worktree` adds
   uncommitted edits) as `relay@relay-smoke` for `<dir>` only. It adds a scratch marketplace and
   installs, and disables `relay@libar-relay`, at local scope, so only a session started in `<dir>`
-  loads the build. `scripts/smoke/uninstall-local.sh <dir>` removes it.
+  loads the build. `scripts/smoke/uninstall-local.sh <dir>` undoes it. The install's receipt is kept
+  in `${XDG_STATE_HOME:-$HOME/.local/state}/relay-plugin-cc/smoke-installs/`, never in `<dir>`, so
+  nothing in a project folder can make the uninstall delete anything outside it.
 - `scripts/smoke/pane.sh` runs that session in tmux on a private socket, so an agent can start it,
   type prompts and read the screen (`start`, `send`, `read`, `wait`, `trust`, `stop`).
   `pane.sh attach-command <name>` prints the line to watch it.
