@@ -45,6 +45,7 @@ function interruptionGuard(run, save) {
   const controller = new AbortController();
   const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => {
     const handler = () => {
+      if (!run.interrupted) console.error(`${signal}: stopping the run; its setup jobs are cancelled before the runner exits.`);
       run.interrupted = true;
       run.interruptedBy ??= signal;
       save();

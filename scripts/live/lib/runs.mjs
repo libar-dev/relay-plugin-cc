@@ -65,13 +65,23 @@ export function pluginCommit(pluginDir) {
     const commit = git(['rev-parse', 'HEAD']);
     const dirty = git(['status', '--porcelain', '--', path.resolve(pluginDir)]);
     return commit.slice(0, 12) + (dirty ? '-dirty' : '');
-  } catch { return null; }
+  } catch {
+    // An export (a smoke install, the plugin cache) is no git work tree; install-local.sh stamped it.
+    try {
+      const commit = readJson(path.join(pluginDir, '.claude-plugin/build.json')).commit;
+      return typeof commit === 'string' && /^[a-f0-9]{12}(-dirty)?$/.test(commit) ? commit : null;
+    } catch { return null; }
+  }
+}
+
+// The cancel grace as the companion reads RELAY_JOBS_CANCEL_GRACE_MS.
+export function cancelGrace(env = process.env) {
+  const value = Number(env.RELAY_JOBS_CANCEL_GRACE_MS);
+  return Number.isFinite(value) && value >= 0 ? value : 10000;
 }
 
 export function cancelTimeout(env = process.env) {
-  const value = Number(env.RELAY_JOBS_CANCEL_GRACE_MS);
-  const grace = Number.isFinite(value) && value >= 0 ? value : 10000;
-  return Math.min(600000, 2 * grace + 40000);
+  return Math.min(600000, 2 * cancelGrace(env) + 40000);
 }
 
 export async function cancelUnfinishedJobs(run, { env = process.env, execute = promisify(execFile) } = {}) {
@@ -99,7 +109,8 @@ export async function cancelUnfinishedJobs(run, { env = process.env, execute = p
     const receipt = { jobId, status: 'cancelled' };
     try {
       await execute(process.execPath, [path.join(run.pluginDir, 'scripts/companion.mjs'), 'cancel', jobId],
-        { cwd: run.workDir, env: { ...env, RELAY_JOBS_HOME: run.jobsHome }, timeout: cancelTimeout(env), encoding: 'utf8' });
+        // Its own process group: a Ctrl-C at the runner's terminal must not kill a cancel under way.
+        { cwd: run.workDir, env: { ...env, RELAY_JOBS_HOME: run.jobsHome }, timeout: cancelTimeout(env), encoding: 'utf8', detached: true });
     } catch (error) {
       receipt.status = 'failed';
       receipt.error = error.message;

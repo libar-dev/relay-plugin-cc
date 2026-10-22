@@ -13,8 +13,10 @@ export function commandPrompt(runId, marker) {
 export async function setupJobs(ctx, running, { env = process.env, execute = promisify(execFile),
   pause = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now, signal } = {}) {
   const companion = path.join(ctx.pluginDir, 'scripts/companion.mjs');
+  // Each companion runs in its own process group, so a Ctrl-C at the runner's terminal cannot kill a
+  // start before it prints the job it made, nor a cancel the cleanup depends on.
   const options = { cwd: ctx.workDir, env: { ...sessionEnvironment(env).env, RELAY_JOBS_HOME: ctx.jobsHome },
-    encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024 };
+    encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024, detached: true };
   ctx.run.setup = { jobs: {}, decoys: {} };
   const started = [];
   const remember = (stdout, backend, kind, decoy) => {

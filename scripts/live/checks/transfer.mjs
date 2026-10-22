@@ -37,7 +37,9 @@ export default {
       try {
         if (rows.length !== 2) throw new Error('Expected status and transfer commands.');
         const status = requireCommand(rows[0], '/relay:status');
-        Object.assign(result, statusBuild(status));
+        const build = statusBuild(status);
+        // A --plugin-dir build prints no commit; the run's own commit names it then.
+        Object.assign(result, { relayVersion: build.relayVersion, relayCommit: build.relayCommit ?? input.run.relayCommit ?? null });
         requireBuild(status, input.run);
         const { verbatim } = requireCommand(rows[1], '/relay:transfer');
         const id = verbatim.match(/^Codex session ID: ([A-Za-z0-9-]+)$/m)?.[1];

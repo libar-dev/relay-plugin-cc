@@ -539,8 +539,9 @@ test('terminal argv includes every plugin, the session bypass setting and model,
   const expected = ['claude', '--plugin-dir', '/tmp/relay', '--plugin-dir', '/tmp/probe one', '--plugin-dir', '/tmp/probe-two',
     '--dangerously-skip-permissions', '--settings', '{"skipDangerousModePermissionPrompt":true}', '--debug', '--session-id', 'uuid', '--model', 'sonnet'];
   assert.deepEqual(claudeArgs(ctx), expected);
-  const args = paneStartArgs(ctx, 'pane-name', 'uuid');
-  assert.deepEqual(args, ['start', 'pane-name', '/tmp/work', '--env', 'RELAY_JOBS_HOME=/tmp/jobs', '--', ...expected]);
+  const args = paneStartArgs(ctx, 'pane-name', 'uuid', {});
+  assert.deepEqual(args, ['start', 'pane-name', '/tmp/work', '--env', 'RELAY_JOBS_HOME=/tmp/jobs', '--env', 'RELAY_JOBS_CANCEL_GRACE_MS=10000', '--', ...expected]);
+  assert.deepEqual(paneStartArgs(ctx, 'pane-name', 'uuid', { RELAY_JOBS_CANCEL_GRACE_MS: '240000' }).slice(5, 7), ['--env', 'RELAY_JOBS_CANCEL_GRACE_MS=240000']);
   assert.equal(args.some(arg => arg.includes('CLAUDE_CONFIG_DIR')), false);
 });
 
@@ -890,6 +891,12 @@ test('terminal build commits distinguish plugin changes from unrelated changes a
   writeJson(path.join(plugin, '.claude-plugin/plugin.json'), { version: 'changed' });
   assert.equal(pluginCommit(plugin), `${commit}-dirty`);
   assert.equal(pluginCommit(ctx.dir), null);
+  // An export outside git (a smoke install, the plugin cache) is named by install-local.sh's stamp.
+  const exported = path.join(ctx.dir, 'export');
+  writeJson(path.join(exported, '.claude-plugin/build.json'), { commit: 'abcdef012345-dirty' });
+  assert.equal(pluginCommit(exported), 'abcdef012345-dirty');
+  writeJson(path.join(exported, '.claude-plugin/build.json'), { commit: '../../etc' });
+  assert.equal(pluginCommit(exported), null);
 });
 
 for (const worktree of [false, true]) {

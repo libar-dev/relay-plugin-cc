@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { cancelTimeout, configDirectory, findTranscript } from './runs.mjs';
+import { cancelGrace, cancelTimeout, configDirectory, findTranscript } from './runs.mjs';
 
 const paneScript = fileURLToPath(new URL('../../smoke/pane.sh', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -30,8 +30,11 @@ export function claudeArgs({ pluginDir, probeDirs, sessionId, model }) {
     '--debug', '--session-id', sessionId, '--model', model];
 }
 
-export function paneStartArgs(ctx, name, sessionId) {
-  return ['start', name, ctx.workDir, '--env', `RELAY_JOBS_HOME=${ctx.jobsHome}`, '--', ...claudeArgs({ ...ctx, sessionId })];
+// The grace goes in explicitly: a tmux server that outlived an earlier run keeps that run's
+// environment, and the runner times a cancel by the grace the module in the pane reads.
+export function paneStartArgs(ctx, name, sessionId, env = process.env) {
+  return ['start', name, ctx.workDir, '--env', `RELAY_JOBS_HOME=${ctx.jobsHome}`,
+    '--env', `RELAY_JOBS_CANCEL_GRACE_MS=${cancelGrace(env)}`, '--', ...claudeArgs({ ...ctx, sessionId })];
 }
 
 function pane(args, input) {
@@ -55,7 +58,7 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
   try {
     started = true;
     let startup;
-    try { startup = drive(paneStartArgs(ctx, name, sessionId)); }
+    try { startup = drive(paneStartArgs(ctx, name, sessionId, env)); }
     catch (error) { startup = error.stdout; throw error; }
     finally {
       run.removedEnvironment = [...new Set(String(startup ?? '').split('\n')

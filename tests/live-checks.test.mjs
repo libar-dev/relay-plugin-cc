@@ -1812,7 +1812,8 @@ for (const surface of ['terminal', 't3']) {
       { recordsDir: path.join(ctx.dir, 'records'), env: ctx.env });
     assert.equal(records[0].result, 'pass');
     assert.equal(records[0].relayVersion, '3.0.0-test');
-    assert.equal(records[0].relayCommit, surface === 't3' ? ctx.run.relayCommit : null);
+    // T3 takes the commit from the status line's stamp; a terminal --plugin-dir build has none, so the run's own.
+    assert.equal(records[0].relayCommit, ctx.run.relayCommit);
   });
 }
 
