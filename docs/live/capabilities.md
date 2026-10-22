@@ -10,13 +10,13 @@ holds the checks; the records below name the builds.
 
 | Check | Codex | Grok Build | ZCode | Kimi Code |
 |---|---|---|---|---|
-| Steer a running job with the main thread's SendMessage | into the running turn, delivered in 2.2–2.8 s | into the running turn, delivered in 2.2–4.8 s | into the running turn, delivered in 2.8–3.3 s | as the next turn, delivered in 2.2–2.8 s |
+| Steer a running job with the main thread's SendMessage | into the running turn, delivered in 2.4–3.8 s | into the running turn, delivered in 2.2–3.5 s | into the running turn, delivered in 2.8–4.5 s | as the next turn, delivered in 3.3–4.3 s |
 | Steer a running job with a Workflow agent's SendMessage | into the running turn, delivered in 3.3 s | into the running turn, delivered in 2.9 s | into the running turn, delivered in 4.4 s | as the next turn, delivered in 3.3 s |
 | Steer a running job with a plugin's session.send | into the running turn, delivered in 3.1 s | into the running turn, delivered in 4.4 s | into the running turn, delivered in 3.2 s | as the next turn, delivered in 3.3 s |
 | Continue a job after its hand-back | a new turn of the job, delivered in 2.5 s | a new turn of the job, delivered in 2.2 s | a new turn of the job, delivered in 2.3 s | a new turn of the job, delivered in 3.2 s |
-| Answer /relay:status, /relay:result and /relay:cancel with no model turn | — | — | — | — |
-| Answer /relay:transfer with no model turn | — | n/a | n/a | n/a |
-| Answer /relay:result and /relay:status in claude -p with no model turn | — | — | — | — |
+| Answer /relay:status, /relay:result and /relay:cancel with no model turn | no model turn; answered in 0.6 s, cancelled in 1.0 s | no model turn; answered in 0.6 s, cancelled in 3.8 s | no model turn; answered in 0.6 s, cancelled in 1.7 s | no model turn; answered in 0.6 s, cancelled in 1.1 s |
+| Answer /relay:transfer with no model turn | no model turn; imported in 0.9 s | n/a | n/a | n/a |
+| Answer /relay:result and /relay:status in claude -p with no model turn | num_turns 0; answered in 0.3 s | num_turns 0; answered in 0.3 s | num_turns 0; answered in 0.3 s | num_turns 0; answered in 0.3 s |
 
 ## T3 Code
 
@@ -25,8 +25,8 @@ holds the checks; the records below name the builds.
 | Steer a running job with the main thread's SendMessage | into the running turn, delivered in 2.0–4.2 s | into the running turn, delivered in 1.8–5.9 s | into the running turn, delivered in 2.3–6.2 s | as the next turn, delivered in 2.1–5.9 s |
 | Steer a running job with a Workflow agent's SendMessage | into the running turn, delivered in 5.4 s | into the running turn, delivered in 6.3 s | into the running turn, delivered in 7.3 s | as the next turn, delivered in 6.3 s |
 | Continue a job after its hand-back | a new turn of the job, delivered in 4.6 s | a new turn of the job, delivered in 3.9 s | a new turn of the job, delivered in 4.3 s | a new turn of the job, delivered in 4.0 s |
-| Answer /relay:status, /relay:result and /relay:cancel with no model turn | — | — | — | — |
-| Answer /relay:transfer with no model turn | — | n/a | n/a | n/a |
+| Answer /relay:status, /relay:result and /relay:cancel with no model turn | no model turn; answered in 0.1–0.4 s, cancelled in 0.5 s | no model turn; answered in 0.1–0.4 s, cancelled in 3.6 s | no model turn; answered in 0.1–0.4 s, cancelled in 2.8 s | no model turn; answered in 0.1–0.4 s, cancelled in 0.8 s |
+| Answer /relay:transfer with no model turn | no model turn; imported in 0.6 s | n/a | n/a | n/a |
 
 ## How each backend took a message
 
@@ -38,10 +38,10 @@ holds the checks; the records below name the builds.
 
 | Check | Surface | Backend | Model | Relay | Claude Code | Lead | Date | Record |
 |---|---|---|---|---|---|---|---|---|
-| steer-main | terminal | codex | gpt-6.1-sol | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100750Z-steer-main-terminal-bc89](records/20261022T100750Z-steer-main-terminal-bc89.jsonl) |
-| steer-main | terminal | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100750Z-steer-main-terminal-bc89](records/20261022T100750Z-steer-main-terminal-bc89.jsonl) |
-| steer-main | terminal | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100750Z-steer-main-terminal-bc89](records/20261022T100750Z-steer-main-terminal-bc89.jsonl) |
-| steer-main | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100750Z-steer-main-terminal-bc89](records/20261022T100750Z-steer-main-terminal-bc89.jsonl) |
+| steer-main | terminal | codex | gpt-6.1-sol | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125809Z-steer-main-terminal-4c28](records/20261022T125809Z-steer-main-terminal-4c28.jsonl) |
+| steer-main | terminal | grok | grok-4.7 | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125809Z-steer-main-terminal-4c28](records/20261022T125809Z-steer-main-terminal-4c28.jsonl) |
+| steer-main | terminal | zcode | glm-5.3-flash | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125809Z-steer-main-terminal-4c28](records/20261022T125809Z-steer-main-terminal-4c28.jsonl) |
+| steer-main | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125809Z-steer-main-terminal-4c28](records/20261022T125809Z-steer-main-terminal-4c28.jsonl) |
 | steer-workflow | terminal | codex | gpt-6.1-sol | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101336Z-steer-workflow-terminal-842a](records/20261022T101336Z-steer-workflow-terminal-842a.jsonl) |
 | steer-workflow | terminal | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101336Z-steer-workflow-terminal-842a](records/20261022T101336Z-steer-workflow-terminal-842a.jsonl) |
 | steer-workflow | terminal | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101336Z-steer-workflow-terminal-842a](records/20261022T101336Z-steer-workflow-terminal-842a.jsonl) |
@@ -54,6 +54,15 @@ holds the checks; the records below name the builds.
 | continue | terminal | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T102242Z-continue-terminal-c6dd](records/20261022T102242Z-continue-terminal-c6dd.jsonl) |
 | continue | terminal | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T102242Z-continue-terminal-c6dd](records/20261022T102242Z-continue-terminal-c6dd.jsonl) |
 | continue | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T102242Z-continue-terminal-c6dd](records/20261022T102242Z-continue-terminal-c6dd.jsonl) |
+| commands | terminal | codex | gpt-6.1-sol | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125540Z-commands-terminal-a112](records/20261022T125540Z-commands-terminal-a112.jsonl) |
+| commands | terminal | grok | grok-4.7 | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125540Z-commands-terminal-a112](records/20261022T125540Z-commands-terminal-a112.jsonl) |
+| commands | terminal | zcode | glm-5.3-flash | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125540Z-commands-terminal-a112](records/20261022T125540Z-commands-terminal-a112.jsonl) |
+| commands | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125540Z-commands-terminal-a112](records/20261022T125540Z-commands-terminal-a112.jsonl) |
+| transfer | terminal | codex | — | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125655Z-transfer-terminal-11f9](records/20261022T125655Z-transfer-terminal-11f9.jsonl) |
+| headless | terminal | codex | gpt-6.1-sol | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | — | 2026-10-22 | [20261022T125705Z-headless-terminal-fc5d](records/20261022T125705Z-headless-terminal-fc5d.jsonl) |
+| headless | terminal | grok | grok-4.7 | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | — | 2026-10-22 | [20261022T125705Z-headless-terminal-fc5d](records/20261022T125705Z-headless-terminal-fc5d.jsonl) |
+| headless | terminal | zcode | glm-5.3-flash | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | — | 2026-10-22 | [20261022T125705Z-headless-terminal-fc5d](records/20261022T125705Z-headless-terminal-fc5d.jsonl) |
+| headless | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | — | 2026-10-22 | [20261022T125705Z-headless-terminal-fc5d](records/20261022T125705Z-headless-terminal-fc5d.jsonl) |
 | steer-main | t3 | codex | gpt-6.1-sol | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-steer-main-t3-f226](records/20261022T100753Z-steer-main-t3-f226.jsonl) |
 | steer-main | t3 | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-steer-main-t3-f226](records/20261022T100753Z-steer-main-t3-f226.jsonl) |
 | steer-main | t3 | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-steer-main-t3-f226](records/20261022T100753Z-steer-main-t3-f226.jsonl) |
@@ -66,3 +75,8 @@ holds the checks; the records below name the builds.
 | continue | t3 | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-continue-t3-c51f](records/20261022T100753Z-continue-t3-c51f.jsonl) |
 | continue | t3 | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-continue-t3-c51f](records/20261022T100753Z-continue-t3-c51f.jsonl) |
 | continue | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-continue-t3-c51f](records/20261022T100753Z-continue-t3-c51f.jsonl) |
+| commands | t3 | codex | gpt-6.1-sol | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125605Z-commands-t3-8a3e](records/20261022T125605Z-commands-t3-8a3e.jsonl) |
+| commands | t3 | grok | grok-4.7 | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125605Z-commands-t3-8a3e](records/20261022T125605Z-commands-t3-8a3e.jsonl) |
+| commands | t3 | zcode | glm-5.3-flash | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125605Z-commands-t3-8a3e](records/20261022T125605Z-commands-t3-8a3e.jsonl) |
+| commands | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125605Z-commands-t3-8a3e](records/20261022T125605Z-commands-t3-8a3e.jsonl) |
+| transfer | t3 | codex | — | 3.0.0-dev.3 (bcbd793aa939) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T125750Z-transfer-t3-7ea4](records/20261022T125750Z-transfer-t3-7ea4.jsonl) |
