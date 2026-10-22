@@ -67,17 +67,22 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
     }
     startSucceeded = true;
     log(drive(['attach-command', name]).trim());
-    let trusted = false, ready = false;
+    let ready = false, polls = 0, answers = 0, answeredAt = -Infinity;
     const startupDeadline = Math.min(deadline, Date.now() + 120000);
     while (Date.now() < startupDeadline && !aborted) {
+      const poll = polls++;
       const screen = drive(['read', name, '0']);
       fs.writeFileSync(path.join(ctx.evidenceDir, 'screen.txt'), screen);
       if (/Yes, I (accept|understand)/i.test(screen) && /bypass|skip.permissions|dangerously/i.test(screen)) {
         throw new Error('The bypass-permissions dialog appeared; it is not answered here, since that changes the user\'s settings.');
       }
-      if (!trusted && screen.includes('Yes, I trust this folder')) {
+      if (screen.includes('Yes, I trust this folder')) {
         if (!ctx.workDirCreated) throw new Error(`${ctx.workDir} is not trusted by Claude Code; open it in Claude Code once, or let the runner create the work folder.`);
-        drive(['trust', name]); trusted = true;
+        // A key sent while the dialog draws can be lost, so answer again while it is still shown two polls later.
+        if (poll - answeredAt >= 2) {
+          if (answers === 3) throw new Error('The folder trust dialog stayed after three answers; see screen.txt.');
+          drive(['trust', name]); answers += 1; answeredAt = poll;
+        }
         await pause(1000); continue;
       }
       const debug = fs.existsSync(debugLog) ? fs.readFileSync(debugLog, 'utf8') : '';

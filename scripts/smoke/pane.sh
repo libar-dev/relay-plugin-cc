@@ -123,7 +123,10 @@ case "$action" in
   trust)
     screen=$(tmux -S "$SOCK" capture-pane -p -J -t "$target")
     if [[ "$screen" == *'Yes, I trust this folder'* ]]; then
-      tmux -S "$SOCK" send-keys -t "$target" Down Enter
+      # The dialog opens on "No, exit". Move down only while "Yes" is not selected, so an answer sent again
+      # after a lost key never moves the selection past it.
+      if [[ "$screen" == *'❯ Yes, I trust this folder'* ]]; then keys=(Enter); else keys=(Down Enter); fi
+      tmux -S "$SOCK" send-keys -t "$target" "${keys[@]}"
       printf 'Accepted folder trust in %s\n' "$name"
     fi ;;
   pid) tmux -S "$SOCK" display-message -p -t "$target" '#{pane_pid}' ;;

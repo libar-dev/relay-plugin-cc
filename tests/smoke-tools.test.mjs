@@ -794,6 +794,23 @@ for (const mode of ['inherited', 'server-only', 'no-server', 'empty']) {
   });
 }
 
+for (const [selected, keys] of [['No, exit', ['Down', 'Enter']], ['Yes, I trust this folder', ['Enter']], [null, []]]) {
+  test(`pane trust answers the folder dialog from its selection: ${selected ?? 'no dialog'}`, t => {
+    const { dir, env } = fakeCli(t);
+    fs.writeFileSync(path.join(dir, 'bin/tmux'), `#!${process.execPath}\n` +
+      fs.readFileSync(path.join(root, 'tests/fixtures/smoke-tools/fake-tmux.cjs'), 'utf8'), { mode: 0o755 });
+    // The dialog as Claude Code 2.1.308 draws it, opening on "No, exit".
+    const items = ['No, exit', 'Yes, I trust this folder'].map(item => `${item === selected ? ' ❯ ' : '   '}${item}`);
+    Object.assign(env, { SMOKE_TMUX_LOG: path.join(dir, 'tmux.jsonl'), XDG_RUNTIME_DIR: path.join(dir, 'runtime'),
+      SMOKE_TMUX_SCREEN: selected ? ` Do you trust the files in this folder?\n\n${items.join('\n')}\n\n Enter to confirm · Esc to cancel\n` : ' ❯ \n' });
+    const result = spawnSync('bash', [path.join(root, 'scripts/smoke/pane.sh'), 'trust', 'clean'], { env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const calls = fs.readFileSync(env.SMOKE_TMUX_LOG, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(calls.filter(args => args[2] === 'send-keys').map(args => args.slice(5)), keys.length ? [keys] : []);
+    assert.equal(result.stdout, selected ? 'Accepted folder trust in clean\n' : '');
+  });
+}
+
 test('archive install receipt identifies the full exported commit and worktree flag', t => {
   const { dir, env } = fakeCli(t);
   const work = workDir(dir);
