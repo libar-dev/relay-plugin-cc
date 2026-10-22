@@ -18,7 +18,8 @@ Codex home (`~/.codex` or `CODEX_HOME`), `~/.grok` and every `~/.grok-<name>`, Z
 `--grok-home H` selects a Grok home and `--kimi-home H` a Kimi home, and the command
 exits non-zero when that backend is not ready. Setup makes no
 model call: Codex answers `account/read`, `config/read` and `model/list` on an app-server it stops
-afterwards, Grok answers `--version` and `grok models`, and for ZCode setup reads `--version`,
+afterwards, Grok answers `--version` and `grok models` (asked once more, a second later, before a home is
+reported signed out), and for ZCode setup reads `--version`,
 whether the credentials file from `zcode login` is a regular file of more than two bytes (the file
 is never opened) and the default model, then asks one `zcode app-server` for every model the
 sign-in serves: it creates a draft session, reads its model list (what ZCode's model picker
@@ -32,7 +33,8 @@ the first turn. Every check has a time limit (10 s for a command, 20 s for an ap
 
 Render one table, one row per block, in the command's order: backend, home, version, sign-in,
 model and effort, models, ready. Put `can` as one short line under the table only where a backend
-lacks something another has. Then the settings line, `Actions taken` if any, and `Next steps`
+lacks something another has. `can.steer` is steering the running turn: a backend without it (Kimi) takes a
+message to a running job as its next turn, so write `steer (next turn)` for it, never "no steering". Then the settings line, `Actions taken` if any, and `Next steps`
 verbatim. Never add rows for node or npm. For a block with `error`, or `signIn.state` `signed-out`
 or `not-installed`, print its `detail` and the command it names, and go on; only Codex gets the
 install offer below. Print every entry of a block's `warnings`; for Grok, a warning that the binary

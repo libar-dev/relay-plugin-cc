@@ -58,10 +58,14 @@ async function checkGrokHome(cwd, home, env, shared, limits) {
   if (script.note) block.warnings.push(script.note);
   const grokEnv = grokEnvironment({ grokHome: home.home, mode: "yolo" }, env);
   const listModels = () => runLimited(shared.binary, ["models"], { cwd, env: grokEnv, timeoutMs: limits.commandMs });
-  let [version, listing] = await Promise.all([shared.version, listModels()]);
-  if (!version.error && !listing.timedOut && !listing.error && !parseGrokModels(listing.stdout).signedIn) {
+  const [version, first] = await Promise.all([shared.version, listModels()]);
+  let listing = first;
+  if (!version.error && !first.timedOut && !first.error && !parseGrokModels(first.stdout).signedIn) {
     await new Promise(resolve => setTimeout(resolve, SIGNED_OUT_RECHECK_MS));
-    listing = await listModels();
+    // A second answer replaces the first only when it came: a retry that hangs or fails to start
+    // leaves the first reading, signed out, with its sign-in step.
+    const again = await listModels();
+    if (!again.timedOut && !again.error) listing = again;
   }
   block.elapsedMs = Date.now() - started;
   block.version = version.text;

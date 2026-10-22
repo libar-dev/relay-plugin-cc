@@ -256,6 +256,8 @@ test("a check that hangs answers with its time limit while the others finish, an
     assert.equal(grok.signIn.state, "unknown");
     assert.equal(grok.error, "grok models: no answer in 0.6 s");
   }
+  // A listing that timed out is not asked again: one per home.
+  assert.equal(ctx.grok().invocations.filter(call => call.args[0] === "models").length, 2);
   const zcode = report.backends.find(block => block.backend === "zcode");
   assert.equal(zcode.ready, false);
   assert.equal(zcode.error, "zcode --version failed (exit 3). zcode wrapper failed");
@@ -305,7 +307,8 @@ test("a malformed Codex catalog entry is skipped and the overview still prints e
   assert.equal(text.stdout.match(/^## /gm).length, 5);
 });
 
-// Capability facts have one declaration; the text and the JSON agree.
+// Capability facts have one declaration; the text and the JSON agree. A capability note adds words
+// beside an item ("steer (next turn)" for Kimi), never an item the JSON lacks.
 test("every block's can: line says what its JSON can says, and nothing else", t => {
   const ctx = everyBackend(t, "home-probe");
   const report = page(ctx).page;

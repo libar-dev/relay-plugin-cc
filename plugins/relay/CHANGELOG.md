@@ -132,8 +132,9 @@ Fixes from the pre-releases:
   fenced block, which Markdown leaves as written.
 - `/relay:setup` asks Grok's `grok models` a second time, a second apart, before it says a home is signed out: a
   signed-in home once answered "You are not authenticated" and then signed in.
-- `/relay:setup` shows Kimi's `can:` line with `steer (next turn)`: a message to a running Kimi job is taken as its
-  next turn. The JSON's `can.steer` is unchanged, and still means steering the running turn.
+- `/relay:setup` shows Kimi as `steer (next turn)`, not as having no steering: a message to a running Kimi job is
+  taken as its next turn. The command tells Claude so, and `companion setup`'s text says it in Kimi's `can:` line.
+  The JSON's `can.steer` is unchanged, and still means steering the running turn.
 - `/relay:status`'s argument hint names `--workflow <run>`.
 
 Docs:

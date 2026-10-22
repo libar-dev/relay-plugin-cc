@@ -600,9 +600,12 @@ second later, before it reports a home signed out; a home that answers signed in
 signed-out home costs one more listing and a second. Rejected: a line in grok-home.md, which would leave every
 reader of setup's output, Claude included, to second-guess a "signed out" that is usually right.
 
-### D72. Kimi's `can:` line says `steer (next turn)` (release lead)
+### D72. Setup shows Kimi as `steer (next turn)` (release lead)
 
 Setup listed `steer` only for a backend that steers its running turn, so Kimi's line had no steering at all, and
 Claude rendered it as "no steering" (the M3's CLI pass, screenshot C3). A message to a running Kimi job is taken as
-its next turn. The text line now says `steer (next turn)` for Kimi, from a capability note; the JSON's `can.steer`
-keeps its meaning, the running turn, so a script reading it is unchanged.
+its next turn. `/relay:setup` runs `companion setup --json`, and Claude renders the JSON, so `commands/setup.md`
+now tells Claude that `can.steer` is steering the running turn and that a backend without it is written
+`steer (next turn)`; `companion setup`'s text page says the same in Kimi's `can:` line, from a capability note. The
+JSON's `can.steer` keeps its meaning, so a script reading it is unchanged. Rejected: a new JSON field, which would
+change the block's shape for one word of rendering.
