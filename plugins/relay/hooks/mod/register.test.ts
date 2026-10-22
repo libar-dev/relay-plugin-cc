@@ -74,6 +74,24 @@ test('a send to an id wakes that id, listed or not', async ($, on) => {
   expect(seen.runs.map((r) => r.argv)).toEqual([wakeArgv('a-relay'), wakeArgv('wf-7f3a')])
 })
 
+test('every relay listed under the name is woken, and a listed agent of another type is not', async ($, on) => {
+  const seen = engine(on, {
+    agents: () => ({
+      value: [
+        ...AGENTS,
+        // A finished relay stays listed for a while beside a new one under the same name.
+        { id: 'a-relay-2', name: 'worker', description: 'a later job', type: 'relay:job', status: 'running' },
+      ],
+    }),
+  })
+
+  expect(await $.session.send({ to: 'worker', text: 'steer', origin: { kind: 'model' } })).toEqual({ isDelivered: true })
+  expect(await $.session.send({ to: 'lead', text: 'hello', origin: { kind: 'model' } })).toEqual({ isDelivered: true })
+
+  expect(seen.lists).toHaveLength(2)
+  expect(seen.runs.map((r) => r.argv)).toEqual([wakeArgv('a-relay'), wakeArgv('a-relay-2')])
+})
+
 test('a send that was not delivered wakes nothing and keeps its refusal', async ($, on) => {
   let isDelivered = false
   const seen = engine(on, {
