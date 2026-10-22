@@ -205,7 +205,7 @@ test("stop gate's outer limits reach the start, the wait and the cancel it spawn
   const { runStopReview, runCompanionSync, stopGateLimits, STOP_COMMAND_TIMEOUT_MS } = await import(STOP_HOOK);
   const spawned = [];
   let taskArgs;
-  const answer = { task: JSON.stringify({ jobId: "task-x", state: "starting" }), wait: JSON.stringify({ state: "running" }), cancel: "{}" };
+  const answer = { task: JSON.stringify({ schema: "relay.task/1", jobId: "task-x", state: "starting" }), wait: JSON.stringify({ schema: "relay.wait/1", state: "running" }), cancel: "{}" };
   const spawn = (command, args, options) => {
     spawned.push([args[1], options.timeout]);
     if (args[1] === "task") taskArgs = args.slice(1);
@@ -300,7 +300,7 @@ test("stop gate allows with the manual-review message when the companion's revie
     const calls = [];
     const runCompanion = (args) => {
       calls.push(args[0]);
-      if (args[0] === "task") return { status: 0, stdout: broken === "task" ? "{not json" : JSON.stringify({ jobId: "task-x", state: "starting" }), stderr: "", error: null };
+      if (args[0] === "task") return { status: 0, stdout: broken === "task" ? "{not json" : JSON.stringify({ schema: "relay.task/1", jobId: "task-x", state: "starting" }), stderr: "", error: null };
       if (args[0] === "wait") return { status: 0, stdout: broken === "wait" ? "BLOCK: {not json" : "{}", stderr: "", error: null };
       return { status: 0, stdout: "{}", stderr: "", error: null };
     };
@@ -319,7 +319,7 @@ test("stop gate: a review still busy at its limit timed out, and is cancelled", 
   const calls = [];
   const runCompanion = (args) => {
     calls.push(args[0]);
-    if (args[0] === "task") return { status: 0, stdout: JSON.stringify({ jobId: "task-x", state: "starting" }), stderr: "", error: null };
+    if (args[0] === "task") return { status: 0, stdout: JSON.stringify({ schema: "relay.task/1", jobId: "task-x", state: "starting" }), stderr: "", error: null };
     if (args[0] === "wait") return { status: 4, stdout: "", stderr: "Job task-x is busy: its record changed during each of 8 reads. Try again.\n", error: null };
     return { status: 0, stdout: "{}", stderr: "", error: null };
   };
@@ -327,3 +327,71 @@ test("stop gate: a review still busy at its limit timed out, and is cancelled", 
   assert.deepEqual(review, { ok: true, failure: "the stop-time Codex review timed out after 1.5 s. Run /relay:review --wait to review by hand." });
   assert.deepEqual(calls, ["task", "wait", "cancel"]);
 });
+
+function reviewWith(task, wait = null) {
+  const calls = [];
+  const runCompanion = args => {
+    calls.push(args[0]);
+    const response = args[0] === "task" ? task : args[0] === "wait" ? wait : { status: 0, value: {} };
+    return { status: response.status ?? 0, stdout: JSON.stringify(response.value), stderr: "", error: null };
+  };
+  return { calls, runCompanion };
+}
+
+const taskJson = { schema: "relay.task/1", relayVersion: "3.0.0", relayBuild: null, jobId: "task-x", state: "starting" };
+const waitJson = { schema: "relay.wait/1", relayVersion: "3.0.0", relayBuild: null, state: "completed", report: "ALLOW: done" };
+
+test("stop gate accepts the task and wait JSON schemas", async () => {
+  const { runStopReview } = await import(STOP_HOOK);
+  const fake = reviewWith({ value: taskJson }, { value: waitJson });
+  assert.deepEqual(runStopReview(process.cwd(), {}, fake), { ok: true, failure: null });
+  assert.deepEqual(fake.calls, ["task", "wait"]);
+});
+
+test("stop gate reports a task error object's message as a failed start", async () => {
+  const { runStopReview } = await import(STOP_HOOK);
+  const fake = reviewWith({ status: 1, value: { schema: "relay.task/1", error: { kind: "usage", message: "No review model configured." } } });
+  const result = runStopReview(process.cwd(), {}, fake);
+  assert.match(result.failure, /review failed \(exit 1: No review model configured\.\)/);
+  assert.deepEqual(fake.calls, ["task"]);
+});
+
+for (const [scenario, stdout, stderr, detail] of [
+  ["a crash on stderr", "", "Module load failed\nStack trace", "Module load failed"],
+  ["a crash on stdout", "Uncaught error\nStack trace", "", "Uncaught error"],
+  ["a wrong schema", JSON.stringify({ schema: "relay.start/1" }), "Start crashed\nStack trace", "Start crashed"]
+]) {
+  test(`stop gate keeps the failed start label for ${scenario}`, async () => {
+    const { runStopReview } = await import(STOP_HOOK);
+    const calls = [];
+    const runCompanion = args => {
+      calls.push(args[0]);
+      return { status: 1, stdout, stderr, error: null };
+    };
+    assert.deepEqual(runStopReview(process.cwd(), {}, { runCompanion }), {
+      ok: true, failure: `the stop-time Codex review failed (exit 1: ${detail}). Run /relay:review --wait to review by hand.`
+    });
+    assert.deepEqual(calls, ["task"]);
+  });
+}
+
+test("stop gate treats a wait busy error object at exit 4 as timed out and cancels", async () => {
+  const { runStopReview } = await import(STOP_HOOK);
+  const fake = reviewWith({ value: taskJson }, { status: 4, value: { schema: "relay.wait/1", error: { kind: "busy", message: "Job is busy." } } });
+  const result = runStopReview(process.cwd(), {}, { ...fake, limits: { reviewMs: 1500 } });
+  assert.match(result.failure, /review timed out after 1\.5 s\./);
+  assert.deepEqual(fake.calls, ["task", "wait", "cancel"]);
+});
+
+for (const scenario of ["another wait error", "busy wait error without exit 4", "another wait schema", "another task schema"]) {
+  test(`stop gate returns invalid JSON for ${scenario}`, async () => {
+    const { runStopReview } = await import(STOP_HOOK);
+    const task = scenario === "another task schema" ? { ...taskJson, schema: "relay.start/1" } : taskJson;
+    const wait = scenario === "another wait schema" ? { ...waitJson, schema: "relay.status/1" } :
+      { schema: "relay.wait/1", error: { kind: scenario === "another wait error" ? "error" : "busy", message: "Cannot read job." } };
+    const fake = reviewWith({ value: task }, { status: scenario === "busy wait error without exit 4" ? 1 : 4, value: wait });
+    const result = runStopReview(process.cwd(), {}, fake);
+    assert.match(result.failure, /review returned invalid JSON\./);
+    assert.deepEqual(fake.calls, scenario === "another task schema" ? ["task"] : ["task", "wait", "cancel"]);
+  });
+}

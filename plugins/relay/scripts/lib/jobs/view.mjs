@@ -7,8 +7,8 @@ import path from "node:path";
 
 import { isWorkerAlive } from "./lease.mjs";
 import { isWorkerLease, readLease } from "./lease.mjs";
-import { jobPaths, readJob, TERMINAL_STATES } from "./store.mjs";
-import { messageAccount, readRelayHandbacks, readRelayViolations } from "./messages.mjs";
+import { jobPaths, readJob, readJsonOrNull, TERMINAL_STATES } from "./store.mjs";
+import { messageAccount, readJobMessages, readRelayHandbacks, readRelayViolations } from "./messages.mjs";
 
 export const EXIT = {
   ok: 0,
@@ -64,6 +64,7 @@ export function loadJobView(jobDir, options = {}) {
     const account = messageAccount(jobDir);
     const relayViolations = readRelayViolations(jobDir);
     const handbacks = readRelayHandbacks(jobDir);
+    const lastToolAt = readJsonOrNull(path.join(jobDir, "relay-guard.json"))?.lastToolAt ?? null;
     const again = readJob(jobDir);
     if (!again || jobVersion(again) !== jobVersion(job)) {
       if (pass < VIEW_READS) continue;
@@ -78,7 +79,9 @@ export function loadJobView(jobDir, options = {}) {
     const undelivered = workerLive ? [] : account.undelivered;
     return {
       job, jobDir, paths, ...view, hasReport, report: hasReport ? read.text : null, reportPath: hasReport ? read.path : null,
-      undelivered, dropped: account.dropped, relayViolations, handbacks
+      // Open: every work message not yet closed, a live worker's included (the account's list before
+      // it is cut to what no worker will run).
+      undelivered, dropped: account.dropped, relayViolations, handbacks, openMessages: account.undelivered.length, lastToolAt
     };
   }
 }
@@ -188,7 +191,7 @@ export function backendLines(request) {
 
 export function backendJson(request) {
   const backend = backendFor(request);
-  return { ...(backend === DEFAULT_BACKEND ? {} : { backend: backend.name }), ...backend.view.json(request) };
+  return { backend: backend.name, ...backend.view.json(request) };
 }
 
 export function backendSettingLines(request) {
@@ -353,7 +356,9 @@ export function renderJobList(views, options = {}) {
   return `jobs: ${views.length}\n\n${[renderRow(header), separator, ...rows.map(renderRow)].join("\n")}\n`;
 }
 
-export function jobViewJson(view) {
+// One job's full view. The messages are read here, for a full view only: a listing row and a
+// polling wait never pay for reading every message and outcome file.
+export function jobViewJson(view, { messages = true } = {}) {
   return {
     id: view.job.id,
     kind: view.job.kind ?? "task",
@@ -363,6 +368,8 @@ export function jobViewJson(view) {
     deadReason: view.deadReason,
     sessionId: view.job.sessionId ?? null,
     turnId: view.job.turnId ?? null,
+    // The Claude Code session the job was started from (its relay's), unlike `sessionId`, the backend's.
+    claudeSessionId: view.job.launchedBy?.claudeSessionId ?? null,
     model: view.job.request?.model ?? null,
     effort: view.job.request?.effort ?? null,
     ...backendJson(view.job.request),
@@ -374,19 +381,62 @@ export function jobViewJson(view) {
     attempts: Array.isArray(view.job.attempts) ? view.job.attempts.length : 0,
     errorMessage: view.job.errorMessage ?? null,
     createdAt: view.job.createdAt ?? null,
+    updatedAt: view.job.updatedAt ?? null,
     completedAt: view.job.completedAt ?? null,
     jobDir: view.jobDir,
     reportPath: view.hasReport ? view.reportPath : null,
+    hasReport: Boolean(view.hasReport),
     summary: summarizeJob(view),
-    relay: view.job.relay ?? null,
+    relay: view.job.relay ? { ...view.job.relay, lastToolAt: view.lastToolAt ?? null } : null,
     relayViolations: view.relayViolations ?? [],
+    relayViolationCount: view.relayViolations?.length ?? 0,
     handedBackAt: view.job.relay ? handedBackAt(view) : null,
+    notHandedBack: notHandedBack(view),
+    openMessages: view.openMessages ?? 0,
+    messages: messages ? readJobMessages(view.jobDir).messages : [],
     automaticResumes: view.job.automaticResumes ?? [],
+    automaticResumeCount: view.job.automaticResumes?.length ?? 0,
     attemptRecords: view.job.attempts ?? [],
     server: view.job.server ?? null,
     undelivered: view.undelivered ?? [],
-    dropped: view.dropped ?? []
+    undeliveredCount: view.undelivered?.length ?? 0,
+    dropped: view.dropped ?? [],
+    droppedCount: view.dropped?.length ?? 0
   };
+}
+
+// Every string a row holds is cut to this many characters, so one row stays small whatever a request or a
+// record holds, and a page of rows stays under its byte budget. One job's full view keeps every value.
+const ROW_STRING_LIMIT = 300;
+
+function cutStrings(value) {
+  if (typeof value === "string") return value.length > ROW_STRING_LIMIT ? Array.from(value).slice(0, ROW_STRING_LIMIT).join("") : value;
+  if (Array.isArray(value)) return value.map(cutStrings);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, cutStrings(entry)]));
+  return value;
+}
+
+export function jobRowJson(view) {
+  const { attemptRecords, server, messages, ...row } = jobViewJson(view, { messages: false });
+  const relay = row.relay;
+  return cutStrings({
+    ...row,
+    errorMessage: firstLine(row.errorMessage) ? Array.from(firstLine(row.errorMessage)).slice(0, 200).join("") : null,
+    relay: relay ? {
+      agentId: relay.agentId ?? null, workflowRunId: relay.workflowRunId ?? null,
+      label: relay.label == null ? null : oneLineLabel(relay.label), phase: relay.phase == null ? null : oneLineLabel(relay.phase),
+      adopted: relay.previous?.length ?? 0, lastToolAt: relay.lastToolAt ?? null
+    } : null,
+    undelivered: row.undelivered.slice(0, 20),
+    dropped: row.dropped.slice(-5).map(entry => ({
+      ...entry, reason: entry.reason == null ? null : Array.from(String(entry.reason).split(/\r?\n/)[0]).slice(0, 200).join("")
+    })),
+    automaticResumes: row.automaticResumes.slice(-5),
+    relayViolations: row.relayViolations.slice(-5).map(entry => ({
+      at: entry.at ?? null, kind: entry.kind ?? null,
+      reason: entry.reason == null ? null : Array.from(String(entry.reason).split(/\r?\n/)[0]).slice(0, 200).join("")
+    }))
+  });
 }
 
 export function sortViewsNewestFirst(views) {

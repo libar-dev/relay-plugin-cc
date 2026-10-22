@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { handleTaskStop } from "../plugins/relay/scripts/hooks/relay-stop.mjs";
 import { createJobDir, jobPaths, readJob, TERMINAL_STATES, writeJob, writeJsonAtomic } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { writeRelayPointer } from "../plugins/relay/scripts/lib/harness/relay.mjs";
+import { readRelayHandbacks } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { COMPANION, PLUGIN_ROOT, companion, jobDirOf, readJobJson, relayContext, relayStart, waitFor } from "./support/relay-fixture.mjs";
 import { run } from "./support/helpers.mjs";
 
@@ -59,6 +60,14 @@ function assertCancelled({ ctx, jobId, dir }, output) {
   const cancels = fs.readdirSync(jobPaths(dir).claimed).map(name => JSON.parse(fs.readFileSync(path.join(jobPaths(dir).claimed, name), "utf8"))).filter(message => message.kind === "cancel");
   assert.equal(cancels.length, 1);
   assert.equal(JSON.parse(fs.readFileSync(path.join(jobPaths(dir).outcomes, `${cancels[0].id}.json`), "utf8")).action, "cancelled");
+  const [handback, ...extra] = readRelayHandbacks(dir);
+  assert.deepEqual(extra, []);
+  assert.deepEqual(handback, { at: handback.at, agentId: ctx.agentId, attempts: job.attempts.length, state: "cancelled", by: "TaskStop" });
+  const status = companion(ctx, ["status", jobId, "--json"]);
+  assert.equal(status.status, 0, status.stderr);
+  const view = JSON.parse(status.stdout);
+  assert.equal(view.handedBackAt, handback.at);
+  assert.equal(view.notHandedBack, false);
 }
 
 for (const variant of ["agent id", "name in tool_input and id in tool_response", "JSON-string tool_response"]) {
@@ -135,6 +144,7 @@ test("TaskStop records a cancel violation when cancel cannot read the job's repo
   assert.match(context(output), /EISDIR/);
   assert.ok(context(output).endsWith(`The job may still be running. Cancel it with: node "${COMPANION}" cancel ${jobId}`));
   assert.equal(readJob(dir).state, "running");
+  assert.deepEqual(readRelayHandbacks(dir), []);
   assert.deepEqual(fs.readdirSync(jobPaths(dir).claimed), []);
   const violation = JSON.parse(fs.readFileSync(path.join(dir, "relay-violations.jsonl"), "utf8"));
   assert.equal(violation.kind, "cancel");
@@ -171,6 +181,7 @@ for (const scenario of ["cancel still running on stdout", "cancel still running 
     assert.equal(violation.kind, "cancel");
     assert.equal(violation.agentId, ctx.agentId);
     assert.equal(readJob(dir).state, "running");
+    assert.deepEqual(readRelayHandbacks(dir), []);
     if (scenario.startsWith("cancel still running")) {
       assert.equal(violation.reason, `TaskStop stopped the relay, and the cancel had not ended the job: ${results[scenario].stderr.replace(/\s+/g, " ").trim()}`);
       assert.ok(context(output).includes(results[scenario].stdout + results[scenario].stderr));
@@ -368,4 +379,83 @@ test("hooks.json registers the TaskStop command with its timeout and description
     command: 'node "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/relay-stop.mjs"', timeout: 600 }] }]);
   assert.match(hooks.description, /a TaskStop hook that cancels a stopped relay's job/);
   assert.match(hooks.description, /checks a relay:job prompt's header at the spawn/);
+});
+
+for (const state of ["completed", "failed"]) {
+  test(`TaskStop records no hand-back when the job ended ${state} before the cancel`, t => {
+    const { ctx, dir } = recorded();
+    const mocked = t.mock.method(childProcess, "spawnSync", () => {
+      writeJob(dir, { ...readJob(dir), state });
+      return { status: 0, stdout: `state: ${state}\n`, stderr: "" };
+    });
+    syncBuiltinESMExports();
+    t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+    const output = handleTaskStop(input(ctx), ctx.env);
+    assert.match(context(output), new RegExp(`ended \\(${state}\\) before the cancel reached it`));
+    assert.deepEqual(readRelayHandbacks(dir), []);
+  });
+}
+
+test("TaskStop adds a failed hand-back append to the cancelled job's context", t => {
+  const { ctx, dir } = recorded();
+  const mocked = t.mock.method(childProcess, "spawnSync", () => {
+    writeJob(dir, { ...readJob(dir), state: "cancelled", attempts: [{ state: "cancelled" }] });
+    return { status: 0, stdout: "state: cancelled\n", stderr: "" };
+  });
+  syncBuiltinESMExports();
+  t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+  const append = t.mock.method(fs, "appendFileSync", file => {
+    assert.equal(file, path.join(dir, "relay-handbacks.jsonl"));
+    throw new Error("ENOSPC: cannot append hand-back");
+  });
+  const output = handleTaskStop(input(ctx), ctx.env);
+  assert.match(context(output), /the relay hook cancelled its job/);
+  assert.match(context(output), /The hand-back could not be recorded: ENOSPC: cannot append hand-back\./);
+  assert.equal(append.mock.callCount(), 1);
+  assert.deepEqual(readRelayHandbacks(dir), []);
+});
+
+for (const state of ["cancelled", "running"]) {
+  test(`TaskStop records the cancelled attempt from its stdout block when job.json is already ${state} at attempt 2`, t => {
+    const { ctx, dir } = recorded();
+    const stdout = "state: cancelled\nattempts: 1\ncancel: the job's worker ended it cancelled\n";
+    const mocked = t.mock.method(childProcess, "spawnSync", () => {
+      writeJob(dir, { ...readJob(dir), state, attempts: [{ state: "cancelled" }, { state }] });
+      return { status: 0, stdout, stderr: "" };
+    });
+    syncBuiltinESMExports();
+    t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+    const output = handleTaskStop(input(ctx), ctx.env);
+    assert.match(context(output), /the relay hook cancelled its job/);
+    assert.ok(context(output).endsWith(stdout));
+    const [handback] = readRelayHandbacks(dir);
+    assert.equal(handback.attempts, 1);
+    assert.equal(handback.state, "cancelled");
+    assert.equal(handback.by, "TaskStop");
+  });
+}
+
+test("TaskStop uses a completed stdout block even when job.json now says cancelled", t => {
+  const { ctx, dir } = recorded();
+  const mocked = t.mock.method(childProcess, "spawnSync", () => {
+    writeJob(dir, { ...readJob(dir), state: "cancelled", attempts: [{ state: "completed" }, { state: "cancelled" }] });
+    return { status: 0, stdout: "state: completed\nattempts: 1\n", stderr: "" };
+  });
+  syncBuiltinESMExports();
+  t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+  const output = handleTaskStop(input(ctx), ctx.env);
+  assert.match(context(output), /ended \(completed\) before the cancel reached it/);
+  assert.deepEqual(readRelayHandbacks(dir), []);
+});
+
+test("TaskStop falls back to job.json when the cancel block has no state line", t => {
+  const { ctx, dir } = recorded();
+  const mocked = t.mock.method(childProcess, "spawnSync", () => {
+    writeJob(dir, { ...readJob(dir), state: "cancelled", attempts: [{ state: "cancelled" }] });
+    return { status: 0, stdout: "cancel: cancelled\n", stderr: "" };
+  });
+  syncBuiltinESMExports();
+  t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+  assert.match(context(handleTaskStop(input(ctx), ctx.env)), /the relay hook cancelled its job/);
+  assert.equal(readRelayHandbacks(dir)[0].attempts, 1);
 });

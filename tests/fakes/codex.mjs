@@ -1021,6 +1021,7 @@ rl.on("line", (line) => {
             if (process.env.FAKE_CODEX_INTERRUPT_DEATH) { process.kill(process.pid, "SIGKILL"); break; }
 	        if (activeTurns.has(message.params.turnId)) {
 	          record("interrupts", message.params);
+	          if (process.env.FAKE_CODEX_INTERRUPT_CHILD) spawnDescendant(message.params.turnId);
 	          send({ id: message.id, result: {} });
 	          if (BEHAVIOR !== "job-hang" && BEHAVIOR !== "job-hang-child") {
 	            finishJobTurn(message.params.turnId, "interrupted");

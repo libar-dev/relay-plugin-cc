@@ -210,7 +210,7 @@ function startForRelay(input, env) {
   const { file, candidates } = resolveAgentTranscript(input);
   spawnSync(process.execPath, [COMPANION, "start", "--from-relay", "--relay-transcript", file ?? candidates[0] ?? "", "--relay-agent", input.agent_id ?? ""], {
     cwd: input.cwd && fs.existsSync(input.cwd) ? input.cwd : process.cwd(),
-    env: absoluteJobsHomeEnv(env),
+    env: absoluteJobsHomeEnv({ ...env, ...(input.session_id ? { RELAY_COMPANION_SESSION_ID: input.session_id } : {}) }),
     stdio: "ignore",
     timeout: 60000
   });

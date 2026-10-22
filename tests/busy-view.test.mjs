@@ -32,8 +32,14 @@ test("status lists no jobs while one is busy: it exits 4 and names it, by reposi
   for (const args of [["status"], ["status", "--all", "--json"]]) {
     const listed = companion(ctx, args, env);
     assert.equal(listed.status, 4, `${args.join(" ")}: ${listed.stdout}`);
-    assert.equal(listed.stdout, "", `${args.join(" ")} printed a listing without the busy job`);
-    assert.match(listed.stderr, busyLine(active));
+    if (args.includes("--json")) {
+      assert.equal(listed.stderr, "");
+      assert.equal(JSON.parse(listed.stdout).error.kind, "busy");
+      assert.match(JSON.parse(listed.stdout).error.message + "\n", busyLine(active));
+    } else {
+      assert.equal(listed.stdout, "", `${args.join(" ")} printed a listing without the busy job`);
+      assert.match(listed.stderr, busyLine(active));
+    }
   }
   // Once its views hold again, both jobs are listed.
   const listed = companion(ctx, ["status", "--all", "--json"]);
@@ -41,7 +47,7 @@ test("status lists no jobs while one is busy: it exits 4 and names it, by reposi
   assert.deepEqual(JSON.parse(listed.stdout).jobs.map(job => job.id).sort(), [active, quiet].sort());
 });
 
-test("status lists this repository's newest 20 jobs while an older one is busy; with --all, which lists it, it exits 4", async t => {
+test("status with --limit 20 lists the newest jobs while an older one is busy; with --all, which lists it, it exits 4", async t => {
   const ctx = setup(t);
   const old = startJob(ctx, HEADER, "[quick] Old job.").id;
   await finishJob(ctx, old);
@@ -55,12 +61,14 @@ test("status lists this repository's newest 20 jobs while an older one is busy; 
     return id;
   });
   const env = busy(ctx, dir);
-  const listed = companion(ctx, ["status", "--json"], env);
+  const listed = companion(ctx, ["status", "--json", "--limit", "20"], env);
   assert.equal(listed.status, 0, listed.stderr);
   assert.deepEqual(JSON.parse(listed.stdout).jobs.map(view => view.id), [...newer].reverse());
   const all = companion(ctx, ["status", "--all", "--json"], env);
   assert.equal(all.status, 4, all.stdout);
-  assert.match(all.stderr, busyLine(old));
+  assert.equal(all.stderr, "");
+  assert.equal(JSON.parse(all.stdout).error.kind, "busy");
+  assert.match(JSON.parse(all.stdout).error.message + "\n", busyLine(old));
 });
 
 test("wait polls a busy job again within its deadline, and shows it once its views hold", async t => {
@@ -82,8 +90,9 @@ test("a job busy through wait's deadline: exit 4 and the busy line; the relay's 
   const env = busy(ctx, jobDir(ctx, id));
   const waited = companion(ctx, ["wait", id, "--timeout-seconds", "1", "--json"], env);
   assert.equal(waited.status, 4, waited.stdout);
-  assert.equal(waited.stdout, "", "no view of a busy job");
-  assert.match(waited.stderr, busyLine(id));
+  assert.equal(waited.stderr, "");
+  assert.equal(JSON.parse(waited.stdout).error.kind, "busy");
+  assert.match(JSON.parse(waited.stdout).error.message + "\n", busyLine(id));
   const relay = companion(ctx, ["wait", id, "--timeout-seconds", "1", "--exit-zero-while-running", "--state-only"], env);
   assert.equal(relay.status, 0, relay.stderr);
   assert.equal(relay.stdout, "still running: not an error. Run the same wait again.\n");
@@ -98,8 +107,14 @@ test("result and status of a busy job exit 4 with the busy line and no view: by 
   for (const args of [["result", id], ["result"], ["status", id, "--json"]]) {
     const read = companion(ctx, args, env);
     assert.equal(read.status, 4, `${args.join(" ")}: ${read.stdout}`);
-    assert.equal(read.stdout, "", args.join(" "));
-    assert.match(read.stderr, busyLine(id));
+    if (args.includes("--json")) {
+      assert.equal(read.stderr, "");
+      assert.equal(JSON.parse(read.stdout).error.kind, "busy");
+      assert.match(JSON.parse(read.stdout).error.message + "\n", busyLine(id));
+    } else {
+      assert.equal(read.stdout, "", args.join(" "));
+      assert.match(read.stderr, busyLine(id));
+    }
   }
 });
 

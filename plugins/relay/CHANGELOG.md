@@ -75,6 +75,38 @@ Phase 3, spawn and stop like a Claude agent:
 - The live suite has three more checks: `stop` (TaskStop cancels the job within 15 s), `session-end`
   (the job runs on after the Claude session ends, terminal only) and `spawn-check`.
 
+Phase 4, the companion's JSON, changed in place (the status line and the board read it):
+
+- **Every `--json` output names its shape and build.** It is one object whose first fields are `schema`
+  (`relay.<command>/1`), `relayVersion` and `relayBuild` (the commit of a smoke install, else null). Under
+  `--json` an error is JSON on stdout too, `{ …, error: { kind, message } }`, with `kind` `busy` (exit 4, as
+  before), `not-found`, `usage`, `attempt-changed` or `error`, and nothing a reader needs goes to stderr. A script
+  that read a `--json` error from stderr reads it from stdout now.
+- **`status --json` lists pages of slim rows.** Rows leave out `attemptRecords` and `server`, carry a short relay
+  binding and one-line errors, cut every string to 300 characters, keep a few entries of each list (owed, dropped,
+  recovered, violations) with its full count, and come newest first, 50 a page (`--limit N`, up to 200, and never past 2 MiB), with `nextCursor` for
+  `--cursor`; `--active` lists only jobs that are starting, running or dead, or owe messages. `--all` and
+  `--workflow` page the same way. Until now the listing held every field of every job, `--all` and `--workflow`
+  every job: 1.29 MB for 473 jobs. `status <job> --json`, `result`, `wait` and `cancel` keep every field. The text
+  listing is unchanged.
+- Every job in the JSON names its `backend`, Codex included; before, a missing `backend` meant Codex.
+- One job's JSON adds `messages` (every message to the job, with its stage, a one-line preview, the relay's
+  transcript entry that carried it, and its outcome: how the backend took it), `openMessages`, `notHandedBack`,
+  `hasReport`, `updatedAt`, `claudeSessionId` (the Claude Code session the job was started from) and
+  `relay.lastToolAt` (the relay's last tool call). `steer`, `continue` and `resume` add `job`; `start` and `task`
+  add `backend`.
+- `cancel --attempt N` cancels the job only while attempt N is current, so a cancel meant for one attempt never stops
+  a newer one that a continue or an automatic recovery started; it then says `attempt-changed`. Once attempt N is
+  stopped, a newer attempt a message starts runs on.
+- A job cancelled before its first turn ran no longer runs its brief when its first worker comes up late.
+- Automatic recovery waits while a `cancel` command runs on the job. A worker that died while a cancel was under
+  way, or that the cancel killed, could be resumed by its relay's wait and meet the cancel again; the relay now sees
+  the job end `cancelled`.
+- A `TaskStop` that cancelled a job records its hand-back, since the TaskStop result carried the cancelled block:
+  `status` no longer marks such a job `not handed back`.
+- The stop-time review gate reads the new JSON. `check-header` keeps its text answer.
+- The live suite's `stop` check requires the hand-back record.
+
 Phase 5, the live suite (development tooling; the plugin itself does not change):
 
 - `scripts/live/suite.mjs` runs live checks against the real backends, in the terminal and in T3 Code, and

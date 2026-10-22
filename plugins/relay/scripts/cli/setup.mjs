@@ -1,4 +1,4 @@
-import { parseCommandInput, resolveCommandCwd, outputResult } from "./shared.mjs";
+import { parseCommandInput, resolveCommandCwd, printJson } from "./shared.mjs";
 import { default as process } from "node:process";
 import { parseMcpOffSetting, setRepoConfig, setUserConfig, userConfigPath, FAST_TIER_VALUES } from "../lib/jobs/config.mjs";
 import { UsageError } from "../lib/util/errors.mjs";
@@ -70,7 +70,8 @@ export async function handleSetup(argv) {
     }
   }
   const page = await buildSetupPage(cwd, { only, actionsTaken });
-  outputResult(options.json ? page : renderSetupPage(page), options.json);
+  if (options.json) printJson("setup", page);
+  else process.stdout.write(renderSetupPage(page));
   // The overview answers whatever it finds; one backend keeps the non-zero exit when not ready.
   if (only && !page.ready) process.exitCode = EXIT.usage;
 }

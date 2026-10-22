@@ -85,7 +85,7 @@ test("cancelled with a pending continuation exits five", () => {
 
 test("worker and ownership share identity decisions and keep private helpers private", async () => {
   const modules = makeTempDir("relay-identity-check-");
-  for (const file of ["jobs/store.mjs", "jobs/lease.mjs", "util/ownership.mjs"]) {
+  for (const file of ["jobs/store.mjs", "jobs/lease.mjs", "util/ownership.mjs", "util/errors.mjs"]) {
     fs.mkdirSync(path.dirname(path.join(modules, file)), { recursive: true });
     fs.copyFileSync(new URL(`../plugins/relay/scripts/lib/${file}`, import.meta.url), path.join(modules, file));
   }

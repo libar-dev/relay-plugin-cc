@@ -1,17 +1,43 @@
-import { sleep, envNumber, parseCommandInput, resolveJobReference, outputResult } from "./shared.mjs";
+import { sleep, envNumber, parseCommandInput, resolveJobReference, printJson } from "./shared.mjs";
+import fs from "node:fs";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
 import { readProcessStartTime, snapshotProcessTree, stopProcessSnapshot, terminateProcessTree } from "../lib/util/process.mjs";
 import { releaseLeaseToConsumer } from "../lib/worker/delivery.mjs";
-import { acquireWorkerLease, isWorkerAlive, readLease } from "../lib/jobs/lease.mjs";
-import { claimInboxMessages, owedMessages, writeOutcome, postInboxMessage, recordReceipt } from "../lib/jobs/messages.mjs";
-import { nowIso, readJob, TERMINAL_STATES, writeJob } from "../lib/jobs/store.mjs";
+import { acquireWorkerLease, isWorkerAlive, isWorkerLease, readLease } from "../lib/jobs/lease.mjs";
+import { claimInboxMessages, owedMessages, readOutcome, writeOutcome, postInboxMessage, recordReceipt } from "../lib/jobs/messages.mjs";
+import { AttemptChanged, UsageError } from "../lib/util/errors.mjs";
+import { jobPaths, nowIso, readJob, readJsonOrNull, TERMINAL_STATES, writeJob, writeJsonAtomic } from "../lib/jobs/store.mjs";
 import { EXIT, isTerminalView, JobViewBusy, jobViewJson, loadJobView as readView, loadJobViewSettled as loadJobView, renderJobBlock } from "../lib/jobs/view.mjs";
 
-// The state now, or null while the job is busy (its record changing): a busy job has not ended.
+const TAKEN_ACTIONS = new Set(["interrupt-sent", "interrupt-failed", "cancelled", "nothing-to-cancel"]);
+
 function stateNow(jobDir) {
-  try { return readView(jobDir).state; }
+  try { return readView(jobDir); }
   catch (error) { if (error instanceof JobViewBusy) return null; throw error; }
+}
+
+function cancelStopped(jobDir, message, attempt, includeDead = true, killed = false) {
+  const view = stateNow(jobDir);
+  const outcome = message ? readOutcome(jobDir, message.id) : null;
+  if (outcome?.action === "no-op") return true;
+  return view !== null && (TERMINAL_STATES.has(view.state) || (includeDead && view.state === "dead") ||
+    (attempt !== null && (killed || TAKEN_ACTIONS.has(outcome?.action)) && view.job.attempts.length > attempt));
+}
+
+function checkRefused(jobDir, message) {
+  const outcome = message ? readOutcome(jobDir, message.id) : null;
+  if (outcome?.action === "no-op") {
+    throw new AttemptChanged(`Job ${path.basename(jobDir)}: ${outcome.reason ?? "the attempt changed"}; nothing was cancelled.`);
+  }
+  return outcome;
+}
+
+function checkAttempt(job, expected) {
+  const current = job.attempts?.length ?? 0;
+  if (expected !== null && current !== expected && !(expected === 1 && current === 0)) {
+    throw new AttemptChanged(`Job ${job.id} is at attempt ${current}, not ${expected}: nothing was cancelled.`);
+  }
 }
 
 
@@ -27,29 +53,43 @@ async function waitUntil(predicate, timeoutMs, pollMs = 200) {
 }
 
 
-// Cancel writes only after confirming the worker is dead and taking its lease.
-// Its lease role does not consume messages. Returns what happened:
-// - { wrote: true } when the cancel wrote the cancelled state itself;
-// - { ended: state } when a worker had ended the job before the write; its end stands;
-// - { delegated, pid, ended } when a worker started after that death (a resume, a continue,
-//   automatic recovery) holds the lease and owns job.json. The cancel goes to it as an
-//   inbox message, and the command waits, up to the cancel grace, for the job to end;
-//   `ended` is null when it has not.
-function markCancelledAfterKill(jobDir, reason) {
+// A nonworker holder cannot consume a delegated cancel, so wait for its short write.
+function markCancelledAfterKill(jobDir, reason, attempt = null, killed = false, originalMessage = null, taken = false) {
   const me = { pid: process.pid, startTime: readProcessStartTime(process.pid) };
-  if (!acquireWorkerLease(jobDir, me, "cancel")) {
+  const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  const deadline = Date.now() + 2000;
+  while (!acquireWorkerLease(jobDir, me, "cancel")) {
     const holder = readLease(jobDir);
-    postInboxMessage(jobDir, { kind: "cancel", text: "" });
-    const deadline = Date.now() + envNumber("RELAY_JOBS_CANCEL_GRACE_MS", 10000);
-    let state = stateNow(jobDir);
-    while (!TERMINAL_STATES.has(state) && Date.now() < deadline) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, Math.min(100, deadline - Date.now())));
-      state = stateNow(jobDir);
+    if (!isWorkerLease(holder) && Date.now() < deadline) {
+      pause();
+      continue;
     }
-    return { delegated: true, pid: holder?.pid ?? "unknown", role: holder?.role ?? "worker", ended: TERMINAL_STATES.has(state) ? state : null };
+    let message = originalMessage;
+    if (attempt === null || (!killed && !taken)) {
+      checkAttempt(readJob(jobDir), attempt);
+      message = postInboxMessage(jobDir, { kind: "cancel", text: "", ...(attempt !== null ? { attempt } : {}) });
+    }
+    if (!isWorkerLease(holder)) return { delegated: true, pid: holder?.pid, role: holder?.role };
+    const sameWorker = holder.pid === readJob(jobDir).worker?.pid;
+    const until = Date.now() + envNumber("RELAY_JOBS_CANCEL_GRACE_MS", 10000);
+    while (!cancelStopped(jobDir, message, attempt, false, killed) && Date.now() < until) pause();
+    const view = loadJobView(jobDir);
+    const outcome = checkRefused(jobDir, message);
+    if (attempt !== null && view.job.attempts.length > attempt && (killed || TAKEN_ACTIONS.has(outcome?.action))) {
+      if (killed) finishKilledCancel(jobDir, originalMessage, attempt);
+      return { advanced: view.job.attempts.length, outcome };
+    }
+    checkAttempt(view.job, attempt);
+    return { delegated: true, pid: holder.pid, role: holder.role, sameWorker, ended: TERMINAL_STATES.has(view.state) ? view.state : null };
   }
   try {
     const job = readJob(jobDir);
+    const outcome = checkRefused(jobDir, originalMessage);
+    if ((killed || taken) && attempt !== null && job.attempts.length > attempt) {
+      if (killed) finishKilledCancel(jobDir, originalMessage, attempt);
+      return { advanced: job.attempts.length, outcome };
+    }
+    checkAttempt(job, attempt);
     if (TERMINAL_STATES.has(job.state)) {
       return { ended: job.state };
     }
@@ -62,16 +102,27 @@ function markCancelledAfterKill(jobDir, reason) {
       ...job,
       attempts,
       state: "cancelled",
+      pendingFirstTurn: false,
       errorMessage: reason,
       completedAt: nowIso(),
       cancelledBy: "cancel command"
     });
-    // Messages the dead worker owed, and any still in the inbox, are reported as dropped.
+    // Save the terminal state before closing messages the dead worker left behind.
     for (const message of [...owedMessages(jobDir), ...claimInboxMessages(jobDir)]) {
-      writeOutcome(jobDir, message.id, {
-        action: message.kind === "cancel" ? "cancelled" : "dropped",
-        reason: "the job was cancelled"
-      });
+      if (message.kind !== "cancel") writeOutcome(jobDir, message.id, { action: "dropped", reason: "the job was cancelled" });
+    }
+    const claimed = jobPaths(jobDir).claimed;
+    for (const name of fs.readdirSync(claimed)) {
+      if (!name.endsWith(".json")) continue;
+      const message = readJsonOrNull(path.join(claimed, name));
+      if (message?.kind !== "cancel") continue;
+      const outcome = readOutcome(jobDir, message.id);
+      if (outcome && !["interrupt-sent", "interrupt-failed"].includes(outcome.action)) continue;
+      const current = attempts.length;
+      const mismatch = message.attempt !== undefined && message.attempt !== current && !(message.attempt === 1 && current === 0);
+      writeOutcome(jobDir, message.id, mismatch
+        ? { action: "no-op", reason: `attempt ${message.attempt} is not the job's current attempt (${current})` }
+        : { action: "cancelled" });
     }
     return { wrote: true };
   } finally {
@@ -81,16 +132,31 @@ function markCancelledAfterKill(jobDir, reason) {
 }
 
 
-// The cancel's report when it did not write the state itself. A cancel left with a live
-// worker that has not ended the job exits nonzero, so a relay retries it.
-function reportCancelHandOff(jobDir, result, actions) {
-  if (result.delegated && !result.ended) {
+function finishKilledCancel(jobDir, message, attempt) {
+  if (!message) return;
+  const outcome = readOutcome(jobDir, message.id);
+  if (!outcome || ["interrupt-sent", "interrupt-failed"].includes(outcome.action)) {
+    writeOutcome(jobDir, message.id, { action: "cancelled", reason: `the cancel stopped attempt ${attempt}'s worker` });
+  }
+}
+
+function advancedAction(attempt, current, outcome) {
+  return outcome?.action === "nothing-to-cancel"
+    ? `attempt ${attempt} had already ended (${outcome.state}); attempt ${current} runs`
+    : `attempt ${attempt} was stopped; attempt ${current} started since, for a message, and runs on`;
+}
+
+// A cancel left with a worker still running exits nonzero so its relay retries it.
+function reportCancelHandOff(jobDir, result, actions, asJson, attempt = null) {
+  if (result.advanced) {
+    actions.push(advancedAction(attempt, result.advanced, result.outcome));
+  } else if (result.delegated && !result.ended) {
     const jobId = readJob(jobDir)?.id ?? path.basename(jobDir);
     actions.push(`the job is still running; the cancel is with its ${result.role} (pid ${result.pid})`);
-    process.stderr.write(`Job ${jobId} is still running; the cancel is with its ${result.role} (pid ${result.pid}).\n`);
+    if (!asJson) process.stderr.write(`Job ${jobId} is still running; the cancel is with its ${result.role} (pid ${result.pid}).\n`);
     process.exitCode = EXIT.running;
   } else if (result.delegated) {
-    actions.push(`the cancel went to the job's ${result.role === "worker" ? "new worker" : result.role} (pid ${result.pid}), which ended it ${result.ended}`);
+    actions.push(`the cancel went to the job's ${result.role === "worker" && !result.sameWorker ? "new worker" : result.role} (pid ${result.pid}), which ended it ${result.ended}`);
   } else if (result.ended) {
     actions.push(`a worker ended the job ${result.ended} before the cancel wrote it`);
   }
@@ -123,76 +189,126 @@ function mergeSnapshots(...snapshots) {
 }
 
 
-// Cancel leaves nothing running: the worker, its app-server and every descendant are
-// snapshotted (with start times) before anything is signalled, and swept at the end.
+// Snapshot before signalling so descendants remain identifiable after their parent dies.
 export async function handleCancel(argv) {
-  const { options, positionals } = parseCommandInput(argv, { booleanOptions: ["json"] });
-  const jobDir = resolveJobReference(positionals[0], "cancel");
-  let view = loadJobView(jobDir);
-  const actions = [];
-  let tree = snapshotProcessTree(processRoots(view.job));
-  if (tree.cause) throw new Error(`Could not cancel job ${view.job.id}: ${tree.cause}.`);
-  if (isTerminalView(view) && view.state !== "dead") {
-    // Nothing to interrupt. The request is still recorded as handled: a no-op receipt.
-    recordReceipt(jobDir, { kind: "cancel", text: "" }, { action: "no-op", reason: `the job had already ${view.state === "completed" ? "completed" : `ended (${view.state})`}` });
-    actions.push(`already ${view.state}`);
-  } else if (view.state === "dead") {
-    if (view.job.worker?.pid) {
-      // The worker is gone; stop anything left in its process group.
-      terminateProcessTree(view.job.worker.pid);
-    }
-    const survivors = await stopProcessSnapshot(tree);
-    if (survivors.length > 0 || survivors.cause || tree.cause) {
-      throw new Error(`Could not stop processes ${survivors.map((entry) => entry.pid).join(", ")} of job ${view.job.id}${(survivors.cause || tree.cause) ? `: ${survivors.cause || tree.cause}` : ""}.`);
-    }
-    const result = markCancelledAfterKill(jobDir, "Cancelled after the worker had died.");
-    if (result.wrote) {
-      recordReceipt(jobDir, { kind: "cancel", text: "" }, { action: "cancelled", reason: "the worker had died; the job was marked cancelled" });
-      actions.push("worker was already gone; marked cancelled");
-    } else {
-      reportCancelHandOff(jobDir, result, actions);
-    }
-  } else {
-    const graceMs = envNumber("RELAY_JOBS_CANCEL_GRACE_MS", 10000);
-    if (view.job.kind === "task" || !view.job.kind) {
-      postInboxMessage(jobDir, { kind: "cancel", text: "" });
-      actions.push("asked the worker to interrupt the turn");
-    }
-    const stopped = await waitUntil(() => { const state = stateNow(jobDir); return state !== null && isTerminalView({ state }); }, graceMs);
-    view = loadJobView(jobDir);
-    const worker = view.job.worker;
-    tree = mergeSnapshots(tree, snapshotProcessTree(processRoots(view.job)));
-    // This second read can fail (`tree.cause`). The worker's group is still signalled below, by
-    // pid alone, and the sweep after it signals nothing it cannot check before the failure is
-    // reported: only the first read's failure stops cancel before any signal.
-    if (!stopped || view.state === "dead") {
-      if (worker?.pid && isWorkerAlive(worker)) {
-        const kill = terminateProcessTree(worker.pid);
-        actions.push(`killed the worker process ${kill.method === "process" ? "" : "tree "}(${worker.pid}) after ${Math.round(graceMs / 1000)}s`);
-      }
-    } else if (worker?.pid) {
-      // The worker stopped the turn itself; let it finish closing its app-server.
-      await waitUntil(() => !isWorkerAlive(worker), 5000, 100);
-    }
-    const survivors = await stopProcessSnapshot(tree);
-    if (survivors.length > 0 || survivors.cause || tree.cause) {
-      throw new Error(`Could not stop processes ${survivors.map((entry) => entry.pid).join(", ")} of job ${view.job.id}. ${survivors.cause ?? tree.cause ?? "They are still running"}.`);
-    }
-    if (tree.length > 1) {
-      actions.push(`stopped ${tree.length} processes (worker, app-server and descendants)`);
-    }
-    const after = loadJobView(jobDir);
-    if (!isTerminalView(after) || after.state === "dead") {
-      const result = markCancelledAfterKill(jobDir, "Cancelled: the worker was stopped.");
-      if (!result.wrote) {
-        reportCancelHandOff(jobDir, result, actions);
-      }
-    }
+  let parsed;
+  try { parsed = parseCommandInput(argv, { booleanOptions: ["json"], valueOptions: ["attempt"] }); }
+  catch (error) {
+    if (error.message === "Missing value for --attempt") throw new UsageError("--attempt must be a positive integer.");
+    throw error;
   }
-  view = loadJobView(jobDir);
-  if (options.json) {
-    outputResult({ ...jobViewJson(view), actions }, true);
-  } else {
-    process.stdout.write(`${renderJobBlock(view)}${actions.map((action) => `cancel: ${action}`).join("\n")}\n`);
+  const { options, positionals } = parsed;
+  const attempt = options.attempt === undefined ? null : Number(options.attempt);
+  if (attempt !== null && (!/^\d+$/.test(options.attempt) || !Number.isSafeInteger(attempt) || attempt < 1)) {
+    throw new UsageError("--attempt must be a positive integer.");
+  }
+  const jobDir = resolveJobReference(positionals[0], "cancel");
+  const record = path.join(jobDir, "cancelling", `${process.pid}.json`);
+  fs.mkdirSync(path.dirname(record), { recursive: true });
+  writeJsonAtomic(record, { pid: process.pid, startTime: readProcessStartTime(process.pid), at: nowIso() });
+  try {
+    let view = loadJobView(jobDir);
+    if (!isTerminalView(view) || view.state === "dead") checkAttempt(view.job, attempt);
+    const actions = [];
+    let tree = snapshotProcessTree(processRoots(view.job));
+    if (tree.cause) throw new Error(`Could not cancel job ${view.job.id}: ${tree.cause}.`);
+    if (isTerminalView(view) && view.state !== "dead") {
+      // Nothing to interrupt. The request is still recorded as handled: a no-op receipt.
+      recordReceipt(jobDir, { kind: "cancel", text: "" }, { action: "no-op", reason: `the job had already ${view.state === "completed" ? "completed" : `ended (${view.state})`}` });
+      actions.push(`already ${view.state}`);
+    } else if (view.state === "dead") {
+      checkAttempt(readJob(jobDir), attempt);
+      if (view.job.worker?.pid) {
+        // The worker is gone; stop anything left in its process group.
+        terminateProcessTree(view.job.worker.pid);
+      }
+      const survivors = await stopProcessSnapshot(tree);
+      if (survivors.length > 0 || survivors.cause || tree.cause) {
+        throw new Error(`Could not stop processes ${survivors.map((entry) => entry.pid).join(", ")} of job ${view.job.id}${(survivors.cause || tree.cause) ? `: ${survivors.cause || tree.cause}` : ""}.`);
+      }
+      const result = markCancelledAfterKill(jobDir, "Cancelled after the worker had died.", attempt);
+      if (result.wrote) {
+        recordReceipt(jobDir, { kind: "cancel", text: "" }, { action: "cancelled", reason: "the worker had died; the job was marked cancelled" });
+        actions.push("worker was already gone; marked cancelled");
+      } else {
+        reportCancelHandOff(jobDir, result, actions, options.json, attempt);
+      }
+    } else {
+      const graceMs = envNumber("RELAY_JOBS_CANCEL_GRACE_MS", 10000);
+      let message = null;
+      if (view.job.kind === "task" || !view.job.kind) {
+        checkAttempt(readJob(jobDir), attempt);
+        message = postInboxMessage(jobDir, { kind: "cancel", text: "", ...(attempt !== null ? { attempt } : {}) });
+        actions.push("asked the worker to interrupt the turn");
+      }
+      const stopped = await waitUntil(() => cancelStopped(jobDir, message, attempt), graceMs);
+      view = loadJobView(jobDir);
+      let outcome = checkRefused(jobDir, message);
+      let taken = TAKEN_ACTIONS.has(outcome?.action);
+      let killed = false;
+      const refresh = () => {
+        view = loadJobView(jobDir);
+        outcome = checkRefused(jobDir, message);
+        taken = TAKEN_ACTIONS.has(outcome?.action);
+      };
+      const runsOn = () => {
+        if (attempt === null || view.job.attempts.length <= attempt) return false;
+        if (killed) finishKilledCancel(jobDir, message, attempt);
+        actions.push(advancedAction(attempt, view.job.attempts.length, outcome));
+        return true;
+      };
+      const advanced = () => attempt !== null && view.job.attempts.length > attempt && (killed || taken);
+      const worker = view.job.worker;
+      const cooperative = attempt !== null && (taken || (stopped && view.state !== "dead"));
+      if (cooperative) {
+        // The worker answered and may begin a newer attempt, so it is never signalled. Its tree is read
+        // again for what attempt N left (a tool started while the turn was interrupted): a newer attempt is
+        // recorded before its server starts, so a read after which the count is still N holds none of it.
+        const later = worker?.pid && isWorkerAlive(worker) ? snapshotProcessTree([worker.pid]) : [];
+        const current = readJob(jobDir)?.attempts?.length ?? 0;
+        const merged = current === attempt || (attempt === 1 && current === 0) ? mergeSnapshots(tree, later) : tree;
+        tree = Object.assign(merged.filter(entry => entry.pid !== worker?.pid), merged.cause ? { cause: merged.cause } : {});
+      } else {
+        tree = mergeSnapshots(tree, snapshotProcessTree(processRoots(view.job)));
+      }
+      if (!advanced()) {
+        checkAttempt(view.job, attempt);
+        // Check again just before signalling: the worker can begin a queued attempt meanwhile.
+        if (!cooperative && (!stopped || view.state === "dead")) {
+          checkAttempt(readJob(jobDir), attempt);
+          if (worker?.pid && isWorkerAlive(worker)) {
+            const kill = terminateProcessTree(worker.pid);
+            killed = kill.delivered;
+            if (killed) actions.push(`killed the worker process ${kill.method === "process" ? "" : "tree "}(${worker.pid}) after ${Math.round(graceMs / 1000)}s`);
+          }
+        } else if (worker?.pid) {
+          await waitUntil(() => !isWorkerAlive(worker) || (attempt !== null && (stateNow(jobDir)?.job.attempts.length ?? 0) > attempt), 5000, 100);
+          refresh();
+          if (cooperative && isWorkerAlive(worker) && !advanced()) {
+            actions.push(isTerminalView(view)
+              ? `the worker (pid ${worker.pid}) is still closing; it is left to finish`
+              : `the worker (pid ${worker.pid}) has not ended the turn; it is left to finish`);
+          }
+        }
+      }
+      const survivors = await stopProcessSnapshot(tree);
+      if (survivors.length > 0 || survivors.cause || tree.cause) {
+        throw new Error(`Could not stop processes ${survivors.map((entry) => entry.pid).join(", ")} of job ${view.job.id}. ${survivors.cause ?? tree.cause ?? "They are still running"}.`);
+      }
+      if (tree.length > 1) actions.push(`stopped ${tree.length} processes (worker, app-server and descendants)`);
+      refresh();
+      if (!((killed || taken) && runsOn()) && (!isTerminalView(view) || view.state === "dead")) {
+        const result = markCancelledAfterKill(jobDir, "Cancelled: the worker was stopped.", attempt, killed, message, taken);
+        if (!result.wrote) reportCancelHandOff(jobDir, result, actions, options.json, attempt);
+      }
+    }
+    view = loadJobView(jobDir);
+    if (options.json) {
+      printJson("cancel", { ...jobViewJson(view), actions });
+    } else {
+      process.stdout.write(`${renderJobBlock(view)}${actions.map((action) => `cancel: ${action}`).join("\n")}\n`);
+    }
+  } finally {
+    fs.unlinkSync(record);
   }
 }

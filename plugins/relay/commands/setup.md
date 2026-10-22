@@ -10,6 +10,8 @@ Run:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json $ARGUMENTS
 ```
 
+The output is one JSON object (`schema: "relay.setup/1"`). When it holds `error`, print its `message` and stop.
+
 With no `--backend`, setup checks every backend home it finds and exits 0 whatever it finds: the
 Codex home (`~/.codex` or `CODEX_HOME`), `~/.grok` and every `~/.grok-<name>`, ZCode, and
 `~/.kimi-code` and every `~/.kimi-code-<name>`. `--backend codex|grok|zcode|kimi` checks one,

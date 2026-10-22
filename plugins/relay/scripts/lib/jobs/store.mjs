@@ -18,6 +18,7 @@ import { default as os } from "node:os";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
 import { runCommand } from "../util/process.mjs";
+import { JobNotFound } from "../util/errors.mjs";
 
 
 export const JOBS_HOME_ENV = "RELAY_JOBS_HOME";
@@ -211,7 +212,7 @@ export function findJobDir(reference, env = process.env) {
     if (fs.existsSync(jobPaths(ref).job)) {
       return ref;
     }
-    throw new Error(`No job found for "${ref}" under ${resolveJobsHome(env)}.`);
+    throw new JobNotFound(`No job found for "${ref}" under ${resolveJobsHome(env)}.`);
   }
   const all = listJobDirs({ env });
   const exact = all.filter((dir) => path.basename(dir) === ref);
@@ -225,5 +226,5 @@ export function findJobDir(reference, env = process.env) {
   if (prefix.length > 1) {
     throw new Error(`Job reference "${ref}" is ambiguous. Use the full job id.`);
   }
-  throw new Error(`No job found for "${ref}" under ${resolveJobsHome(env)}.`);
+  throw new JobNotFound(`No job found for "${ref}" under ${resolveJobsHome(env)}.`);
 }

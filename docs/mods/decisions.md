@@ -453,6 +453,91 @@ attempts. `C steer` and `C continue` already reach a job without its relay. The 
 `cancel` to a Workflow relay, which the Phase 3 branch's D42 and D44 rely on. Phase 3's checks should measure it
 (the Phase 3 thread was told); if none does, the release does.
 
+### D54. Where D3's manual Desktop pass runs (owner, 22 October 2026)
+
+D3 holds: the board is checked with the test kit's `desktop` mount on Fedora, plus one manual pass before the
+release. That pass, and every Desktop test and screenshot, runs on the M3 itself: the Claude desktop app's Code tab
+on the M3, a local session in a folder on the M3 with the build installed there by `scripts/smoke/install-local.sh`,
+and a T3 thread on the M3 that drives the app through Cua Driver and keeps the screenshots there. The app has no
+Fedora build (its Linux beta is for Debian 12+ and Ubuntu 22.04+), and the M3 cannot reach the ThinkPad over SSH
+(its key is not authorized there), so an SSH session from the app is not the route. The app's own Claude Code
+(2.1.308 on both Macs) is above relay's floor.
+
+### D55. The companion's JSON: one object per command that names its shape (Phase 4 thread)
+
+Every `--json` output is one object on stdout whose first fields are `schema` (`relay.<command>/1`, raised when
+that command's shape changes), `relayVersion` and `relayBuild` (D37's commit). An error under `--json` is the same
+header with `error: { kind, message }` on stdout, nothing a reader needs on stderr, and the exit code it had: `busy`
+4, and `not-found`, `usage`, `attempt-changed` and `error` 1. A malformed argument list that swallows `--json` as
+another option's value still answers in JSON. A job object keeps today's fields and names, flat at
+the top, so a script that read `.state` or `.handedBackAt` reads them still; every field is present (null, false,
+0 or an empty list when it has no value), and `backend` is always set. `status` has two forms under one schema, a
+listing without a job and one job with it, as the command's arguments choose. Rejected: an envelope
+(`{ ok, data }`), which would move every field a script reads; a `bridge` command beside it (the plan's Rejected,
+a second interface); schema names per form, which would name the arguments, not the command.
+
+### D56. A JSON listing is pages of slim rows (Phase 4 thread)
+
+The status line and the board read listings through `$.process.run`, which keeps 4 MiB of stdout. A full row is
+mostly attempt records with server stderr tails (1.29 MB for 473 jobs), so a row leaves out `attemptRecords`, the
+server and the messages, cuts the relay binding and the errors to what a list shows, and keeps a few entries of each
+list (owed, dropped, recovered, violations) with its full count, and every string in a row is cut to 300
+characters; Sol's reviews built 6.2 MB of rows from 300 dropped messages a job, then a 5 MiB row from one long model
+name. A page also ends before 2 MiB: 50 rows of a 300-job home
+with large attempt records came to 50 KB, read in 0.16 s. Pages are 50 rows by default and at most 200, newest
+first by `createdAt`, then job id, and a cursor names the last row's key, so a job created between pages never
+shifts them. `--active` keeps the jobs that are starting, running or dead, or owe messages; it skips a job whose
+stored state has ended and whose inbox owes nothing without viewing it. `--limit`, `--cursor` and `--active` are
+`--json` options: the text listing (`/relay:status`'s) is unchanged. One job's JSON keeps every field.
+
+### D57. `cancel --attempt` cancels only while that attempt is current (Phase 4 thread)
+
+The board's Cancel names a job and an attempt, and a continue or an automatic recovery can begin the next attempt
+between the press and the cancel. `cancel --attempt N` checks before it posts; its message carries N, and the worker
+answers `no-op` to one for another attempt, which closes the window between that check and the worker taking the
+message. A starting job's first attempt counts as 1. Once attempt N is stopped, a newer attempt a message starts runs
+on and `cancel` succeeds, saying so.
+
+Two review rounds by GPT-6.1 Sol and Opus 5.5 found the same kind of defect each time: `cancel` reading the job and
+then acting on it outside the worker, which can begin an attempt between the two. The first version re-checked the
+attempt at more points, and each round found a window between a check and a signal or a lease. The rules that hold by
+construction:
+
+- When the worker took the cancel, `cancel` never signals the worker's process. The worker answered, closes its own
+  server, and may begin a newer attempt at any moment; `cancel` sweeps only attempt N's other processes.
+- `cancel` kills a worker only when it has not taken the cancel within the grace and the attempt is still N.
+- Recovery waits while a `cancel` command runs on the job (each records its process in `cancelling/`), instead of
+  `cancel` guessing whether a new worker is a recovery or a message's. A worker that died during a cancel, or that the
+  cancel killed, is not resumed, and a relay's `wait` sees the job end `cancelled`, not `dead`. This holds for every
+  cancel. A first version classified the cancel messages (`hasOpenCancel`) and was wrong both ways in round 2.
+- The worker writes the terminal state before the cancel messages' outcomes, so no reader sees a closed cancel on a
+  job that is not cancelled.
+
+A third, narrow round on these paths found smaller gaps (a pending cancel of another attempt settled as
+`cancelled`, attempt N's processes left unswept when a newer attempt ran on, a second cancel posted to a worker that
+had taken the first, a recovery that began before the cancel's record and acted after it, a lease holder's wait
+that dropped the old fallback). Each was fixed in place, and one that release/3.0 had too: a job cancelled before
+its first worker ran could run its brief when that worker came up late.
+
+Without `--attempt` nothing else changes; `/relay:cancel` and the TaskStop hook pass none.
+
+### D58. A TaskStop that cancelled a job records its hand-back (Phase 4 thread)
+
+Phase 3 left it open: such a job showed `not handed back`, though the TaskStop result carried the cancelled block,
+and the board would flag it as a lost result. The TaskStop hook appends `{ agentId, attempts, state: "cancelled",
+by: "TaskStop" }` to `relay-handbacks.jsonl` when its cancel ended the job, and only then. The `stop` check requires
+the record.
+
+### D59. The job's JSON carries each message's outcome, the relay's last call and the launching session (Phase 4 thread)
+
+The board shows how each message was taken and whether a running job's relay still lives, and routes Steer and
+Continue. So one job's JSON lists every message with its stage, a one-line preview (120 characters; the text stays in
+the job's files), the relay's transcript entry that carried it, and its outcome from `inbox/outcomes/`; `relay.lastToolAt`
+is the relay guard's record of the relay's last tool call;
+`claudeSessionId` is the Claude Code session the job was started from (`launchedBy`), which a relay of the
+Agent tool shares. A waiting relay calls about every nine minutes; the gap can pass ten (the Bash tool's limit) by its
+own model's step and the guard's lock wait, so a reader that judges a relay lost allows more than that.
+
 ### D60. How relay 3.0 is reviewed, proved and released (owner, 22 October 2026)
 
 The owner's decisions after PR #12, in parts. What they touch:

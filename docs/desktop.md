@@ -97,7 +97,8 @@ Open a git repository's top-level folder in the Code tab, choose Auto, and start
    Failed, and no job folder is created.
 5. Stop a job. Launch another job like the one in step 2 with `sleep 120`, and ask the session to stop its agent
    with `TaskStop`. The job becomes `cancelled`: in the check 0.4 s later, though a cancel may take up to about 10
-   seconds. `/relay:status` lists it as cancelled, "not handed back".
+   seconds. `/relay:status` lists it as cancelled; from 3.0.0-dev.5 it is no longer marked "not handed back",
+   since the TaskStop result carried the cancelled job's block.
 6. Run a Workflow. Ask the session to run a Workflow whose script calls `agent(prompt, { agentType: 'relay:job' })`
    with a short job. The Workflow returns the job's state block. It shows as a card in the conversation, and in the
    Background tasks panel with its phases and agents.
