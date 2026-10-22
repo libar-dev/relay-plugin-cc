@@ -184,7 +184,8 @@ test("the jobs skill covers the header, SendMessage and the companion commands",
   assert.match(skill, /## How the relay is carried by code/);
   assert.match(skill, /`relay-violation:`/);
   assert.match(skill, /`SendMessage` with exactly `cancel`/);
-  assert.match(skill, /`TaskStop` on the agent/);
+  assert.match(skill, /`TaskStop` on the agent \| stops the agent and cancels the job/);
+  assert.match(skill, /Workflow agent spawn denied by a plugin: <reason>/);
   assert.match(skill, /within seconds: the plugin's hooks module ends the relay's current wait/);
   for (const command of ["start", "wait", "status", "result", "steer", "continue", "resume", "cancel"]) {
     assert.match(skill, new RegExp(`\\| \`C ${command}`));
@@ -238,11 +239,14 @@ test("internal docs point task work at relay:jobs", () => {
   assert.match(promptRecipes, /## Narrow fix/);
 });
 
-test("hooks keep the session exports and stop gating, and no SessionEnd hook ends jobs", () => {
+test("hooks keep the session exports and stop gating, add TaskStop cancellation, and no SessionEnd hook ends jobs", () => {
   const source = read("hooks/hooks.json");
   assert.match(source, /SessionStart/);
   assert.doesNotMatch(source, /SessionEnd/);
   assert.match(source, /hooks\/relay-guard\.mjs/);
+  assert.match(source, /"PostToolUse"/);
+  assert.match(source, /"matcher": "TaskStop"/);
+  assert.match(source, /hooks\/relay-stop\.mjs/);
   assert.match(source, /hooks\/stop-review-gate\.mjs/);
   assert.match(source, /hooks\/session-lifecycle\.mjs/);
 });
@@ -322,11 +326,11 @@ test("README carries the first hour, stop gate, Claude Code dependency and devel
   for (const source of [readme, internals]) {
     assert.ok(source.includes("The relay reads two things Claude Code does not publish as an interface: the agent transcript and the Workflow tool's run journal"));
     assert.match(source, /Claude Code 2\.1\.287 and 2\.1\.288/);
-    assert.match(source, /the `session\.send` event of the Mod API, so the floor is Claude Code 2\.1\.307/);
+    assert.match(source, /the `session\.send` and `agent\.spawn` events of the Mod API, so the floor is Claude Code 2\.1\.307/);
     assert.match(source, /A Claude Code update can break it\./);
     assert.ok(source.includes("the job's `job.json` must hold the call's key as `relay.journalKey`"));
     assert.ok(source.includes("once another relay has adopted the job, its `relay.json` holds the binding"));
-    assert.match(source, /The module only wakes a waiting relay: delivery runs on command hooks and the transcript/);
+    assert.match(source, /The module only checks headers and wakes a waiting relay: delivery runs on command hooks and the transcript/);
   }
   assert.ok(internals.includes("stores that key as `relay.journalKey` in the job's `job.json`"));
   assert.doesNotMatch(internals, /binds the job to that key in the job's `relay\.json`/);

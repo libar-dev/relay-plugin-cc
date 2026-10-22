@@ -32,8 +32,8 @@ chosen). The stop-time review gate and transfer run on Codex.
 
 Requirements:
 
-- Claude Code 2.1.307 or later: the plugin's hooks module needs its `session.send` event, and the
-  relay hooks need `SubagentHandback`.
+- Claude Code 2.1.307 or later: the plugin's hooks module needs its `session.send` and `agent.spawn`
+  events, and the relay hooks need `SubagentHandback`.
 - Node.js 22 or later.
 - macOS or Linux. The process sweep reads the process table with `ps`.
 - At least one backend CLI, signed in: the Codex CLI, Grok Build, ZCode or Kimi Code. Release 2.1.2
@@ -255,7 +255,7 @@ Your Codex sign-in, API key and provider configuration apply as they do in the C
 
 The relay reads two things Claude Code does not publish as an interface: the agent transcript and
 the Workflow tool's run journal. Its markers were read from Claude Code 2.1.287 and 2.1.288, and its
-hooks need `SubagentHandback`. Its hooks module needs the `session.send` event of the Mod API, so the
+hooks need `SubagentHandback`. Its hooks module needs the `session.send` and `agent.spawn` events of the Mod API, so the
 floor is Claude Code 2.1.307. A Claude Code update can break it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json`
 must hold the call's key as `relay.journalKey` (once another relay has adopted the job, its
 `relay.json` holds the binding), and the script must get the state block back. Repeat this check
@@ -267,16 +267,18 @@ call's state-block return with its `relay.journalKey`, a relay restarted with `T
 without the adoption.
 
 The hooks are PreToolUse on `Bash`, `Write`, `SubagentHandback` and `StructuredOutput`,
-SubagentStop on `relay:job`, SessionStart and Stop. Claude Code gives subagents the
-`SubagentHandback` tool only in auto mode. In other modes, the SubagentStop hook checks the relay's
-final text against the job's result instead. The hooks module (`hooks/mod/register.js`) adds one
-`session.send` hook: when a message is sent to a relay, it ends the relay's current wait, and the
-guard delivers the message at the relay's next call. The module only wakes a waiting relay: delivery
-runs on command hooks and the transcript.
+SubagentStop on `relay:job`, PostToolUse on `TaskStop`, SessionStart and Stop. Claude Code gives
+subagents the `SubagentHandback` tool only in auto mode. In other modes, the SubagentStop hook checks
+the relay's final text against the job's result instead. The PostToolUse hook cancels the job of a
+relay that `TaskStop` stopped. The hooks module (`hooks/mod/register.js`) adds two hooks: on
+`agent.spawn`, it checks a `relay:job` prompt's header and refuses the spawn with the parser's
+message when the header is bad; on `session.send`, when a message is sent to a relay, it ends the
+relay's current wait, and the guard delivers the message at the relay's next call. The module only
+checks headers and wakes a waiting relay: delivery runs on command hooks and the transcript.
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.2. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.3. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash

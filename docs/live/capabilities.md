@@ -14,6 +14,9 @@ holds the checks; the records below name the builds.
 | Steer a running job with a Workflow agent's SendMessage | into the running turn, delivered in 3.3 s | into the running turn, delivered in 2.9 s | into the running turn, delivered in 4.4 s | as the next turn, delivered in 3.3 s |
 | Steer a running job with a plugin's session.send | into the running turn, delivered in 3.1 s | into the running turn, delivered in 4.4 s | into the running turn, delivered in 3.2 s | as the next turn, delivered in 3.3 s |
 | Continue a job after its hand-back | a new turn of the job, delivered in 2.5 s | a new turn of the job, delivered in 2.2 s | a new turn of the job, delivered in 2.3 s | a new turn of the job, delivered in 3.2 s |
+| Stop a running job with TaskStop | — | — | — | — |
+| End the Claude session during a job; the job runs on | — | — | — | — |
+| Spawn with a bad header fails at once | — | — | — | — |
 
 ## T3 Code
 
@@ -22,6 +25,8 @@ holds the checks; the records below name the builds.
 | Steer a running job with the main thread's SendMessage | into the running turn, delivered in 2.0–4.2 s | into the running turn, delivered in 1.8–5.9 s | into the running turn, delivered in 2.3–6.2 s | as the next turn, delivered in 2.1–5.9 s |
 | Steer a running job with a Workflow agent's SendMessage | into the running turn, delivered in 5.4 s | into the running turn, delivered in 6.3 s | into the running turn, delivered in 7.3 s | as the next turn, delivered in 6.3 s |
 | Continue a job after its hand-back | a new turn of the job, delivered in 4.6 s | a new turn of the job, delivered in 3.9 s | a new turn of the job, delivered in 4.3 s | a new turn of the job, delivered in 4.0 s |
+| Stop a running job with TaskStop | — | — | — | — |
+| Spawn with a bad header fails at once | — | — | — | — |
 
 ## How each backend took a message
 

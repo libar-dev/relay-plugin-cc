@@ -1,0 +1,38 @@
+{
+  "id": "kimi-job",
+  "state": "cancelled",
+  "completedAt": "2026-10-22T10:00:30.400Z",
+  "request": {
+    "backend": "kimi",
+    "model": "kimi-code/kimi-for-coding"
+  },
+  "relay": {
+    "agentId": "agent-kimi",
+    "transcriptPath": "../transcript/subagents/agent-kimi.jsonl",
+    "label": "stop-kimi",
+    "workflowRunId": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "startedAt": "2026-10-22T10:00:10.000Z",
+      "endedAt": "2026-10-22T10:00:30.400Z",
+      "state": "cancelled",
+      "relayVersion": "3.0.0-test"
+    }
+  ],
+  "messages": [
+    {
+      "id": "cancel-kimi",
+      "kind": "cancel",
+      "action": "interrupt-sent",
+      "at": "2026-10-22T10:00:30.400Z"
+    },
+    {
+      "id": "cancel-kimi",
+      "kind": "cancel",
+      "action": "cancelled",
+      "at": "2026-10-22T10:00:30.400Z"
+    }
+  ]
+}

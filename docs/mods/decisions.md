@@ -228,3 +228,61 @@ folder that is gone after the run. This is the one stored choice the tooling mak
 and only for a folder the runner created. A folder the caller names must already be a git work tree, which the
 runner never initializes, and already trusted: when Claude Code asks, the run stops. D13's rule holds for every other dialog. Reopen if Claude Code gets a per-session
 trust flag.
+
+### D41. TaskStop is mapped to its job by the id in the tool's result (Phase 3 thread)
+
+The plan asked to check first what TaskStop names. Measured on 2.1.308: `tool_input.task_id` is what the caller
+wrote, an agent id or the agent's `name`, while the `PostToolUse` result always carries the stopped agent's id
+(`task_id`, with `task_type: "local_agent"`). The hook reads the result's id, falls back to the input's, and finds
+the job through that id's relay pointer. It cancels only when the agent is the job's current relay, the rule
+`wake` follows, so a TaskStop on a relay that a resume replaced never cancels the job its new relay holds. Claude
+Code kills the relay's running Bash call, and no `SubagentStop` fires for a stopped relay, so nothing else of the
+guard runs. Reopen if TaskStop's result stops naming the agent by id.
+
+### D42. A TaskStop on a whole Workflow cancels nothing (Phase 3 thread)
+
+D2 covers a TaskStop on a relay agent. Claude Code offers no TaskStop for one agent of a Workflow (`No task found
+with ID`), and a TaskStop on the Workflow's own task (`task_type: "local_workflow"`) ends all its relays at once.
+Those jobs keep running: the Workflow tool tells a caller to stop a run with TaskStop before a `resumeFromRunId`,
+the resume adopts the running jobs (design.md, "Adoption by journal key"), and adoption never takes a cancelled
+job, so cancelling them would make every resume start the work over. The hook needs no rule for this: a
+Workflow's task id has no relay pointer. A Workflow job is cancelled with the message `cancel` to its relay's
+agent id, or with `companion cancel`. Reopen if Claude Code adds a TaskStop for one Workflow agent.
+
+### D43. The TaskStop hook waits for the cancel and tells the caller (Phase 3 thread)
+
+The hook runs `companion cancel` and waits for it (hook timeout 60 s, above cancel's 10 s grace and its process
+sweep), then returns the cancelled job's block as the hook's `additionalContext`, which the caller reads beside
+the TaskStop result. Measured: Codex and Kimi jobs were `cancelled` 0.2 s and 0.4 s after the call. A cancel that
+fails, or that leaves a newer worker still running (exit 4), is told to the caller with the command to retry,
+and recorded as a relay violation, so `status` and `result` show it. Rejected: running the cancel detached (an
+`async` hook or a background child), which returns sooner but tells the caller nothing, and leaves a failed
+cancel unseen until someone reads the job.
+
+### D44. The message `cancel` stays beside TaskStop (Phase 3 thread)
+
+Rule 4 asks for one solution for each thing. These are two: TaskStop ends the agent and cancels the job, and the
+caller gets no hand-back; the message `cancel` cancels the job and the relay hands back the cancelled job's
+result, as a Claude agent that is asked to stop reports. The message is also the only way to cancel the job of one
+Workflow agent (D42). The docs say when to use which.
+
+### D45. The spawn check fails open and skips the prompts it cannot judge (Phase 3 thread)
+
+The module's `agent.spawn` hook denies a spawn only when `companion check-header` ran and refused the prompt
+(exit 1 and an `error:` line); a timeout, a crash, a truncated output or a refused process start lets the spawn
+through, because `start --from-relay` runs the same checks and fails the relay as before. It skips a resumed
+agent (its prompt is the resuming message) and a Workflow agent whose prompt is the placeholder a run that keeps
+its script from hooks puts there (`(withheld: this workflow run does not share its script)`, read from the 2.1.308
+binary), since a denied placeholder would refuse a valid job. The deny text is the parser's message alone; Claude
+Code puts `Subagent spawn denied by a plugin: ` or `Workflow agent spawn denied by a plugin: ` before it. Measured:
+a Workflow agent's `agent.spawn` carries the script's prompt as written, not the framed task the relay reads from
+its transcript, so the check needs no unframing.
+
+### D46. The spawn check resolves relative paths against the spawn's directory (Phase 3 thread)
+
+`start` resolves a relative `cd:`, `add-dir:` or `brief:` against the relay's working directory. The hook knows
+only the spawn's (`cwd` when the call names one, else the session's); an agent started with worktree isolation
+runs in a worktree that does not exist yet at the spawn. The two differ only when a path exists in the worktree
+and not in the session's directory, which a worktree cut from the same commit makes rare; the opposite case lets a
+spawn through that `start` then refuses, as today. Rejected: skipping the path checks at the spawn. A wrong
+absolute `cd:` is a common mistake, and it would fail late again.

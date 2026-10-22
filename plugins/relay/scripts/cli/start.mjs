@@ -6,35 +6,25 @@ import { default as process } from "node:process";
 import { spawnWorker } from "../lib/worker/delivery.mjs";
 import { appendRelayViolation } from "../lib/jobs/messages.mjs";
 import { nowIso, readJob } from "../lib/jobs/store.mjs";
-import { buildLaunchRequest, parseHeaderPrompt, UsageError } from "../lib/jobs/request.mjs";
+import { buildLaunchRequest, readLaunchPrompt, UsageError } from "../lib/jobs/request.mjs";
 import { SCHEMA_SENTENCE } from "../lib/harness/workflow.mjs";
 import { backendJson, backendLines, backendSettingLines, EXIT, loadJobViewSettled as loadJobView, relayAdoptionLines } from "../lib/jobs/view.mjs";
 import { adoptRelayJob, deliverRelayMessages, findAdoptableRelayJob, promptSha256, readJournalKey, readRelayPointer, readRelayTranscript, writeRelayPointer } from "../lib/harness/relay.mjs";
 
 
-function readLaunchFromPrompt(text) {
-  const { header, brief } = parseHeaderPrompt(text);
-  let briefText = brief;
-  if (header.brief) {
-    if (brief.trim()) {
-      throw new UsageError("The header names a brief file, so nothing may follow the dashes.");
-    }
-    briefText = fs.readFileSync(path.resolve(process.cwd(), header.brief), "utf8");
-  }
-  return { values: header, brief: briefText };
-}
-
-
 function readLaunchFromOptions(options) {
   if (options["prompt-file"]) {
-    return readLaunchFromPrompt(readInputFile(options["prompt-file"]));
+    return readLaunchPrompt(readInputFile(options["prompt-file"]), { baseDir: process.cwd(), env: process.env });
   }
   if (!options["brief-file"]) {
     throw new UsageError("start needs --prompt-file <file>, or header options and --brief-file <file>.");
   }
   const brief = fs.readFileSync(path.resolve(process.cwd(), options["brief-file"]), "utf8");
+  if (!brief.trim()) {
+    throw new UsageError("The brief is empty.");
+  }
   return {
-    values: {
+    request: buildLaunchRequest({
       model: options.model,
       effort: options.effort,
       backend: options.backend,
@@ -45,7 +35,7 @@ function readLaunchFromOptions(options) {
       webSearch: options["web-search"],
       cd: options.cd,
       addDirs: options["add-dir"] ?? []
-    },
+    }, { baseDir: process.cwd(), env: process.env }),
     brief
   };
 }
@@ -140,12 +130,9 @@ async function handleStartFromRelay(options) {
     if (transcript.prompt.framed && !transcript.prompt.text.trim()) {
       throw new Error("The computed task is empty.");
     }
-    const launch = readLaunchFromPrompt(transcript.prompt.text);
+    const launch = readLaunchPrompt(transcript.prompt.text, { baseDir: process.cwd(), env: process.env });
     brief = launch.brief;
-    if (!brief.trim()) {
-      throw new UsageError("The brief is empty.");
-    }
-    request = buildLaunchRequest(launch.values, { baseDir: process.cwd() });
+    request = launch.request;
     // Harness trailers dropped from the prompt (the worktree note, a reminder) are noted.
     request.notes = [...request.notes, ...(transcript.prompt.notes ?? [])];
   } catch (error) {
@@ -189,11 +176,7 @@ export async function handleStart(argv) {
     await handleStartFromRelay(options);
     return;
   }
-  const { values, brief } = readLaunchFromOptions(options);
-  if (!brief.trim()) {
-    throw new UsageError("The brief is empty.");
-  }
-  const request = buildLaunchRequest(values, { baseDir: process.cwd() });
+  const { request, brief } = readLaunchFromOptions(options);
   const jobDir = createTaskJob(request, brief);
   spawnWorker(jobDir, request.cwd);
   const job = readJob(jobDir);

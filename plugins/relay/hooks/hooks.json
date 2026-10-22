@@ -1,5 +1,5 @@
 {
-  "description": "Session exports, the optional stop-time review gate, the relay:job relay hook, which carries the relay's prompt, messages and report, and a module whose session.send hook wakes a relay's wait when a message is queued for it.",
+  "description": "Session exports, the optional stop-time review gate, the relay:job relay hook, which carries the relay's prompt, messages and report, a TaskStop hook that cancels a stopped relay's job, and a module that checks a relay:job prompt's header at the spawn and wakes a relay's wait when a message is queued for it.",
   "modules": [
     "./mod/register.js"
   ],
@@ -34,6 +34,18 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/relay-guard.mjs\"",
             "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "TaskStop",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/relay-stop.mjs\"",
+            "timeout": 60
           }
         ]
       }

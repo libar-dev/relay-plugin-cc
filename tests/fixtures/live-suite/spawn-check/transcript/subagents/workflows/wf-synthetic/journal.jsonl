@@ -1,0 +1,2 @@
+{"type":"failed","key":"bad-key","agentId":""}
+{"type":"started","key":"good-key","agentId":"agent-codex","label":"spawn-good-codex"}

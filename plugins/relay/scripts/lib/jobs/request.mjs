@@ -60,6 +60,21 @@ export function parseHeaderPrompt(text) {
   return { header, brief };
 }
 
+export function readLaunchPrompt(text, { baseDir = process.cwd(), env = process.env } = {}) {
+  const { header, brief } = parseHeaderPrompt(text);
+  let briefText = brief;
+  if (header.brief) {
+    if (brief.trim()) {
+      throw new UsageError("The header names a brief file, so nothing may follow the dashes.");
+    }
+    briefText = fs.readFileSync(path.resolve(baseDir, header.brief), "utf8");
+  }
+  if (!briefText.trim()) {
+    throw new UsageError("The brief is empty.");
+  }
+  return { request: buildLaunchRequest(header, { baseDir, env }), brief: briefText };
+}
+
 function parseBoolean(value, name) {
   if (value == null || value === "") {
     return false;

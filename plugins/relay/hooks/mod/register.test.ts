@@ -1,9 +1,11 @@
-// The module's session.send hook, run by `claude plugin test plugins/relay`. The kit runs only
-// *.test.ts files, so this one is TypeScript while the module is JavaScript.
+// The module's hooks, run by `claude plugin test plugins/relay`. The kit runs only *.test.ts
+// files, so this one is TypeScript while the module is JavaScript.
 //
 // The hooks registered here sit beneath the plugin and stand for the engine. The engine skips a
 // hook that throws and goes on without it, which would leave a send's result unchanged too, so
-// each test also proves the hook ran: by the wake it ran, or by the agent list it read.
+// each session.send test also proves the hook ran: by the wake it ran, or by the agent list it
+// read. Each agent.spawn test does the same by the check it ran, or by a deny that kept the
+// spawn from the engine.
 import { expect, test } from 'claude-code/testing'
 
 const AGENTS = [
@@ -142,4 +144,149 @@ test('a send from a plugin or from a subagent wakes the same way', async ($, on)
 
   expect(seen.sends).toEqual([fromPlugin, fromSubagent])
   expect(seen.runs.map((r) => r.argv)).toEqual([wakeArgv('a-relay'), wakeArgv('a-relay')])
+})
+
+// The agent.spawn hook. A check's run as check-header answers it.
+const ran = (exitCode: number, stdout: string, isStdoutTruncated = false) => ({
+  value: { exitCode, stdout, stderr: '', isStdoutTruncated, isStderrTruncated: false },
+})
+
+const checkArgv = ['node', expect.stringMatching(/^\/.*\/scripts\/companion\.mjs$/), 'check-header']
+
+const BAD = 'model: gpt-6.1-sol\nefort: low\n---\nSay hi.'
+const GOOD = 'model: gpt-6.1-sol\neffort: low\n---\nSay hi.'
+const REFUSAL = 'Unknown header key "efort".'
+const STARTED = { model: 'gpt-6.1-sol', agentId: 'a-job' }
+const WITHHELD = '(withheld: this workflow run does not share its script)'
+
+// The engine beneath the plugin for a spawn: a process runner answering the check and the
+// engine's own spawn, each recording what reached it.
+function spawnEngine(on: any, check: () => unknown = () => ran(0, 'ok\n')) {
+  const runs: any[] = []
+  const spawns: unknown[] = []
+  on('process.run', (_: unknown, e: any) => {
+    runs.push(e)
+    return check()
+  })
+  on('agent.spawn', (_: unknown, e: unknown) => {
+    spawns.push(e)
+    return STARTED
+  })
+  return { runs, spawns }
+}
+
+const relay = (prompt: string, extra: Record<string, unknown> = {}) => ({
+  prompt,
+  subagentType: 'relay:job',
+  description: 'a job',
+  name: 'worker',
+  ...extra,
+})
+
+test('a relay:job spawn whose header check refuses it is denied with the message alone', async ($, on) => {
+  const seen = spawnEngine(on, () => ran(1, `error: ${REFUSAL}\n`))
+
+  const result = await $.agent.spawn(relay(BAD))
+
+  expect(result).toEqual({ deny: REFUSAL })
+  expect(seen.runs.map((r) => r.argv)).toEqual([checkArgv])
+  expect(seen.spawns).toHaveLength(0)
+})
+
+test('a relay:job spawn whose header check passes reaches the engine unchanged', async ($, on) => {
+  const seen = spawnEngine(on)
+  const input = relay(GOOD)
+
+  const result = await $.agent.spawn(input)
+
+  expect(result).toEqual(STARTED)
+  expect(seen.runs).toHaveLength(1)
+  expect(seen.spawns).toEqual([input])
+})
+
+test('the check runs check-header with the prompt on stdin, in the cwd the spawn named', async ($, on) => {
+  const seen = spawnEngine(on)
+
+  await $.agent.spawn(relay(GOOD))
+  await $.agent.spawn(relay(GOOD, { cwd: '/home/dev/repo' }))
+  // An empty cwd names no directory, so the check runs in the session's, as the agent will.
+  await $.agent.spawn(relay(GOOD, { cwd: '' }))
+
+  expect(seen.runs).toEqual([
+    { argv: checkArgv, init: { stdin: GOOD, timeoutMs: 10000 } },
+    { argv: checkArgv, init: { stdin: GOOD, timeoutMs: 10000, cwd: '/home/dev/repo' } },
+    { argv: checkArgv, init: { stdin: GOOD, timeoutMs: 10000 } },
+  ])
+  expect(seen.spawns).toHaveLength(3)
+})
+
+test('a spawn of another agent type runs no check and reaches the engine', async ($, on) => {
+  const seen = spawnEngine(on, () => ran(1, `error: ${REFUSAL}\n`))
+  const general = { prompt: BAD, subagentType: 'general-purpose', description: 'look around' }
+  const explore = { prompt: BAD, subagentType: 'Explore', description: 'look around' }
+
+  expect(await $.agent.spawn(general)).toEqual(STARTED)
+  expect(await $.agent.spawn(explore)).toEqual(STARTED)
+
+  expect(seen.runs).toHaveLength(0)
+  expect(seen.spawns).toEqual([general, explore])
+
+  // The same hook denies a relay:job spawn next, so it was loaded and passing the others above.
+  expect(await $.agent.spawn(relay(BAD))).toEqual({ deny: REFUSAL })
+  expect(seen.spawns).toHaveLength(2)
+})
+
+test('a check that gives no verdict lets the spawn through', async ($, on) => {
+  const answers: Array<() => unknown> = [
+    // The check could not run: a timeout, a spawn failure or a denied process.run.
+    () => ({ deny: 'process.run is not allowed here' }),
+    // An exit check-header never gives for a verdict.
+    () => ran(2, `error: ${REFUSAL}\n`),
+    // check-header's own usage error goes to stderr; stdout holds nothing of the parser's.
+    () => ran(1, 'Usage: companion check-header\n'),
+    // A refusal with no message would deny with an empty reason.
+    () => ran(1, 'error:   \n'),
+    // A cut-off stdout may hold half a message.
+    () => ran(1, `error: ${REFUSAL}`, true),
+  ]
+  let next = 0
+  const seen = spawnEngine(on, () => answers[next++]())
+
+  for (let i = 0; i < answers.length; i++) {
+    expect(await $.agent.spawn(relay(BAD)), `answer ${i}`).toEqual(STARTED)
+  }
+
+  expect(seen.runs).toHaveLength(answers.length)
+  expect(seen.spawns).toEqual(answers.map(() => relay(BAD)))
+})
+
+// The kit's $.agent.spawn is typed for an Agent tool call's fields, but it hands the plugin the
+// whole input, so a Workflow's or a resume's fields reach the hook as the engine would set them.
+test('a Workflow agent with a bad header is denied, and a withheld prompt is not checked', async ($, on) => {
+  const seen = spawnEngine(on, () => ran(1, `error: ${REFUSAL}\n`))
+  const workflow = { runId: 'wf_7f3a', agentIndex: 1 }
+  const withheld = relay(WITHHELD, { workflow: { runId: 'wf_7f3a', agentIndex: 2 }, background: false })
+
+  const denied = await $.agent.spawn(relay(BAD, { workflow, background: false }) as any)
+  const passed = await $.agent.spawn(withheld as any)
+
+  expect(denied).toEqual({ deny: REFUSAL })
+  expect(passed).toEqual(STARTED)
+  expect(seen.runs).toEqual([{ argv: checkArgv, init: { stdin: BAD, timeoutMs: 10000 } }])
+  expect(seen.spawns).toEqual([withheld])
+})
+
+test('a resumed relay:job agent is not checked and reaches the engine', async ($, on) => {
+  const seen = spawnEngine(on, () => ran(1, `error: ${REFUSAL}\n`))
+  // A resume's prompt is the resuming message, which has no header.
+  const resumed = relay('Go on with the tests.', { resume: { agentId: 'a-job' } })
+
+  expect(await $.agent.spawn(resumed as any)).toEqual(STARTED)
+
+  expect(seen.runs).toHaveLength(0)
+  expect(seen.spawns).toEqual([resumed])
+
+  // The same hook denies a new relay:job spawn next, so it was loaded and running above.
+  expect(await $.agent.spawn(relay(BAD))).toEqual({ deny: REFUSAL })
+  expect(seen.runs).toHaveLength(1)
 })

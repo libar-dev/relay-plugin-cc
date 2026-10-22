@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { handleStart } from "./cli/start.mjs";
+import { handleCheckHeader } from "./cli/check-header.mjs";
 import { handleWait } from "./cli/wait.mjs";
 import { handleWake } from "./cli/wake.mjs";
 import { handleStatus, handleResult } from "./cli/status.mjs";
@@ -23,6 +24,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
+      "  companion.mjs check-header   (reads a relay:job prompt on stdin; prints ok, or error: <the reason start would refuse it>)",
       "  companion.mjs start --prompt-file <header+brief file>",
       "  companion.mjs start --from-relay        (the relay:job relay; its hook adds the transcript and agent id)",
       "  companion.mjs start --model <m> --effort <e> [--mode yolo|write|read-only] [--network true|false]",
@@ -60,6 +62,9 @@ async function main() {
   }
 
   switch (subcommand) {
+    case "check-header":
+      handleCheckHeader(argv);
+      break;
     case "start":
       await handleStart(argv);
       break;

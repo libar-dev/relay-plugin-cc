@@ -51,6 +51,7 @@ cd: /abs/path/to/repo
 | `add-dir` | no | absolute extra writable root, repeatable; `write` only | none |
 | `brief` | no | absolute path of the brief file; nothing follows the dashes | none |
 
+- A bad header fails the Agent call at once, before a relay starts, with the reason the job would have been refused: `Subagent spawn denied by a plugin: <reason>`. Fix the header and spawn again.
 - A model named like another backend's (`glm-*`, `grok-*`, `kimi-code/*`) with no `backend:` is refused before launch, since the job would run on Codex. `backend: codex` sends it to Codex as written.
 - Ask a `read-only` job for its report as its final answer, not in a file it writes. Codex and Grok hold `read-only` with a sandbox: their commands run and cannot write. Kimi and ZCode have no sandbox: `read-only` takes their shell and write tools away, and what they start themselves (hooks, MCP servers, Kimi's own operations) can still write. See Kimi jobs and GLM jobs.
 - In Codex `mode: write`, a command that keeps its own state under `~` (a CLI's sign-in file, say) cannot write it there. Name that directory with `add-dir:`. Grok's `write` takes no `add-dir:`; such a job needs `mode: yolo`.
@@ -181,9 +182,9 @@ A failed cancel stays pending while the job runs and tries remain. A terminal jo
 |---|---|---|
 | `SendMessage` with text | steers the running turn; if the turn cannot take it (always on Kimi), it becomes the next turn | a new turn on the same thread; the agent returns the new report |
 | `SendMessage` with exactly `cancel` | interrupts the turn; if the job has not ended 10 s later, kills the worker | nothing |
-| `TaskStop` on the agent | stops only the wrapper; the job keeps running | nothing |
+| `TaskStop` on the agent | stops the agent and cancels the job, as `cancel` does; the TaskStop result comes with the cancelled job's block | nothing |
 
-A message reaches the job within seconds: the plugin's hooks module ends the relay's current wait when the message is sent, and the relay's hook delivers it. The job survives the wrapper and the end of the Claude session. A dead or failed job continues on a message or `C resume <job>`.
+A message reaches the job within seconds: the plugin's hooks module ends the relay's current wait when the message is sent, and the relay's hook delivers it. Stop a job with `TaskStop` when you no longer need the agent; send `cancel` when you want the agent to hand back the cancelled job's result. A job survives its agent ending any other way, and the end of the Claude session. A dead or failed job continues on a message or `C resume <job>`.
 
 ## Inside a workflow script
 
@@ -203,12 +204,13 @@ A message reaches the job within seconds: the plugin's hooks module ends the rel
 - Give a `relay:job` agent no `schema`. A script cannot read files either: for structured data, ask the brief for the shape, then hand `r.report` to a Claude agent that has the schema: `agent(\`Read ${r.report} and return its findings.\`, { schema: FINDINGS })`.
 - The agent holds its slot for the job's whole run, so size a launch by job length. `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` caps how many run at once.
 - A retried or resumed call takes over its running job. Two calls with the same prompt and label are two jobs. Adoption is not a follow-up: a script cannot send a new turn to a job it names. To continue a finished job from a workflow, give a Claude agent the job id and have it run `C continue <job> --message-file F`.
-- A skipped agent returns null. Stopping the workflow ends the relays, not the jobs: `C status --all` lists them by run id and label; `C cancel <job>` the ones you abandon.
+- An `agent()` whose header is bad throws at once, before a relay starts: `Workflow agent spawn denied by a plugin: <reason>`.
+- A skipped agent returns null. Stopping the workflow, with `TaskStop` too, ends the relays, not the jobs, so a `resumeFromRunId` adopts them: `C status --all` lists them by run id and label; `C cancel <job>` the ones you abandon. `TaskStop` cannot stop one agent of a workflow; send its agent id the message `cancel` instead.
 - A review can be a step: a Claude agent whose prompt says to run `C review --wait` (or `C adversarial-review --wait`, with `--backend` and the other review flags) and return its output. The review runs in the foreground and is recorded as a job. Outside a workflow you can invoke `/relay:review` and `/relay:adversarial-review` directly instead.
 
 ## Direct use
 
-You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:status`, `/relay:result`, `/relay:setup` and `/relay:rescue` yourself. A review you start never asks the user a question: without `--wait` or `--background` it runs in the foreground. `/relay:cancel` and `/relay:transfer` are the user's: cancel a job by sending its agent the message `cancel`. The `C` commands below are for scripts and Workflow steps.
+You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:status`, `/relay:result`, `/relay:setup` and `/relay:rescue` yourself. A review you start never asks the user a question: without `--wait` or `--background` it runs in the foreground. `/relay:cancel` and `/relay:transfer` are the user's: cancel a job with `TaskStop` on its agent, or by sending its agent the message `cancel`. The `C` commands below are for scripts and Workflow steps.
 
 `C` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs"`. In your own Bash, define it as a function, `C() { node "<that path>" "$@"; }`: a variable that holds the command does not split into words in zsh. A job lives in `$RELAY_JOBS_HOME` (default `~/.relay-jobs`) under `<repo-slug>/<job-id>/`; any command takes a job id or a unique prefix, or the job's directory inside that home.
 

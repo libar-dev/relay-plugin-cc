@@ -1,0 +1,38 @@
+{
+  "id": "codex-job",
+  "state": "cancelled",
+  "completedAt": "2026-10-22T10:00:30.200Z",
+  "request": {
+    "backend": "codex",
+    "model": "gpt-6.1-sol"
+  },
+  "relay": {
+    "agentId": "agent-codex",
+    "transcriptPath": "../transcript/subagents/agent-codex.jsonl",
+    "label": "stop-codex",
+    "workflowRunId": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "startedAt": "2026-10-22T10:00:10.000Z",
+      "endedAt": "2026-10-22T10:00:30.200Z",
+      "state": "cancelled",
+      "relayVersion": "3.0.0-test"
+    }
+  ],
+  "messages": [
+    {
+      "id": "cancel-codex",
+      "kind": "cancel",
+      "action": "interrupt-sent",
+      "at": "2026-10-22T10:00:30.200Z"
+    },
+    {
+      "id": "cancel-codex",
+      "kind": "cancel",
+      "action": "cancelled",
+      "at": "2026-10-22T10:00:30.200Z"
+    }
+  ]
+}

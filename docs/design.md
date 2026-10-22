@@ -17,14 +17,17 @@ the [README](../README.md) installation and the commands, and the `relay:jobs` s
 | The completion notice carries the agent's final message | The completion notice carries a state block and the job's report, verbatim |
 | `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within seconds; a turn that cannot take it, or has just ended, gets it as the next turn |
 | `SendMessage` after it ends continues it with its context | `SendMessage` after it ends starts a new turn on the same backend session and returns the new report |
-| `TaskStop` stops it | The message `cancel`, or `companion cancel <job>`, cancels the job. `TaskStop` stops only the agent, and the job keeps running |
+| `TaskStop` stops it | `TaskStop` stops the relay, and the plugin's hook cancels its job. The message `cancel`, or `companion cancel <job>`, cancels the job and leaves the relay to hand back its state |
+| A bad parameter fails the Agent call at once | A bad header fails the Agent call, or a Workflow script's `agent()`, at once, with the parser's message |
 | The Agent tool's `model` picks the model | `model:` and `effort:` in the header pick the job's model; the Agent tool's `model` picks the relay's own |
 
 A Workflow script gets the same agent with `agent(prompt, { agentType: 'relay:job' })` and receives
 the state block as a string ([Under the Workflow tool](#under-the-workflow-tool)).
 
-Jobs outlive the agent and the Claude session on purpose, so stopping one is always an explicit
-act. A dead or failed job continues on a message, or on `companion resume <job>`, whose default
+Jobs outlive the relay and the Claude session on purpose, so stopping one is always an explicit
+act: a `TaskStop` on its relay, the message `cancel`, or `companion cancel`. A relay that ends any
+other way (the session ends, its process is killed, its Workflow is stopped) leaves its job
+running. A dead or failed job continues on a message, or on `companion resume <job>`, whose default
 message is "Your session was cut off. Continue the task from where you stopped, then write the
 final report." Each queued turn starts a new attempt. A steer inside a running turn and automatic server
 recovery stay in that attempt. The previous attempt's report moves to `attempts/`. A reader reads
@@ -64,6 +67,17 @@ The keys are `backend`, `model`, `effort`, `mode`, `network`, `web-search`, `fas
   (openai/codex-plugin-cc#751).
 - **An unknown header key is a usage error** that names the known keys. A typo fails before
   anything runs.
+- **A bad header fails at the spawn.** Before a `relay:job` agent starts, the hooks module's
+  `agent.spawn` hook runs `companion check-header` on its prompt: the parser and request builder
+  `start` uses, with the same messages, creating nothing. A header it refuses denies the spawn with
+  the parser's message, so the Agent call fails, or a Workflow script's `agent()` throws, before a
+  relay exists; Claude Code puts `Subagent spawn denied by a plugin: ` (or `Workflow agent spawn
+  denied by a plugin: `) before the message. `start` keeps every check, because it builds the job
+  from the same parser, and the hook lets a spawn through when it cannot run the check, when the
+  agent is being resumed (its prompt is then a message), and when a Workflow run keeps its script
+  from hooks (the prompt is then a placeholder). Relative `cd:`, `add-dir:` and `brief:` paths
+  resolve against the spawn's directory; an agent started in an isolated worktree has them checked
+  again by `start` where it runs.
 - **`mode` defaults to `yolo`**: no sandbox and no approvals, so that every existing header and
   Workflow script keeps running as it did. A live check (Codex 0.162.0 and Grok Build 1.0.50, on
   macOS) found `write` with `network: true` enough for web search, package installs, git commits
@@ -303,6 +317,16 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   that worker has not ended the job within 10 seconds, `cancel` exits 4 and names the holder's role,
   so a relay tries again.
 - **An ended job** gets a no-op receipt, so every cancel is recorded as handled.
+- **TaskStop on a relay.** A `PostToolUse` hook on `TaskStop` (`scripts/hooks/relay-stop.mjs`)
+  takes the stopped agent's id from the tool's result, since the caller may have named the agent by
+  its name, and finds the job through that id's relay pointer. When the agent is the job's current
+  relay and the job has not ended, it runs `cancel` and waits for it, so the caller's TaskStop
+  returns with the cancelled job's block beside it. A cancel that fails, or that leaves a newer
+  worker still running, is told to the caller and recorded as a relay violation. Claude Code has no
+  TaskStop for one agent of a Workflow, and a TaskStop on a whole Workflow cancels nothing: its
+  relays end, the jobs run on, and the `resumeFromRunId` that usually follows adopts them, which it
+  never does for a cancelled job. Cancel one Workflow job with the message `cancel` to its relay's
+  agent id, or with `companion cancel`.
 
 ### Prune
 
@@ -355,7 +379,7 @@ received message not yet delivered, in order: steered while the job runs, contin
 Claude Code puts a message queued for a subagent into its conversation only between two tool
 calls. A relay spends nearly all its time inside one tool call, `wait`, so a message would wait for
 the wait to end. The plugin's hooks module, `hooks/mod/register.js` (listed under `modules` in
-`hooks/hooks.json`), ends it sooner. Its one hook, on `session.send`, runs for every message that
+`hooks/hooks.json`), ends it sooner. Its `session.send` hook runs for every message that
 leaves the conversation: a `SendMessage` from the main thread or from any subagent, and a plugin's
 `$.session.send`. Once Claude Code reports the message queued at the recipient, the hook resolves
 the recipient through `$.agent.list()` (an id, else a name; a Workflow's agents are not listed and
@@ -451,7 +475,8 @@ Violations are never removed; `result` and `status` print each as a `relay-viola
   `cd:`, the job runs in the worktree and carries `note: isolated worktree <path>`.
 - **A relay holds its slot for the job's whole run.** The harness runs at most
   `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` agents at once, by default two fewer than the
-  machine's cores, within 2 and 16. Stopping a workflow ends the relays, not the jobs.
+  machine's cores, within 2 and 16. Stopping a workflow, with TaskStop too, ends the relays, not the
+  jobs, so a resume adopts them ([Cancel](#cancel)).
 
 ### Adoption by journal key
 
@@ -486,7 +511,9 @@ and id, `last_assistant_message`, `stop_hook_active`, `background_tasks`, the `S
 tool and `updatedInput`. From the transcript: each entry's `type`, `uuid`, `isMeta`, `origin` and
 content, two attachment types and the coordinator's wrapper. From the Workflow harness: the
 transcript path, the marker lines, two system-prompt notes, two trailers, the meta file, the
-journal's `started` lines and the three retry suffixes.
+journal's `started` lines and the three retry suffixes. From the Mod API's `agent.spawn`: the agent
+type, the prompt, `resume`, and the placeholder a Workflow run that withholds its script puts in
+the prompt. From `TaskStop`'s `PostToolUse`: the stopped task's id in its result.
 
 ## Backends
 
@@ -811,10 +838,10 @@ only.
 The relay reads two things Claude Code does not publish as an interface: the agent transcript and
 the Workflow tool's run journal ([what it reads](#what-the-relay-reads-from-claude-code)). Its
 markers were read from Claude Code 2.1.287 and 2.1.288, and its hooks need `SubagentHandback`. Its
-hooks module needs the Mod API's `session.send` event, `$.agent.list()` and `$.process.run`, as
-Claude Code 2.1.307 declares them, so the floor is 2.1.307. A Claude Code update can break any of
-it. Delivery runs on command hooks and the transcript; the module only wakes a waiting relay
-([The wake](#the-wake)).
+hooks module needs the Mod API's `session.send` and `agent.spawn` events, `$.agent.list()` and
+`$.process.run`, as Claude Code 2.1.307 declares them, so the floor is 2.1.307. A Claude Code update
+can break any of it. Delivery runs on command hooks and the transcript; the module only wakes a
+waiting relay ([The wake](#the-wake)) and checks a header before a relay starts.
 
 The Workflow journal has a second storage mode, behind a feature flag and off on 2.1.288, that
 keeps no `journal.jsonl` on disk. Under it a relay finds no key, so a resumed run's relay starts a
@@ -830,7 +857,10 @@ After a Claude Code update:
    state block must show no `relay-violation:` line, and the second message must run as a new turn.
    The live suite does both on every backend and times them: `node scripts/live/suite.mjs run steer-main
    continue`.
-3. If either fails, `scripts/hook-probe.mjs` logs what the hooks receive. Register it for
+3. Stop one running `relay:job` agent with `TaskStop`, and spawn one with a bad header. The job must
+   be `cancelled` within seconds, and the spawn must fail with the parser's message before a relay
+   starts: `node scripts/live/suite.mjs run stop spawn-check`.
+4. If any of these fails, `scripts/hook-probe.mjs` logs what the hooks receive. Register it for
    PreToolUse, PostToolUse and SubagentStop in a throwaway project, repeat the steps, and compare
    the log with what `lib/harness/` expects.
 
