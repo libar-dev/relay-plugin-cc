@@ -520,7 +520,7 @@ async function fakeReadPeer(t, scenario) {
     stdio: ["pipe", "pipe", "pipe"]
   });
   let buffer = "", stderr = "", closed = false, nextId = 0;
-  const replies = new Map();
+  const replies = new Map(), notifications = [];
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", chunk => {
     buffer += chunk;
@@ -529,6 +529,7 @@ async function fakeReadPeer(t, scenario) {
       const message = JSON.parse(buffer.slice(0, newline));
       buffer = buffer.slice(newline + 1);
       if (Object.hasOwn(message, "id")) replies.set(message.id, message);
+      else notifications.push(message);
     }
   });
   child.stderr.on("data", chunk => { stderr += chunk; });
@@ -551,7 +552,7 @@ async function fakeReadPeer(t, scenario) {
   const { response: started } = await request("turn/start", { threadId, input: [{ type: "text", text: "Schema contract" }] });
   const turnId = started.result.turn.id;
   return {
-    threadId, turnId,
+    threadId, turnId, notifications,
     async read(...options) {
       const includeTurns = options.length ? options[0] : true;
       const pending = request("thread/read", { threadId, ...(includeTurns === undefined ? {} : { includeTurns }) });
@@ -569,6 +570,9 @@ test("Codex schema contract: fake thread/read requests and results", async t => 
       assertSchema("ThreadReadRequest", sent);
       assertSchema("JSONRPCResponse", response);
       assertSchema("ThreadReadResponse", response.result);
+      const items = peer.notifications.filter(message => ["item/started", "item/completed"].includes(message.method));
+      assert.ok(items.some(message => message.params.item.type === "collabAgentToolCall"));
+      for (const notification of items) assertSchema(notification.method, notification);
       assert.equal(response.id, sent.id);
       assert.equal(response.result.thread.id, peer.threadId);
       const turn = response.result.thread.turns.find(turn => turn.id === peer.turnId);
@@ -640,6 +644,9 @@ timerTest("Codex schema contract: relay consumes schema-valid collaborator notif
     item: { type: "agentMessage", id: "answer", text: "Schema-valid answer", phase: "final_answer" } });
   await h.tick(250);
   assert.equal(h.reads.length, 1);
+  const { at, ...params } = h.reads[0];
+  assertSchema("ThreadReadRequest", { id: 1, method: "thread/read", params });
+  assert.equal(params.includeTurns, true);
   const result = await h.completion;
   assert.equal(result.turnStatus, "completed");
   assert.equal(result.finalMessage, "Schema-valid answer");

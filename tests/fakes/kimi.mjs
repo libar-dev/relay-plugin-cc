@@ -49,6 +49,8 @@ state.starts.push({ args, env: kimiEnv(), cwd: process.cwd(), pid: process.pid }
 const send = message => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\\n');
 const home = process.env.KIMI_CODE_HOME;
 let sessionId, active = null, own = null, mode = 'default', model = 'kimi-code/k3', clientCaps = {}, reverseId = 0;
+let atClose = null;
+const flushAtClose = () => { const flush = atClose; atClose = null; flush?.(); };
 const pendingReverse = new Map();
 const queued = [];
 const update = value => send({ method: 'session/update', params: { sessionId, update: value } });
@@ -190,10 +192,10 @@ function finish(reason) {
   if (reason !== 'cancelled') record({ type: 'prompt.completed', agentId: 'main', promptId: turn.promptId, reason });
   // Opt in to the live 2.2.0 ordering: the prompt ends before the engine's final batch.
   // A releaseFile gate holds that batch while relay observes the end; afterClose releases it
-  // only when relay closes stdin, so it arrives after the settle grace without a timing race.
+  // on stdin end or SIGTERM, whichever arrives first, after the settle grace.
   if (late) {
     const flush = () => { finalMessage(); engineEnd(); };
-    if (late.afterClose) process.stdin.once('end', flush);
+    if (late.afterClose) atClose = flush;
     else if (late.releaseFile) {
       const release = () => { if (fs.existsSync(path.resolve(late.releaseFile))) flush(); else setTimeout(release, 10); };
       release();
@@ -240,8 +242,9 @@ function ownTurn() {
 // sent before it goes, so on SIGTERM the fake reads stdin to its end, recording every message,
 // then exits. Stdin that has not ended a second later: SIGTERM kills it, as it did before.
 let inputEnded = false, terminating = false;
-process.stdin.on('end', () => { inputEnded = true; if (terminating) process.exit(0); });
+process.stdin.on('end', () => { flushAtClose(); inputEnded = true; if (terminating) process.exit(0); });
 process.on('SIGTERM', () => {
+  flushAtClose();
   if (inputEnded) process.exit(0);
   terminating = true;
   setTimeout(() => { process.removeAllListeners('SIGTERM'); process.kill(process.pid, 'SIGTERM'); }, 1000).unref();

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -10,7 +11,7 @@ import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mj
 import { createJobDir, jobPaths, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 import { installFakeZcode } from "./fakes/zcode.mjs";
-import { finishJob, jobDir, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
+import { finishJob, jobDir, readJob, ROOT, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 
 function seedJob(ctx, patch = {}, brief = "Never sent.") {
   const id = "job-worker-branches";
@@ -18,7 +19,7 @@ function seedJob(ctx, patch = {}, brief = "Never sent.") {
   fs.writeFileSync(jobPaths(dir).brief, brief);
   writeJob(dir, {
     id, kind: "task", state: "starting", createdAt: new Date().toISOString(),
-    request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: ctx.work }),
+    request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: ctx.work }, { baseDir: ctx.work, env: ctx.env }),
     pendingFirstTurn: false, attempts: [], ...patch
   });
   return { id, dir };
@@ -37,10 +38,25 @@ for (const [label, attempts] of [
   // No pending brief or work messages: this must take the empty-queue cancel branch.
   const { id, dir } = seedJob(ctx, { attempts });
   const cancel = postInboxMessage(dir, { kind: "cancel" });
-  await runWorker(dir, { env: ctx.env });
+  // A skipped cancel can spin in the hand-off loop. Run it in a child so even that
+  // regression cannot starve the parent's bounded wait or its diagnostic/cleanup.
+  const worker = spawn(process.execPath, [path.join(ROOT, "plugins/relay/scripts/companion.mjs"), "worker", dir], {
+    cwd: ctx.work, env: ctx.env, stdio: ["ignore", "pipe", "pipe"]
+  });
+  let closed = false, output = "";
+  worker.stdout.on("data", chunk => { output += chunk; });
+  worker.stderr.on("data", chunk => { output += chunk; });
+  worker.on("close", () => { closed = true; });
+  try {
+    await waitFor(() => closed, 5000).catch(() => assert.fail("the cancel was not taken: worker did not exit"));
+    assert.equal(worker.exitCode, 0, output);
+  } finally {
+    if (!closed) worker.kill("SIGKILL");
+    await waitFor(() => closed);
+  }
 
   const job = readJob(ctx, id);
-  assert.equal(job.state, "cancelled");
+  assert.equal(job.state, "cancelled", "the cancel was not taken");
   assert.equal(job.errorMessage, "Cancelled before a turn ran.");
   assert.equal(job.pendingFirstTurn, false);
   assert.ok(job.completedAt);

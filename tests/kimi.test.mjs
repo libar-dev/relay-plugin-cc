@@ -6,7 +6,7 @@ import { resolveKimiHome } from "../plugins/relay/scripts/lib/backends/kimi/requ
 import { kimiEventRecorder, resolveKimiBinary } from "../plugins/relay/scripts/lib/backends/kimi/connection.mjs";
 import { KimiWire } from "../plugins/relay/scripts/lib/backends/kimi/wire.mjs";
 import { KimiFileReads } from "../plugins/relay/scripts/lib/backends/kimi/files.mjs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { isWorkerAlive, readLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
@@ -846,7 +846,7 @@ const lateRecordOrder = ["agent.message.appended", "agent.turn.started", "turn.p
 
 test("a final answer recorded after turn.ended and prompt.completed reaches the completed job's report before the settle grace", async t => {
   const ctx = fixture(t, { lateMessages: { releaseFile: "release-final" }, answer: "The late final answer." });
-  ctx.env.RELAY_JOBS_KIMI_SETTLE_MS = "3000";
+  ctx.env.RELAY_JOBS_KIMI_SETTLE_MS = "10000";
   const { id } = startJob(ctx, HEADER, "[quick] Late record.");
   // The worker has observed this turn, but the fake's engine still holds its final batch.
   await waitFor(() => readJob(ctx, id).turnId && kimiRecords(ctx, id).some(record => record.type === "prompt.completed"));
@@ -890,3 +890,59 @@ test("a final answer arriving after the settle grace stays in the record and eve
   assert.match(result.stdout, /^report: none$/m);
   assert.doesNotMatch(result.stdout, /Too late for the report\./);
 });
+
+
+for (const first of ["stdin end", "SIGTERM"]) {
+  test(`late-order fake flushes once when ${first} arrives first`, async t => {
+    const ctx = fixture(t, { lateMessages: { afterClose: true }, answer: "Close-time final." });
+    const child = spawn(process.execPath, [ctx.env.KIMI_BINARY, "acp"], {
+      cwd: ctx.work, env: { ...ctx.env, KIMI_CODE_HOME: path.join(ctx.user, ".kimi-code") },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let closed = false, stdout = "", stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("close", () => { closed = true; });
+    t.after(async () => {
+      child.stdin.destroy();
+      if (!closed) child.kill("SIGKILL");
+      await waitFor(() => closed);
+    });
+    const request = async (id, method, params) => {
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      let reply;
+      await waitFor(() => {
+        reply = stdout.split("\n").filter(Boolean).map(line => JSON.parse(line)).find(message => message.id === id);
+        return reply || closed;
+      });
+      assert.ok(reply?.result, `${method}: ${stderr}`);
+      return reply.result;
+    };
+    await request(1, "initialize", { clientCapabilities: {} });
+    const { sessionId } = await request(2, "session/new", { cwd: ctx.work, mcpServers: [] });
+    await request(3, "session/prompt", { sessionId, prompt: [{ type: "text", text: "[quick] Close." }] });
+    const records = () => {
+      const home = path.join(ctx.user, ".kimi-code", "sessions");
+      const bucket = fs.readdirSync(home)[0];
+      return fs.readFileSync(path.join(home, bucket, sessionId, "agents/main/wire.jsonl"), "utf8")
+        .trim().split("\n").map(line => JSON.parse(line)).filter(record => record.type !== "metadata");
+    };
+    assert.deepEqual(records().map(record => record.type), lateRecordOrder.slice(0, 5));
+    if (first === "stdin end") child.stdin.end();
+    else child.kill("SIGTERM");
+    // Observe the flush before allowing the other close event: no scheduling delay
+    // can hide a missing first-event handler or make the two handlers look ordered.
+    await waitFor(() => records().length === lateRecordOrder.length);
+    await waitFor(() => stdout.trim().split("\n").map(line => JSON.parse(line))
+      .filter(message => message.params?.update?.sessionUpdate === "agent_message_chunk")
+      .map(message => message.params.update.content.text).join("") === "Close-time final.");
+    if (first === "stdin end") child.kill("SIGTERM");
+    else child.stdin.end();
+    await waitFor(() => closed);
+    assert.equal(child.exitCode, 0, stderr);
+    assert.deepEqual(records().map(record => record.type), lateRecordOrder, "both close events flush only once");
+    const messages = stdout.trim().split("\n").map(line => JSON.parse(line));
+    assert.equal(messages.filter(message => message.params?.update?.sessionUpdate === "agent_message_chunk")
+      .map(message => message.params.update.content.text).join(""), "Close-time final.");
+  });
+}

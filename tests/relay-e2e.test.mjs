@@ -357,8 +357,8 @@ for (const marker of [
   "[Request interrupted by user]",
   "[Request interrupted: the session ended before this agent finished. Nobody asked it to stop.]"
 ]) {
-  for (const fromPerson of [false, true]) {
-    test(`end to end: after cancellation, ${fromPerson ? "a person still delivers" : "the relay ignores"} ${marker}`, async t => {
+  for (const toolName of ["Bash", "SubagentHandback"]) for (const fromPerson of [false, true]) {
+    test(`end to end: after cancellation through ${toolName}, ${fromPerson ? "a person still delivers" : "the relay ignores"} ${marker}`, async t => {
       const ctx = relayContext("job", { turnMs: 60000 });
       const brief = "D48: keep the cancelled job stopped.";
       ctx.append(ctx.prompt(`model: gpt-test\neffort: low\n---\n${brief}`));
@@ -389,14 +389,17 @@ for (const marker of [
       if (fromPerson) note.origin = { kind: "human" };
       assert.equal(Object.hasOwn(note, "isMeta"), false);
       assert.equal(Object.hasOwn(note, "origin"), fromPerson);
-      // Put the tool use before the note, so the guard reads a transcript ending
-      // in the interrupt entry, just as the surviving/resumed relay loop did.
-      ctx.append(ctx.toolUse(command), note);
-      const input = hookInput(ctx, "PreToolUse", { tool_name: "Bash", tool_input: { command } });
+      // On resume the interrupt note precedes a fresh tool use. Exercise both
+      // the wait hook and hand-back, which sync through the same transcript parser.
+      ctx.append(note, ctx.toolUse(toolName === "Bash" ? command : toolName));
+      const input = hookInput(ctx, "PreToolUse", {
+        tool_name: toolName, tool_input: toolName === "Bash" ? { command } : { message: "done" }
+      });
       for (let check = 0; check < 2; check += 1) {
         const guarded = await runHookProcess(ctx, input);
         assert.equal(guarded.status, 0, guarded.stderr);
-        assert.equal(guarded.json?.hookSpecificOutput?.permissionDecision, "allow", guarded.stdout);
+        assert.equal(guarded.json?.hookSpecificOutput?.permissionDecision,
+          toolName === "SubagentHandback" && fromPerson ? "deny" : "allow", guarded.stdout);
       }
 
       if (fromPerson) {

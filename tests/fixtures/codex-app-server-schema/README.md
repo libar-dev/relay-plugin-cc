@@ -7,7 +7,7 @@ No app-server session or model call was used to obtain the schema.
 codex --version
 codex app-server generate-json-schema --help
 codex app-server generate-json-schema --out /tmp/relay-codex-schema
-node tests/fixtures/codex-app-server-schema/extract.mjs /tmp/relay-codex-schema 'codex-cli 0.163.0'
+node tests/fixtures/codex-app-server-schema/extract.mjs /tmp/relay-codex-schema "$(codex --version)"
 node --test --test-name-pattern='Codex schema contract:' tests/codex-turns.test.mjs
 ```
 
@@ -64,14 +64,26 @@ or live schema generation is part of the test suite.
   `final_answer`. `collabAgentToolCall`, `receiverThreadIds`, and its `inProgress`
   and `completed` statuses also exist. No consumed notification name or status
   was renamed in this baseline.
-- The turn-order fake's item notifications lack required `startedAtMs` or
-  `completedAtMs`; its collaboration items also lack required `senderThreadId`
-  and `agentsStates`. These emissions are outside this task's allowed
-  `thread/read` edits. The added notification test supplies and validates all
-  required fields before exercising relay's actual turn capture.
+- The turn-order fake's item notifications supply required `startedAtMs` or
+  `completedAtMs`; its collaboration items also supply `senderThreadId` and
+  `agentsStates`. The fake contract test validates its emitted collaborator item
+  notifications. The notification consumer test also validates relay's actual
+  `thread/read` parameters, including its request for turns.
 
 No product schema mismatch was found, so no product test is marked TODO. This
 contract does **not** establish notification ordering, a missing main-thread
 `turn/completed`, the safety of the 250 ms grace window, or the decision to infer
 completion from `inProgress`/an unsupported-method error. Those remain runtime
 assumptions requiring a real collaborator-turn transcript.
+
+## Live/smoke follow-up (requires real backend evidence)
+
+- Capture a real Codex collaborator turn, including whether the root omits
+  `turn/completed`, the final-answer timing, and the `thread/read` response. Use
+  the recording to check the 250 ms inference assumption and error classification
+  (`unknown variant …`, `Unsupported method`); schemas cannot establish these.
+- Capture Grok's actual capacity/request-rate failure payload and its adapter
+  mapping. The unverified candidates in `tests/retries.test.mjs` pin no retry
+  today; they are not evidence of retry bugs. A bare 429 can also mean a usage
+  quota, which must fail at once. Record evidence and intended handling before
+  changing any candidate's expectation or introducing a product-bug TODO.
