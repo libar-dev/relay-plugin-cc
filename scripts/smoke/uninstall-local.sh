@@ -15,6 +15,8 @@ CLAUDE_CONFIG_DIR=$(node -e 'const p = require("node:path"), fs = require("node:
 export CLAUDE_CONFIG_DIR
 # Require ownership evidence before any mutation or Claude command.
 state=$(node - "$dir" <<'NODE'
+// A refusal is one line for the person, not a stack trace.
+process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const dir = process.argv[2], home = fs.realpathSync(os.homedir()), config = process.env.CLAUDE_CONFIG_DIR;
 if (dir === home || dir === config) throw new Error('Refusing HOME or the Claude config directory.');
@@ -50,6 +52,8 @@ cd -- "$dir"
 if [[ $state == installed$'\n'* ]]; then claude plugin uninstall relay@relay-smoke --scope local; fi
 if [[ $state == *$'\n'marketplace ]]; then claude plugin marketplace remove relay-smoke; fi
 node - "$dir" <<'NODE'
+// A refusal is one line for the person, not a stack trace.
+process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path');
 const dir = process.argv[2], file = path.join(dir, '.claude/settings.local.json');
 const marker = path.join(dir, '.claude/relay-smoke-local.json');

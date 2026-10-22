@@ -42,6 +42,8 @@ fi
 CLAUDE_CONFIG_DIR=$(node -e 'const p = require("node:path"), fs = require("node:fs"); const dir = p.resolve(process.env.CLAUDE_CONFIG_DIR || p.join(require("node:os").homedir(), ".claude")); console.log(fs.existsSync(dir) ? fs.realpathSync(dir) : dir)')
 export CLAUDE_CONFIG_DIR
 node - "$dir" <<'NODE'
+// A refusal is one line for the person, not a stack trace.
+process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const dir = process.argv[2], home = fs.realpathSync(os.homedir());
 const config = process.env.CLAUDE_CONFIG_DIR;
@@ -71,6 +73,8 @@ else
   git -C "$repo" archive "$sha" plugins/relay | tar -C "$mkt/relay" --strip-components=2 -xf -
 fi
 node - "$mkt" "$dir" <<'NODE'
+// A refusal is one line for the person, not a stack trace.
+process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs'), path = require('node:path');
 const [mkt, dir] = process.argv.slice(2);
 const plugin = JSON.parse(fs.readFileSync(path.join(mkt, 'relay/.claude-plugin/plugin.json'), 'utf8'));
@@ -106,6 +110,8 @@ printf 'Undo: %q %q\n' "$script_dir/uninstall-local.sh" "$dir"
 cd -- "$dir"
 record_step() {
   node - "$dir/.claude/relay-smoke-local.json" "$1" <<'NODE'
+// A refusal is one line for the person, not a stack trace.
+process.on('uncaughtException', (error) => { console.error(error.message); process.exit(1); });
 const fs = require('node:fs');
 const [file, step] = process.argv.slice(2);
 const saved = JSON.parse(fs.readFileSync(file, 'utf8'));

@@ -21,6 +21,10 @@ This checks terminal Agent/SendMessage delivery. Workflow, module-origin sends,
 T3 and continuation after completion need separate checks.
 `;
 
+// Bypass mode without its confirmation dialog, for this session only: answering the dialog stores
+// the choice in ~/.claude/settings.json.
+const BYPASS_FOR_THIS_SESSION = JSON.stringify({ skipDangerousModePermissionPrompt: true });
+
 export function parseArgs(args) {
   const options = { pluginDir: path.resolve(here, '../../plugins/relay'), backends: Object.keys(models), timeoutMinutes: 20, keep: false };
   const names = { '--plugin-dir': 'pluginDir', '--work-dir': 'workDir', '--jobs-home': 'jobsHome',
@@ -156,10 +160,10 @@ export async function run(options) {
   const deadline = Date.now() + options.timeoutMinutes * 60000;
   try {
     pane(['start', name, cwd, '--env', `RELAY_JOBS_HOME=${jobs}`, '--', 'claude', '--plugin-dir', pluginDir,
-      '--dangerously-skip-permissions', '--debug', '--session-id', sessionId, ...(options.model ? ['--model', options.model] : [])]);
+      '--dangerously-skip-permissions', '--settings', BYPASS_FOR_THIS_SESSION, '--debug', '--session-id', sessionId, ...(options.model ? ['--model', options.model] : [])]);
     started = true;
     console.log(pane(['attach-command', name]).trim());
-    let trusted = false, bypassAccepted = false, ready = false;
+    let trusted = false, ready = false;
     const startupDeadline = Math.min(deadline, Date.now() + 120000);
     while (Date.now() < startupDeadline && !aborted) {
       const screen = pane(['read', name, '0']);
@@ -168,9 +172,10 @@ export async function run(options) {
         pane(['trust', name]); trusted = true;
         await delay(1000); continue;
       }
-      if (!bypassAccepted && /Yes, I (accept|understand)/i.test(screen) && /bypass|skip.permissions|dangerously/i.test(screen)) {
-        pane(['keys', name, 'Down', 'Enter']); bypassAccepted = true;
-        await delay(1000); continue;
+      // Accepting the dialog would write skipDangerousModePermissionPrompt into the user's own
+      // settings; the --settings flag above skips it for this session only.
+      if (/Yes, I (accept|understand)/i.test(screen) && /bypass|skip.permissions|dangerously/i.test(screen)) {
+        throw new Error('The bypass-permissions dialog appeared; it is not answered here, since that changes the user\'s settings.');
       }
       const debug = fs.existsSync(debugLog) ? fs.readFileSync(debugLog, 'utf8') : '';
       metadata.startupEvidence = inspectDebug(debug, pluginDir);
