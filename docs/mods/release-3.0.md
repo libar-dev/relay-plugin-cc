@@ -49,11 +49,12 @@ Steps 6 to 8 start while Phase 4 is open; each part starts once what it needs ha
      step 8's screenshots and guide exist, Opus 5.5's UX and UI review, with the screenshots, of the commands'
      output, the status line, the board, the README, `docs/desktop.md` and the user guide. Their fixes merge
      before the release PR.
-8. **The screenshots, the walkthrough and the guide.** Screenshots of every user-facing feature, in the CLI and in
-   Desktop, taken on the M3 (D54, D60), with the status line and the board once built (the CLI in a narrow and a wide
-   terminal, and Desktop); they stay local. T3 screenshots for the post to the T3 community. One feature
+8. **The screenshots, the walkthrough and the guide.** Screenshots of every user-facing feature, in the CLI and
+   in Desktop, taken on the M3 (D54, D60), with the status line and the board once built (the CLI in a narrow and
+   a wide terminal, and Desktop); they stay local. T3 screenshots for the post to the T3 community. One feature
    walkthrough, which feeds the owner's manual test script (each step with its expected result) and the user
-   guide (with screenshots that explain the features).
+   guide (with screenshots that explain the features). A screenshot that is published, in the T3 post or the
+   user guide, shows no account or session names.
 9. **The release PR**, `release/3.0` into `main`.
 10. **The owner's manual testing.** Once the release candidate is confirmed (decisions.md, "Open for the owner"),
     the owner tests it by hand with the manual test script, on one Mac and on Fedora at the same time; the M1
@@ -91,7 +92,8 @@ and dropped the demo recording: feature screenshots and the user guide replace i
 - The full live suite on all four backends, in the terminal and in T3, on the release head.
 - The real-API suite, which replaces the smoke kit's release run, on the release head, on Fedora and on a Mac
   through cmux.
-- D3's manual Desktop pass of the board, on the M3 (D54).
+- D3's checks of the board: its Mod tests on the test kit's `desktop` mount, which `claude plugin test` runs on
+  Fedora, and the manual Desktop pass on the M3 (D54).
 - The screenshots of every user-facing feature, in the CLI and in Desktop, the status line and the board included.
 - The feature walkthrough done, the user guide in the release, and the owner's manual test script ready.
 - The reviews of step 7 done, and their fixes merged: the skills review with Opus 5.5's skill updates, the
