@@ -591,3 +591,73 @@ The parts:
     that explain the features.
 12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
     owner decides.
+
+### D70. Pre-release cuts: version numbers, the cut PR and the tag (release lead)
+
+How D95's cuts are made.
+
+- **The version.** A cut is `3.0.0-pre.N`, set by `scripts/bump-version.mjs` everywhere it sets a version, the
+  marketplace included. Its PR's merge commit is tagged `v3.0.0-pre.N`. A cut gets no GitHub release and no npm
+  release.
+- **Between cuts,** phase PRs keep raising `3.0.0-dev.N` (D6): build numbers only have to be unique. By semver
+  `dev.N` sorts below `pre.N`, which matters nowhere: the cut machines install by tag, the smoke installs use
+  marketplaces of their own, and the live suite runs `--plugin-dir`. Rejected: `3.0.0-pre.N.M` for dev builds,
+  which reads like a cut; renaming the dev series, which would change D6 for no reader.
+- **The cut PR** holds the version and one line under the CHANGELOG's 3.0.0 heading, nothing else, so the build
+  the end-to-end suite tested is the build the tag names. Its gates are `npm test`, `npm run check`,
+  `claude plugin validate`, `claude plugin test`, CI, and the end-to-end suite on the cut's plugin code. With a
+  diff of version strings, the two-family review and the bots may follow the merge; what they find goes into the
+  next cut.
+- **pre.1** (217adc8, from c73e053) was cut that way at once, on the owner's word that it be installed now. No
+  plugin code had changed since 962130b, where the end-to-end suite had run twice on Fedora, and pre.1's
+  companion read a copy of a 2.2.0 jobs home (404 jobs) as 2.2.0 did: the same jobs, the same reports.
+
+### D95. Pre-release cuts before 3.0.0, on the M3 and the ThinkPad (owner, 22 October 2026)
+
+The owner, in three messages that day:
+
+> I would like to deploy and heavily use the pre-release cut of the 3.0 release on one Mac and on Fedora. Maybe we
+> can do 3.0.0-pre1 or something along those lines. I would like to perfect and polish the release and
+> user-facing documentation and everything.
+
+> My suggestion was just to put the pre-release cut on M3 and replace the current plugin and to do actual work, a
+> ton of work, to battle-test it.
+
+> Thinkpad should also use the 3.0 pre-release and M3. Run heavy orchestration testing over the weekend on both
+> operating systems. […] We will be feeding back issues and doing pre-releases until we solve all the issues. This
+> will be an iterative process. […] Use exactly the same workflow as we did before. It is very simple. […] I will
+> deploy production workflows on both M3 and Fedora with the new relay plugin.
+
+So 3.0.0 is preceded by pre-release cuts, `3.0.0-pre.N` (D70). Each is installed at user scope on the M3 and the
+ThinkPad, replacing 2.2.0, through the marketplace pinned to the cut's tag, the procedure earlier releases used.
+libar-infra runs the install in a terminal the owner watches. The owner runs production work on both, and the issues
+found go into the next cut, until none remain. The M1 stays on 2.2.0 as the fallback.
+
+What it changes:
+
+- **release-3.0.md.** The fleet no longer stays on 2.2.0 until the release PR merges: the M3 and the ThinkPad run
+  the cuts. The working rule that no build is installed at user scope on the ThinkPad gives way for the cuts; the
+  live suite and the smoke kit still run their own builds, with `--plugin-dir` and in the smoke folders.
+- **D60, part 11.** The owner's testing is production use of each cut on the M3 and the ThinkPad, with the guide
+  lead's pre-release guide as its checklist. What confirms the release candidate stays open for the owner.
+
+### D96. A user's stop of a relay leaves its job running, with a notice (owner, 22 October 2026)
+
+The coordinating thread recommended option A, and the owner answered: "A is final."
+
+- **A stop from Claude Code's own controls** ends the relay and leaves its job running: "x" in the agent list, Esc
+  twice in the relay's view, the desktop app's Stop button. Relay shows a notice naming the job, with
+  `/relay:cancel` and `/relay:result`.
+- **`TaskStop` on a relay and the message `cancel` still cancel the job** (D2, D44): they are the deliberate ways
+  to stop the work. A cancelled job keeps its backend session, and a message continues it.
+- **A resumed Workflow still never adopts a cancelled job.** No change for 3.0 (D42).
+
+Why: relay 2.2.0's survey of about 920 T3 threads and 360 relay jobs (PR #5) found no relay that died through a
+`TaskStop`. Every death on record came from a T3 restart, a quit of the T3 app on macOS, a usage limit that ended at
+least 14 relays at once, or a `kill -9` of a lead, and every job ran on and was recovered: Workflows resumed with
+`resumeFromRunId` took their jobs back, and leads collected and continued finished jobs. A rule that cancelled the
+job when its relay stopped would have cancelled those recoveries had the same signal fired on such deaths, and that
+is not ruled out. Rejected: B, a user's stop cancels the job.
+
+The notice is built after Phase 4's status line and board, which change the same module. Still open: on macOS,
+quitting the T3 app kills relay workers, for a reason not known yet; the cuts' use on the M3 watches for it.
