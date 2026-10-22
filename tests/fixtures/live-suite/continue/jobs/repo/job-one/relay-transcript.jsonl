@@ -1,1 +1,1 @@
-{"type": "user", "isSidechain": true, "timestamp": "2026-10-22T10:00:30.000Z", "message": {"content": "continue for codex: reply with exactly one line: second turn for codex"}}
+{"type": "user", "isSidechain": true, "uuid": "send-entry", "origin": {"kind": "coordinator"}, "message": {"content": "Synthetic continue"}}

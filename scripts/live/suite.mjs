@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { analyzeRun, configDirectory, createRun, evidenceRoot, pluginVersion, readJson,
+import { analyzeRun, configDirectory, createRun, evidenceRoot, pluginCommit, pluginVersion, readJson,
   runDirectory, settingsGuard, smokeInstall, writeJson } from './lib/runs.mjs';
 import { runTerminal } from './lib/terminal.mjs';
 import { writeTable } from './lib/table.mjs';
@@ -90,8 +91,17 @@ function summaries(result, registry, log) {
   if (result.file) log(`Records: ${result.file}`);
 }
 
+function requireWorkTree(workDir) {
+  try {
+    if (execFileSync('git', ['-C', workDir, 'rev-parse', '--is-inside-work-tree'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() === 'true') return;
+  } catch {}
+  throw new UsageError(`--work-dir must already be inside a git work tree: ${workDir}`);
+}
+
 export async function runChecks(options, registry, readers, { env = process.env, log = console.log,
   warn = console.error, driver = runTerminal } = {}) {
+  if (options.workDir) requireWorkTree(options.workDir);
   let status = 0;
   for (const id of options.checks) {
     const check = registry.find(item => item.id === id);
@@ -99,25 +109,27 @@ export async function runChecks(options, registry, readers, { env = process.env,
     const relayVersion = pluginVersion(pluginDir);
     const workDir = options.workDir ?? fs.mkdtempSync('/tmp/relay-live-work-');
     const jobsHome = options.jobsHome ?? fs.mkdtempSync('/tmp/relay-live-jobs-');
-    fs.mkdirSync(workDir, { recursive: true });
+    if (!options.workDir) execFileSync('git', ['init', '--quiet', workDir]);
     fs.mkdirSync(jobsHome, { recursive: true });
     const { run, evidenceDir } = createRun(evidenceRoot(env), check, { surface: 'terminal',
       backends: readers.BACKENDS.filter(backend => options.backends.includes(backend)), workDir: fs.realpathSync(workDir),
-      jobsHome: fs.realpathSync(jobsHome), pluginDir, relayVersion, model: options.model,
+      jobsHome: fs.realpathSync(jobsHome), pluginDir, relayVersion, relayCommit: pluginCommit(pluginDir), model: options.model,
       timeoutMinutes: options.timeoutMinutes ?? check.timeoutMinutes,
       probeDirs: check.probes.map(probe => path.join(repository, 'scripts/live/probes', probe)) });
     const save = () => writeJson(path.join(evidenceDir, 'run.json'), run);
     const guard = settingsGuard(configDirectory(env));
     log(`Run: ${run.runId}\nEvidence: ${evidenceDir}`);
     const ctx = { runId: run.runId, backends: run.backends, pluginDir, probeDirs: run.probeDirs, workDir: run.workDir,
-      jobsHome: run.jobsHome, evidenceDir, model: run.model, timeoutMinutes: run.timeoutMinutes };
+      jobsHome: run.jobsHome, evidenceDir, model: run.model, timeoutMinutes: run.timeoutMinutes, run, save, readers,
+      paneDriver: (input = ctx, selected = check, overrides = {}) => driver(input, selected,
+        { run, save, readers, keep: options.keep, env, log, warn, ...overrides }) };
     let analysis;
     try {
       if (check.runTerminal) {
         analysis = await check.runTerminal(ctx);
         // An override returning its analysis has completed its session work.
-        run.promptSentAt = run.preparedAt;
-        run.transcript = analysis.evidence.transcripts[0] ?? null;
+        run.promptSentAt ??= run.preparedAt;
+        run.transcript ??= analysis?.evidence.transcripts[0] ?? null;
       } else await driver(ctx, check, { run, save, readers, keep: options.keep, env, log, warn });
     } catch (error) {
       run.error = error.message;
@@ -157,6 +169,7 @@ export async function main(args, registry, readers, dependencies = {}) {
     if (options.command === 'prepare') {
       const check = registry.find(item => item.id === options.checkId);
       if (!check.surfaces.includes('t3')) throw new Error(`${check.id} does not support t3.`);
+      requireWorkTree(options.workDir);
       const build = smokeInstall(options.workDir, env);
       const { run, evidenceDir } = createRun(evidenceRoot(env), check, { surface: 't3', backends: options.backends, ...build });
       log(`${run.runId}\n${path.join(evidenceDir, 'prompt.txt')}\n---\n${fs.readFileSync(path.join(evidenceDir, 'prompt.txt'), 'utf8').replace(/\n$/, '')}`);
@@ -179,10 +192,10 @@ export async function main(args, registry, readers, dependencies = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const { checks, getCheck } = await import('./checks/index.mjs');
-    const { readTranscript, claudeCodeVersionOf, leadModelOf, hasMarker, runSpan, BACKENDS, BACKEND_NAMES } = await import('./lib/evidence.mjs');
+    const { readTranscript, claudeCodeVersionOf, leadModelOf, hasMarker, runSpan, scopeToRun, BACKENDS, BACKEND_NAMES } = await import('./lib/evidence.mjs');
     const registry = checks.map(check => getCheck(check.id));
     process.exitCode = await main(process.argv.slice(2), registry,
-      { readTranscript, claudeCodeVersionOf, leadModelOf, hasMarker, runSpan, BACKENDS, BACKEND_NAMES });
+      { readTranscript, claudeCodeVersionOf, leadModelOf, hasMarker, runSpan, scopeToRun, BACKENDS, BACKEND_NAMES });
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

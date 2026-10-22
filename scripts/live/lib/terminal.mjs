@@ -40,21 +40,22 @@ function pane(args, input) {
 
 export async function runTerminal(ctx, check, { run, save, readers, keep = false, env = process.env,
   log = console.log, warn = console.error, drive = pane, pause = delay } = {}) {
-  if (!fs.existsSync(path.join(ctx.workDir, '.git'))) execFileSync('git', ['init', '--quiet', ctx.workDir]);
   const sessionId = randomUUID();
   const name = `relay-live-${sessionId.slice(0, 8)}`;
   const configDir = configDirectory(env);
   const debugLog = path.join(configDir, 'debug', `${sessionId}.txt`);
   Object.assign(run, { sessionId, pane: name, debugLog });
   save();
-  let started = false, aborted = false;
+  let started = false, startSucceeded = false, aborted = false;
   const abort = () => { aborted = true; };
   process.on('SIGINT', abort);
   process.on('SIGTERM', abort);
+  process.on('SIGHUP', abort);
   const deadline = Date.now() + ctx.timeoutMinutes * 60000;
   try {
-    drive(paneStartArgs(ctx, name, sessionId));
     started = true;
+    drive(paneStartArgs(ctx, name, sessionId));
+    startSucceeded = true;
     log(drive(['attach-command', name]).trim());
     let trusted = false, ready = false;
     const startupDeadline = Math.min(deadline, Date.now() + 120000);
@@ -90,8 +91,10 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
       const screen = drive(['read', name, '2000']);
       fs.writeFileSync(path.join(ctx.evidenceDir, 'screen.txt'), screen);
       run.transcript = findTranscript(ctx.workDir, debugLog, configDir, readers.readTranscript);
-      if (run.transcript && screen.includes(check.marker) && readers.hasMarker(readers.readTranscript(run.transcript), check.marker)) {
-        done = true; break;
+      if (run.transcript) {
+        const entries = readers.scopeToRun(readers.readTranscript(run.transcript), run.runId);
+        done = check.completed ? check.completed(entries) : Boolean(check.marker && screen.includes(check.marker) && readers.hasMarker(entries, check.marker));
+        if (done) break;
       }
       if (Date.now() - lastUpdate >= 30000) {
         log(`Waiting for completion; ${Math.max(0, Math.ceil((deadline - Date.now()) / 60000))} minutes left.`);
@@ -109,16 +112,20 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
     } finally {
       try {
         if (started) {
-          if (keep && !aborted) log(`Pane kept: ${drive(['attach-command', name]).trim()}`);
+          if (keep && !aborted && startSucceeded) log(`Pane kept: ${drive(['attach-command', name]).trim()}`);
           else {
             try { drive(['stop', name]); }
-            catch (error) { warn(`Could not stop ${name}: ${error.message}`); }
+            catch (error) {
+              run.error = `Could not stop ${name}: ${error.message}`;
+              throw new Error(run.error);
+            }
           }
         }
       } finally {
         run.interrupted = aborted;
         process.off('SIGINT', abort);
         process.off('SIGTERM', abort);
+        process.off('SIGHUP', abort);
         save();
       }
     }

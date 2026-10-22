@@ -22,7 +22,11 @@ export function readRecords(directory) {
 
 const escapeCell = value => String(value ?? '—').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 const row = cells => `| ${cells.map(escapeCell).join(' | ')} |`;
-const finishTime = record => Number.isFinite(Date.parse(record.finishedAt)) ? Date.parse(record.finishedAt) : -Infinity;
+const finishTime = record => {
+  for (const time of [record.finishedAt, record.startedAt]) if (Number.isFinite(Date.parse(time))) return Date.parse(time);
+  const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-/.exec(record.runId);
+  return match ? Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`) : -Infinity;
+};
 const compare = (a, b) => finishTime(a) - finishTime(b) || a.runId.localeCompare(b.runId);
 
 export function renderTable(records, registry, { BACKENDS, BACKEND_NAMES }, relayVersion) {
@@ -54,18 +58,21 @@ export function renderTable(records, registry, { BACKENDS, BACKEND_NAMES }, rela
     }
     lines.push('');
   }
-  lines.push('## How a backend takes a message sent while its turn runs', '',
-    '- **Into the running turn**: Codex (`turn/steer`), Grok Build (`_x.ai/interject`) and ZCode (`sendText` with',
-    '  `guide`) add the message to the turn that is running.',
-    '- **As the next turn**: Kimi Code. ACP has no steer, and a running Kimi turn takes no message. The message',
-    '  reaches the job as fast as on the other backends, waits for the running turn to end, and then runs as a turn of',
-    '  its own; the running turn never sees it.',
-    '- **A new turn on the same session**: a message sent after the job ended continues the backend session the job',
-    '  ran in.', '', '## Records behind each cell', '',
+  lines.push('## How each backend took a message', '');
+  for (const delivery of ['in-turn', 'next-turn', 'new-turn']) {
+    const backends = BACKENDS.filter(backend => shown.some(record => record.backend === backend && record.delivery === delivery));
+    if (!backends.length) continue;
+    const names = backends.map(backend => BACKEND_NAMES[backend]).join(', ');
+    if (delivery === 'in-turn') lines.push(`- **Into the running turn**: ${names}. The backend added the message to the turn it was running.`);
+    if (delivery === 'next-turn') lines.push(`- **As the next turn**: ${names}. The message reached the job as fast, waited for the running turn to end, and ran as a turn of its own; the running turn did not see it.${backends.includes('kimi') ? " (Kimi's ACP has no steer.)" : ''}`);
+    if (delivery === 'new-turn') lines.push(`- **A new turn of the job**: ${names}. A message sent after the job ended ran as a new turn.`);
+  }
+  if (!shown.length) lines.push('No check has passed yet.');
+  lines.push('', '## Records behind each cell', '',
     '| Check | Surface | Backend | Model | Relay | Claude Code | Lead | Date | Record |',
     '|---|---|---|---|---|---|---|---|---|');
   for (const record of shown) lines.push(row([record.check, record.surface, record.backend, record.model,
-    record.relayVersion, record.claudeCodeVersion, record.leadModel, record.finishedAt?.slice(0, 10),
+    record.relayCommit ? `${record.relayVersion} (${record.relayCommit})` : record.relayVersion, record.claudeCodeVersion, record.leadModel, record.finishedAt?.slice(0, 10),
     `[${record.runId}](records/${record.runId}.jsonl)`]));
   return lines.join('\n') + '\n';
 }

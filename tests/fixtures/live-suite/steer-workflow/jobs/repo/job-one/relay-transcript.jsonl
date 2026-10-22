@@ -1,1 +1,1 @@
-{"type": "user", "isSidechain": true, "timestamp": "2026-10-22T10:00:30.000Z", "message": {"content": "steer from a workflow agent for codex"}}
+{"type": "attachment", "uuid": "send-entry", "attachment": {"type": "queued_command", "origin": {"kind": "peer", "from": "sender"}}}

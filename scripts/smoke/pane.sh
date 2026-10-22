@@ -67,9 +67,19 @@ install -d -m 700 "$socket_dir"
 target="=$name:"
 case "$action" in
   start)
+    # A reused tmux server can retain the launching agent's session even after the caller cleared it.
+    clean_env=()
+    while IFS= read -r variable; do
+      variable=${variable%%=*}
+      variable=${variable#-}
+      case "$variable" in
+        CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_*|CLAUDE_AGENT_SDK_*|RELAY_COMPANION_*)
+          [[ "$variable" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] && clean_env+=(-u "$variable") ;;
+      esac
+    done < <(compgen -e; tmux -S "$SOCK" show-environment -g 2>/dev/null || true)
     # Multiple tmux command arguments execute directly; no shell reparses their values. The guarded
     # expansion keeps an empty env_args from failing under set -u on Bash before 4.4 (macOS ships 3.2).
-    tmux -S "$SOCK" new-session -d -s "$name" -x 200 -y 50 -c "$dir" ${env_args[@]+"${env_args[@]}"} -- "$@"
+    tmux -S "$SOCK" new-session -d -s "$name" -x 200 -y 50 -c "$dir" ${env_args[@]+"${env_args[@]}"} -- env ${clean_env[@]+"${clean_env[@]}"} "$@"
     # Claude Code tracks focus through the terminal's focus events, which tmux passes on only
     # when asked; without them it prints a hint under the prompt.
     tmux -S "$SOCK" set-option -g focus-events on ;;

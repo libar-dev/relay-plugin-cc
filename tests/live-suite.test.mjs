@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { main, parseArgs, runChecks, usage, UsageError } from '../scripts/live/suite.mjs';
 import { analyzeRun, copyEvidence, createRun, evidenceRoot, findRunTranscript, findTranscript, makeRecords,
-  readJson, recordKeys, runDirectory, runId, writeJson, writeRecords } from '../scripts/live/lib/runs.mjs';
+  pluginCommit, readJson, recordKeys, runDirectory, runId, smokeInstall, writeJson, writeRecords } from '../scripts/live/lib/runs.mjs';
 import { claudeArgs, inspectDebug, paneStartArgs, runTerminal } from '../scripts/live/lib/terminal.mjs';
 import { readRecords, renderTable, staleMessage } from '../scripts/live/lib/table.mjs';
 
@@ -23,6 +24,13 @@ function fakeSetup(fs, path) {
   const hasLine = (entry, line) => textOf(entry).split('\n').some(text => text.trimEnd() === line);
   const readers = {
     BACKENDS, BACKEND_NAMES,
+    scopeToRun(entries, id) {
+      const isStart = entry => !entry.isSidechain && entry.type === 'user';
+      const first = entries.findIndex(entry => isStart(entry) && textOf(entry).split('\n')[0] === `Live suite run ${id}.`);
+      if (first < 0) return [];
+      const next = entries.findIndex((entry, i) => i > first && isStart(entry) && /^Live suite run \S+\.$/.test(textOf(entry).split('\n')[0]));
+      return entries.slice(first, next < 0 ? undefined : next);
+    },
     readTranscript(file) {
       return fs.readFileSync(file, 'utf8').split('\n').flatMap((line, i) => {
         if (!line.trim()) return [];
@@ -77,7 +85,7 @@ const start = '2026-10-22T10:30:15.000Z';
 const finish = '2026-10-22T10:30:18.500Z';
 function entries(run = id, marker = 'FAKE-DONE') {
   return [
-    { type: 'user', timestamp: start, version: '2.1.308', message: { content: `Live suite run ${run}.` } },
+    { type: 'user', entrypoint: run.includes('-terminal-') ? 'cli' : 'sdk-ts', timestamp: start, version: '2.1.308', message: { content: `Live suite run ${run}.` } },
     { type: 'assistant', timestamp: finish, message: { model: 'claude-sonnet-5-5', content: [{ type: 'text', text: marker }] } }
   ];
 }
@@ -90,16 +98,18 @@ function scratch(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const workDir = path.join(dir, 'work');
   fs.mkdirSync(workDir);
+  assert.equal(spawnSync('git', ['init', '--quiet', workDir]).status, 0);
+  fs.mkdirSync(path.join(dir, 'jobs'));
   const env = { ...process.env, RELAY_LIVE_HOME: path.join(dir, 'live'), XDG_STATE_HOME: path.join(dir, 'state'),
     CLAUDE_CONFIG_DIR: path.join(dir, 'config'), RELAY_JOBS_HOME: path.join(dir, 'jobs') };
   return { dir, workDir, env, recordsDir: path.join(dir, 'records') };
 }
-function receipt(ctx) {
+function receipt(ctx, fields = {}) {
   const marketplace = path.join(ctx.dir, 'marketplace');
   writeJson(path.join(marketplace, 'relay/.claude-plugin/plugin.json'), { name: 'relay', version: '3.0.0-test' });
   const real = fs.realpathSync(ctx.workDir);
   const hash = createHash('sha256').update(real).digest('hex');
-  writeJson(path.join(ctx.env.XDG_STATE_HOME, 'relay-plugin-cc/smoke-installs', `${hash}.json`), { dir: real, marketplace });
+  writeJson(path.join(ctx.env.XDG_STATE_HOME, 'relay-plugin-cc/smoke-installs', `${hash}.json`), { dir: real, marketplace, ...fields });
   return path.join(marketplace, 'relay');
 }
 function cli(ctx, args, driver = '') {
@@ -209,10 +219,10 @@ test('records have the exact keys, canonical backend order and no paths', () => 
     assert.equal(row.finishedAt, finish);
     assert.equal(row.durationSeconds, 3.5);
     assert.equal(row.evidence, `runs/${id}`);
-    assert.doesNotMatch(JSON.stringify(row), /\/tmp\/|\/private\//);
+    assert.doesNotMatch(JSON.stringify(row), /\/tmp\//);
     assert.equal(Object.hasOwn(row, 'details'), false);
   }
-  assert.equal(records[3].reason, 'Cannot read [path]');
+  assert.equal(records[3].reason, 'Cannot read <tmp>/private/job.json');
   assert.equal(makeRecords(run, check, result, [], readers)[0].durationSeconds, null);
 });
 
@@ -278,15 +288,9 @@ holds the checks; the records below name the builds.
 | A fake check | — | — | — | — |
 | A T3 check | — | — | — | — |
 
-## How a backend takes a message sent while its turn runs
+## How each backend took a message
 
-- **Into the running turn**: Codex (\`turn/steer\`), Grok Build (\`_x.ai/interject\`) and ZCode (\`sendText\` with
-  \`guide\`) add the message to the turn that is running.
-- **As the next turn**: Kimi Code. ACP has no steer, and a running Kimi turn takes no message. The message
-  reaches the job as fast as on the other backends, waits for the running turn to end, and then runs as a turn of
-  its own; the running turn never sees it.
-- **A new turn on the same session**: a message sent after the job ended continues the backend session the job
-  ran in.
+No check has passed yet.
 
 ## Records behind each cell
 
@@ -375,26 +379,28 @@ test('prepare requires a receipt, refuses terminal-only checks, and uses a realp
   assert.equal(result.stdout, `${runId}\n${promptFile}\n---\n${check.prompt(run)}`);
 });
 
-test('transcript discovery checks the slug first and then all folders newest first', t => {
+test('transcript discovery requires an exact first line and refuses ambiguous sessions across folders', t => {
   const ctx = scratch(t);
   const projects = path.join(ctx.env.CLAUDE_CONFIG_DIR, 'projects');
   const slug = ctx.workDir.replace(/[^a-zA-Z0-9]/g, '-');
   const preferred = path.join(projects, slug, 'old.jsonl');
-  const newer = path.join(projects, 'other', 'new.jsonl');
-  const newest = path.join(projects, 'elsewhere', 'newest.jsonl');
-  for (const [file, time] of [[preferred, 1000], [newer, 2000], [newest, 3000]]) {
-    writeTranscript(file); fs.utimesSync(file, time, time);
-  }
+  const other = path.join(projects, 'other', 'new.jsonl');
   const find = () => findRunTranscript(ctx.workDir, id, ctx.env.CLAUDE_CONFIG_DIR, readers.readTranscript);
+  writeTranscript(preferred);
   assert.equal(find(), preferred);
-  const preferredNew = path.join(projects, slug, 'newer.jsonl');
-  writeTranscript(preferredNew); fs.utimesSync(preferredNew, 1500, 1500);
-  assert.equal(find(), preferredNew);
-  fs.rmSync(path.dirname(preferred), { recursive: true });
-  assert.equal(find(), newest);
-  writeTranscript(newest, [{ ...entries()[0], isSidechain: true }]);
-  assert.equal(find(), newer);
-  writeTranscript(newer, [{ ...entries()[0], type: 'assistant' }]);
+  for (const content of [`Quoted prompt:\nLive suite run ${id}.`, `Live suite run ${id}. `, `Live suite run ${id}.\r\nrest`]) {
+    writeTranscript(other, [{ type: 'user', message: { content } }]);
+    assert.equal(find(), preferred);
+  }
+  writeTranscript(other, [{ ...entries()[0], isSidechain: true }]);
+  assert.equal(find(), preferred);
+  writeTranscript(other, [{ ...entries()[0], type: 'assistant' }]);
+  assert.equal(find(), preferred);
+  writeTranscript(other, [{ ...entries()[0], message: { content: [{ type: 'text', text: `Live suite run ${id}.` }, { type: 'text', text: 'rest' }] } }]);
+  assert.throws(find, error => error.message.includes('--transcript') && error.message.includes(preferred) && error.message.includes(other));
+  fs.rmSync(preferred);
+  assert.equal(find(), other);
+  fs.rmSync(other);
   assert.equal(find(), null);
 });
 
@@ -542,7 +548,7 @@ const fakeDriver = `const driver = async (ctx, check, { run }) => {
   if (process.env.SETUP_FAILURE) throw new Error('Setup failed.');
   const transcript = path.join(ctx.evidenceDir, 'original.jsonl');
   fs.writeFileSync(transcript, [
-    { type: 'user', timestamp: '2026-10-22T10:30:15.000Z', version: '2.1.308', message: { content: 'Live suite run ' + ctx.runId + '.' } },
+    { type: 'user', entrypoint: 'cli', timestamp: '2026-10-22T10:30:15.000Z', version: '2.1.308', message: { content: 'Live suite run ' + ctx.runId + '.' } },
     { type: 'assistant', timestamp: '2026-10-22T10:30:18.500Z', message: { model: 'sonnet', content: [{ type: 'text', text: process.env.NO_MARKER ? 'unfinished' : check.marker }] } }
   ].map(JSON.stringify).join('\\n') + '\\n');
   run.promptSentAt = '2026-10-22T10:30:15.000Z'; run.transcript = transcript;
@@ -571,7 +577,7 @@ for (const state of ['unchanged', 'absent', 'changed', 'created', 'deleted']) {
     if (changed) {
       assert.equal(run.settingsExistedBefore, existed);
       assert.equal(fs.readFileSync(copy, 'utf8'), existed ? before : 'null\n');
-      assert.equal(result.stderr, `~/.claude/settings.json changed during the run; compare it with ${copy}\n`);
+      assert.equal(result.stderr, `${settings} changed during the run; compare it with ${copy}\n`);
     } else assert.equal(result.stderr, '');
   });
 }
@@ -614,17 +620,16 @@ test('runTerminal override receives the contract context and skips the pane driv
   assert.equal(status, 0);
   assert.equal(called, 1);
   assert.equal(driverCalls, 0);
-  assert.deepEqual(Object.keys(seen), ['runId', 'backends', 'pluginDir', 'probeDirs', 'workDir', 'jobsHome', 'evidenceDir', 'model', 'timeoutMinutes']);
+  assert.deepEqual(Object.keys(seen), ['runId', 'backends', 'pluginDir', 'probeDirs', 'workDir', 'jobsHome', 'evidenceDir', 'model', 'timeoutMinutes', 'run', 'save', 'readers', 'paneDriver']);
   assert.equal(seen.timeoutMinutes, 7);
   assert.equal(seen.model, 'sonnet');
   assert.deepEqual(seen.backends, ['codex']);
   assert.equal(readRecords(ctx.recordsDir)[0].result, 'pass');
 });
 
-for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM']) {
+for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM', 'SIGHUP', 'partial-start', 'stop-error', 'custom-completion']) {
   test(`terminal driver with a fake pane: ${mode}`, async t => {
     const ctx = scratch(t);
-    fs.mkdirSync(path.join(ctx.workDir, '.git'));
     const created = createRun(ctx.env.RELAY_LIVE_HOME, registry[1], { surface: 'terminal', backends: ['codex'],
       workDir: ctx.workDir, jobsHome: ctx.env.RELAY_JOBS_HOME, relayVersion: 'test' });
     const input = { runId: created.run.runId, backends: ['codex'], pluginDir: '/tmp/plugin', probeDirs: ['/tmp/probe'],
@@ -633,7 +638,9 @@ for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM']) 
     let polls = 0, transcript;
     const drive = (args, prompt) => {
       calls.push(args);
+      if (args[0] === 'stop' && mode === 'stop-error') throw new Error('Stop failed.');
       if (args[0] === 'start') {
+        if (mode === 'partial-start') throw new Error('Start failed after creating the pane.');
         const sessionId = args[args.indexOf('--session-id') + 1];
         transcript = path.join(ctx.env.CLAUDE_CONFIG_DIR, 'projects', ctx.workDir.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);
         const debug = path.join(ctx.env.CLAUDE_CONFIG_DIR, 'debug', `${sessionId}.txt`);
@@ -655,18 +662,19 @@ for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM']) 
       if (args[0] === 'read') return 'FAKE-DONE';
       return 'pane command';
     };
-    const before = [process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')];
-    const action = runTerminal(input, registry[1], { run: created.run, save() {}, readers, env: ctx.env, drive,
-      pause: async () => {}, log() {}, warn() {}, keep: mode.startsWith('SIG') });
-    if (mode === 'complete') await action;
-    else await assert.rejects(action, mode === 'bypass' ? /bypass-permissions dialog/ : mode === 'module-error' ? /wake-probe hooks module failed/ : /Interrupted/);
+    const before = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => process.listenerCount(signal));
+    const selected = mode === 'custom-completion' ? { ...registry[1], marker: undefined, completed: entries => entries.some(entry => entry.type === 'assistant') } : registry[1];
+    const action = runTerminal(input, selected, { run: created.run, save() {}, readers, env: ctx.env, drive,
+      pause: async () => {}, log() {}, warn() {}, keep: mode.startsWith('SIG') || mode === 'partial-start' });
+    if (['complete', 'custom-completion'].includes(mode)) await action;
+    else await assert.rejects(action, mode === 'partial-start' ? /Start failed/ : mode === 'stop-error' ? /Could not stop/ : mode === 'bypass' ? /bypass-permissions dialog/ : mode === 'module-error' ? /wake-probe hooks module failed/ : /Interrupted/);
     assert.equal(calls.filter(args => args[0] === 'stop').length, 1);
-    assert.equal(calls.filter(args => args[0] === 'send').length, ['bypass', 'module-error'].includes(mode) ? 0 : 1);
-    assert.equal(calls.some(args => args[0] === 'trust'), mode !== 'bypass');
-    assert.equal(Boolean(created.run.promptSentAt), !['bypass', 'module-error'].includes(mode));
+    assert.equal(calls.filter(args => args[0] === 'send').length, ['bypass', 'module-error', 'partial-start'].includes(mode) ? 0 : 1);
+    assert.equal(calls.some(args => args[0] === 'trust'), !['bypass', 'partial-start'].includes(mode));
+    assert.equal(Boolean(created.run.promptSentAt), !['bypass', 'module-error', 'partial-start'].includes(mode));
     if (created.run.promptSentAt) assert.equal(created.run.transcript, transcript);
     assert.equal(created.run.interrupted, mode.startsWith('SIG'));
-    assert.deepEqual([process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')], before);
+    assert.deepEqual(['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => process.listenerCount(signal)), before);
   });
 }
 
@@ -712,7 +720,7 @@ test('a sent prompt with no transcript records failures that replay from empty c
     workDir: ctx.workDir, jobsHome: ctx.env.RELAY_JOBS_HOME, relayVersion: 'test', promptSentAt: start });
   const first = analyzeRun(created.run, created.evidenceDir, registry, readers, { recordsDir: ctx.recordsDir, env: ctx.env });
   assert.equal(first.records[0].result, 'fail');
-  assert.equal(first.records[0].reason, 'The lead did not print FAKE-DONE.');
+  assert.equal(first.records[0].reason, 'The lead did not print FAKE-DONE. The session ran as null, not cli.');
   assert.equal(first.records[0].startedAt, null);
   assert.equal(first.records[0].finishedAt, null);
   assert.equal(first.records[0].durationSeconds, null);
@@ -726,4 +734,318 @@ test('a sent prompt with no transcript records failures that replay from empty c
 test('the committed capability table matches the committed records', () => {
   const result = spawnSync(process.execPath, [path.join(root, 'scripts/live/suite.mjs'), 'table', '--check'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('record metadata, completion and surface come only from this run', () => {
+  const before = entries('prior-run');
+  before[0].version = 'old-version'; before[0].entrypoint = 'cli';
+  const current = entries(id, 'not done');
+  const after = entries('later-run');
+  after[0].timestamp = '2026-10-23T00:00:00Z'; after[1].timestamp = '2026-10-23T00:01:00Z';
+  const rows = [...before, ...current, ...after];
+  const result = makeRecords(baseRun(), check, analyzed(), rows, readers)[0];
+  assert.equal(result.result, 'fail');
+  assert.equal(result.reason, 'The lead did not print FAKE-DONE.');
+  assert.equal(result.claudeCodeVersion, '2.1.308');
+  assert.equal(result.leadModel, 'claude-sonnet-5-5');
+  assert.equal(result.startedAt, start);
+  assert.equal(result.finishedAt, finish);
+  const missing = makeRecords(baseRun(), check, analyzed(), [...before, ...after], readers)[0];
+  assert.equal(missing.claudeCodeVersion, null);
+  assert.equal(missing.leadModel, null);
+  assert.equal(missing.startedAt, null);
+  assert.equal(missing.finishedAt, null);
+});
+
+for (const surface of ['terminal', 't3']) {
+  for (const entrypoint of ['cli', 'sdk-ts', null]) {
+    test(`${surface} records require their measured entrypoint (${entrypoint})`, () => {
+      const rows = entries(); rows[0].entrypoint = entrypoint;
+      rows.unshift({ isSidechain: true, entrypoint: surface === 'terminal' ? 'cli' : 'sdk-ts' });
+      const records = makeRecords(baseRun({ surface }), check, analyzed(), rows, readers);
+      const expected = surface === 'terminal' ? 'cli' : 'sdk-ts';
+      for (const record of records) {
+        assert.equal(record.result, entrypoint === expected ? 'pass' : 'fail');
+        assert.equal(record.reason, entrypoint === expected ? null : `The session ran as ${entrypoint}, not ${expected}.`);
+      }
+    });
+  }
+}
+
+test('custom completion sees scoped entries and works without an assistant marker', () => {
+  const rows = [entries()[0], { type: 'system', observed: 'done', timestamp: finish }, ...entries('later-run')];
+  let seen;
+  const custom = { ...check, marker: undefined, completed(entries) { seen = entries; return entries.some(entry => entry.observed === 'done'); } };
+  assert.equal(makeRecords(baseRun(), custom, analyzed(), rows, readers)[0].result, 'pass');
+  assert.equal(seen.length, 2);
+  const failed = analyzed(); failed.results[0].reason = 'Output was missing.'; failed.results[0].result = 'fail';
+  custom.completed = () => false;
+  assert.equal(makeRecords(baseRun(), custom, failed, rows, readers)[0].reason, 'The run did not complete. Output was missing.');
+  assert.equal(makeRecords(baseRun(), { ...custom, completed: undefined }, analyzed(), rows, readers)[0].reason, 'The run did not complete.');
+  assert.equal(makeRecords(baseRun(), { ...custom, marker: 'CUSTOM' }, analyzed(), rows, readers)[0].reason, 'The lead did not print CUSTOM.');
+});
+
+test('records redact known roots before generic paths, validate models, and keep only numeric timing arrays', () => {
+  const home = os.homedir();
+  const evidence = path.join(home, 'private live evidence');
+  const workDir = path.join(os.tmpdir(), 'work with spaces');
+  const jobsHome = path.join(workDir, 'jobs with spaces');
+  const run = baseRun({ workDir, jobsHome, relayCommit: '0123456789ab-dirty' });
+  const analysis = analyzed(run);
+  Object.assign(analysis.results[0], { model: `custom:${home}/private/model`, result: 'fail',
+    reason: [`\`${home}/My Folder/x\``, `ENOENT:/home/other/q`, '[/Users/other/z]', 'file:///home/other/a.mjs',
+      `${evidence}/run`, `${root.slice(0, -1)}/code`, `${workDir}/work`, `${jobsHome}/job`, '/tmp/other', `${os.tmpdir()}/thing`].join(' '),
+    timings: { deliveredSeconds: [2, 3], readSeconds: [1, 2], empty: [], bad: [1, Infinity], nan: [NaN],
+      mixed: [1, '/home/person/path'], nested: { path: '/Users/person/path' }, scalar: 4, [`${home}/key`]: [5] } });
+  const row = makeRecords(run, check, analysis, entries(), readers, evidence)[0];
+  assert.equal(row.model, null);
+  assert.equal(row.relayCommit, '0123456789ab-dirty');
+  assert.deepEqual(Object.keys(row).slice(6, 9), ['relayVersion', 'relayCommit', 'claudeCodeVersion']);
+  assert.deepEqual(row.timings, { deliveredSeconds: [2, 3], readSeconds: [1, 2], empty: [], '~/key': [5] });
+  assert.doesNotMatch(JSON.stringify(row), /\/home\/|\/Users\/|\/tmp\//);
+  for (const label of ['~/My Folder/x', '<evidence>/run', '<repo>/code', '<work>/work', '<jobs>/job', '<tmp>/other', '[path]']) assert.ok(row.reason.includes(label), label);
+  for (const model of ['kimi-code/kimi-for-coding', 'model.v1:low', 'a-b_c']) {
+    analysis.results[0].model = model;
+    assert.equal(makeRecords(run, check, analysis, entries(), readers)[0].model, model);
+  }
+  for (const model of ['/absolute/path', 'bad model', 'x\nmodel', 123]) {
+    analysis.results[0].model = model;
+    assert.equal(makeRecords(run, check, analysis, entries(), readers)[0].model, null);
+  }
+});
+
+test('every committed live record is free of home and temporary absolute paths', () => {
+  const files = spawnSync('git', ['-C', root, 'ls-files', '-z', '--', 'docs/live/records/'], { encoding: 'utf8' });
+  assert.equal(files.status, 0, files.stderr);
+  for (const file of files.stdout.split('\0').filter(Boolean)) {
+    const content = fs.readFileSync(path.join(root, file), 'utf8');
+    for (const prefix of [os.homedir(), '/home/', '/Users/', '/tmp/']) assert.ok(!content.includes(prefix), `${file} contains ${prefix}`);
+  }
+});
+
+test('terminal build commits distinguish plugin changes from unrelated changes and unknown builds', t => {
+  const ctx = scratch(t);
+  const plugin = path.join(ctx.workDir, 'plugins/relay');
+  writeJson(path.join(plugin, '.claude-plugin/plugin.json'), { version: 'test' });
+  const git = (...args) => {
+    const result = spawnSync('git', ['-C', ctx.workDir, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+  };
+  git('add', 'plugins');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--no-gpg-sign', '-qm', 'fixture');
+  const commit = git('rev-parse', 'HEAD').slice(0, 12);
+  assert.equal(pluginCommit(plugin), commit);
+  fs.writeFileSync(path.join(ctx.workDir, 'unrelated'), 'change');
+  assert.equal(pluginCommit(plugin), commit);
+  fs.writeFileSync(path.join(plugin, 'new-file'), 'change');
+  assert.equal(pluginCommit(plugin), `${commit}-dirty`);
+  fs.rmSync(path.join(plugin, 'new-file'));
+  writeJson(path.join(plugin, '.claude-plugin/plugin.json'), { version: 'changed' });
+  assert.equal(pluginCommit(plugin), `${commit}-dirty`);
+  assert.equal(pluginCommit(ctx.dir), null);
+});
+
+for (const worktree of [false, true]) {
+  test(`prepare carries receipt build identity (${worktree ? 'worktree' : 'archive'}) and diagnoses vanished builds`, t => {
+    const ctx = scratch(t), commit = '0123456789abcdef0123456789abcdef01234567';
+    const plugin = receipt(ctx, { commit, worktree });
+    assert.equal(smokeInstall(ctx.workDir, ctx.env).relayCommit, commit.slice(0, 12) + (worktree ? '-dirty' : ''));
+    const args = ['prepare', 'fake', '--surface', 't3', '--work-dir', ctx.workDir];
+    const prepared = cli(ctx, args);
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const run = readJson(path.join(path.dirname(prepared.stdout.split('\n')[1]), 'run.json'));
+    assert.equal(run.relayCommit, commit.slice(0, 12) + (worktree ? '-dirty' : ''));
+    fs.rmSync(plugin, { recursive: true });
+    const gone = cli(ctx, args);
+    assert.equal(gone.status, 1);
+    assert.equal(gone.stderr, `The smoke install's build folder ${plugin} is gone; reinstall with scripts/smoke/install-local.sh ${ctx.workDir}.\n`);
+  });
+}
+
+test('table uses start and run-id timestamps when finish is absent', () => {
+  const old = record();
+  for (const failed of [record({ result: 'fail', finishedAt: null, startedAt: '2026-10-23T00:00:00Z' }),
+    record({ result: 'fail', finishedAt: null, startedAt: null, runId: '20261023T000000Z-fake-t3-0000' }),
+    record({ result: 'fail', finishedAt: 'invalid', startedAt: 'invalid', runId: '20261023T000000Z-fake-t3-0000' })]) {
+    assert.equal(renderTable([old, failed], registry, readers), emptyTable);
+    assert.equal(renderTable([failed, old], registry, readers), emptyTable);
+  }
+});
+
+test('table explains only shown deliveries, deduplicates canonical backend names and names build commits', () => {
+  const rows = [record({ backend: 'zcode' }), record({ surface: 'terminal' }), record({ backend: 'codex' }),
+    record({ backend: 'kimi', delivery: 'next-turn' }), record({ backend: 'grok', delivery: 'new-turn', relayCommit: '0123456789ab' })];
+  const table = renderTable(rows, registry, readers);
+  assert.match(table, /\*\*Into the running turn\*\*: Codex, ZCode\. The backend added/);
+  assert.match(table, /\*\*As the next turn\*\*: Kimi Code\..*\(Kimi's ACP has no steer\.\)/);
+  assert.match(table, /\*\*A new turn of the job\*\*: Grok Build\./);
+  assert.match(table, /3\.0\.0-test \(0123456789ab\)/);
+  assert.doesNotMatch(table, /same session|turn\/steer|_x.ai|sendText/);
+  const onlyNext = renderTable([record({ delivery: 'next-turn' })], registry, readers);
+  assert.match(onlyNext, /\*\*As the next turn\*\*: Codex\./);
+  assert.doesNotMatch(onlyNext, /Kimi's ACP|\*\*Into the running turn|\*\*A new turn/);
+  const hidden = renderTable([...rows, record({ backend: 'kimi', result: 'fail', finishedAt: '2026-10-24T00:00:00Z' })], registry, readers);
+  assert.doesNotMatch(hidden, /\*\*As the next turn|Kimi's ACP/);
+});
+
+function directoryBytes(dir) {
+  return fs.readdirSync(dir, { recursive: true }).sort().filter(file => fs.statSync(path.join(dir, file)).isFile())
+    .map(file => [file, fs.readFileSync(path.join(dir, file), 'base64')]);
+}
+
+for (const missing of ['jobsHome', 'transcript', 'jobDir']) {
+  for (const legacy of [false, true]) {
+    test(`reanalyze refuses missing ${missing} with ${legacy ? 'legacy' : 'new'} copies and changes no evidence`, t => {
+      const ctx = scratch(t), input = evidenceFixture(ctx);
+      const created = createRun(ctx.env.RELAY_LIVE_HOME, check, { ...baseRun(input), backends: ['codex'], promptSentAt: start });
+      // createRun chooses a new id; the original transcript belongs to that run.
+      writeTranscript(input.transcript, entries(created.run.runId));
+      const options = { recordsDir: ctx.recordsDir, env: ctx.env };
+      const original = analyzeRun(created.run, created.evidenceDir, registry, readers, options);
+      if (legacy) {
+        delete created.run.copy.originalJobDirs;
+        writeJson(path.join(created.evidenceDir, 'run.json'), created.run);
+      }
+      const before = directoryBytes(created.evidenceDir), records = directoryBytes(ctx.recordsDir);
+      fs.rmSync(input[missing], { recursive: true });
+      assert.throws(() => analyzeRun(created.run, created.evidenceDir, registry, readers, options),
+        { message: `The original evidence of ${created.run.runId} is gone; analyze it with --from-copy.` });
+      assert.deepEqual(directoryBytes(created.evidenceDir), before);
+      assert.deepEqual(directoryBytes(ctx.recordsDir), records);
+      assert.deepEqual(analyzeRun(created.run, created.evidenceDir, registry, readers, { ...options, fromCopy: true }).records, original.records);
+    });
+  }
+}
+
+test('a failed copy leaves the previous copy and records byte-for-byte intact and removes staging files', t => {
+  const ctx = scratch(t), input = evidenceFixture(ctx);
+  const created = createRun(ctx.env.RELAY_LIVE_HOME, check, { ...baseRun(input), backends: ['codex'], promptSentAt: start });
+  writeTranscript(input.transcript, entries(created.run.runId));
+  const options = { recordsDir: ctx.recordsDir, env: ctx.env };
+  analyzeRun(created.run, created.evidenceDir, registry, readers, options);
+  const before = directoryBytes(created.evidenceDir), records = directoryBytes(ctx.recordsDir);
+  t.mock.method(fs, 'copyFileSync', () => { throw new Error('Simulated disk failure.'); });
+  assert.throws(() => analyzeRun(created.run, created.evidenceDir, registry, readers, options), /Simulated disk failure/);
+  assert.deepEqual(directoryBytes(created.evidenceDir), before);
+  assert.deepEqual(directoryBytes(ctx.recordsDir), records);
+  assert.equal(fs.readdirSync(created.evidenceDir).some(name => name.startsWith('.copy-')), false);
+});
+
+for (const command of ['run', 'prepare']) {
+  test(`${command} refuses a caller-owned non-repository and accepts a repository subdirectory without git init`, t => {
+    const ctx = scratch(t), pluginDir = receipt(ctx);
+    const outside = path.join(ctx.dir, 'outside'), nested = path.join(ctx.workDir, 'nested');
+    fs.mkdirSync(outside); fs.mkdirSync(nested);
+    const args = dir => command === 'run' ? ['run', 'fake', '--plugin-dir', pluginDir, '--work-dir', dir,
+      '--jobs-home', ctx.env.RELAY_JOBS_HOME, '--records-dir', ctx.recordsDir] : ['prepare', 'fake', '--surface', 't3', '--work-dir', dir];
+    const refused = cli(ctx, args(outside), fakeDriver);
+    assert.equal(refused.status, 2, refused.stderr);
+    assert.match(refused.stderr, /--work-dir must already be inside a git work tree/);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.equal(fs.existsSync(ctx.env.RELAY_LIVE_HOME), false);
+    if (command === 'prepare') receipt({ ...ctx, workDir: nested });
+    const accepted = cli(ctx, args(nested), fakeDriver);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.equal(fs.existsSync(path.join(nested, '.git')), false);
+  });
+}
+
+for (const fail of [false, true]) {
+  test(`override can reuse the pane driver and retain lifecycle metadata when it ${fail ? 'throws' : 'returns'}`, async t => {
+    const ctx = scratch(t), pluginDir = receipt(ctx);
+    let driverCalls = 0, analyzeCalls = 0, seenRun, transcript;
+    const custom = { ...check, async runTerminal(input) {
+      await input.paneDriver();
+      seenRun = input.run;
+      assert.equal(input.readers, readers);
+      input.save();
+      if (fail) throw new Error('After-start failure.');
+      return { ...analyzed(baseRun({ backends: input.backends })), evidence: { transcripts: [], agents: [] } };
+    }, analyze(input) {
+      analyzeCalls++;
+      assert.equal(input.evidenceDir, path.dirname(transcript));
+      assert.equal(input.transcript, transcript);
+      return check.analyze(input);
+    } };
+    const options = parseArgs(['run', 'fake', '--plugin-dir', pluginDir, '--work-dir', ctx.workDir,
+      '--jobs-home', ctx.env.RELAY_JOBS_HOME, '--records-dir', ctx.recordsDir, '--backends', 'codex'], [custom], readers.BACKENDS);
+    const status = await runChecks(options, [custom], readers, { env: ctx.env, log() {}, warn() {}, driver(input, selected, { run }) {
+      driverCalls++;
+      assert.equal(selected, custom);
+      transcript = path.join(input.evidenceDir, 'main.jsonl');
+      writeTranscript(transcript, entries(input.runId, fail ? 'unfinished' : check.marker));
+      Object.assign(run, { promptSentAt: start, transcript, sessionId: 'kept-session', debugLog: 'kept-debug', startupEvidence: { kept: true } });
+    } });
+    assert.equal(status, fail ? 1 : 0);
+    assert.equal(driverCalls, 1); assert.equal(analyzeCalls, fail ? 1 : 0);
+    assert.equal(seenRun.promptSentAt, start); assert.equal(seenRun.transcript, transcript);
+    assert.equal(seenRun.sessionId, 'kept-session'); assert.equal(seenRun.debugLog, 'kept-debug');
+    assert.deepEqual(seenRun.startupEvidence, { kept: true });
+    const records = readRecords(ctx.recordsDir);
+    assert.equal(records.length, 1); assert.equal(records[0].result, fail ? 'fail' : 'pass');
+    if (fail) assert.equal(readJson(path.join(path.dirname(transcript), 'run.json')).error, 'After-start failure.');
+  });
+}
+
+test('a stop failure propagates to run.error and CLI status even when analysis passes', async t => {
+  const ctx = scratch(t), pluginDir = receipt(ctx);
+  const status = await main(['run', 'fake', '--plugin-dir', pluginDir, '--work-dir', ctx.workDir,
+    '--jobs-home', ctx.env.RELAY_JOBS_HOME, '--records-dir', ctx.recordsDir, '--backends', 'codex'], registry, readers,
+  { env: ctx.env, log() {}, warn() {}, driver(input, selected, { run }) {
+    run.transcript = path.join(input.evidenceDir, 'main.jsonl');
+    run.promptSentAt = start;
+    writeTranscript(run.transcript, entries(input.runId));
+    throw new Error('Could not stop pane: Stop failed.');
+  } });
+  assert.equal(status, 1);
+  const record = readRecords(ctx.recordsDir)[0];
+  const run = readJson(path.join(runDirectory(ctx.env.RELAY_LIVE_HOME, record.runId), 'run.json'));
+  assert.equal(run.error, 'Could not stop pane: Stop failed.');
+});
+
+test('copied job and adoption bindings follow their copied relay transcript', t => {
+  const ctx = scratch(t), input = evidenceFixture(ctx);
+  writeJson(path.join(input.jobDir, 'job.json'), { state: 'completed', relay: { transcriptPath: input.relayTranscript } });
+  writeJson(path.join(input.jobDir, 'relay.json'), { transcriptPath: input.relayTranscript });
+  const result = { ...analyzed(), evidence: { transcripts: [input.transcript, input.relayTranscript],
+    agents: [{ agentId: 'codex', pointer: input.pointer, jobDir: input.jobDir }] } };
+  const copy = copyEvidence(baseRun(input), result, path.join(ctx.dir, 'evidence'));
+  const pointer = readJson(path.join(copy.jobsHome, 'relays/codex.json'));
+  fs.rmSync(input.jobsHome, { recursive: true });
+  assert.equal(readJson(path.join(pointer.jobDir, 'job.json')).relay.transcriptPath, pointer.transcriptPath);
+  assert.equal(readJson(path.join(pointer.jobDir, 'relay.json')).transcriptPath, pointer.transcriptPath);
+  assert.equal(fs.existsSync(pointer.transcriptPath), true);
+});
+
+test('a source disappearing during analysis cannot replace the existing evidence copy', t => {
+  const ctx = scratch(t), input = evidenceFixture(ctx);
+  const created = createRun(ctx.env.RELAY_LIVE_HOME, check, { ...baseRun(input), backends: ['codex'], promptSentAt: start });
+  writeTranscript(input.transcript, entries(created.run.runId));
+  const options = { recordsDir: ctx.recordsDir, env: ctx.env };
+  analyzeRun(created.run, created.evidenceDir, registry, readers, options);
+  const before = directoryBytes(created.evidenceDir);
+  const custom = { ...check, analyze(input) {
+    const result = check.analyze(input);
+    fs.rmSync(result.evidence.agents[0].jobDir, { recursive: true });
+    return result;
+  } };
+  assert.throws(() => analyzeRun(created.run, created.evidenceDir, [custom], readers, options), /original evidence.*gone; analyze it with --from-copy/);
+  assert.deepEqual(directoryBytes(created.evidenceDir), before);
+  assert.equal(fs.readdirSync(created.evidenceDir).some(name => name.startsWith('.copy-')), false);
+});
+
+test('a failed swap restores the old copy and removes staging files', t => {
+  const ctx = scratch(t), input = evidenceFixture(ctx);
+  const created = createRun(ctx.env.RELAY_LIVE_HOME, check, { ...baseRun(input), backends: ['codex'], promptSentAt: start });
+  writeTranscript(input.transcript, entries(created.run.runId));
+  const options = { recordsDir: ctx.recordsDir, env: ctx.env };
+  analyzeRun(created.run, created.evidenceDir, registry, readers, options);
+  const before = directoryBytes(created.evidenceDir), rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (source, destination) => {
+    if (path.basename(source).startsWith('.copy-') && !source.endsWith('-previous')) throw new Error('Swap failed.');
+    return rename(source, destination);
+  });
+  assert.throws(() => analyzeRun(created.run, created.evidenceDir, registry, readers, options), /Swap failed/);
+  assert.deepEqual(directoryBytes(created.evidenceDir), before);
+  assert.equal(fs.readdirSync(created.evidenceDir).some(name => name.startsWith('.copy-')), false);
 });

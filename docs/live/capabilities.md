@@ -23,15 +23,9 @@ holds the checks; the records below name the builds.
 | Steer a running job with a Workflow agent's SendMessage | — | — | — | — |
 | Continue a job after its hand-back | — | — | — | — |
 
-## How a backend takes a message sent while its turn runs
+## How each backend took a message
 
-- **Into the running turn**: Codex (`turn/steer`), Grok Build (`_x.ai/interject`) and ZCode (`sendText` with
-  `guide`) add the message to the turn that is running.
-- **As the next turn**: Kimi Code. ACP has no steer, and a running Kimi turn takes no message. The message
-  reaches the job as fast as on the other backends, waits for the running turn to end, and then runs as a turn of
-  its own; the running turn never sees it.
-- **A new turn on the same session**: a message sent after the job ended continues the backend session the job
-  ran in.
+No check has passed yet.
 
 ## Records behind each cell
 

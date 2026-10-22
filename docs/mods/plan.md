@@ -142,7 +142,7 @@ What shipped:
   parser and end-to-end tests for peer messages. CI installs a pinned Claude Code to run `claude plugin validate`
   and `claude plugin test`.
 - Dev tools: `scripts/smoke/` (a tmux pane an agent drives, and an install of a build into one directory),
-  `scripts/live/steer-wake.mjs` (the live steer check below).
+  `scripts/live/steer-wake.mjs` (the live steer check below; now the suite's `steer-main` check).
 
 Live results on the Fedora machine, Claude Code 2.1.308 (`scripts/live/steer-wake.mjs` and its analyzer, Sonnet
 lead). The last terminal run and the T3 run used the final rule, on the build then numbered 2.3.0:
@@ -313,7 +313,8 @@ LIVE-RESULTS-PLACEHOLDER
 
 Assumptions that held:
 
-- Phase 1's tools carried over unchanged: `pane.sh`, `install-local.sh`, the per-session bypass setting.
+- Phase 1's tools carried over: `pane.sh`, `install-local.sh`, the per-session bypass setting, with the one fix
+  to `pane.sh` below.
 - The job's own files are enough to judge every check so far: the relay pointer, `inbox/relay/` for when the
   guard delivered a message, `inbox/outcomes/` for how the backend took it, and the attempts for the version and
   for the turn a continue started.
@@ -322,6 +323,13 @@ Assumptions that held:
 
 What changed, and where:
 
+- **A terminal run was not a plain terminal session** (D27). The pane's Claude Code inherited the lead's session
+  variables, its messaging socket and token among them, and recorded itself as an Agent SDK child
+  (`entrypoint: sdk-ts`); Phase 1's terminal runs did too. `pane.sh start` now removes them, and a record fails
+  unless the transcript's entrypoint matches its surface. The suite's terminal records come from clean sessions.
+- **A check credits a delivery to its sender and its run only** (D26). Both reviewers found that a steer could pass
+  on a record another sender produced, or on an earlier run in the same transcript. The relay's transcript names
+  the sender of every message it received, and the analysis is cut to the run's own entries.
 - **How a check waits.** A lead that waits in a background Monitor ends its turn, and in T3 it is not woken again
   (D18). The suite's prompts have the lead wait in foreground Bash until-loops and keep its turn until it prints
   the check's marker. Completion notices of background agents and Workflows still arrive between its tool calls,

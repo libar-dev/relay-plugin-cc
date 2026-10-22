@@ -60,6 +60,8 @@ test('worktree export excludes generated types and keeps local settings on clean
   const install = spawnSync('bash', [path.join(root, 'scripts/smoke/install-local.sh'), work, '--repo', root, '--worktree'], { env, encoding: 'utf8' });
   assert.equal(install.status, 0, install.stderr);
   const marker = JSON.parse(fs.readFileSync(receiptPath(work, env), 'utf8'));
+  assert.equal(marker.worktree, true);
+  assert.equal(marker.commit, spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim());
   const exported = path.join(marker.marketplace, 'relay');
   assert.equal(fs.existsSync(path.join(exported, '.claude-plugin/types')), false);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(exported, '.claude-plugin/plugin.json'), 'utf8')),
@@ -495,3 +497,55 @@ for (const target of ['.claude', '.claude/settings.local.json']) {
     }
   });
 }
+
+for (const mode of ['inherited', 'server-only', 'no-server', 'empty']) {
+  test(`pane start scrubs Claude session variables and preserves other variables: ${mode}`, t => {
+    const { dir, env } = fakeCli(t);
+    const reserved = name => /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT)$|^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|RELAY_COMPANION_)/.test(name);
+    for (const name of Object.keys(env)) if (reserved(name)) delete env[name];
+    const polluted = { CLAUDECODE: '1', CLAUDE_PID: '123', CLAUDE_EFFORT: 'high', CLAUDE_CODE_ENTRYPOINT: 'sdk-ts',
+      CLAUDE_CODE_SESSION_ID: 'parent', CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/socket', CLAUDE_CODE_MESSAGING_TOKEN: 'test-token',
+      CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ATTENDED: '0', CLAUDE_CODE_EXECPATH: '/tmp/claude',
+      CLAUDE_AGENT_SDK_VERSION: 'test', CLAUDE_AGENT_SDK_FUTURE: 'future', RELAY_COMPANION_FUTURE: 'future' };
+    if (mode === 'inherited' || mode === 'no-server') Object.assign(env, polluted);
+    const globals = mode === 'inherited' || mode === 'server-only' ? { ...polluted, CLAUDE_CODE_SERVER_ONLY: 'sdk',
+      CLAUDE_CODE_REMOVED: null, SERVER_KEEP: 'retained', CLAUDE_CONFIG_DIR: path.join(dir, 'server config') } : {};
+    Object.assign(env, { SMOKE_TMUX_GLOBALS: JSON.stringify(globals), SMOKE_TMUX_LOG: path.join(dir, 'tmux.jsonl'),
+      XDG_RUNTIME_DIR: path.join(dir, 'runtime'), ORDINARY_VARIABLE: 'keep me' });
+    if (mode === 'no-server') env.SMOKE_TMUX_NO_SERVER = '1';
+    fs.writeFileSync(path.join(dir, 'bin/tmux'), `#!${process.execPath}\n` +
+      fs.readFileSync(path.join(root, 'tests/fixtures/smoke-tools/fake-tmux.cjs'), 'utf8'), { mode: 0o755 });
+    const output = path.join(dir, 'child environment.json');
+    const code = 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify(process.env))';
+    const result = spawnSync('bash', [path.join(root, 'scripts/smoke/pane.sh'), 'start', 'clean', dir,
+      ...(mode === 'empty' ? [] : ['--env', 'RELAY_JOBS_HOME=/tmp/jobs with spaces']), '--', process.execPath, '-e', code, output],
+    { env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const child = readJson(output);
+    assert.deepEqual(Object.keys(child).filter(reserved), []);
+    assert.equal(child.CLAUDE_CONFIG_DIR, globals.CLAUDE_CONFIG_DIR ?? env.CLAUDE_CONFIG_DIR);
+    assert.equal(child.ORDINARY_VARIABLE, 'keep me');
+    if (mode !== 'empty') assert.equal(child.RELAY_JOBS_HOME, '/tmp/jobs with spaces');
+    if (globals.SERVER_KEEP) assert.equal(child.SERVER_KEEP, 'retained');
+    const calls = fs.readFileSync(env.SMOKE_TMUX_LOG, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(calls.map(args => args[2]), ['show-environment', 'new-session', 'set-option']);
+    const command = calls[1].slice(calls[1].indexOf('--') + 1);
+    assert.equal(command[0], 'env');
+    for (const name of Object.keys({ ...(mode === 'inherited' || mode === 'no-server' ? polluted : {}), ...globals }).filter(reserved)) {
+      assert.ok(command.some((value, i) => value === name && command[i - 1] === '-u'), name);
+    }
+    assert.deepEqual(command.slice(-4), [process.execPath, '-e', code, output]);
+  });
+}
+
+test('archive install receipt identifies the full exported commit and worktree flag', t => {
+  const { dir, env } = fakeCli(t);
+  const work = workDir(dir);
+  const commit = spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+  const result = smokeScript('install', work, env, '--repo', root, '--ref', commit);
+  assert.equal(result.status, 0, result.stderr);
+  const saved = readJson(receiptPath(work, env));
+  assert.equal(saved.commit, commit);
+  assert.equal(saved.worktree, false);
+  assert.equal(smokeScript('uninstall', work, env).status, 0);
+});

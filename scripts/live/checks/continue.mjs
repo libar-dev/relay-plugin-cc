@@ -20,6 +20,6 @@ export default {
     return analyzeCheck(input, { kind: 'continue', messages: backend => [`continue for ${backend}: reply with exactly one line: second turn for ${backend}`] });
   },
   cell(record) {
-    return `a new turn on the same session, delivered in ${formatSeconds(record.timings.deliveredSeconds ?? [])}`;
+    return `a new turn of the job, delivered in ${formatSeconds(record.timings.deliveredSeconds ?? [])}`;
   }
 };

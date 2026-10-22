@@ -8,11 +8,13 @@
     {
       "attempt": 1,
       "startedAt": "2026-10-22T10:00:10.000Z",
-      "relayVersion": "2.2.0-test"
+      "relayVersion": "2.2.0-test",
+      "turnId": "first-turn"
     }
   ],
   "request": {
     "backend": "codex",
     "model": "gpt-6.1-sol"
-  }
+  },
+  "messages": []
 }

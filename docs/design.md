@@ -828,7 +828,8 @@ After a Claude Code update:
 2. Steer one running `relay:job` agent with `SendMessage`, and send it one message after it hands
    back. The steer must be recorded in the job's `inbox/relay/` within seconds of the send, the
    state block must show no `relay-violation:` line, and the second message must run as a new turn.
-   `scripts/live/steer-wake.mjs` runs the steer on every backend and times it.
+   The live suite does both on every backend and times them: `node scripts/live/suite.mjs run steer-main
+   continue`.
 3. If either fails, `scripts/hook-probe.mjs` logs what the hooks receive. Register it for
    PreToolUse, PostToolUse and SubagentStop in a throwaway project, repeat the steps, and compare
    the log with what `lib/harness/` expects.

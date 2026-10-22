@@ -15,7 +15,8 @@
       "startedAt": "2026-10-22T10:00:10.000Z",
       "endedAt": "2026-10-22T10:00:20.000Z",
       "state": "completed",
-      "relayVersion": "3.0.0-test"
+      "relayVersion": "3.0.0-test",
+      "turnId": "first-turn"
     },
     {
       "attempt": 2,
@@ -24,5 +25,6 @@
       "state": "completed",
       "relayVersion": "3.0.0-test"
     }
-  ]
+  ],
+  "messages": []
 }

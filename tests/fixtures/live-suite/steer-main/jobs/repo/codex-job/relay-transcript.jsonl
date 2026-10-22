@@ -1,0 +1,2 @@
+{"type": "attachment", "uuid": "one", "attachment": {"type": "queued_command", "origin": {"kind": "coordinator"}}}
+{"type": "attachment", "uuid": "three", "attachment": {"type": "queued_command", "origin": {"kind": "coordinator"}}}
