@@ -97,6 +97,8 @@ for (const ended of [false, true]) {
     assert.deepEqual(JSON.parse(fs.readFileSync(markerFile, "utf8")), marker);
     assert.ok(![...codexReceived(ctx).turns, ...codexReceived(ctx).steers].includes(pending.attachment.origin.body));
 
+    // B's continue was acknowledged before its turn started; C sent before then would wait out B's whole turn.
+    if (ended) await waitFor(() => codexReceived(ctx).turns.includes("B: continue the job."));
     ctx.append(pending, { type: "api-request", timestamp: new Date().toISOString() }, ctx.toolUse(command));
     const delivered = await runHookProcess(ctx, hookInput(ctx, "PreToolUse", { tool_name: "Bash", tool_input: { command } }));
     assert.equal(delivered.json.hookSpecificOutput.permissionDecision, "allow");
