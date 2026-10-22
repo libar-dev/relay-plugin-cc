@@ -6,6 +6,9 @@ export const MODELS = { codex: 'gpt-6.1-sol', grok: 'grok-4.7', zcode: 'glm-5.3-
 export const BACKEND_NAMES = { codex: 'Codex', grok: 'Grok Build', zcode: 'ZCode', kimi: 'Kimi Code' };
 export const STEER_DELIVERY = { codex: 'in-turn', grok: 'in-turn', zcode: 'in-turn', kimi: 'next-turn' };
 export const JOBS_HOME_EXPR = '${RELAY_JOBS_HOME:-$HOME/.relay-jobs}';
+// A woken wait delivers a steer in seconds, plus the relay's own model step, which once took 9 s;
+// a wait the wake missed runs its 540 s bound. A continue first resumes the stopped relay.
+export const LIMIT_SECONDS = { steer: 30, continue: 60 };
 
 export function readTranscript(file) {
   return fs.readFileSync(file, 'utf8').split('\n').flatMap((line, i) => {
@@ -234,7 +237,7 @@ export function analyzeCheck(input, { source = 'main', messages, kind = 'steer' 
       if (record.kind !== kind) throw new Error(`Expected ${kind}, got ${record.kind ?? 'no kind'}.`);
       if (!['posting', 'done'].includes(record.status)) throw new Error(`Delivery status is ${record.status ?? 'missing'}.`);
       if (row.deliveredSeconds < 0) throw new Error('Delivery predates the send.');
-      const limit = kind === 'continue' ? 60 : 10;
+      const limit = LIMIT_SECONDS[kind];
       if (row.deliveredSeconds > limit) throw new Error(`Delivery exceeded ${limit} seconds.`);
       if ((job.request?.backend ?? job.backend) !== backend) throw new Error(`Job backend does not match ${backend}.`);
       if (row.model !== MODELS[backend]) throw new Error(`Job model ${row.model ?? 'missing'} does not match ${MODELS[backend]}.`);

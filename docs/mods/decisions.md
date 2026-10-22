@@ -130,3 +130,57 @@ buttons send to `relay.agentId` from the job (`relay.json` after an adoption) an
 
 A Monitor the lead arms does not start a new turn in a T3 thread once the turn has ended. The Phase 1 T3 check
 stopped after its first round until a message continued it.
+
+### D19. The live suite's records are committed, its evidence stays on the test machine (Phase 5 thread)
+
+A record is one line per check, backend and surface, in `docs/live/records/<run id>.jsonl`: one file per run, so
+two phase PRs that both run the suite never edit the same file. A record names the check, backend, model, relay
+version, Claude Code version, surface, lead model, timings, result and its evidence folder, and holds no absolute
+path. The evidence (screen, transcripts, the jobs' folders) is copied out of `/tmp` into
+`${XDG_STATE_HOME:-~/.local/state}/relay-plugin-cc/live/runs/<run id>/`, so `analyze --from-copy` reproduces a
+run's records later. Committed records let anyone regenerate the capability table, and `npm test` holds the
+committed table to them. Rejected: records kept only on the machine (a public table would rest on files nobody
+else can read), and committed evidence (transcripts carry local paths and job data). A run that sent its prompt
+keeps its records, failures included; a run whose setup failed writes none.
+
+### D20. The capability table shows a cell only when its latest record passed (Phase 5 thread)
+
+Latest by `finishedAt`, per check, surface and backend; an older pass behind a newer failure is a dash. Kimi's
+steer cell says "as the next turn" because the steer checks require it: a send passes only when the job's outcome
+for the message is `steered` (into the running turn) on Codex, Grok and ZCode, and `turn-started` (a turn of its
+own) on Kimi. The semantics the table states are measured, not written by hand.
+
+### D21. A probe Mod sends from a tool the model calls (Phase 5 thread)
+
+Phase 1's `/wake-probe` was a slash command: a person, or the driver, had to type it with an agent id known only
+once the run was under way. A tool (`mcp__wake-probe__send`) lets one prompt drive the check, as every other check
+is driven. Probes live in `scripts/live/probes/` and load with `--plugin-dir` only, never installed, so a check
+that needs one runs in the terminal only; a T3 thread loads only installed plugins. Reopen if a later phase needs
+a plugin's send proven in T3.
+
+### D22. A T3 run is prepared and analyzed by the runner and sent by the lead (Phase 5 thread)
+
+`suite.mjs prepare` writes the run and its prompt; the lead sends the prompt to a thread of the T3 project that has
+the build installed (`scripts/smoke/install-local.sh`), and `suite.mjs analyze` finds that thread's transcript by
+the prompt's first line, `Live suite run <run id>.` `prepare` reads the build's version from the smoke install's
+receipt, and a record fails when its job ran another relay version, so a thread that loaded the released plugin
+cannot pass. The prompt names the jobs home as `${RELAY_JOBS_HOME:-$HOME/.relay-jobs}`, since a T3 thread cannot
+be given an environment of its own; the terminal pane sets a fresh one.
+
+### D23. The suite replaces `steer-wake.mjs` and `analyze-steer.mjs` (Phase 5 thread)
+
+Their prompt and analyzer are the `steer-main` check; the plan's rule 4 leaves one way to run a live check.
+
+### D24. A record's Claude Code version is the transcript's (Phase 5 thread)
+
+T3 runs Claude Code through the Agent SDK, whose build can differ from `claude --version` on the same machine. The
+lead's transcript carries the version of the build that ran it, on both surfaces. The lead's model comes from the
+transcript too; a terminal run uses `--model sonnet` unless told otherwise, as Phase 1's runs did.
+
+### D25. A steer check allows 30 seconds from the send to the job's ledger (Phase 5 thread)
+
+Phase 1's analyzer allowed 10 s. In the first T3 run of the suite, Kimi's first steer took 10.25 s: the wake ended
+the relay's wait 0.86 s after the send, and the relay's own Haiku step then took 9.3 s before its next tool call,
+where the guard delivered the message. The limit was measuring Haiku's latency. A wait the wake missed runs its
+540 s bound, so 30 s still tells the two apart, and the table shows each measured range. A continue keeps 60 s:
+it first resumes a relay that has stopped. Reopen if the relay's model changes, or the ranges creep up.

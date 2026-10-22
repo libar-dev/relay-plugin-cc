@@ -94,14 +94,14 @@ test('constants use the contract order, names, models and deliveries', () => {
 
 test('old analyzer cases resolve names and ids, current and legacy sends, and use arrival time', () => {
   const analyzed = legacy();
-  assert.deepEqual(analyzed.details.map(row => row.deliveredSeconds), [2, 10, 12]);
+  assert.deepEqual(analyzed.details.map(row => row.deliveredSeconds), [2, 10, 31]);
   assert.deepEqual(analyzed.details.map(row => row.pass), [true, true, false]);
   assert.deepEqual(analyzed.details.map(row => row.matchedBy), ['text', 'text', 'order']);
   assert.deepEqual(analyzed.results.map(row => row.result), ['fail', 'pass']);
-  assert.deepEqual(analyzed.results[0].timings, { deliveredSeconds: [2, 12] });
+  assert.deepEqual(analyzed.results[0].timings, { deliveredSeconds: [2, 31] });
   assert.equal(analyzed.results[0].relayVersion, '2.2.0-test');
   assert.equal(analyzed.results[0].model, 'gpt-6.1-sol');
-  assert.match(analyzed.results[0].reason, /steer 2 for codex.*exceeded 10/);
+  assert.match(analyzed.results[0].reason, /steer 2 for codex.*exceeded 30/);
 });
 
 test('duplicate progress snapshots do not add sends or lose timestamps', t => {
@@ -113,7 +113,7 @@ test('duplicate progress snapshots do not add sends or lose timestamps', t => {
   assert.equal(transcriptCalls(repeated).sends.length, 3);
   assert.equal(transcriptCalls(repeated).sends[0].sentAt, entries[4].timestamp);
   lines(file, repeated);
-  assert.deepEqual(legacy(dir).details.map(row => row.deliveredSeconds), [2, 10, 12]);
+  assert.deepEqual(legacy(dir).details.map(row => row.deliveredSeconds), [2, 10, 31]);
 });
 
 test('text matching takes precedence over order and a record is never reused', t => {

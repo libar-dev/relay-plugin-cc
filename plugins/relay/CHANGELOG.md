@@ -22,6 +22,16 @@ Phase 1, steer wake:
   it received before it, since none of them has a delivery record.
 - Needs Claude Code 2.1.307 or later, for the module's `session.send` event.
 
+Phase 5, the live suite (development tooling; the plugin itself does not change):
+
+- `scripts/live/suite.mjs` runs live checks against the real backends, in the terminal and in T3 Code, and
+  writes one record per check and backend to `docs/live/records/`. `docs/live/capabilities.md`, generated from
+  the records, shows what the suite has passed on each backend and surface. It replaces
+  `scripts/live/steer-wake.mjs`.
+- The checks so far: a steer from the main thread, from a Workflow agent and from another plugin's
+  `$.session.send`, and a continue after the hand-back, on all four backends. A steer passes only when the job's
+  record shows how the backend took it: into the running turn on Codex, Grok and ZCode, as the next turn on Kimi.
+
 ## 2.2.0 (2026-10-22)
 
 From a survey of every T3 Code thread on three machines, about 360 relay jobs from 17 to 22 October,

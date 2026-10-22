@@ -319,10 +319,15 @@ every other session there, the one that starts the test included, keeps the rele
 - `scripts/smoke/pane.sh` runs that session in tmux on a private socket, so an agent can start it,
   type prompts and read the screen (`start`, `send`, `read`, `wait`, `trust`, `stop`).
   `pane.sh attach-command <name>` prints the line to watch it.
-- `node scripts/live/steer-wake.mjs` starts a session with `--plugin-dir` and a fresh jobs home,
-  steers a running job on every backend three times, and checks that each message reaches the
-  job's `inbox/relay/` within 10 seconds. It keeps its records in the work directory's
-  `.live-steer/`.
+- `node scripts/live/suite.mjs` is the live suite: checks that drive a real Claude Code session
+  against the real backends, such as a steer from the main thread, a Workflow agent or a plugin,
+  and a continue after the hand-back (`list` names them). `run <check>` or `run all` runs them
+  in the terminal, each in a tmux pane with `--plugin-dir` and a fresh jobs home. In T3 Code,
+  `prepare` writes a check's prompt for a thread whose project has the build installed, and
+  `analyze` reads the thread's transcript afterwards. Each run writes one record per backend to
+  `docs/live/records/`, and `table` generates [docs/live/capabilities.md](docs/live/capabilities.md)
+  from them; `npm test` fails when the two disagree. A run's evidence (screen, transcripts, job
+  folders) stays in `~/.local/state/relay-plugin-cc/live/`.
 
 `claude plugin marketplace update` installs a new build only when the plugin's version goes up.
 Every release that changes the plugin bumps it with `node scripts/bump-version.mjs <version>`,
