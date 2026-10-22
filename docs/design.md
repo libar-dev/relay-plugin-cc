@@ -121,6 +121,36 @@ words of the request.
 | `5` | cancelled; this wins over `3` |
 | `1` | usage error |
 
+### JSON for programs
+
+Every command that takes `--json` prints one JSON object, and only that, on stdout. Its first fields name the
+shape and the build: `schema` is `relay.<command>/1` (`relay.status/1`, `relay.cancel/1`, …), raised when that
+command's shape changes; `relayVersion` is the plugin's version, and `relayBuild` the commit of a build
+`scripts/smoke/install-local.sh` installed, else null. An error under `--json` is the same header with
+`error: { kind, message }`, also on stdout: `busy` (the job's record kept changing, exit 4, try again), `not-found`,
+`usage`, `attempt-changed` (below) or `error`. Every field is present, with null, false, 0 or an empty list when it
+has no value, and every job names its `backend`, Codex included. The status line and the board read this.
+
+- **One job** (`status <job>`, `result`, `wait`, `cancel`) is the full view: the state and its parts, the request,
+  `attemptRecords`, the relay binding with `lastToolAt` (the relay's last tool call: a waiting relay calls about every
+  nine minutes, and the gap can pass ten, the Bash tool's limit, by its own model's step and the guard's lock wait),
+  `handedBackAt` and `notHandedBack`, `claudeSessionId` (the Claude Code session
+  the job was started from), and `messages`: every message to the job, oldest first, with its stage, a one-line
+  preview, the relay's transcript entry that carried it, and its outcome, which says how the backend took it
+  (`steered`, `queued-next-turn`, `turn-started`, `dropped`, …). `openMessages` counts the work messages not yet
+  closed. `result` and `wait` add the report, `cancel` its actions.
+- **A listing** (`status`, `status --all`, `status --workflow <run>`) is bounded: slim rows (the full view without
+  `attemptRecords`, the server and the messages, with a short relay binding, one-line errors, and the lists of
+  owed, dropped, recovered and violation entries cut to a few, each with its full count), newest first by creation
+  time and job id, 50 a page by default and at most 200 (`--limit`). Every string in a row is cut to 300
+  characters, so one row stays small, and a page ends before 2 MiB. `nextCursor` names the last row, and
+  `--cursor` lists the rows after it, so a job created meanwhile never shifts a page. `--active` lists only the jobs
+  that are starting, running or dead, or that owe messages. The text listing is unchanged. Before 3.0 the JSON
+  listing held every field of every job: 1.29 MB for 473 jobs, past what a hooks module's process call keeps
+  (4 MiB) at about 1,500 jobs.
+
+`check-header` keeps its text answer (`ok`, or `error: <message>` with exit 1), which the hooks module reads.
+
 ## Why each layer exists
 
 | Layer | What it owns |
@@ -273,7 +303,10 @@ starts beside an old one, and queued work stays owed for a later worker.
   resume message, in the same attempt. A second end in that attempt fails it, naming both ends.
 - **The worker dies.** The relay's `wait` (the hook adds `--auto-resume`) takes the lease as
   `recovery`, stops the dead worker's servers, posts the automatic resume message and starts a new
-  worker. A direct `wait` resumes only when it is given `--auto-resume`.
+  worker. A direct `wait` resumes only when it is given `--auto-resume`. While a `cancel` command runs on the
+  job (it records its process in `cancelling/`), recovery waits and takes no lease, so a worker that died
+  during a cancel, or that the cancel killed, is never resumed for the cancel to meet again; the relay's
+  `wait` sees the job end `cancelled`.
 - **One shared allowance.** Both paths spend one allowance per stretch of user work: the start, each user
   continue and each delivered user message begin a new stretch, and automatic messages do not. Each
   recovery is recorded in `automaticResumes` with its cause, `app-server` or `worker`, and printed
@@ -318,6 +351,26 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   that worker has not ended the job within 10 seconds, `cancel` exits 4 and names the holder's role,
   so a relay tries again.
 - **An ended job** gets a no-op receipt, so every cancel is recorded as handled.
+- **An expected attempt.** `cancel --attempt N` cancels the job only while attempt N is its current attempt (a
+  starting job's first attempt counts as 1), so a cancel pressed on one attempt never stops a newer one that a
+  continue or an automatic recovery started meanwhile. It checks before it posts its message, which carries N; the
+  worker takes it only while it runs attempt N and answers any other with `no-op`. A refusal says
+  `attempt-changed` and stops nothing (a refused message stays on record with its `no-op`).
+  - When the worker takes the cancel, `cancel` never signals the worker's process: the worker answered, closes its
+    own server, and may begin a newer attempt for a message at any moment. `cancel` sweeps only attempt N's other
+    processes, and a worker still closing is left to finish.
+  - When the worker has not taken it within the grace, `cancel` checks the attempt again and kills the worker only
+    while it is still N. A new worker that then holds the lease came for a message (recovery waits while a cancel
+    runs): a cancel still waiting in the inbox reaches it and ends the job, and a newer attempt it began runs on.
+  - Once attempt N is stopped, a newer attempt a message starts is not this cancel's: it runs on, and `cancel`
+    says so and succeeds, after it has swept attempt N's processes. A message still waiting when the cancel ends
+    the job is dropped and reported, as for any cancel. A cancel for attempt N that reaches the worker after N has
+    ended answers `nothing-to-cancel`, and work that came with it runs.
+  - Without `--attempt` nothing changes but the wait below.
+- **A start that was cancelled stays cancelled.** A job cancelled before its first turn ran never runs its brief
+  later, when its first worker comes up late or a message starts a worker; a job whose first turn failed keeps its
+  brief for `resume`.
+- **No recovery during a cancel.** See [Automatic recovery, once](#automatic-recovery-once).
 - **TaskStop on a relay.** A `PostToolUse` hook on `TaskStop` (`scripts/hooks/relay-stop.mjs`)
   takes the stopped agent's id from the tool's result, since the caller may have named the agent by
   its name, and finds the job through that id's relay pointer. When the agent is the job's current
@@ -330,7 +383,9 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   relays end, the jobs run on, and the `resumeFromRunId` that usually follows adopts them, which it
   never does for a cancelled job. The hook tells the caller which of the run's jobs keep running,
   with the command to cancel one. Cancel one Workflow job while its relay runs with the message
-  `cancel` to the relay's agent id, or at any time with `companion cancel`.
+  `cancel` to the relay's agent id, or at any time with `companion cancel`. A TaskStop that cancelled
+  the job records a hand-back (`by: "TaskStop"`): the caller got the cancelled block, so `status` does
+  not mark the job `not handed back`.
 
 ### Prune
 
@@ -947,6 +1002,13 @@ After a Claude Code update:
 
 - `cancel` of a dead job signals the recorded worker pid without checking its start time, and its
   process-group kill can reach a nested job that kept the worker's group.
+- A tool that the backend starts as the turn is interrupted, and that leaves the server's process tree before
+  `cancel` reads the tree again after the grace (a daemon whose server has already exited), is not stopped. A tool
+  whose server still runs then is stopped.
+- `cancel --attempt N` kills a worker that has not taken the cancel within the grace after checking that the
+  attempt is still N. A worker that wakes in the moment between that check and the signal, takes the cancel and
+  begins a newer attempt for a waiting message, is killed with it. Only a worker that ignored the cancel for the
+  whole grace is killed at all.
 - A `cancel` whose read of the process table fails after the grace period signals only the
   worker's process group, or its bare pid; a descendant outside that group, such as a tool
   command the server started in a session of its own, keeps running.

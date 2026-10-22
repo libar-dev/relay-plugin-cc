@@ -1382,7 +1382,11 @@ const stopMutations = [
   ['another relay version', dir => edit(dir, phaseJob, j => { j.attempts[0].relayVersion = 'other'; }), /relayVersion/],
   ['second TaskStop', dir => changeEntries(dir, e => { e.push(callEntry('second-stop', 'TaskStop', { task_id: 'agent-codex' }, at('00:30.100'))); }), /one TaskStop/],
   ['TaskStop outside the run scope', dir => changeEntries(dir, e => { e.splice(3, 0, textEntry('user', 'Live suite run other-run.')); }), /one TaskStop/],
-  ['hook outside the run scope', dir => changeEntries(dir, e => { e.splice(e.indexOf(hookEntry(e)), 0, textEntry('user', 'Live suite run other-run.')); }), /hook context/]
+  ['hook outside the run scope', dir => changeEntries(dir, e => { e.splice(e.indexOf(hookEntry(e)), 0, textEntry('user', 'Live suite run other-run.')); }), /hook context/],
+  ['no hand-back recorded', dir => fs.rmSync(path.join(dir, 'jobs/repo/codex-job/relay-handbacks.jsonl')), /hand-back/],
+  ['hand-back not by TaskStop', dir => fs.writeFileSync(path.join(dir, 'jobs/repo/codex-job/relay-handbacks.jsonl'), '{"at":"2026-10-22T10:00:30.150Z","agentId":"agent-codex","attempts":1,"state":"cancelled"}\n'), /hand-back/],
+  ['hand-back for another relay', dir => fs.writeFileSync(path.join(dir, 'jobs/repo/codex-job/relay-handbacks.jsonl'), '{"at":"2026-10-22T10:00:30.150Z","agentId":"other","attempts":1,"state":"cancelled","by":"TaskStop"}\n'), /hand-back/],
+  ['hand-back before TaskStop', dir => fs.writeFileSync(path.join(dir, 'jobs/repo/codex-job/relay-handbacks.jsonl'), '{"at":"2026-10-22T10:00:29.999Z","agentId":"agent-codex","attempts":1,"state":"cancelled","by":"TaskStop"}\n'), /hand-back/]
 ];
 for (const [label, mutate, reason] of stopMutations) {
   test(`stop rejects ${label}`, t => {

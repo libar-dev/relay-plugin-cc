@@ -1,3 +1,5 @@
+import { UsageError } from "./errors.mjs";
+
 export function parseArgs(argv, config = {}) {
   const multiOptions = new Set(config.multiOptions ?? []);
   const valueOptions = new Set([...(config.valueOptions ?? []), ...multiOptions]);
@@ -5,6 +7,14 @@ export function parseArgs(argv, config = {}) {
   const aliasMap = config.aliasMap ?? {};
   const options = {};
   const positionals = [];
+  // A value option followed by one of this command's own options (`--attempt --json`) has no value: the
+  // other option is not swallowed as its value. Any other text, `--` included, is a value.
+  const isOwnOption = (next) => {
+    if (typeof next !== "string" || !/^--?[^-]/.test(next)) return false;
+    const name = next.replace(/^--?/, "").split("=", 1)[0];
+    const key = aliasMap[name] ?? name;
+    return booleanOptions.has(key) || valueOptions.has(key);
+  };
   let passthrough = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -36,8 +46,8 @@ export function parseArgs(argv, config = {}) {
 
       if (valueOptions.has(key)) {
         const nextValue = inlineValue ?? argv[index + 1];
-        if (nextValue === undefined) {
-          throw new Error(`Missing value for --${rawKey}`);
+        if (nextValue === undefined || (inlineValue === undefined && isOwnOption(nextValue))) {
+          throw new UsageError(`Missing value for --${rawKey}`);
         }
         if (multiOptions.has(key)) {
           options[key] = [...(options[key] ?? []), nextValue];
@@ -64,8 +74,8 @@ export function parseArgs(argv, config = {}) {
 
     if (valueOptions.has(key)) {
       const nextValue = argv[index + 1];
-      if (nextValue === undefined) {
-        throw new Error(`Missing value for -${shortKey}`);
+      if (nextValue === undefined || isOwnOption(nextValue)) {
+        throw new UsageError(`Missing value for -${shortKey}`);
       }
       options[key] = nextValue;
       index += 1;

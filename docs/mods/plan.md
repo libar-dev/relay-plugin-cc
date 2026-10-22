@@ -1,12 +1,14 @@
 # Relay and Claude Code Mods: the plan
 
 Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. Phase 1, Phase 5's suite
-runner, Phase 2, Phase 3 and the typed-message fix are done on the branch `release/3.0`, Phase 6's investigation
-is reported, and the later phases were reviewed in the light of each ([After Phase 1](#after-phase-1-what-held-and-what-changed),
+runner, Phase 2, Phase 3, Phase 4's companion JSON and the typed-message fix are done on the branch
+`release/3.0`, Phase 6's investigation is reported, and the later phases were reviewed in the light of each
+([After Phase 1](#after-phase-1-what-held-and-what-changed),
 [After the suite runner](#after-the-suite-runner-what-held-and-what-changed),
 [After Phase 2](#after-phase-2-what-held-and-what-changed),
 [After Phase 6](#after-phase-6-what-held-and-what-changed),
 [After Phase 3](#after-phase-3-what-held-and-what-changed),
+[After the companion's JSON](#after-the-companions-json-what-held-and-what-changed),
 [After the typed-message fix](#after-the-typed-message-fix-what-held-and-what-changed)). Phases 1 to 5 ship together as relay 3.0.0
 ([release-3.0.md](release-3.0.md)); every decision taken on the way is in [decisions.md](decisions.md).
 It combines three independent plans in this directory:
@@ -468,7 +470,7 @@ The later work, in this light:
      Phase 4 decides what the buttons do.
    - **Cancel** runs the same `companion cancel` as `/relay:cancel`, and names the job and attempt again when
      pressed.
-3. **Companion JSON, changed in place.** The stop gate, `setup.md` and the jobs skill change in the same PR:
+3. **Companion JSON, changed in place** (done, below). The stop gate, `setup.md` and the jobs skill change in the same PR:
    - every `--json` output carries `schema: "relay.<command>/1"` and `relayVersion`;
    - under `--json`, errors are JSON on stdout (busy keeps exit 4);
    - listings are bounded, with a cursor, and every row names its backend (`view.mjs:189` omits Codex today);
@@ -484,6 +486,74 @@ empty `surfaces()`, nothing polls. The live check of Steer and Continue reads th
 not the send's `isDelivered` alone, for a relay the Agent tool started and for a Workflow relay. The live suite runs the board in a narrow and a wide terminal on Fedora.
 Claude Desktop has no Linux build, so the Desktop check is the test kit's `desktop` mount, plus one manual pass on
 a Mac before release (open question 2).
+
+### The companion's JSON (done, on `release/3.0`)
+
+What shipped (3.0.0-dev.5; D55 to D59):
+
+- Every `--json` output is one object on stdout that starts with `schema` (`relay.<command>/1`), `relayVersion`
+  and `relayBuild`. Under `--json` an error is that header with `error: { kind, message }` on stdout (`busy` exit 4,
+  `not-found`, `usage`, `attempt-changed`, `error` exit 1), also when a malformed argument list swallowed `--json`.
+  Job objects stay flat, with today's fields, and every field is present; `backend` always.
+- `status --json` lists pages of slim rows: no attempt records, server or messages, a short relay binding, one-line
+  errors, every string cut to 300 characters, a few entries of each list with its count; 50 a page (`--limit` to 200, and never past 2 MiB), newest
+  first, `nextCursor` for `--cursor`; `--active` keeps starting, running and dead jobs and jobs that owe messages. The
+  text listing is unchanged.
+- One job's JSON adds `messages` (stage, preview, the relay's transcript entry, the outcome), `openMessages`,
+  `notHandedBack`, `claudeSessionId`, `relay.lastToolAt` and the list counts.
+- `cancel --attempt N` cancels the job only while attempt N is current; once N is stopped, a newer attempt a message
+  starts runs on. Automatic recovery waits while a `cancel` runs on the job. A TaskStop that cancelled a job
+  records its hand-back from the block the caller got. The stop gate reads the new JSON.
+- Three review rounds by GPT-6.1 Sol and Opus 5.5, the third on the cancel alone. Each of the first two found a window
+  between `cancel` reading the job and acting on it, which the worker can use to begin an attempt; the rules that hold
+  by construction (D57) replaced re-checks: recovery waits while a cancel runs, and a cancel the worker took never
+  signals the worker.
+
+Live results (the Fedora machine, Claude Code 2.1.308, Sonnet 5.5 lead, on 3db8ebe; records in `docs/live/records/`):
+`stop` cancelled in 0.2 to 0.5 s and recorded the TaskStop's hand-back, in the terminal and in T3; `commands` answered
+in 0.6 to 0.7 s in the terminal and 0.1 s in T3; `headless` answered with `num_turns: 0`; all four backends, 20 of 20.
+The smoke kit passed on the same build (workflow `wf_d39cdf9e-a66`, then the plain fan-out, whose `status` named
+`relay-version: 3.0.0-dev.5 (3db8ebeb0fc1)`).
+
+### After the companion's JSON: what held and what changed
+
+Assumptions that held:
+
+- The JSON could change in place. Its readers were the stop gate, the live suite's `session-end` (one job), the jobs
+  skill's Workflow lookup, and tests; the commands show the text form, and `check-header` keeps its text.
+- Slim rows fit `$.process.run`'s 4 MiB with room: 50 rows of a 300-job home are 50 KB, read in 0.16 s, and the
+  status line's `--active` read is as quick.
+- The job's own files were enough for everything the board needs: each message's stage and outcome, the relay's last
+  call (`relay-guard.json`), the launching session (`launchedBy`).
+
+What changed, and where:
+
+- **An expected attempt needs the worker and recovery, not only `cancel.mjs`.** The plan placed the check in
+  `cli/cancel.mjs`. A check there cannot close the window between it and the worker taking the message, so the
+  message carries the attempt and the worker answers `no-op` to another. A recovery that a relay's
+  `wait --auto-resume` starts can race any cancel from either side, so recovery waits while a cancel runs, and a
+  cancel the worker took never signals the worker, which may begin a newer attempt at any moment (D57).
+- **A relay's call gap is not 540 s.** A waiting relay calls about every nine minutes, and the gap passes ten by its
+  own model's step and the guard's lock wait. A reader that judges a relay lost allows more (D59).
+- **A TaskStop's cancel is a hand-back** (D58), so the board's "not handed back" flag means a lost result only.
+- A row's lists are bounded by count, its strings by length, and a page by bytes: the row limit alone did not bound a
+  page (6.2 MB of rows from 300 dropped messages a job, then a 5 MiB row from one long model name, in Sol's reviews).
+
+The later PRs, in this light:
+
+- **Status line.** It reads `status --json --active --limit 200` in the session's directory: running is `starting`
+  and `running`, dead is `dead`, owed is the sum of `undeliveredCount`. A busy answer keeps the line.
+- **Board.** Its list reads `status --json` (a page, `--cursor` for more) and the selected job's `result --json`. It
+  shows how each message was taken from `messages`, flags `notHandedBack` as a lost result, and a running job whose
+  relay has not called for more than 15 minutes (`relay.lastToolAt`) as one that lost its relay. Cancel runs
+  `cancel <job> --attempt <N> --json` with the bound `/relay:cancel` uses. Steer and Continue send to the relay by
+  its recorded id (D17) only for a relay the Agent tool started in this session (no `relay.workflowRunId`, and
+  `claudeSessionId` is this session's). For a Workflow job, a job of another session or a job with no relay, they run
+  `companion steer` or `continue` on the job directly: a send by id would fork a running Workflow relay and reach no
+  job after it ended (D53), and a relay of another session is not this session's to message. The board PR records
+  the decision, and its live check judges both routes by the job's ledger and attempts.
+- **The release.** The CHANGELOG's JSON lines name the breaking parts (errors on stdout, slim rows, `backend` always).
+  The `stop` check now requires the hand-back record; `run all` covers it.
 
 ## Phase 5: a scripted live suite
 

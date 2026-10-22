@@ -1,11 +1,13 @@
 // Relay wait owns automatic recovery. Take the worker lease before reserving the one
 // retry, so concurrent waits cannot write job.json or launch two recovery messages.
 import process from "node:process";
+import fs from "node:fs";
+import path from "node:path";
 import { releaseLeaseToConsumer, spawnWorker } from "./delivery.mjs";
 import { acquireWorkerLease, isWorkerAlive } from "../jobs/lease.mjs";
 import { computeJobView } from "../jobs/view.mjs";
 import { messageExists, newMessageId, postInboxMessage } from "../jobs/messages.mjs";
-import { nowIso, readJob, writeJob } from "../jobs/store.mjs";
+import { nowIso, readJob, readJsonOrNull, writeJob } from "../jobs/store.mjs";
 import { listProcesses, readProcessStartTime, snapshotProcessTree, stopProcessSnapshot } from "../util/process.mjs";
 
 // Every app-server recorded on the job (the live one in `server` and each attempt's
@@ -58,10 +60,23 @@ export function sweptAppServersPatch(job, { servers, survivors }, at = nowIso())
   return { attempts, ...(live ? { server: null, serverPid: null } : {}) };
 }
 
+function cancelIsRunning(jobDir) {
+  const cancelling = path.join(jobDir, "cancelling");
+  let records;
+  try { records = fs.readdirSync(cancelling); }
+  catch (error) { if (error.code !== "ENOENT") throw error; records = []; }
+  for (const name of records) {
+    if (name.endsWith(".json") && isWorkerAlive(readJsonOrNull(path.join(cancelling, name)))) return true;
+  }
+  return false;
+}
+
 export async function resumeDeadJobOnce(jobDir, env = process.env) {
+  if (cancelIsRunning(jobDir)) return "busy";
   const me = { pid: process.pid, startTime: readProcessStartTime(process.pid) };
   if (!acquireWorkerLease(jobDir, me, "recovery")) return "busy";
   let launch = false;
+  let cancelling = false;
   let cwd;
   try {
     let job = readJob(jobDir);
@@ -73,6 +88,8 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
     if (sweep.survivors.length) throw new Error(`Could not stop the dead job's processes: ${sweep.survivors.map(entry => entry.pid).join(", ")}${sweep.cause ? ` (${sweep.cause})` : ""}`);
     job = readJob(jobDir);
     if (sweep.servers.length) job = { ...job, ...sweptAppServersPatch(job, sweep) };
+    cancelling = cancelIsRunning(jobDir);
+    if (cancelling) return "busy";
     if (previous && previous.state !== "reserved") {
       writeJob(jobDir, { ...job, server: null, serverPid: null });
       return false;
@@ -90,8 +107,7 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
     cwd = job.request.cwd;
     launch = true;
   } finally {
-    // A message that arrives while recovery holds the lease needs a worker to consume it.
-    releaseLeaseToConsumer(jobDir, me, env, { spawn: !launch });
+    releaseLeaseToConsumer(jobDir, me, env, { spawn: !launch && !cancelling });
   }
   if (launch) spawnWorker(jobDir, cwd, env);
   return launch;

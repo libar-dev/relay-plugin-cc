@@ -183,7 +183,7 @@ async function runWorkerRound(jobDir, options, held) {
   let steerSeq = 0;
   const inflight = new Set();
   let cancelRequested = false;
-  let cancelMessage = null;
+  const cancelMessages = [];
   /** @type {import("../backends/types").Connection | null} */
   let connection = null;
   let sessionId = job.sessionId ?? null;
@@ -203,6 +203,10 @@ async function runWorkerRound(jobDir, options, held) {
       ...(reset ? { recoveryEpoch: message.id } : {}) });
   };
 
+  const cancelOutcome = (result) => {
+    for (const message of cancelMessages) outcome(message, result);
+  };
+
   const enqueue = (item, reason) => {
     queue.push(item);
     if (attemptOpen && item.message) {
@@ -213,8 +217,13 @@ async function runWorkerRound(jobDir, options, held) {
   const accept = (messages, recoveryCandidate = false) => {
     for (const message of messages) {
       if (message.kind === "cancel") {
+        const current = job.attempts?.length ?? 0;
+        if (message.attempt !== undefined && message.attempt !== current && !(message.attempt === 1 && current === 0)) {
+          outcome(message, { action: "no-op", reason: `attempt ${message.attempt} is not the job's current attempt (${current})` });
+          continue;
+        }
         cancelRequested = true;
-        cancelMessage = message;
+        cancelMessages.push(message);
         continue;
       }
       if (message.kind === "steer" && turnActive) {
@@ -274,7 +283,9 @@ async function runWorkerRound(jobDir, options, held) {
 
   // Work: the first brief if it never started, then messages a dead worker claimed but
   // never delivered, then new inbox messages.
-  if (job.pendingFirstTurn) {
+  // A job cancelled before its first turn never runs its brief later; a failed first turn keeps it
+  // for `resume`, which runs it before the resume message.
+  if (job.pendingFirstTurn && job.state !== "cancelled") {
     queue.push({ prompt: fs.readFileSync(paths.brief, "utf8"), source: "brief", message: null, clientId: `brief-${job.id}`, recoveryCandidate: true });
   }
   accept(owedMessages(jobDir), true);
@@ -308,21 +319,33 @@ async function runWorkerRound(jobDir, options, held) {
     }
   };
 
+  const cancelBeforeTurn = () => {
+    const attempts = (job.attempts ?? []).map(entry =>
+      entry.endedAt ? entry : { ...entry, state: "cancelled", endedAt: nowIso() });
+    save({ ...me_record, attempts, state: "cancelled", pendingFirstTurn: false, completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
+    cancelOutcome({ action: "cancelled" });
+    dropQueued("the job was cancelled");
+    return releaseAndReturn({});
+  };
+
+  if (cancelRequested && TERMINAL.has(job.state) && cancelMessages.every(message => message.attempt !== undefined)) {
+    cancelOutcome({ action: "nothing-to-cancel", state: job.state });
+    cancelMessages.length = 0;
+    cancelRequested = false;
+  }
+
   if (queue.length === 0) {
     if (cancelRequested) {
       if (!TERMINAL.has(job.state)) {
-        outcome(cancelMessage, { action: "cancelled" });
-        return releaseAndReturn({ ...me_record, state: "cancelled", completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
+        return cancelBeforeTurn();
       }
-      outcome(cancelMessage, { action: "nothing-to-cancel", state: job.state });
+      cancelOutcome({ action: "nothing-to-cancel", state: job.state });
       return releaseAndReturn(me_record);
     }
     return { job: null, held: handOff() };
   }
   if (cancelRequested) {
-    outcome(cancelMessage, { action: "cancelled" });
-    dropQueued("the job was cancelled");
-    return releaseAndReturn({ ...me_record, state: "cancelled", completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
+    return cancelBeforeTurn();
   }
 
   // Begin an attempt: nonterminal state, attempt record and report ownership are written
@@ -398,9 +421,9 @@ async function runWorkerRound(jobDir, options, held) {
       interruptSent = true;
       try {
         await track(connection.interrupt(activeTurnId));
-        outcome(cancelMessage, { action: "interrupt-sent", turnId: activeTurnId });
+        cancelOutcome({ action: "interrupt-sent", turnId: activeTurnId });
       } catch (error) {
-        outcome(cancelMessage, { action: "interrupt-failed", reason: error.message });
+        cancelOutcome({ action: "interrupt-failed", reason: error.message });
       }
     }
     while (pendingSteers.length > 0 && turnActive && connection.controlsReady(activeTurnId)) {
@@ -726,15 +749,15 @@ async function runWorkerRound(jobDir, options, held) {
     clearInterval(poller);
     const last = job.attempts.at(-1);
     if (cancelRequested) {
-      outcome(cancelMessage, { action: "cancelled" });
-      if (current.message && !CLOSED_ACTIONS.has(readOutcome(jobDir, current.message.id)?.action)) {
-        outcome(current.message, { action: "dropped", reason: "the job was cancelled before this turn ran" });
-      }
-      dropQueued("the job was cancelled");
       if (last && !TERMINAL.has(last.state)) {
         updateAttempt({ state: "cancelled", endedAt: nowIso() });
       }
       save({ state: "cancelled", errorMessage: "Cancelled.", completedAt: nowIso() });
+      cancelOutcome({ action: "cancelled" });
+      if (current.message && !CLOSED_ACTIONS.has(readOutcome(jobDir, current.message.id)?.action)) {
+        outcome(current.message, { action: "dropped", reason: "the job was cancelled before this turn ran" });
+      }
+      dropQueued("the job was cancelled");
     } else {
       save({ state: last?.state ?? "failed", errorMessage: last?.errorMessage ?? null, completedAt: nowIso() });
     }

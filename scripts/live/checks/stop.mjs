@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { analyzeBackends, formatSeconds, inboxMessages, lastActiveAttempt, oneRelay, readJson, relayJob, requireBackend, textContent } from '../lib/evidence.mjs';
 import { agentCalls, opening, waitRunning, waitLoop } from './steer-main.mjs';
@@ -46,6 +47,15 @@ export default {
       }
       const outcome = readJson(path.join(jobDir, 'inbox/outcomes', `${path.basename(message.id)}.json`), true);
       if (outcome?.messageId !== message.id || outcome.action !== 'cancelled') throw new Error('Cancel message has no cancelled outcome.');
+      // The caller got the cancelled job's block beside the TaskStop result, so the hook records it as handed back.
+      let handbacks = [];
+      try { handbacks = fs.readFileSync(path.join(jobDir, 'relay-handbacks.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)); }
+      catch (error) { if (error.code !== 'ENOENT') throw new Error(`Cannot read relay-handbacks.jsonl: ${error.message}`); }
+      const recorded = handbacks.filter(entry => entry.by === 'TaskStop');
+      if (recorded.length !== 1 || recorded[0].agentId !== agent.agentId || recorded[0].state !== 'cancelled' ||
+          recorded[0].attempts !== job.attempts?.length || !(Date.parse(recorded[0].at) >= Date.parse(call.timestamp))) {
+        throw new Error('The TaskStop hook recorded no hand-back of the cancelled job.');
+      }
       const seconds = (Date.parse(job.completedAt) - Date.parse(call.timestamp)) / 1000;
       if (!(seconds >= 0 && seconds <= 15)) throw new Error('Cancellation was not within 0 to 15 seconds of TaskStop.');
       row.timings.cancelledSeconds = [seconds];

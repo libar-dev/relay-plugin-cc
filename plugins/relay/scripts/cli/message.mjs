@@ -1,4 +1,4 @@
-import { parseCommandInput, requireTaskJob, readMessageText, outputResult } from "./shared.mjs";
+import { parseCommandInput, requireTaskJob, readMessageText, printJson } from "./shared.mjs";
 import { default as process } from "node:process";
 import { deliverMessage } from "../lib/worker/delivery.mjs";
 import { findJobDir } from "../lib/jobs/store.mjs";
@@ -51,7 +51,8 @@ export async function handleSteerOrContinue(kind, argv) {
   }
   const delivery = await deliverMessage(jobDir, kind, text);
   const state = stateAfterDelivery(jobDir);
-  outputResult(options.json ? { ...delivery, state } : renderDelivery(job, kind, delivery, state), options.json);
+  if (options.json) printJson(kind, { job: job.id, ...delivery, state });
+  else process.stdout.write(renderDelivery(job, kind, delivery, state));
   if (!delivery.outcome) {
     process.exitCode = EXIT.running;
   }
@@ -73,7 +74,8 @@ export async function handleResume(argv) {
   const text = readMessageText(options, { required: false, fallback: null });
   const delivery = await deliverMessage(jobDir, "resume", text ?? DEFAULT_RESUME_MESSAGE, { isDefault: text == null });
   const state = stateAfterDelivery(jobDir);
-  outputResult(options.json ? { ...delivery, state } : renderDelivery(job, "resume", delivery, state), options.json);
+  if (options.json) printJson("resume", { job: job.id, ...delivery, state });
+  else process.stdout.write(renderDelivery(job, "resume", delivery, state));
   if (!delivery.outcome) {
     process.exitCode = EXIT.running;
   }

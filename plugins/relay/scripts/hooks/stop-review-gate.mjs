@@ -156,22 +156,32 @@ export function runStopReview(cwd, input = {}, { limits = stopGateLimits(), runC
   if (started.error) {
     return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review did not start: ${started.error.message}. ${MANUAL_REVIEW}` };
   }
+  const task = parseJson(started.stdout);
+  if (task?.schema === "relay.task/1" && task.error) {
+    return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review failed (exit ${started.status}: ${task.error.message}). ${MANUAL_REVIEW}` };
+  }
   if (started.status !== 0) {
     const detail = firstLine(started.stderr || started.stdout);
     return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review failed (exit ${started.status}${detail ? `: ${detail}` : ""}). ${MANUAL_REVIEW}` };
   }
-  const jobId = parseJson(started.stdout)?.jobId;
+  if (task?.schema !== "relay.task/1") {
+    return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review returned invalid JSON. ${MANUAL_REVIEW}` };
+  }
+  const jobId = task.jobId;
   if (typeof jobId !== "string" || !jobId) {
     return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review returned invalid JSON. ${MANUAL_REVIEW}` };
   }
   const waited = runCompanion(["wait", jobId, "--json", "--timeout-seconds", String(limits.reviewMs / 1000)], { cwd, timeoutMs: limits.reviewMs + STOP_COMMAND_TIMEOUT_MS });
-  const view = waited.error ? null : parseJson(waited.stdout);
+  const answer = waited.error ? null : parseJson(waited.stdout);
+  const valid = answer?.schema === "relay.wait/1";
+  const busy = valid && answer.error?.kind === "busy" && waited.status === EXIT.running;
+  const view = valid && !answer.error ? answer : null;
   const ended = view && TERMINAL_STATES.has(view.state);
   if (!ended) {
     // Past its limit, dead, or unreadable: nothing of the review may outlive the hook.
     runCompanion(["cancel", jobId, "--json"], { cwd, timeoutMs: STOP_COMMAND_TIMEOUT_MS });
     // Exit 4 without a view: the job was still busy at the limit, at work as a running one is.
-    if (!view && !waited.error && waited.status !== EXIT.running) {
+    if (!view && !waited.error && !busy && (answer || waited.status !== EXIT.running)) {
       return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review returned invalid JSON. ${MANUAL_REVIEW}` };
     }
     if (view?.state === "dead") {

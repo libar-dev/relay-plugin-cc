@@ -1,4 +1,4 @@
-import { parseCommandInput, resolveCommandCwd, firstMeaningfulLine, outputResult } from "./shared.mjs";
+import { parseCommandInput, resolveCommandCwd, firstMeaningfulLine, printJson } from "./shared.mjs";
 import { default as fs } from "node:fs";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
@@ -333,7 +333,8 @@ export async function handleReviewCommand(argv, config) {
     execution.rendered
   );
   const notes = request.notes.map((note) => `note: ${note}\n`).join("");
-  outputResult(options.json ? { ...execution.payload, notes: request.notes } : `${notes}${notes ? "\n" : ""}${execution.rendered}`, options.json);
+  if (options.json) printJson(kind, { ...execution.payload, notes: request.notes });
+  else process.stdout.write(`${notes}${notes ? "\n" : ""}${execution.rendered}`);
   if (execution.exitStatus !== 0) {
     process.exitCode = execution.exitStatus;
   }
