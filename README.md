@@ -199,7 +199,10 @@ in plain words, Claude reads jobs with the companion in Bash, which a session in
 permission mode asks you about, and cancels a job by sending its agent the message `cancel`.
 
 In the terminal, a status line under the prompt counts the repository's jobs while any are
-running or dead or owe messages: `relay: 2 running · 1 dead · 3 owed`.
+running or dead or owe messages: `relay: 2 running · 1 dead · 3 owed`. `/relay-board` opens a
+pane of the repository's jobs, where you steer, continue or cancel one
+([design.md](docs/design.md#the-board)); it takes keys between turns, and clicks in the
+fullscreen layout (`CLAUDE_CODE_NO_FLICKER=1`) at any time.
 
 Claude can run `/relay:setup`, `/relay:rescue`, `/relay:review` and `/relay:adversarial-review`
 itself when you ask for one in plain words, for example "review my changes on Kimi". A review Claude

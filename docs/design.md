@@ -526,6 +526,30 @@ and on every tick for thirty seconds after a relay event the module saw: a `rela
 relay, one of the four commands above, or a busy answer. A job a `relay:job` agent of this session starts shows within
 about five seconds; a review, a start the model runs in Bash, or another session's job within thirty (D63).
 
+### The board
+
+`/relay-board` opens a pane, `Relay jobs`, docked beside the transcript in the fullscreen layout from 110 columns and
+above the prompt otherwise. It lists the repository's jobs from `companion status --json`, newest first, 20 a page
+with a `More` row up to 200, then `Older jobs` and `Newest jobs` to page with the cursor: one row each with its id, backend, state and attempt, and its flags: owed messages,
+`not handed back`, `relay lost` (a running job whose relay has not called for 15 minutes, D59) and violations.
+Selecting a row shows the job from `result --json`: model and effort, its relay and Workflow run, each message with
+how the backend took it, and the report as Markdown.
+
+- **Steer** (a starting or running job; `Queue next turn` on Kimi) and **Continue** (an ended or dead job) send the
+  field's text by one route, chosen from the job as it is read at the press (D61): by the relay, as the lead's
+  `SendMessage`, for an Agent-tool relay of this session that is alive; to the job directly with `companion steer` or
+  `continue` otherwise. A send the relay refuses offers `Send to the job directly`; nothing is sent twice. Each message
+  in the job's view says which route carried it.
+- **Cancel** asks again, naming the job and its attempt, and `Yes` runs `companion cancel <job> --attempt <N> --json`
+  with the bound `/relay:cancel` uses, so it never stops a newer attempt ([Cancel](#cancel)).
+
+The pane draws from `$.state` alone. From `/relay-board` until the pane closes, while it is placed and a surface draws,
+the list is read every three seconds, one read at a time, and the selected job when it is selected and when its state,
+attempts, messages, report or relay's last call change; state is written, and the pane drawn again, only when what it
+shows changed. A busy answer keeps the last data, marked as such. Nothing runs while the pane is closed or nothing
+draws. Its keys and
+clicks follow Claude Code's rules for panes (D65): the keyboard between turns, the mouse in the fullscreen layout.
+
 ### The report
 
 PreToolUse on `SubagentHandback` denies the hand-back while the job is not terminal or a message is
