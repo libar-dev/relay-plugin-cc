@@ -229,20 +229,22 @@ and only for a folder the runner created. A folder the caller names must already
 runner never initializes, and already trusted: when Claude Code asks, the run stops. D13's rule holds for every other dialog. Reopen if Claude Code gets a per-session
 trust flag.
 
-### D31. A command shows the companion's lines in a code block, and a job's report as Markdown (Phase 2 thread)
+### D31. A command's answer: the command as typed, the companion's lines in a code block, then Markdown (Phase 2 thread)
 
 Measured on 2.1.308 before any code: the terminal draws a command's text as Markdown, and a `---` line right after
 the state block turns the block into a setext heading; T3 draws the text as an assistant message, as Markdown
-without line breaks, so a state block's `key: value` lines run into one paragraph. Claude Code also puts the
-plugin's name, `relay: `, in front of the first line, which breaks a code fence that opens the text. So the module
-answers a line break, then the companion's output up to its first `---` line in a fenced block (with stderr after
-it, and a fence longer than any backtick run inside), then `---` and the report as written. The state block, the
-status table and every message the companion prints read exactly as in Bash, on every surface, and a report, which
-the backend wrote as Markdown, is drawn as one, as the model's retelling drew it before. Rejected: the bare text
-(mangled in both surfaces), a Markdown variant of the companion's output (a second human format, which the plan
-rules out), and fencing the state block inside `renderResultText` (it would change the hand-back that every
-completion notice carries, for a display concern). Reopen if T3 or the terminal stops rendering command output as
-Markdown.
+without line breaks, so a state block's `key: value` lines run into one paragraph. Claude Code puts the plugin's
+name, `relay: `, in front of the first line, which would break a code fence that opened the text, and shows and
+records a command a plugin answered without its arguments. So the answer's first line is the command as typed
+(`relay: /relay:result <job>` on screen), then the companion's output in a fenced block up to its first line that is
+`---` or starts with `|` (with stderr after it, and a fence longer than any backtick run inside), then the rest as
+Markdown: a job's report after `---`, which the backend wrote as Markdown, or the job table, which the terminal
+draws as a box table and T3 as a table. The state block and every message the companion prints read exactly as in
+Bash, on every surface. Rejected: the bare text (mangled in both surfaces), a Markdown variant of the companion's
+output (a second human format, which the plan rules out), fencing the state block inside `renderResultText` (it
+would change the hand-back that every completion notice carries, for a display concern), and fencing the table
+too, which the first version did: Opus 5.5's review found it unreadable once a row wrapped in a terminal of 80 to
+120 columns. Reopen if T3 or the terminal stops rendering command output as Markdown.
 
 ### D32. The commands ship without a branch fallback (Phase 2 thread)
 
@@ -259,7 +261,8 @@ it would be told the module did not load. `status.md` and `result.md` get `disab
 `cancel.md` and `transfer.md` have, and the jobs skill and the README send Claude to `C status` and `C result` in
 Bash, which print the same text. Rejected: keeping the `!` bodies for the model's calls, which would leave a second
 way to run each command and a working fallback in the release. What users lose is `Skill(relay:status)` and
-`Skill(relay:result)` as permission rules; a session that allows the companion in Bash has the same reads. Easy
+`Skill(relay:result)` as permission rules: in `default` permission mode Claude Code asks before Claude's Bash call
+of the companion. Easy
 to reverse if a later Claude Code routes a model's call through `command.run`.
 
 ### D34. Transfer finds the session's transcript by its id (Phase 2 thread)
@@ -284,9 +287,24 @@ A slash command cannot carry the prompt's first line, `Live suite run <id>.`, by
 transcript and finds a T3 thread's. A command check's prompt is that line and a one-line reply; the commands
 follow as the session's next messages, typed into the pane by the runner, or sent to the thread by the lead from
 the list `prepare` prints. The jobs the commands read are started by the check's setup with the build's companion,
-not through Claude, so no relay's hand-back starts a lead turn among the commands. A command's time runs from the
+not through Claude, so no relay's hand-back starts a lead turn among the commands, and every job the setup started
+and the commands left running is cancelled after the analysis. The transcript holds a command without its
+arguments, so a command passes only when the answer's first line, the module's echo of `e.args`, is the command as
+planned; a newer finished job and a second running job sit beside the ones the commands name, so the companion's
+defaults could not stand in for the arguments. The build that answered is proved by the `relay-version:` line of a
+`/relay:status` answer (D37); the jobs' own versions only prove the setup's build. A command's time runs from the
 runner's send in the terminal, where the transcript stamps the command and its answer alike, and from the SDK's
-`enqueue` record in T3 and `claude -p`. `transfer` runs on Codex only; the table says `n/a` for the others.
+`enqueue` record in T3; a `claude -p` run reports its own `duration_ms`, since its `enqueue` record comes before the
+hooks module has loaded. `transfer` runs on Codex only; the table says `n/a` for the others, and `run all` skips a
+check that applies to none of the backends asked for. Both reviewers (GPT-6.1 Sol and Opus 5.5) found the two
+false passes this closes: arguments a module dropped, and an older build answering in T3.
+
+### D37. `status` names the relay version (Phase 2 thread)
+
+The status header gains `relay-version: <version>` after `fast-tier:`. A person sees which build answers the commands,
+and a live check can prove that the module of the build under test answered: in T3 nothing else in the transcript
+names the build that loaded. `status <job>` and `--json` are
+unchanged; Phase 4 gives every `--json` output a `relayVersion`.
 
 ### D51. Phase 6's PR raises no version (Phase 6 thread)
 
