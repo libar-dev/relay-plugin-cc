@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.3.0 (unreleased)
+## 2.3.0 (2026-10-22)
 
 Phase 1 of the Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)).
 
