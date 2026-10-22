@@ -97,13 +97,13 @@ for (const ended of [false, true]) {
     assert.deepEqual(JSON.parse(fs.readFileSync(markerFile, "utf8")), marker);
     assert.ok(![...codexReceived(ctx).turns, ...codexReceived(ctx).steers].includes(pending.attachment.origin.body));
 
-    // B's continue was acknowledged before its turn started; C sent before then would wait out B's whole turn.
-    if (ended) await waitFor(() => codexReceived(ctx).turns.includes("B: continue the job."));
+    // B's continue is acknowledged (accepted-next-turn) before its turn starts, and a steer that arrives in between
+    // is queued behind B's whole turn: C is sent once the worker records B's turn as started.
+    if (ended) await waitFor(() => (readJobJson(ctx, jobId).messages ?? []).some(m => m.kind === "continue" && m.action === "turn-started"));
     ctx.append(pending, { type: "api-request", timestamp: new Date().toISOString() }, ctx.toolUse(command));
     const delivered = await runHookProcess(ctx, hookInput(ctx, "PreToolUse", { tool_name: "Bash", tool_input: { command } }));
     assert.equal(delivered.json.hookSpecificOutput.permissionDecision, "allow");
-    // The hook returns once the worker writes an outcome. A continue's (`accepted-next-turn`) comes
-    // before the worker has started the turn the fake records, so the turns are awaited, not read.
+    // C's hook returns on C's outcome; the turns it reached are awaited all the same.
     const carried = received => [...received.turns, ...received.steers].filter(text => text === "C: sent after the boundary.").length;
     await waitFor(() => carried(codexReceived(ctx)) >= 1 && (!ended || codexReceived(ctx).turns.includes("B: continue the job.")));
     const received = codexReceived(ctx);

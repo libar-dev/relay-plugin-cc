@@ -342,6 +342,22 @@ test("every block's can: line says what its JSON can says, and nothing else", t 
   }
 });
 
+test("a Grok retry that hangs keeps the first reading: signed out, with its sign-in step", t => {
+  const ctx = everyBackend(t, "home-probe", { modelsHangAfterFirstMs: 60000 });
+  const { status, page: report } = page(ctx, [], { RELAY_SETUP_COMMAND_MS: "600", ...backendReadyEnv(ctx.env) });
+  assert.equal(status, 0);
+  const groks = report.backends.filter(block => block.backend === "grok");
+  assert.equal(groks.length, 2);
+  for (const block of groks) {
+    assert.equal(block.signIn.state, "signed-out", JSON.stringify(block.signIn));
+    assert.match(block.signIn.detail, /Not signed in/);
+    assert.match(block.signIn.detail, new RegExp(`GROK_HOME=${block.home} grok login`));
+  }
+  assert.ok(report.nextSteps.some(step => step.includes(`GROK_HOME=${path.join(ctx.user, ".grok")} grok login`)), report.nextSteps.join("\n"));
+  // Each home: the first listing, then the retry that hung.
+  assert.equal(ctx.grok().invocations.filter(call => call.args[0] === "models").length, 4);
+});
+
 test("a Grok home that reads signed out once is asked again, and setup says signed in", t => {
   const ctx = everyBackend(t, "home-probe", { signedOutOnce: true });
   const { status, page: report } = page(ctx);
