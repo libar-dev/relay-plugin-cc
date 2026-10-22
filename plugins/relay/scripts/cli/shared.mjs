@@ -5,6 +5,7 @@ import { parseArgs, splitRawArgumentString } from "../lib/util/args.mjs";
 import { createJobDir, findJobDir, generateJobId, jobPaths, listJobDirs, nowIso, readJob, repoSlugFor, writeFileAtomic, writeJob } from "../lib/jobs/store.mjs";
 import { UsageError } from "../lib/jobs/request.mjs";
 import { isTerminalView, JobViewBusy, loadJobViewSettled, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
+import { PLUGIN_BUILD, PLUGIN_VERSION } from "../lib/util/plugin.mjs";
 
 
 // An empty or blank value is unset; an explicit 0 stands.
@@ -24,6 +25,27 @@ export function outputResult(value, asJson) {
 }
 
 
+// Every `--json` output is one object that names its shape and the build that wrote it:
+// `schema` is `relay.<command>/<n>`, and n rises when the shape changes.
+export function jsonHeader(command) {
+  return { schema: `relay.${command}/1`, relayVersion: PLUGIN_VERSION, relayBuild: PLUGIN_BUILD };
+}
+
+
+export function printJson(command, value) {
+  console.log(JSON.stringify({ ...jsonHeader(command), ...value }, null, 2));
+}
+
+
+// Whether this run asked for JSON: what the command's own parse found, or, when the parse
+// itself failed, the `--json` token.
+let parsedJson = null;
+
+export function jsonRequested(argv) {
+  return parsedJson ?? normalizeArgv(argv).includes("--json");
+}
+
+
 function normalizeArgv(argv) {
   if (argv.length === 1) {
     const [raw] = argv;
@@ -37,13 +59,15 @@ function normalizeArgv(argv) {
 
 
 export function parseCommandInput(argv, config = {}) {
-  return parseArgs(normalizeArgv(argv), {
+  const parsed = parseArgs(normalizeArgv(argv), {
     ...config,
     aliasMap: {
       C: "cwd",
       ...(config.aliasMap ?? {})
     }
   });
+  parsedJson = Boolean(parsed.options.json);
+  return parsed;
 }
 
 

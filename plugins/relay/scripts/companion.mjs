@@ -13,7 +13,8 @@ import { handleReviewCommand, validateNativeReviewRequest } from "./cli/review.m
 import { handleTransfer } from "./cli/transfer.mjs";
 import { default as process } from "node:process";
 import { handlePrune } from "./cli/prune.mjs";
-import { UsageError } from "./lib/util/errors.mjs";
+import { AttemptChanged, JobNotFound, UsageError } from "./lib/util/errors.mjs";
+import { jsonRequested, printJson } from "./cli/shared.mjs";
 import { BACKENDS } from "./lib/backends/index.mjs";
 import { EXIT, JobViewBusy } from "./lib/jobs/view.mjs";
 
@@ -54,8 +55,13 @@ function printUsage() {
 }
 
 
+// The commands that take `--json`. Under it, an error is JSON on stdout too.
+const JSON_COMMANDS = new Set(["status", "result", "wait", "start", "task", "steer", "continue", "resume", "cancel", "setup", "review", "adversarial-review", "transfer"]);
+
+const [subcommand, ...argv] = process.argv.slice(2);
+
+
 async function main() {
-  const [subcommand, ...argv] = process.argv.slice(2);
   if (!subcommand || subcommand === "help" || subcommand === "--help") {
     printUsage();
     return;
@@ -122,7 +128,12 @@ async function main() {
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
+  if (JSON_COMMANDS.has(subcommand) && jsonRequested(argv)) {
+    const kind = error instanceof JobViewBusy ? "busy" : error instanceof AttemptChanged ? "attempt-changed" : error instanceof JobNotFound ? "not-found" : error instanceof UsageError ? "usage" : "error";
+    printJson(subcommand, { error: { kind, message } });
+  } else {
+    process.stderr.write(`${message}\n`);
+  }
   // A job whose record kept changing is at work: not a usage error, and not a state.
   process.exitCode = error instanceof JobViewBusy ? EXIT.running : EXIT.usage;
 });
