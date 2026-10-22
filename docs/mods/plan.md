@@ -307,7 +307,18 @@ What shipped:
   ledger within 30 s of the send (D25), a continue within 60 s.
 - A terminal run fails when `~/.claude/settings.json` changed during it (D13).
 
-LIVE-RESULTS-PLACEHOLDER
+Live results (the Fedora machine, Claude Code 2.1.308, 3.0.0-dev.2 at 6adeeaf, Sonnet 5.5 lead; the records are
+in `docs/live/records/` and the table in [docs/live/capabilities.md](../live/capabilities.md)): every check passed on
+all four backends, 28 of 28 records.
+
+| Check | Terminal | T3 Code | How the message was taken |
+|---|---|---|---|
+| `steer-main` (3 rounds) | 2.2 to 4.8 s | 1.8 to 6.2 s | into the running turn; Kimi as the next turn |
+| `steer-workflow` | 2.9 to 4.4 s | 5.4 to 7.3 s | the same |
+| `steer-plugin` | 3.1 to 4.4 s | terminal only | the same |
+| `continue` | 2.2 to 3.2 s | 3.9 to 4.6 s | a new turn of the job |
+
+The smoke kit passed on the same build (workflow `wf_d17160d4-740`, then the plain fan-out).
 
 ### After the suite runner: what held and what changed
 
