@@ -1,7 +1,7 @@
 {
   "id": "job-agent-codex",
   "createdAt": "2026-10-22T10:00:03.000Z",
-  "claudeSessionId": "board-session",
+  "launchedBy": { "claudeSessionId": "board-session" },
   "state": "completed",
   "completedAt": "2026-10-22T10:03:40.000Z",
   "request": {

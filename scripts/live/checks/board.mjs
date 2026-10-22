@@ -57,7 +57,7 @@ function boardJobs(input, evidence) {
     const loaded = relayJob(input, evidence, agentId), job = loaded.job;
     requireBackend(job, backend);
     if (job.relay?.label !== label || (kind === 'workflow' ? job.relay.workflowRunId !== workflowId : job.relay.workflowRunId != null) ||
-        job.claudeSessionId !== input.run.sessionId || !(Date.parse(job.createdAt) >= Date.parse(entries[0]?.timestamp))) {
+        job.launchedBy?.claudeSessionId !== input.run.sessionId || !(Date.parse(job.createdAt) >= Date.parse(entries[0]?.timestamp))) {
       throw new Error(`Board job ${label} belongs to another run or session.`);
     }
     const pointer = readJson(path.join(input.jobsHome, 'relays', `${agentId}.json`));
