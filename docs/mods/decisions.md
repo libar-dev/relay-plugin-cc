@@ -605,25 +605,21 @@ How D95's cuts are made.
   be unique. By semver `dev.N` sorts below `pre.N`, which matters nowhere: the cut machines install by tag, the
   smoke installs use marketplaces of their own, and the live suite runs `--plugin-dir`. Rejected: `3.0.0-pre.N.M`
   for dev builds, which reads like a cut; renaming the dev series, which would change D6 for no reader.
-- **The cut PR** changes only the version fields, the README's Development line and one CHANGELOG entry, so the
-  build the real-API suite tests is the build the tag names. Its gates are those of the other PRs into
-  `release/3.0` (without a decisions.md entry), `npm run check-version`, and the real-API suite on the PR's head on
-  Fedora and on the M3 through cmux. It merges while `release/3.0` has not moved since that run, so the merge
-  commit's tree is the tested tree; if it has moved, the PR is rebased and the suite runs again. After the tag and
-  before infra installs it, the cut installs and goes back to `#v2.2.0` in a throwaway `HOME`.
+- **The cut PR** changes only the version fields, the README's Development line and one CHANGELOG entry. It merges
+  once CI passes, and its merge commit is tagged; the coordinating thread then has libar-infra install the cut. The
+  owner ruled the loop simple: fix, cut, install, test with real use, repeat. With a diff of version strings, the
+  two-family review and the bots follow the merge, and what they find goes into the next cut. The fixes and phase
+  PRs a cut carries have passed their own gates before they merged.
 - **The release candidate** is the last cut, made from `release/3.0` once the reviews' fixes have merged. The
   release PR then changes only the version (3.0.0), the README line and the CHANGELOG's date, so the owner's
   machines run the plugin code that merges. A change to the plugin after the last cut needs another cut.
-- **pre.1 was the exception.** On the owner's word that it be installed at once, it was cut from c73e053 with
-  `npm test`, `npm run check`, `claude plugin validate`, `claude plugin test` and CI, and the two-family review and
-  the bots followed the merge (217adc8). No plugin code had changed since 962130b, where the real-API suite's
-  recorded run on Fedora passed or hit its known limits, but for the fenced hand-back the typed-message fix
-  closes; it did not run on the M3. pre.1's companion listed the same 404 jobs as 2.2.0 in a copy of a 2.2.0 jobs
-  home, and gave the same report for one ended job. libar-infra installed it directly, with no throwaway-`HOME`
-  check, and on the ThinkPad while a lead's Workflow had two relay jobs running, which finished under that
-  session's 2.2.0. The jobs-home checks wait for pre.2: 2.2.0 reads a jobs home a cut wrote (`status --all`, and
-  `result` of a completed job, a job cancelled with `cancel` and with `cancel --attempt`, and one a TaskStop
-  cancelled), and `continue` crosses versions both ways.
+- **pre.1** (217adc8, from c73e053) was the first cut, made at once on the owner's word that it be installed: no
+  plugin code had changed since 962130b, where the real-API suite's recorded run on Fedora passed or hit its known
+  limits, but for the fenced hand-back the typed-message fix closes. libar-infra installed it on the ThinkPad while
+  a lead's Workflow had two relay jobs running, which finished under that session's 2.2.0. A rollback check ran
+  after the tag and passed: 2.2.0's companion read a completed job, a job cancelled by the message `cancel` and one
+  cancelled by TaskStop, all written by pre.1 in a live session, with the same output as pre.1's, and the seven
+  jobs pre.1 had written in the ThinkPad's jobs home.
 
 ### D95. Pre-release cuts before 3.0.0, on the M3 and the ThinkPad (owner, 22 October 2026)
 
@@ -691,3 +687,30 @@ cancels the job.
 Still open: on macOS, quitting the T3 app kills relay workers, for a reason not known yet; the cuts' use on the M3
 watches for it. The coordinating thread scheduled the notice after Phase 4's status line and board, which rework
 `hooks/mod/register.js`, as the notice will.
+
+### D97. Test pre.1, then cycle pre-releases for 48 hours before heavy production (owner, 22 October 2026)
+
+The owner, after pre.1 was installed:
+
+> Yes we need to test the pre-release. We already did the smoke test on M3. Issues need to be addressed and then the
+> new pre-release should be cut. For 48 hours until we are confident. To deploy heavy production workloads on m3
+> and fedora.
+
+So pre.1 stays installed on the M3 and the ThinkPad and is tested now. What its smoke runs, the suites and the
+reviews find is fixed, pre.2 is cut, and pre-releases keep coming for 48 hours, until the owner is confident. Only
+then do heavy production workloads go onto the M3 and the ThinkPad. The loop stays simple, as the owner ruled: fix,
+cut (D70), libar-infra installs the cut at user scope on both machines, the owner tests it with real use, repeat.
+
+What it changes: D95. The cuts are tested and fixed for 48 hours before the owner's production work on them grows
+to heavy workloads. Arranged by the coordinating thread: a plan for the 48 hours, with what each cut must fix and a
+go/no-go for heavy production, which the owner gives.
+
+### D98. A survey of how the pre-releases are used (owner, 22 October 2026)
+
+> We'll do this kind of survey again. https://github.com/libar-dev/relay-plugin-cc/pull/5
+
+A survey like relay 2.2.0's (PR #5) reads every T3 thread on the M1, the M3 and the ThinkPad, and the jobs homes,
+for how the pre-releases are used and where relay fails. It runs twice: once partway through D97's 48 hours, to feed
+the next cut, and once at the end, before the go for heavy production. Each pass records its cutoff in
+[docs/thread-surveys.md](../thread-surveys.md), and the next starts there. Client threads are read for relay's
+behaviour only, and nothing from a client goes into the repository.

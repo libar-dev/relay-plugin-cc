@@ -84,7 +84,7 @@ Phase 4's `--json` and the typed-message fix merge, and more as Phase 4 lands an
   rule 7), and the CHANGELOG and decisions.md entries.
 
 Other PRs into `release/3.0`, such as the reviews' fixes, pass the same gates, except the review of every later
-phase; their last commit updates the CHANGELOG and decisions.md. A pre-release cut adds gates of its own (see
+phase; their last commit updates the CHANGELOG and decisions.md. A pre-release cut follows its own, shorter procedure (see
 "Pre-release cuts").
 
 ## What the release PR must pass
@@ -124,18 +124,18 @@ when the owner decides.
 
 ## Pre-release cuts
 
-D95 and D70. Each cut goes on the M3 and the ThinkPad, and the owner uses it for production work, with the guide
-lead's pre-release guide as the checklist; the threads run heavy orchestration testing on both. The M1 stays on
+D95, D97, D98 and D70. Each cut goes on the M3 and the ThinkPad and is tested there, with the guide lead's
+pre-release guide as the owner's checklist; the threads run heavy orchestration testing on both. Fixes go into the
+next cut, and cuts keep coming for 48 hours, until the owner is confident; only then do heavy production workloads
+go onto both machines. A survey of how the cuts are used runs partway through and at the end (D98). The M1 stays on
 2.2.0 as the fallback.
 
 A cut is a PR into `release/3.0` that changes only the version fields `node scripts/bump-version.mjs 3.0.0-pre.N`
-sets, the README's Development line and one CHANGELOG entry under the 3.0.0 heading. It passes the gates of the
-other PRs above (without a decisions.md entry), `npm run check-version`, and the real-API suite (step 6) on its
-head on Fedora and on the M3 through cmux. It merges while `release/3.0` has not moved since that run; otherwise it
-is rebased and the suite runs again. Its merge commit is tagged `v3.0.0-pre.N` and pushed: no GitHub release, no
-npm. Before infra installs it, the cut installs and goes back to `#v2.2.0` in a throwaway `HOME`. pre.1 was cut at
-once on the owner's word, with the reviews after the merge and the suite's earlier Fedora run on the same plugin
-code (D70).
+sets, the README's Development line and one CHANGELOG entry under the 3.0.0 heading (D70). It merges once CI
+passes, and its merge commit is tagged `v3.0.0-pre.N` and pushed: no GitHub release, no npm. The two-family review
+and the bots follow the merge, and what they find goes into the next cut. The fixes and phase PRs it carries have
+passed their own gates first. The coordinating thread hears before each tag and has libar-infra install the cut;
+no thread installs a build itself, at any scope.
 
 libar-infra installs each cut with its fleet tool, in a terminal the owner watches:
 
@@ -151,9 +151,8 @@ libar-infra installs each cut with its fleet tool, in a terminal the owner watch
    3.0.0-pre.N`; `~/.claude/settings.json` differs from the copy only in plugin and marketplace entries.
 4. **Sessions.** A session that started before the switch keeps the build it loaded until its plugins reload or
    its process is replaced; it reloads only when it holds no Workflow of relays. New sessions run the cut.
-5. **The way back** is the same with `#v2.2.0`. Whether 2.2.0 reads a jobs home a cut wrote is checked with pre.2;
-   until then, roll back only once every job the cut started has ended and been read, and check that 2.2.0's
-   `status --all` lists the jobs home afterwards.
+5. **The way back** is the same with `#v2.2.0`. pre.1's rollback check showed that 2.2.0 reads the jobs pre.1 wrote
+   (D70); after a rollback, check that 2.2.0's `status --all` lists the jobs home.
 
 No mixed versions across a resume. A Workflow started under one version finishes, or is abandoned and its jobs
 cancelled, under that version; adoption across versions is untested. A session that held an old version's Workflow
