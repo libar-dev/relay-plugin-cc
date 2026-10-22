@@ -206,6 +206,10 @@ What worked in Phase 1:
 - The view in force reaches a module through a drawn site. The 2.1.308 declarations give `e.props.view.agentId` to
   the `AbovePrompt` band and to a `Pane`, and none to `$.ui.status`. Measured for the band: opening an agent's view
   and going back re-run its hook with the agent's id and with none, and a hook that passes draws nothing.
+- The footer's agent list shows five agent rows under `main`, then `↓ N more`; the list scrolls as the cursor moves.
+  A finished agent leaves the list unless its view is open, where it stays as `idle`. Under load (several sessions
+  and their jobs) a key's effect can take more than 250 ms to draw: a script polls the screen for it and never
+  sends a key twice.
 - Keys in the terminal: from the main prompt, `Down` moves into the agent list and `Up` from `main` gives the prompt
   back; `Enter` on a row opens that agent's view, and `Up` as many times as `Down` reaches its prompt. Esc in a
   running agent's view stops the agent, and `x` on its row in the list stops it too; both end its turn with

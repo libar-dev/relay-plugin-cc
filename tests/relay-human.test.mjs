@@ -10,7 +10,7 @@ import {
   updated, waitFor, workflowEntry
 } from "./support/relay-fixture.mjs";
 import {
-  parseRelayTranscript, readGuardState, readLedger, syncRelayMessages, writeGuardState, writeRelayPointer
+  parseRelayTranscript, readGuardState, readLedger, RELAY_BLOCK_BUDGET, syncRelayMessages, writeGuardState, writeRelayPointer
 } from "../plugins/relay/scripts/lib/harness/relay.mjs";
 import { appendRelayViolation, readRelayViolations } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 
@@ -320,6 +320,39 @@ test("an unreadable transcript at SubagentStop ends the hand-back exemption", as
   assert.equal(readRelayViolations(dir).length, 1);
 });
 
+test("hand-backs with an unreadable transcript preserve the stop block budget and record release", async () => {
+  const ctx = relayContext("job", { turnMs: 100 });
+  const { jobId, dir } = await handedBack(ctx);
+  fs.unlinkSync(ctx.transcript);
+  fs.mkdirSync(ctx.transcript);
+  for (let index = 0; index <= RELAY_BLOCK_BUDGET; index++) {
+    assert.equal(decision(await pre(ctx, "SubagentHandback", { message: "own words" })), "allow");
+    assert.equal(readGuardState(ctx.env, ctx.agentId, dir).consecutiveBlocks, index);
+    const stopped = await stop(ctx, "Report delivered.");
+    if (index < RELAY_BLOCK_BUDGET) {
+      assert.equal(stopped?.decision, "block");
+      assert.equal(readGuardState(ctx.env, ctx.agentId, dir).consecutiveBlocks, index + 1);
+    } else {
+      assert.equal(stopped, null);
+    }
+  }
+  assert.equal(readGuardState(ctx.env, ctx.agentId, dir).consecutiveBlocks, 0);
+  assert.deepEqual(readRelayViolations(dir).map(({ kind }) => kind), ["transcript", "final-message"]);
+  assert.match(companion(ctx, ["result", jobId]).stdout, /^relay-violation: final-message: the relay was let go after 8 blocks:/m);
+});
+
+test("a readable hand-back still resets consecutive blocks", async () => {
+  const ctx = relayContext("job", { turnMs: 100 });
+  const { jobId, dir } = await handedBack(ctx);
+  ctx.append(ctx.humanAfterHandback("cancel"));
+  assertExactResultBlock(await stop(ctx, "Report delivered."), ctx, jobId);
+  assert.equal(readGuardState(ctx.env, ctx.agentId, dir).consecutiveBlocks, 1);
+  assert.equal(decision(await pre(ctx, "SubagentHandback", { message: "own words" })), "allow");
+  assert.equal(readGuardState(ctx.env, ctx.agentId, dir).consecutiveBlocks, 0);
+  assert.equal(await stop(ctx, "Report delivered."), null);
+  assert.deepEqual(readRelayViolations(dir), []);
+});
+
 test("a guard state without receivedUuids still exempts a stop with no new message", async () => {
   const ctx = relayContext("job", { turnMs: 100 });
   const { dir } = await handedBack(ctx);
@@ -370,8 +403,8 @@ test("without SubagentHandback, only one whole-message fence may surround the ex
     assert.equal(await stop(ctx, fence(result())), null);
     assert.ok(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).handedBackAt);
   });
-  await t.test("language tags and whitespace outside the fence pass", async () => {
-    for (const tag of ["", "text", "markdown", "plaintext", "aZ09_+.-"]) {
+  await t.test("only the allowed tags and whitespace outside the fence pass", async () => {
+    for (const tag of ["", "text", "txt", "plaintext", "markdown", "md"]) {
       assert.equal(await stop(ctx, `\n \t\n${fence(result(), "```" + tag + " \t")}\n \t`), null);
     }
   });
@@ -382,6 +415,8 @@ test("without SubagentHandback, only one whole-message fence may surround the ex
   });
   const cases = [
     ["prose in the fence info string fails", (text) => fence(text, "```I passed your message on to the job")],
+    ["a prose tag without spaces fails", (text) => fence(text, "```passed-your-message-on.to.the-job")],
+    ["an unrecognized language tag fails", (text) => fence(text, "```aZ09_+.-")],
     ["an unclosed fence fails", (text) => `\`\`\`\n${text}`],
     ["a fence with a changed line fails", (text) => fence(text.replace("state: completed", "state: cancelled"))],
     ["a fence with an added line fails", (text) => fence(`${text}\nAdded line.`)],

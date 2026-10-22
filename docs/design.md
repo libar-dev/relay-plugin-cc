@@ -480,7 +480,8 @@ pipe. After a failed start the hand-back is allowed at once and carries the star
 Code gives a subagent the `SubagentHandback` tool only in auto mode, and a subagent under the
 Workflow tool does not get it. Without it, SubagentStop blocks while the job runs, a message is
 owed, or the relay's final text differs from the result; one code fence around the whole result,
-with at most a language tag after its opening backticks, is not a difference. A message after the hand-back resumes
+with no tag or `text`, `txt`, `plaintext`, `markdown` or `md` after its opening backticks, is not a difference; a
+Workflow relay's state block may have the same one fence and no other. A message after the hand-back resumes
 the relay; the hook delivers it at the next tool call, as a continue, and the next hand-back is
 rewritten the same way. The hand-back records every inbound entry the hook saw, delivered or not.
 SubagentStop lets a relay that handed back stop without a check only while its transcript is

@@ -76,18 +76,18 @@ function trimEnd(text) {
 function withoutOuterFence(text, expected) {
   // A relay may fence the result; only its outer envelope may differ.
   if (/^(?:[ \t]*\r?\n)*`{3,}/.test(String(expected ?? ""))) return text;
-  const fenced = /^(?:[ \t]*\r?\n)*(`{3,})[A-Za-z0-9_+.-]*[ \t]*\r?\n([\s\S]*?)\r?\n\1$/.exec(trimEnd(text));
+  const fenced = /^(?:[ \t]*\r?\n)*(`{3,})(?:text|txt|plaintext|markdown|md)?[ \t]*\r?\n([\s\S]*?)\r?\n\1$/.exec(trimEnd(text));
   return fenced ? fenced[2] : text;
 }
 
 // A string-return relay retypes the state block, and a small model drops a line that only restates
 // the request, most often its own `relay:` line. Its text passes when every line it holds is a line
 // of the block and no outcome line is missing. A line added or changed still fails, and so does a
-// missing state, error or undelivered line. Blank lines and code fences are not counted.
+// missing state, error or undelivered line. Blank lines and one outer code fence are not counted.
 export function matchesStateBlock(text, expected) {
-  const lines = (value) => String(value ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("```"));
+  const lines = (value) => String(value ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const remaining = lines(expected);
-  for (const line of lines(text)) {
+  for (const line of lines(withoutOuterFence(text, expected))) {
     const index = remaining.indexOf(line);
     if (index === -1) return false;
     remaining.splice(index, 1);
@@ -309,7 +309,7 @@ function handleHandback(input, env, jobDir, pointer, sync) {
   const agentId = input.agent_id;
   const rewrite = (text, reason) => {
     writeGuardState(env, agentId, jobDir, {
-      consecutiveBlocks: 0,
+      ...(sync?.readable !== false ? { consecutiveBlocks: 0 } : {}),
       handback: { at: new Date().toISOString(), messageUuids: (sync?.messages ?? []).map((message) => message.uuid), receivedUuids: sync?.received ?? [] }
     });
     return allow(reason, { ...toolInput, message: text });

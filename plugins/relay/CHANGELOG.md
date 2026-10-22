@@ -88,8 +88,9 @@ Messages typed into a relay's own view (a fix found by the Desktop and CLI passe
   hook can check it, the relay can no longer end with words of its own. (The block budget, a failing
   hook and a relay whose start failed stay as they were.)
 - A relay without `SubagentHandback` whose final message is the exact result inside one code fence is
-  no longer blocked: the fence, with at most a language tag, is ignored. A Haiku relay had fenced the
-  result eight times running and been let go without a recorded hand-back.
+  no longer blocked: the fence, with no tag or a plain one such as `text` or `markdown`, is ignored. A Haiku
+  relay had sent the result fenced nine times and been let go after eight blocks, with no recorded hand-back.
+  A Workflow relay's state block may carry the same one fence, and no fence line anywhere else.
 - A message of an origin the guard does not know is recorded as a `relay-violation:` line instead of
   being dropped in silence (the harness's own `task-notification` notices are skipped), and the same
   transcript problem is recorded once, not again at every hook call.

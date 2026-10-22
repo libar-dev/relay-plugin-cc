@@ -66,8 +66,9 @@ for (const backends of [['kimi'], ['kimi', 'zcode', 'grok', 'codex']]) {
 
 function navigation(dir, screens = json(path.join(fixture, 'screens.json')), agentCount = 2) {
   const calls = [];
-  let time = 0, last;
-  const drive = args => { calls.push(args); if (args[0] === 'read') { if (screens.length) last = screens.shift(); return last; } return ''; };
+  let time = 0, last, sent;
+  const drive = args => { calls.push(args); if (args[0] === 'send') sent = args[2];
+    if (args[0] === 'read') { if (screens.length) last = screens.shift(); return last.replaceAll('{{sent}}', sent ?? ''); } return ''; };
   return { ctx: { run: { pane: 'fixture-pane' }, evidenceDir: dir }, agentCount, calls, drive,
     now: () => time, sleep: async ms => { time += ms; } };
 }
@@ -84,7 +85,7 @@ test('typed navigation finds the named row and verifies every key against saved 
   assert.equal(nav.calls.filter(call => call[0] === 'read').length, 12);
   assert.equal(fs.readdirSync(dir).filter(file => file.startsWith('typed-') && file.endsWith('.txt')).length, 12);
   const timings = readers.readTranscript(path.join(dir, 'typed-navigation.jsonl'));
-  assert.equal(timings.length, 10);
+  assert.equal(timings.length, 11);
   assert.ok(timings.every(step => step.settled && step.elapsedMs === 200 && step.reads === 1 && step.timeoutMs === 5000));
 });
 
@@ -113,9 +114,9 @@ test('typed navigation polls every key until its effect appears on the third rea
     ['Down', 'Down', 'Down', 'Enter', 'Up', 'Up', 'Up', 'Down', 'Enter', 'Up']);
   assert.equal(nav.calls.filter(call => call[0] === 'read').length, 32);
   const timings = readers.readTranscript(path.join(dir, 'typed-navigation.jsonl'));
-  assert.equal(timings.length, 10);
+  assert.equal(timings.length, 11);
   for (const step of timings) {
-    assert.equal(step.elapsedMs, 600); assert.equal(step.reads, 3); assert.equal(step.settled, true);
+    assert.equal(step.elapsedMs, step.key === 'send' ? 200 : 600); assert.equal(step.reads, step.key === 'send' ? 1 : 3); assert.equal(step.settled, true);
     assert.equal(step.agent, 'typed-a-codex'); assert.equal(step.text, 'line');
     assert.ok(fs.existsSync(path.join(dir, step.screen)));
   }
@@ -214,7 +215,7 @@ function verifiedScreens(nav, dir, name) {
   const failed = readers.readTranscript(path.join(dir, 'typed-navigation.jsonl')).some(step => !step.settled);
   assert.equal(count, nav.screens.length + (failed ? 25 : 0));
   for (let i = 0; i < count; i++) {
-    assert.equal(fs.readFileSync(path.join(dir, `typed-${name}-first-${i}.txt`), 'utf8'), nav.screens[Math.min(i, nav.screens.length - 1)]);
+    assert.equal(fs.readFileSync(path.join(dir, `typed-${name}-first-${i}.txt`), 'utf8'), nav.screens[Math.min(i, nav.screens.length - 1)].replaceAll('{{sent}}', 'line'));
   }
 }
 
@@ -240,7 +241,7 @@ test('typed navigation reaches typed-b-kimi below the initial five rows', async 
   const view = screen => screen.replace('❯ \n', `❯ Message @${name}…\n`)
     .replace('● main', '◯ main').replace(`◯ ${name}`, `● ${name}`);
   const screens = [...recorded.down.slice(0, 8), view(recorded.down[7]),
-    ...recorded.down.slice(0, 7).reverse().map(view), view(recorded.down[0]),
+    ...recorded.down.slice(0, 7).reverse().map(view), '❯ {{sent}}\n' + view(recorded.down[0]),
     view(recorded.down[1]), recorded.down[1], recorded.down[0]];
   const nav = { ...navigation(dir, [...screens], 9), screens };
   await typeInView(nav.ctx, name, 'line', nav);
@@ -255,7 +256,7 @@ test('typed navigation starts from a scrolled main footer and finds an earlier a
   const view = screen => screen.replace('❯ \n', `❯ Message @${name}…\n`)
     .replace('● main', '◯ main').replace(`◯ ${name}`, `● ${name}`);
   const screens = [recorded.mainPrompt, recorded.mainSelected, recorded.down[2], view(recorded.down[2]),
-    view(recorded.down[1]), view(recorded.down[0]), view(recorded.down[0]),
+    view(recorded.down[1]), view(recorded.down[0]), '❯ {{sent}}\n' + view(recorded.down[0]),
     view(recorded.down[1]), recorded.down[1], recorded.down[0]];
   const nav = { ...navigation(dir, [...screens], 9), screens };
   assert.equal(screens[0].includes(name), false);
@@ -332,7 +333,7 @@ test('typed C analysis proves an interrupt steer in the running or next turn wit
 function recordedNotices(scenario = 'c') {
   return readers.readTranscript(path.join(fixture, '20261022T194022Z-notices-c.jsonl')).map(row =>
     JSON.parse(JSON.stringify(row).replaceAll('a6c3884c5d785b7dd', `agent-${scenario}-codex`)
-      .replaceAll('typed-c-codex', `typed-${scenario}-codex`)));
+      .replaceAll('typed-c-codex', `typed-${scenario}-codex`))).map(row => ({ ...row, timestamp: '2026-10-22T10:00:34.000Z' }));
 }
 
 for (const scenario of ['a', 'b', 'c']) test(`typed analysis deduplicates recorded C notices for ${scenario.toUpperCase()}`, t => {
@@ -390,7 +391,7 @@ const failures = [
     edit(dir, `${C}/inbox/claimed/msg-C1-codex.json`, row => { row.kind = 'continue'; });
   }, /C1 was not a steer/],
   ['C1 two ledger records', dir => fs.copyFileSync(path.join(dir, C, 'inbox/relay/entry-C1-codex.json'), path.join(dir, C, 'inbox/relay/duplicate.json')), /exactly one ledger/],
-  ['C1 duplicate human entry', dir => editLines(dir, 'transcript/subagents/agent-c-codex.jsonl', rows => rows.push({ ...rows[0], uuid: 'duplicate' })), /exactly one human/],
+  ['C1 duplicate human entry', dir => editLines(dir, 'transcript/subagents/agent-c-codex.jsonl', rows => rows.push({ ...rows.at(-1), uuid: 'duplicate' })), /exactly one human/],
   ['C1 duplicate inbox message', dir => fs.copyFileSync(path.join(dir, C, 'inbox/claimed/msg-C1-codex.json'), path.join(dir, C, 'inbox/duplicate.json')), /exactly once/],
   ['C1 ledger after running attempt', dir => edit(dir, `${C}/job.json`, row => { row.attempts[0].endedAt = '2026-10-22T10:00:39Z'; }), /active at the boundary/],
   ['C1 wrong outcome turn', dir => edit(dir, `${C}/inbox/outcomes/msg-C1-codex.json`, row => { row.turnId = 'other'; }), /in-turn steer for C1/],
@@ -511,7 +512,7 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
     }
     return [backend, { jobDir, job, handbacks, relayFile, relay, ledger, other, offset: i * 120000 }];
   }));
-  let time = Date.parse('2026-10-22T10:00:25Z'), screens = [], visit = 0, stage = null, current;
+  let time = Date.parse('2026-10-22T10:00:25Z'), screens = [], visit = 0, stage = null, current, sent, lastScreen;
   const visits = ['B1', 'C1', 'A1'].flatMap(line => backends.map(backend => ({ line, backend })));
   lines(input.transcript, main.filter(row => row.origin?.kind !== 'task-notification'));
   const run = { ...input, backends, pane: 'fixture-pane', timeoutMinutes: failure === 'timeout' ? 0.01 : typed.timeoutMinutes };
@@ -543,14 +544,15 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
     } else if (stage === 'A2') {
       write(ledger[1].file, ledger[1].value); lines(relayFile, relay);
       write(path.join(jobDir, 'job.json'), job); lines(path.join(jobDir, 'relay-handbacks.jsonl'), handbacks);
-      lines(input.transcript, main);
       time = Date.parse('2026-10-22T10:02:00Z') + offset;
+      lines(input.transcript, main.filter(row => Date.parse(row.timestamp) <= time));
       stage = null;
       afterA2({ jobDir, handbacks, main, input });
     }
   }, drive(args) {
     calls.push(args);
     if (args[0] === 'read') {
+      if (!screens.length && visit >= visits.length) return lastScreen;
       if (!screens.length) {
         current = visits[visit++]; assert.ok(current, 'no navigation after the final A');
         const { line, backend } = current;
@@ -569,12 +571,14 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
         screens = screens.map(screen => screen.replaceAll('codex', backend));
         if (failure === 'navigation') screens[0] = 'unexpected';
       }
-      return screens.shift();
+      lastScreen = screens.shift().replaceAll('{{sent}}', sent ?? '');
+      return lastScreen;
     }
     if (args[0] === 'keys' && current?.line === 'A1' && run.typed[current.backend].A2) {
       assert.ok(fs.existsSync(saved[current.backend].ledger[1].file), 'A2 ledger precedes returning to main');
     }
     if (args[0] === 'send') {
+      sent = args[2];
       if (args[2].includes(' B1 ')) time += 1000;
       if (args[2].includes(' C1 ') && !pendingC) {
         const { file, job } = saved[current.backend].other.c; write(file, job);
@@ -592,7 +596,7 @@ function terminal(t, { failure, pendingB = true, pendingC = true, backends = ['c
       if (!pendingB) { const { file, job } = saved[current.backend].other.b; write(file, job); }
     }
     if (args[0] === 'cancel') {
-      assert.ok(backends.some(backend => ['b', 'c'].some(scenario => args[1] === path.join(dir, `jobs/repo/job-${scenario}-${backend}`))));
+      assert.ok(backends.some(backend => ['a', 'b', 'c'].some(scenario => args[1] === path.join(dir, `jobs/repo/job-${scenario}-${backend}`))));
       const job = json(path.join(args[1], 'job.json')), at = new Date(time).toISOString();
       write(path.join(args[1], 'job.json'), { ...job, state: 'cancelled', completedAt: at,
         attempts: job.attempts.map(attempt => ({ ...attempt, state: 'cancelled', endedAt: at })) });
@@ -672,11 +676,11 @@ for (const failure of ['wrong B outcome', 'wrong final result', 'missing final h
     const row = result.results[0];
     assert.equal(row.result, 'fail');
     assert.match(row.reason, failure === 'wrong B outcome' ? /Expected in-turn steer for B1/ :
-      failure === 'wrong final result' ? /Last hand-back is not the job result/ : /Missing completed hand-back/);
+      failure === 'wrong final result' ? /Last hand-back is not the job result/ : /Missing completed (hand-back|notice)/);
     const ledgerAt = Date.parse(json(path.join(dir, A, 'inbox/relay/entry-A2-codex.json')).at);
     const elapsed = dependencies.now() - ledgerAt;
     assert.ok(elapsed <= 120000);
-    assert.equal(elapsed, failure.startsWith('missing') ? 120000 : 8000);
+    assert.equal(elapsed, failure === 'missing final notice' ? 120000 : 8000);
     assert.equal(ctx.run.completed, true);
     assert.equal(ctx.run.error, undefined);
     assert.ok(ctx.run.checkFinishedAt);
@@ -730,7 +734,7 @@ for (const failure of ['driver', 'marker', 'navigation', 'wake', 'interrupt', 't
     await assert.rejects(typed.runTerminal(ctx, dependencies));
     assert.equal(ctx.run.completed, false); assert.ok(ctx.run.error);
     assert.deepEqual(calls.at(-1), ['stop', 'fixture-pane']);
-    if (['navigation', 'wake', 'interrupt', 'timeout'].includes(failure)) assert.equal(calls.filter(call => call[0] === 'cancel').length, 2);
+    if (['navigation', 'wake', 'interrupt', 'timeout'].includes(failure)) assert.equal(calls.filter(call => call[0] === 'cancel').length, 3);
   });
 }
 
@@ -770,4 +774,229 @@ test('typed failed evidence remains replayable after copying', t => {
   run.copy = copyEvidence(run, analysis, dir); write(path.join(dir, 'run.json'), run);
   fs.rmSync(input.jobsHome, { recursive: true }); fs.rmSync(input.transcript); fs.rmSync(path.join(dir, 'transcript'), { recursive: true });
   assert.deepEqual(typed.analyze({ ...input, transcript: run.copy.transcript, jobsHome: run.copy.jobsHome }).results, analysis.results);
+});
+
+for (const effect of ['third read', 'final read', 'stuck text', 'lost paste']) {
+  test(`typed send waits for a submitted echo and cleared prompt without resending: ${effect}`, async t => {
+    const { dir } = setup(t), screens = json(path.join(fixture, 'screens.json'));
+    const pending = effect === 'lost paste' ? screens[7] : screens[7].replace('❯ Message @typed-a-codex…', '❯ line');
+    const succeeds = effect === 'third read' || effect === 'final read';
+    const sequence = [...screens.slice(0, 8), ...Array(effect === 'third read' ? 2 : 25).fill(pending),
+      ...(succeeds ? screens.slice(8) : [pending])];
+    const nav = navigation(dir, sequence);
+    if (succeeds) await typeInView(nav.ctx, 'typed-a-codex', 'line', nav);
+    else await assert.rejects(typeInView(nav.ctx, 'typed-a-codex', 'line', nav), /cleared prompt and submitted text.*screen saved/);
+    const sent = readers.readTranscript(path.join(dir, 'typed-navigation.jsonl')).find(step => step.key === 'send');
+    assert.equal(sent.reads, effect === 'third read' ? 3 : 26);
+    assert.equal(sent.elapsedMs, effect === 'third read' ? 600 : 5000);
+    assert.equal(sent.timeoutMs, 5000); assert.equal(sent.settled, succeeds);
+    assert.equal(nav.calls.filter(call => call[0] === 'send').length, 1);
+    assert.ok(fs.existsSync(path.join(dir, sent.screen)));
+    if (!succeeds) assert.equal(nav.calls.filter(call => call[0] === 'keys').length, 7);
+  });
+}
+
+test('typed send accepts the submitted echo recorded in the four-backend passing run', async t => {
+  const { dir } = setup(t), screens = json(path.join(fixture, 'screens.json')).map(screen => screen.replaceAll('typed-a-codex', 'typed-b-codex'));
+  screens[8] = fs.readFileSync(path.join(fixture, '20261022T201923Z-sent-b.txt'), 'utf8');
+  const nav = navigation(dir, screens);
+  await typeInView(nav.ctx, 'typed-b-codex', typedLine('20261022T201923Z-typed-terminal-a8d4', 'codex', 'B1'), nav);
+  assert.equal(nav.calls.filter(call => call[0] === 'send').length, 1);
+});
+
+test('typed return requires main selection after Enter before sending Up', async t => {
+  const { dir } = setup(t), screens = json(path.join(fixture, 'screens.json'));
+  screens.splice(10, 2, screens[11]);
+  const nav = navigation(dir, screens);
+  await assert.rejects(typeInView(nav.ctx, 'typed-a-codex', 'line', nav), /main view with selector on main/);
+  assert.deepEqual(nav.calls.filter(call => call[0] === 'keys').at(-1), ['keys', 'fixture-pane', 'Enter']);
+  assert.equal(readers.readTranscript(path.join(dir, 'typed-navigation.jsonl')).at(-1).settled, false);
+});
+
+test('typed terminal refuses Escape when C ended while its prompt was being focused', async t => {
+  const { ctx, dependencies, calls, dir } = terminal(t);
+  const drive = dependencies.drive;
+  dependencies.drive = args => {
+    const value = drive(args);
+    if (args[0] === 'read' && value.includes('❯ Message @typed-c-codex…') && !value.includes('❯ ◯') && !value.includes('❯ ●')) {
+      edit(dir, `${C}/job.json`, job => { job.state = 'completed'; });
+    }
+    return value;
+  };
+  await assert.rejects(typed.runTerminal(ctx, dependencies), /typed-c-codex is no longer running before Escape/);
+  assert.equal(calls.some(call => call.includes('Escape')), false);
+  assert.equal(calls.filter(call => call[0] === 'send').length, 1);
+});
+
+for (const [failure, mutate, reason] of [
+  ['own words', dir => editLines(dir, 'transcript.jsonl', rows => {
+    const row = rows.find(row => row.message?.content?.includes?.('<task-id>agent-a-codex</task-id>'));
+    row.message.content = row.message.content.replace('Acknowledged.', 'My own words.');
+  }), /Last hand-back is not the job result/],
+  ['altered inbox', dir => edit(dir, `${A}/inbox/claimed/msg-A1-codex.json`, row => { row.text += ' altered'; }), /Inbox does not carry A1 exactly once/],
+  ['duplicate delivery', dir => fs.copyFileSync(path.join(dir, A, 'inbox/relay/entry-A1-codex.json'), path.join(dir, A, 'inbox/relay/duplicate.json')), /exactly one ledger record for A1/],
+  ['continue before completion', dir => edit(dir, `${A}/job.json`, job => { job.attempts[0].endedAt = '2026-10-22T10:01:37Z'; }), /Continue A1 preceded completion/]
+]) test(`typed terminal throws permanent A1 failure with its cause: ${failure}`, async t => {
+  const { ctx, dependencies, calls, dir } = terminal(t);
+  const sleep = dependencies.sleep;
+  let changed = failure === 'altered inbox';
+  if (changed) mutate(dir);
+  dependencies.sleep = async ms => {
+    await sleep(ms);
+    if (!changed && readers.readTranscript(path.join(dir, A, 'relay-handbacks.jsonl')).length) { changed = true; mutate(dir); }
+  };
+  await assert.rejects(typed.runTerminal(ctx, dependencies), reason);
+  assert.equal(changed, true); assert.match(ctx.run.error, reason);
+  assert.ok(dependencies.now() < Date.parse('2026-10-22T10:01:50Z'));
+  assert.equal(calls.some(call => call[0] === 'send' && call[2].includes(' A2 ')), false);
+  assert.match(typed.analyze(ctx).results[0].reason, reason);
+});
+
+for (const failure of ['missing A1 ledger', 'posting A1 ledger', 'missing A1 hand-back', 'missing A1 notice', 'missing A2 ledger', 'posting A2 ledger']) {
+  test(`typed terminal bounds in-flight evidence and saves its last diagnostic: ${failure}`, async t => {
+    const { ctx, dependencies, calls, dir } = terminal(t, { afterA2({ jobDir }) {
+      if (failure === 'missing A2 ledger') fs.rmSync(path.join(jobDir, 'inbox/relay/entry-A2-codex.json'));
+      if (failure === 'posting A2 ledger') edit(jobDir, 'inbox/relay/entry-A2-codex.json', row => { row.status = 'posting'; });
+    } });
+    const sleep = dependencies.sleep;
+    dependencies.sleep = async ms => {
+      await sleep(ms);
+      const file = path.join(dir, A, 'inbox/relay/entry-A1-codex.json');
+      if (failure === 'missing A1 ledger') fs.rmSync(file, { force: true });
+      if (failure === 'posting A1 ledger' && fs.existsSync(file)) edit(dir, `${A}/inbox/relay/entry-A1-codex.json`, row => { row.status = 'posting'; });
+      if (failure === 'missing A1 hand-back') lines(path.join(dir, A, 'relay-handbacks.jsonl'), []);
+      if (['missing A1 hand-back', 'missing A1 notice'].includes(failure)) editLines(dir, 'transcript.jsonl', rows => {
+        for (let i = rows.length - 1; i >= 0; i--) if (rows[i].message?.content?.includes?.('<task-id>agent-a-codex</task-id>')) rows.splice(i, 1);
+      });
+    };
+    const reason = failure.startsWith('posting') ? /A[12] ledger status is posting/ :
+      failure === 'missing A1 hand-back' ? /Missing hand-back/ : failure === 'missing A1 notice' ? /Missing completed notice/ : /ledger record is missing/;
+    await assert.rejects(typed.runTerminal(ctx, dependencies), reason);
+    assert.match(ctx.run.error, /screen saved/);
+    const line = failure.includes('A2') ? 'A2' : 'A1';
+    const elapsed = dependencies.now() - Date.parse(ctx.run.typed.codex[line].sentAt);
+    assert.equal(elapsed, line === 'A2' ? 60000 : 220000);
+    assert.ok(fs.readdirSync(dir).some(file => file.endsWith('-timeout.txt')));
+    assert.deepEqual(calls.at(-1), ['stop', 'fixture-pane']);
+  });
+}
+
+test('typed idle row wait stops after thirty seconds with the screen saved', async t => {
+  const { dir } = setup(t), screens = json(path.join(fixture, 'screens.json'));
+  const nav = navigation(dir, screens.slice(0, 9));
+  await assert.rejects(typeInView(nav.ctx, 'typed-a-codex', 'line', { ...nav,
+    followup: { text: 'A2', ready: async () => {}, beforeSend() { assert.fail('A2 must not be sent'); } }
+  }), /idle row within 30 seconds.*screen saved/);
+  assert.equal(nav.now(), 31600);
+  assert.equal(nav.calls.filter(call => call[0] === 'send').length, 1);
+  const saved = fs.readdirSync(dir).filter(file => file.startsWith('typed-typed-a-codex-'));
+  assert.ok(saved.length >= 31);
+});
+
+for (const failure of ['missing rejected result', 'missing interruption note', 'unrelated rejected tool', 'interrupt after C1', 'receipt before interrupt', 'queued command', 'stop after delivery']) {
+  test(`typed analysis proves interrupt then redirect: ${failure}`, t => {
+    const { dir, input } = setup(t);
+    if (failure === 'receipt before interrupt') edit(dir, 'run.json', run => { run.typed.codex.C1.sentAt = '2026-10-22T10:00:32Z'; });
+    else if (failure === 'stop after delivery') editLines(dir, 'transcript.jsonl', rows => {
+      rows.find(row => row.message?.content?.includes?.('<task-id>agent-c-codex</task-id>')).timestamp = '2026-10-22T10:00:41Z';
+    });
+    else editLines(dir, 'transcript/subagents/agent-c-codex.jsonl', rows => {
+      if (failure === 'missing rejected result') rows.splice(1, 1);
+      if (failure === 'missing interruption note') rows.splice(2, 1);
+      if (failure === 'unrelated rejected tool') rows[0].message.content[0].input.command = 'echo unrelated';
+      if (failure === 'interrupt after C1') rows.push(...rows.splice(1, 2));
+      if (failure === 'queued command') {
+        const entry = rows.at(-1);
+        rows[rows.length - 1] = { ...entry, type: 'attachment', attachment: {
+          type: 'queued_command', origin: { kind: 'human' }, prompt: typedLine('synthetic-run', 'codex', 'C1')
+        } };
+      }
+    });
+    const row = typed.analyze(input).results[0];
+    assert.equal(row.result, 'fail');
+    assert.match(row.reason, failure === 'queued command' ? /resuming human user entry/ :
+      failure === 'stop after delivery' ? /stop notice did not precede C1 delivery/ : /interrupted wait before/);
+  });
+}
+
+for (const outcome of ['pass', 'analysis failure', 'navigation failure']) {
+  test(`typed cleanup records cancel errors and still cancels every unfinished job after ${outcome}`, async t => {
+    const { ctx, dependencies, calls, dir } = terminal(t, { failure: outcome === 'navigation failure' ? 'navigation' : undefined });
+    if (outcome === 'analysis failure') edit(dir, `${B}/inbox/outcomes/msg-B1-codex.json`, row => { row.turnId = 'wrong'; });
+    const cancel = dependencies.companionRunner;
+    dependencies.companionRunner = async (value, args) => {
+      if (args[0] === 'cancel' && args[1] === path.join(dir, outcome === 'navigation failure' ? A : B)) {
+        calls.push(args); throw Object.assign(new Error('Cancel exited 1.'), { status: 1 });
+      }
+      return cancel(value, args);
+    };
+    if (outcome === 'navigation failure') await assert.rejects(typed.runTerminal(ctx, dependencies), /Navigation:/);
+    else {
+      const result = await typed.runTerminal(ctx, dependencies);
+      assert.equal(result.results[0].result, outcome === 'pass' ? 'pass' : 'fail');
+      if (outcome === 'analysis failure') assert.match(result.results[0].reason, /in-turn steer for B1/);
+    }
+    const scenarios = outcome === 'navigation failure' ? ['A', 'B', 'C'] : ['B', 'C'];
+    assert.equal(calls.filter(call => call[0] === 'cancel').length, scenarios.length);
+    for (const scenario of scenarios) assert.ok(ctx.run.typed.codex[`${scenario}1`].cleanupAt);
+    assert.equal(ctx.run.typed.codex[`${scenarios[0]}1`].cleanupError, 'Cancel exited 1.');
+    assert.deepEqual(calls.at(-1), ['stop', 'fixture-pane']);
+    assert.equal(typed.analyze(ctx).results[0].result, outcome === 'pass' ? 'pass' : 'fail');
+  });
+}
+
+test('typed terminal settles every A2 turn, hand-back and notice before analyzing once', async t => {
+  const pending = new Map(), stages = new Map();
+  let analyses = 0;
+  const { ctx, dependencies, calls } = terminal(t, { backends: ['codex', 'kimi'], pendingB: false, pendingC: false,
+    afterA2(value) {
+      const job = json(path.join(value.jobDir, 'job.json')), backend = job.request.backend;
+      pending.set(backend, { ...value, job }); stages.set(backend, 0);
+      write(path.join(value.jobDir, 'job.json'), { ...job, state: 'running',
+        attempts: job.attempts.map((attempt, i) => i === 2 ? { ...attempt, state: 'running', endedAt: null } : attempt) });
+      lines(path.join(value.jobDir, 'relay-handbacks.jsonl'), value.handbacks.slice(0, 1));
+      lines(value.input.transcript, value.main.filter(row => !row.message?.content?.includes?.(`<task-id>agent-a-${backend}</task-id>`) ||
+        Date.parse(row.timestamp) < Date.parse(value.handbacks.at(-1).at)));
+    }
+  });
+  const sleep = dependencies.sleep;
+  dependencies.sleep = async ms => {
+    const waiting = [...pending];
+    await sleep(ms);
+    if (ms !== 1000) return;
+    for (const [backend, value] of waiting) {
+      const stage = stages.get(backend) + 1; stages.set(backend, stage);
+      if (stage === 1) write(path.join(value.jobDir, 'job.json'), value.job);
+      if (stage === 2) lines(path.join(value.jobDir, 'relay-handbacks.jsonl'), value.handbacks);
+      if (stage === 3) {
+        lines(value.input.transcript, value.main.filter(row => Date.parse(row.timestamp) <= dependencies.now()));
+        pending.delete(backend);
+      }
+    }
+  };
+  const analyze = typed.analyze;
+  t.mock.method(typed, 'analyze', function (input) {
+    analyses++;
+    assert.deepEqual([...stages], [['codex', 3], ['kimi', 3]]);
+    return analyze.call(this, input);
+  });
+  const result = await typed.runTerminal(ctx, dependencies);
+  assert.equal(analyses, 1);
+  assert.deepEqual(result.results.map(row => [row.result, row.reason]), [['pass', null], ['pass', null]]);
+  assert.equal(calls.filter(call => call[0] === 'send' && call[2].includes(' A2 ')).length, 2);
+});
+
+test('typed analysis accepts the interrupted wait and resuming entry cut from the passing run', t => {
+  const { dir, input } = setup(t);
+  const rows = readers.readTranscript(path.join(fixture, '20261022T201923Z-interrupt-c.jsonl')).map(row => {
+    const value = JSON.parse(JSON.stringify(row).replaceAll('job-mvjziwe3-c90046ab', 'job-c-codex')
+      .replaceAll('20261022T201923Z-typed-terminal-a8d4', 'synthetic-run'));
+    value.timestamp = new Date(Date.parse(row.timestamp) - (10 * 60 + 20) * 60000).toISOString();
+    return value;
+  });
+  rows.at(-1).uuid = 'entry-C1-codex';
+  lines(path.join(dir, 'transcript/subagents/agent-c-codex.jsonl'), rows);
+  edit(dir, 'run.json', run => { run.typed.codex.C1.sentAt = '2026-10-22T10:00:31.293Z'; });
+  const row = typed.analyze(input).results[0];
+  assert.equal(row.result, 'pass', row.reason);
 });

@@ -82,7 +82,7 @@ test("end to end: typed text steers at the relay's next call and text after hand
   assertLedger(ctx, jobId, [during, after]);
 });
 
-test("end to end under the Workflow harness: typed text steers at the next call and a fenced state block passes the stop", async (t) => {
+test("end to end under the Workflow harness: typed text steers at the next call and only one allowed outer fence passes the stop", async (t) => {
   const ctx = relayContext("job", { workflow: "wf_typed-001", turnMs: 100 });
   ctx.append(ctx.userRequest(), ctx.workflowPrompt("computedTask", "[held] Typed-message Workflow brief."),
     ctx.environment(), ctx.snapshot("string"), ctx.systemReminder());
@@ -112,9 +112,23 @@ test("end to end under the Workflow harness: typed text steers at the next call 
   assert.equal(blocked.status, 0, blocked.stderr);
   assert.equal(blocked.json?.decision, "block");
   assert.equal(blocked.json.reason, "Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else:\n" + block);
-  const stopped = await stop("```text\n" + block.trimEnd() + "\n```");
-  assert.equal(stopped.status, 0, stopped.stderr);
-  assert.equal(stopped.stdout, "");
+  for (const text of [
+    "```passed-your-message-on.to.the-job\n" + block + "```",
+    "```I passed your message on to the job\n" + block + "```",
+    block.replace("\n", "\n```I passed your message on to the job\n"),
+    block.replace("\n", "\n```\n"),
+    "````text\n" + block + "```",
+    "````\n```text\n" + block + "```\n````"
+  ]) {
+    const rejected = await stop(text);
+    assert.equal(rejected.status, 0, rejected.stderr);
+    assert.equal(rejected.json?.decision, "block", text);
+  }
+  for (const tag of ["", "text", "txt", "plaintext", "markdown", "md"]) {
+    const stopped = await stop("\n \t\n````" + tag + " \t\n" + block.trimEnd() + "\n````\n \t");
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(stopped.stdout, "", tag);
+  }
   assertLedger(ctx, jobId, [typed]);
 });
 

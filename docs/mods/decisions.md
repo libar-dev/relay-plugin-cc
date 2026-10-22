@@ -557,9 +557,10 @@ Two defects, one rule: the relay's final message is the job's result, nothing of
 - **One code fence around the result is not a difference.** The e2e suite's first full run on dev.4 had a Haiku
   relay without `SubagentHandback` end with the exact result inside a ```` ``` ```` fence nine times; the exact
   compare blocked each, and the relay was let go after eight blocks with no hand-back recorded. The compare now
-  removes one fence wrapping the whole message, with at most a language tag after the opening backticks, so the
+  removes one fence wrapping the whole message, with no tag or one of `text`, `txt`, `plaintext`, `markdown` and `md`
+  after the opening backticks, so the
   relay cannot hide words there; anything else still fails, and the block's text says "with no code fence around
-  it". The Workflow path already ignored fences.
+  it". The Workflow path, which ignored every fence line, now takes the same one outer fence and no other.
 
 What still lets a relay go, as before and recorded or by design: the block budget (eight blocks), a hook that fails,
 and a relay whose start failed, which has no job and keeps its hand-back exemption.

@@ -71,6 +71,25 @@ function handback(loaded, agent, entries, after) {
   return last;
 }
 
+function interruptedRedirect(entries, entry, receipt, job) {
+  if (entry.type !== 'user' || entry.origin?.kind !== 'human') throw new Error('C1 was not a resuming human user entry.');
+  const before = entries.slice(0, entries.indexOf(entry));
+  const note = before.findLastIndex(row => row.type === 'user' &&
+    textContent(row.message?.content) === '[Request interrupted by user for tool use]');
+  const rejected = before.slice(0, note).findLast(row => row.type === 'user' &&
+    Array.isArray(row.message?.content) && row.message.content.some(block => block.type === 'tool_result' &&
+      block.is_error && (row.toolDenialKind === 'user-rejected' || /tool use was rejected/.test(textContent(block.content))) &&
+      before.slice(0, before.indexOf(row)).some(call => call.type === 'assistant' &&
+        Array.isArray(call.message?.content) && call.message.content.some(tool => tool.type === 'tool_use' &&
+          tool.id === block.tool_use_id && /companion\.mjs["']?\s+wait\s/.test(tool.input?.command ?? '') &&
+          tool.input.command.includes(job.id)))));
+  if (note < 0 || !rejected || !(Date.parse(rejected.timestamp) <= Date.parse(before[note].timestamp)) ||
+      !(Date.parse(before[note].timestamp) < Date.parse(receipt.sentAt)) ||
+      !(Date.parse(receipt.sentAt) <= Date.parse(entry.timestamp))) {
+    throw new Error('C1 lacks an interrupted wait before its typing receipt and resuming entry.');
+  }
+}
+
 function delivery(input, loaded, receipt, line, backend) {
   const { job, jobDir } = loaded;
   const text = typedLine(input.runId, backend, line);
@@ -78,6 +97,7 @@ function delivery(input, loaded, receipt, line, backend) {
   const entries = readTranscript(path.resolve(input.jobsHome, job.relay.transcriptPath));
   const matches = entries.filter(entry => humanText(entry) === text);
   if (matches.length !== 1 || !matches[0].uuid) throw new Error(`Expected exactly one human transcript entry for ${line}.`);
+  if (line === 'C1') interruptedRedirect(entries, matches[0], receipt, job);
   const uuid = matches[0].uuid;
   const ledger = recordsFor(jobDir).filter(record => path.basename(record.file, '.json') === uuid || record.message === text);
   if (ledger.length !== 1 || path.basename(ledger[0].file, '.json') !== uuid) throw new Error(`Expected exactly one ledger record for ${line}.`);
@@ -128,7 +148,7 @@ function footer(screen) {
   return main < 0 ? [] : rows.slice(main);
 }
 
-export async function typeInView(ctx, name, text, { agentCount, drive = pane, sleep = pause, now = Date.now, beforeSend = () => {}, check = () => {}, interrupt = false, followup } = {}) {
+export async function typeInView(ctx, name, text, { agentCount, drive = pane, sleep = pause, now = Date.now, beforeSend = () => {}, beforeInterrupt = () => {}, check = () => {}, interrupt = false, followup } = {}) {
   let step = 0;
   let screenFile;
   const screen = () => {
@@ -148,10 +168,10 @@ export async function typeInView(ctx, name, text, { agentCount, drive = pane, sl
   const prompt = name => value => name === 'main' ? /^\s*❯\s*[^\n]*$/m.test(value) && !value.includes('Message @') &&
     footer(value).some(row => row.name === 'main' && row.viewed) && !footer(value).some(row => row.selected) :
     viewPrompt(value) && footer(value).length > 0 && !footer(value).some(row => row.selected);
-  const key = async (key, expected, why, timeoutMs = 5000) => {
+  const stepUntil = async (action, expected, why, timeoutMs = 5000) => {
     check();
     const started = now(), deadline = started + timeoutMs;
-    drive(['keys', ctx.run.pane, key]);
+    drive([action === 'send' ? 'send' : 'keys', ctx.run.pane, action === 'send' ? text : action]);
     let value, settled = false, reads = 0;
     while (now() < deadline) {
       await sleep(Math.min(200, deadline - now()));
@@ -164,11 +184,15 @@ export async function typeInView(ctx, name, text, { agentCount, drive = pane, sl
       settled = expected(value);
     }
     fs.appendFileSync(path.join(ctx.evidenceDir, 'typed-navigation.jsonl'), JSON.stringify({
-      agent: name, text, key, expected: why, elapsedMs: now() - started, timeoutMs, reads, settled, screen: screenFile
+      agent: name, text, key: action, expected: why, elapsedMs: now() - started, timeoutMs, reads, settled, screen: screenFile
     }) + '\n');
     verify(value, () => settled, why);
     return value;
   };
+  const key = stepUntil;
+  const send = () => stepUntil('send', value => prompt(name)(value) &&
+    value.slice(0, value.lastIndexOf('❯')).replace(/\s+/g, ' ').includes(text),
+  `${name}'s cleared prompt and submitted text`);
   const walk = async (value, direction, expected, why) => {
     for (let presses = 0; presses < agentCount + 2; presses++) {
       if (expected(value)) return value;
@@ -187,29 +211,31 @@ export async function typeInView(ctx, name, text, { agentCount, drive = pane, sl
   const opened = await key('Enter', value => viewPrompt(value) && footer(value).some(row => row.name === name && row.viewed), `${name}'s view`);
   await walk(opened, 'Up', prompt(name), `${name}'s prompt`);
   if (interrupt) {
+    check(); beforeInterrupt();
     await key('Escape', value => prompt(name)(value) && /\bInterrupted\b/.test(value), `${name}'s interrupted prompt`, 15000);
     await sleep(3000);
     verify(screen(), prompt(name), `${name}'s prompt after the interrupt`);
   }
-  check(); beforeSend(); drive(['send', ctx.run.pane, text]); await sleep(250);
-  verify(screen(), value => value.includes(`Message @${name}`), `${name}'s view after typing`);
+  check(); beforeSend(); await send();
   if (followup) {
     // A finished relay can disappear from the footer unless its view stays open.
     await followup.ready();
     text = followup.text;
+    const idleBy = now() + 30000;
     while (true) {
       const value = screen();
       verify(value, prompt(name), `${name}'s focused prompt before A2`);
       if (footer(value).some(row => row.name === name && row.viewed && row.idle)) break;
-      await sleep(1000);
+      verify(value, () => now() < idleBy, `${name}'s idle row within 30 seconds`);
+      await sleep(Math.min(1000, idleBy - now()));
     }
-    check(); followup.beforeSend(); drive(['send', ctx.run.pane, text]); await sleep(250);
-    verify(screen(), value => value.includes(`Message @${name}`), `${name}'s view after typing`);
+    check(); followup.beforeSend(); await send();
     await followup.delivered();
   }
   const returning = await key('Down', value => cursor(value) !== null, 'a selected footer row');
   await walk(returning, 'Up', selected('main'), 'selector on main');
-  await key('Enter', value => footer(value).some(row => row.name === 'main' && row.viewed) && !value.includes('Message @'), 'the main view');
+  await key('Enter', value => selected('main')(value) && footer(value).some(row => row.name === 'main' && row.viewed) &&
+    !value.includes('Message @'), 'the main view with selector on main');
   await key('Up', prompt('main'), 'the main prompt');
 }
 
@@ -241,15 +267,56 @@ export default {
     const input = () => ({ ...run, jobsHome: ctx.jobsHome, evidenceDir: ctx.evidenceDir });
     const entries = () => scopeToRun(readTranscript(run.transcript), run.runId);
     const evidence = { agents: [], transcripts: [] }, jobs = [];
-    const waitFor = async predicate => {
+    const waitFor = async (pending, until, label, fail = true) => {
+      const bound = Math.min(deadline, Number.isFinite(until) ? until : now());
+      let diagnostic;
       while (true) {
-        check();
-        try { if (predicate()) return; }
+        signal?.throwIfAborted();
+        if (run.interrupted) throw new Error('Interrupted.');
+        try { diagnostic = pending(); }
         catch (error) {
           if (!error.message.startsWith('Invalid JSON at ')) throw error;
+          diagnostic = error.message;
         }
-        await sleep(1000);
+        if (!diagnostic) return;
+        if (now() >= bound) {
+          const file = `typed-${label}-timeout.txt`;
+          fs.writeFileSync(path.join(ctx.evidenceDir, file), String(drive(['read', run.pane, '0'])));
+          const message = `${label}: ${diagnostic}; screen saved in ${file}.`;
+          if (fail) throw new Error(message);
+          return message;
+        }
+        await sleep(Math.min(1000, bound - now()));
       }
+    };
+    const lineRecords = (item, line) => {
+      const text = run.typed[item.backend][line].text;
+      const file = path.resolve(ctx.jobsHome, item.A.job.relay.transcriptPath);
+      const uuids = new Set((fs.existsSync(file) ? readTranscript(file) : [])
+        .filter(entry => humanText(entry) === text).map(entry => entry.uuid));
+      return recordsFor(item.A.jobDir).filter(record => record.message === text || uuids.has(path.basename(record.file, '.json')));
+    };
+    const ledgerPending = (item, line) => {
+      const records = lineRecords(item, line);
+      // Duplicates are evidence to validate, not an operation still in flight.
+      return records.length > 1 || records.some(record => record.status === 'done') ? null :
+        `${line} ledger ${records.length ? `status is ${records[0].status}` : 'record is missing'} for ${item.a.name}`;
+    };
+    const handbackPending = (item, after) => {
+      item.A = relayJob(input(), evidence, item.a.agentId);
+      const file = path.join(item.A.jobDir, 'relay-handbacks.jsonl');
+      const returned = fs.existsSync(file) ? readTranscript(file).at(-1) : null;
+      const completed = notices(entries(), item.a).filter(notice => notice.text.includes('<status>completed</status>'));
+      // A completion without the guard's hand-back is already a permanent validation failure.
+      if (completed.some(notice => Date.parse(notice.at) >= Date.parse(after)) &&
+          !(Date.parse(returned?.at) >= Date.parse(after))) return null;
+      if (!['completed', 'failed', 'cancelled'].includes(item.A.job.state) ||
+          !item.A.job.attempts.at(-1)?.endedAt) return `${item.a.name}'s turn has not ended`;
+      if (!(Date.parse(returned?.at) >= Date.parse(after))) return `Missing hand-back for ${item.a.name} after delivery`;
+      if (!completed.some(notice => Date.parse(notice.at) >= Date.parse(returned.at))) {
+        return `Missing completed notice for ${item.a.name} after hand-back`;
+      }
+      return null;
     };
     try {
       await ctx.paneDriver(ctx, this, { keep: true, drive });
@@ -270,7 +337,9 @@ export default {
       };
       const type = (item, line, followup) => typeInView(ctx, item[line[0].toLowerCase()].name,
         typedLine(run.runId, item.backend, line), { agentCount: parsed.spawns.length, drive, sleep, now, check, interrupt: line === 'C1',
-          beforeSend: () => receipt(item, line), followup });
+          beforeInterrupt: () => {
+            if (readJob(item.C.jobDir).state !== 'running') throw new Error(`${item.c.name} is no longer running before Escape.`);
+          }, beforeSend: () => receipt(item, line), followup });
       for (const item of jobs) {
         await type(item, 'B1');
         check();
@@ -281,35 +350,27 @@ export default {
       for (const item of jobs) {
         await type(item, 'A1', {
           text: typedLine(run.runId, item.backend, 'A2'),
-          ready: () => waitFor(() => {
+          ready: async () => {
+            const until = now() + (60 + 40 * run.backends.length + 150 * run.backends.indexOf(item.backend) + 120) * 1000;
+            await waitFor(() => ledgerPending(item, 'A1'), until, `${item.a.name}-A1-ledger`);
             item.A = relayJob(input(), evidence, item.a.agentId);
-            try {
-              const delivered = delivery(input(), item.A, run.typed[item.backend].A1, 'A1', item.backend);
-              handback(item.A, item.a, entries(), delivered.postedAt); return true;
-            } catch { return false; }
-          }),
+            const records = lineRecords(item, 'A1');
+            if (records.length !== 1 || !Number.isFinite(Date.parse(records[0].postedAt))) {
+              delivery(input(), item.A, run.typed[item.backend].A1, 'A1', item.backend);
+            }
+            await waitFor(() => handbackPending(item, records[0].postedAt), until, `${item.a.name}-A1-handback`);
+            const delivered = delivery(input(), item.A, run.typed[item.backend].A1, 'A1', item.backend);
+            handback(item.A, item.a, entries(), delivered.postedAt);
+          },
           beforeSend: () => receipt(item, 'A2'),
-          delivered: () => waitFor(() => recordsFor(item.A.jobDir).some(record =>
-            record.message === run.typed[item.backend].A2.text))
+          delivered: async () => {
+            await waitFor(() => ledgerPending(item, 'A2'), now() + 60000, `${item.a.name}-A2-ledger`);
+            item.a2 = lineRecords(item, 'A2')[0];
+          }
         });
-      }
-      const last = jobs.at(-1);
-      const record = recordsFor(last.A.jobDir).find(record => record.message === run.typed[last.backend].A2.text);
-      const at = Date.parse(record.at);
-      const settledBy = Math.min(deadline, Number.isFinite(at) ? at + 120000 : now());
-      // Only A2's hand-back and notice can still be pending; analysis failures cannot settle.
-      while (now() < settledBy) {
-        check();
-        try {
-          const file = path.join(last.A.jobDir, 'relay-handbacks.jsonl');
-          const returned = fs.existsSync(file) ? readTranscript(file).at(-1) : null;
-          if (returned?.agentId === last.a.agentId && Date.parse(returned.at) >= at &&
-              notices(entries(), last.a).some(notice => notice.text.includes('<status>completed</status>') &&
-                Date.parse(notice.at) >= Date.parse(returned.at))) break;
-        } catch (error) {
-          if (!error.message.startsWith('Invalid JSON at ')) throw error;
-        }
-        await sleep(Math.min(1000, settledBy - now()));
+        const diagnostic = await waitFor(() => handbackPending(item, item.a2.postedAt), Date.parse(item.a2.at) + 120000,
+          `${item.a.name}-A2-handback`, false);
+        if (diagnostic) { run.typed[item.backend].A2.settleError = diagnostic; ctx.save(); }
       }
       signal?.throwIfAborted();
       if (run.interrupted) throw new Error('Interrupted.');
@@ -320,13 +381,30 @@ export default {
       run.completed = false; run.error = error.message; ctx.save(); throw error;
     } finally {
       try {
-        for (const item of jobs) for (const scenario of ['B', 'C']) {
-          const loaded = item[scenario];
-          if (['completed', 'failed', 'cancelled'].includes(readJob(loaded.jobDir).state)) continue;
-          if (scenario === 'C' && run.typed[item.backend].C1) {
-            run.typed[item.backend].C1.cleanupAt = new Date(now()).toISOString(); ctx.save();
+        const started = new Map(jobs.flatMap(item => ['A', 'B', 'C'].map(scenario =>
+          [item[scenario].jobDir, { backend: item.backend, scenario, loaded: item[scenario] }])));
+        // Startup or navigation can fail before the normal job inventory is complete.
+        if (run.transcript && fs.existsSync(run.transcript)) {
+          for (const agent of transcriptCalls(entries()).spawns) {
+            const scenario = ['a', 'b', 'c'].find(value => agent.name === `typed-${value}-${agent.backend}`);
+            if (!scenario || !run.backends.includes(agent.backend)) continue;
+            try {
+              const loaded = relayJob(input(), evidence, agent.agentId);
+              started.set(loaded.jobDir, { backend: agent.backend, scenario: scenario.toUpperCase(), loaded });
+            } catch { /* A spawn may not have created a job yet. */ }
           }
-          await companionRunner(ctx, ['cancel', loaded.jobDir]);
+        }
+        for (const { backend, scenario, loaded } of started.values()) {
+          const receipts = ((run.typed ??= {})[backend] ??= {});
+          const receipt = (receipts[`${scenario}1`] ??= {});
+          try {
+            if (['completed', 'failed', 'cancelled'].includes(readJob(loaded.jobDir).state)) continue;
+            receipt.cleanupAt = new Date(now()).toISOString(); ctx.save();
+            await companionRunner(ctx, ['cancel', loaded.jobDir]);
+          } catch (error) {
+            receipt.cleanupError = error.message;
+          }
+          ctx.save();
         }
       } finally {
         if (run.pane) drive(['stop', run.pane]);
@@ -356,10 +434,13 @@ export default {
         if (parsed.sends.some(send => send.agentId === agent.agentId)) throw new Error(`Lead sent a message to ${agent.name}.`);
       }
       const receipt = run.typed?.[backend];
+      if (receipt?.A2?.settleError) throw new Error(receipt.A2.settleError);
       const a1 = delivery(input, A, receipt?.A1, 'A1', backend);
       const a2 = delivery(input, A, receipt?.A2, 'A2', backend);
       const b1 = delivery(input, B, receipt?.B1, 'B1', backend);
       const c1 = delivery(input, C, receipt?.C1, 'C1', backend);
+      const stop = notices(entries, c).find(notice => notice.text.includes('was stopped by user</summary>'));
+      if (!(Date.parse(stop.at) < Date.parse(c1.at))) throw new Error('C stop notice did not precede C1 delivery.');
       // Cleanup follows the final analysis; saved evidence must still replay then.
       const cleanup = Date.parse(receipt.C1.cleanupAt);
       const afterCheck = cleanup >= Date.parse(run.checkFinishedAt) && cleanup >= Date.parse(c1.postedAt);
