@@ -190,7 +190,8 @@ function moduleFailed($, e, next, sub) {
   return errorText(e, "The relay module failed while answering it: " + why + ". Run " + companionShell($, sub, e.args) + " in a shell to see its output.");
 }
 
-const UNAVAILABLE = "relay: status unavailable";
+// Claude Code draws a plugin's status line after the plugin's name ("relay: "), so the text leaves it out.
+const UNAVAILABLE = "status unavailable";
 
 // The status line's text for one run of the listing: the line, undefined to clear it, or null to
 // keep it as it is, since a busy listing only means a job's record was changing.
@@ -236,7 +237,7 @@ function statusText(ran) {
   if (owed > 0) {
     parts.push(owed + " owed");
   }
-  return parts.length === 0 ? undefined : "relay: " + parts.join(" · ");
+  return parts.length === 0 ? undefined : parts.join(" · ");
 }
 
 // One read of the listing, as statusText reads it; a run that failed shows the line is unavailable.

@@ -828,7 +828,7 @@ test('the line counts running, dead and owed jobs, leaves out a part at 0, and c
     await seen.clock.advance(5000)
   }
 
-  expect(seen.lines).toEqual(['relay: 2 running', 'relay: 2 running · 1 dead · 23 owed', 'relay: 1 dead', 'relay: 2 owed', undefined])
+  expect(seen.lines).toEqual(['2 running', '2 running · 1 dead · 23 owed', '1 dead', '2 owed', undefined])
 })
 
 test('with more pages, the running count carries a +', async ($, on) => {
@@ -838,7 +838,7 @@ test('with more pages, the running count carries a +', async ($, on) => {
 
   await seen.clock.advance(5000)
 
-  expect(seen.lines).toEqual(['relay: 2+ running · 1 dead'])
+  expect(seen.lines).toEqual(['2+ running · 1 dead'])
 })
 
 test('a busy listing keeps the line, and the next good answer replaces it', async ($, on) => {
@@ -849,7 +849,7 @@ test('a busy listing keeps the line, and the next good answer replaces it', asyn
   await seen.clock.advance(15000)
 
   expect(seen.runs).toHaveLength(3)
-  expect(seen.lines).toEqual(['relay: 1 running', 'relay: 1 dead'])
+  expect(seen.lines).toEqual(['1 running', '1 dead'])
 })
 
 test('every other failure shows the status as unavailable until a good answer', async ($, on) => {
@@ -875,7 +875,7 @@ test('every other failure shows the status as unavailable until a good answer', 
   }
 
   expect(seen.runs).toHaveLength(answers.length)
-  expect(seen.lines).toEqual([...Array(answers.length - 1).fill('relay: status unavailable'), 'relay: 1 running'])
+  expect(seen.lines).toEqual([...Array(answers.length - 1).fill('status unavailable'), '1 running'])
 })
 
 test('a tick while a read is in flight runs nothing', async ($, on) => {
@@ -894,9 +894,9 @@ test('a tick while a read is in flight runs nothing', async ($, on) => {
   held = false
   answer({ value: listing([job('j-1', 'running')]) })
   await seen.clock.settle()
-  expect(seen.lines).toEqual(['relay: 1 running'])
+  expect(seen.lines).toEqual(['1 running'])
 
   await seen.clock.advance(5000)
   expect(seen.runs).toHaveLength(2)
-  expect(seen.lines).toEqual(['relay: 1 running', 'relay: 1 dead'])
+  expect(seen.lines).toEqual(['1 running', '1 dead'])
 })
