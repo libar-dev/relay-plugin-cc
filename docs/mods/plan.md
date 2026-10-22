@@ -1,9 +1,10 @@
 # Relay and Claude Code Mods: the plan
 
 Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. Phase 1 and Phase 5's suite
-runner are done on the branch `release/3.0`, and the later phases were reviewed in the light of each
-([After Phase 1](#after-phase-1-what-held-and-what-changed),
-[After the suite runner](#after-the-suite-runner-what-held-and-what-changed)). Phases 1 to 5 ship together as relay 3.0.0
+runner are done on the branch `release/3.0`, Phase 6's investigation is reported, and the later phases were
+reviewed in the light of each ([After Phase 1](#after-phase-1-what-held-and-what-changed),
+[After the suite runner](#after-the-suite-runner-what-held-and-what-changed),
+[After Phase 6](#after-phase-6-what-held-and-what-changed)). Phases 1 to 5 ship together as relay 3.0.0
 ([release-3.0.md](release-3.0.md)); every decision taken on the way is in [decisions.md](decisions.md).
 It combines three independent plans in this directory:
 
@@ -78,7 +79,7 @@ agent. These are the calls where the two still differ, and what this plan does a
 | `SendMessage` after it ends | continues it with its context | a new turn on the same backend session | unchanged: already the same |
 | `TaskStop` | stops it | stops only the relay; the job keeps running | stops the relay and cancels the job |
 | Spawn with a bad parameter | the Agent call fails at once | a relay starts, `start` fails, the relay hands the error back | the Agent call, or the Workflow `agent()`, fails at once with the parser's message |
-| A message from the agent to its parent or a peer | `SendMessage` | not possible: a backend has no way to send one | investigated in Phase 6 |
+| A message from the agent to its parent or a peer | `SendMessage` | not possible: a backend has no way to send one | possible on every backend, as the relay's own `SendMessage` ([Phase 6](messages-from-a-job.md)); not built in 3.0 |
 
 **How a steer travels today.** The lead's `SendMessage` queues the message for the relay agent. The relay is a
 Haiku agent blocked in `companion wait`, which the guard bounds at 120 seconds. When the wait returns, the relay
@@ -379,11 +380,66 @@ given a "send to lead" tool (an MCP server the relay adds to the job) whose mess
 `$.session.send` as the relay agent's own. Report what each backend allows, and how a reply would find its way
 back, before writing any code.
 
+**Reported** in [messages-from-a-job.md](messages-from-a-job.md), measured on all four backends, in the terminal
+and in T3:
+
+- Every backend takes a client-supplied stdio MCP server for one session, with the environment relay gives it,
+  and must be given it again on every open. The modes where its call is allowed, how long one call may wait
+  (30 s on ZCode, 60 s on Kimi, 300 s on Codex), and whether a steer reaches the model while the call waits (only
+  on Codex) differ, and the report has the table.
+- The module cannot deliver the message as the relay's: a module's `$.session.send` always sends as the main
+  conversation, and `"main"` refuses it. The relay agent can send it itself, with `SendMessage`, its `message`
+  and `to` rewritten by the guard with `updatedInput`, as the guard rewrites a hand-back. The lead then reads the
+  job's exact text from the relay, and an idle lead starts a turn on it.
+- A reply to a note is the steer or continue that exists. The answer to a question the job waits on must be the
+  waiting call's result: Grok and ZCode hold a steer until the call returns, and Kimi refuses it.
+
+Building it is a later plan ([Later plans](#later-plans)).
+
+### After Phase 6: what held and what changed
+
+Assumptions that held:
+
+- A backend can be given a tool by the client, on all four, without writing into the user's home.
+- The guard's ledger can stay the one way a message reaches a job; the answer to a question is a second consumer
+  of it, not a second path.
+- Messages to a main thread reach it from any agent, and an idle main thread starts a turn on one, in T3 too
+  (unlike a Monitor, D18).
+
+What changed, and where:
+
+- **The plan's delivery path does not exist.** `$.session.send` carries no sender agent, whatever loop calls it.
+  A job's message would be the relay's own `SendMessage` (D52).
+- **A message by id to a running Workflow agent forks it.** Claude Code starts a second loop under the same id,
+  and the original loop never reads the message. For a `relay:job` Workflow agent the steer still reached the
+  job, through the second relay loop, which waited on the job beside the first and sent the lead an extra
+  completion notice. A message to a Workflow relay that has ended fails ("No transcript found"), or resumes a
+  `general-purpose` agent on the lead's model that answers in the relay's place; the job gets no turn. Phase 1
+  and the suite never sent to a Workflow relay: every relay they steered was started with the Agent tool.
+
+The later phases, in this light:
+
+- **Phases 2 and 3.** Unchanged. Phase 3's `agent.spawn` hook already lets a resume through
+  (`agent.spawn` fires with `resume` and the message as the prompt when a message resumes a relay). Its hook is
+  where relay would record a relay's parent from `parentAgentId`, when messages from a job are built.
+- **Phase 4.** D17's Steer and Continue by the recorded relay id hold for relays started with the Agent tool. For
+  a Workflow relay, a Steer would start a second relay loop, and a Continue would not reach the job (D53). Phase 4
+  decides what the buttons do for a Workflow job: `C steer` and `C continue` exist for scripts. Its live checks
+  include a steer and a continue of a Workflow relay from the lead's session, the check D17 already asked for.
+- **Phase 5's suite.** The rows for messages from a job stay out of the table. A later check would send a note
+  to an idle and a busy lead, a note to a peer, an answered question and one that runs out, per backend and
+  surface, and from a Workflow relay.
+- **The release.** The jobs skill and `agents/job.md` say that `SendMessage` after a relay ends continues its job.
+  For a Workflow relay it does not; the release PR states it beside the skill's existing `C continue` advice.
+
 ## Later plans
 
 These features are being considered and will get plans of their own. They are listed here so that this plan
 leaves room for them:
 
+- **Messages from a job.** A "send to lead" and an "ask the lead" tool for jobs, delivered as the relay's own
+  `SendMessage`. Phase 6's [report](messages-from-a-job.md) has the per-backend facts, a design and the live
+  checks it would need.
 - **Model-family guidance.** How each model family behaves, what it does well, and how families complement each
   other in one piece of work.
 - **Orchestration strategies for different kinds of work**, such as planning a coding session, executing one,
@@ -444,7 +500,7 @@ The funding principles ([funding.md](funding.md)) add no product feature. Four p
 - **A capability matrix proved by tests** ("compatibility is earned by tests"). Phase 5 makes the live acceptance
   checks a scripted suite whose records back such a table. Its rows line up with this plan: steering during
   execution (Phase 1), continue (unchanged), stop (Phase 3), dynamic Workflow joining (Phase 3's spawn check),
-  and agent-to-parent and agent-to-agent messages (Phase 6, unsupported until proven).
+  and agent-to-parent and agent-to-agent messages (Phase 6: possible, not built in 3.0, unsupported until proven).
 - **A short demo** of steering a running job while a second agent joins. It needs Phase 1's
   two-second steer to be watchable, and the board to be visible. That is one more reason the terminal board is in
   scope.

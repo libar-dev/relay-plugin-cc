@@ -228,3 +228,32 @@ folder that is gone after the run. This is the one stored choice the tooling mak
 and only for a folder the runner created. A folder the caller names must already be a git work tree, which the
 runner never initializes, and already trusted: when Claude Code asks, the run stops. D13's rule holds for every other dialog. Reopen if Claude Code gets a per-session
 trust flag.
+
+### D51. Phase 6's PR raises no version (Phase 6 thread)
+
+Phase 6 is a report. No code of the plugin changes, only its CHANGELOG, so no build gets a new `3.0.0-dev.N`
+(D6 numbers builds). Its PR adds docs, the plan's review and a CHANGELOG line, and passes the gates that apply to docs: the
+tests, the checks, `claude plugin validate` and `claude plugin test`, CI, a review by two model families and the
+bots. It adds no live check, so it commits no records.
+
+### D52. A job's message would be the relay's own `SendMessage` (Phase 6 thread)
+
+The plan had the module deliver a job's message with `$.session.send` as the relay agent's own. Measured in
+2.1.308, a module's send always comes from the main conversation: it carries no sender agent from any loop, an
+`agentId` passed to it is dropped, `"main"` refuses it, and a peer reads it as the coordinator's. The relay agent
+can send as itself: it gets the `SendMessage` tool, and the `PreToolUse` guard rewrites the call's `message` and
+`to` with `updatedInput` from the job's outbox, under the relay lock, once per message. The relay never sees the
+text. The answer to a question the job waits on goes back as the waiting tool call's result, not as a steer:
+Grok and ZCode hold a steer until the call returns, and Kimi refuses it. Rejected: a module `session.send` hook
+that rewrites the relay's send (it works, but it would be a second delivery path beside the guard's ledger, and
+it works only where the module loads). The report has the evidence
+([messages-from-a-job.md](messages-from-a-job.md)). Reopen if Claude Code lets a module send as an agent.
+
+### D53. D17 covers relays started with the Agent tool (Phase 6 thread)
+
+D17 has Phase 4's Steer and Continue send to the job's recorded relay id. In 2.1.308 a message by id to a running
+Workflow agent starts a second loop of it. For a `relay:job` Workflow agent the steer still reached the job,
+through that second relay loop. A message to a Workflow relay that has ended fails, or resumes a
+`general-purpose` agent that answers in the relay's place, and the job gets no turn. So D17 holds as decided for
+relays the Agent tool started. What the buttons do for a Workflow job is Phase 4's to decide, with a live check of
+both cases from the lead's session. `C steer` and `C continue` already reach a job without its relay.

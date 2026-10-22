@@ -25,7 +25,8 @@ it: where the work goes, what each step must pass, and how the work was done in 
    rebases.
 4. **Phase 4**, in this order: the companion's `--json` changed in place (the board reads it), the status line,
    the board pane.
-5. **Phase 6**, the investigation report, at any point. No code.
+5. **Phase 6**, the investigation report, at any point. No code. Reported in
+   [messages-from-a-job.md](messages-from-a-job.md).
 6. **The release PR**, `release/3.0` into `main`.
 
 ## What a phase PR must pass
@@ -92,3 +93,11 @@ What worked in Phase 1:
 - `$.agent.list()` holds no Workflow agent. A message from another agent reaches a relay as origin kind `peer`.
 - Never set `CLAUDE_CONFIG_DIR` and never answer a dialog that stores a choice (D13). Check
   `~/.claude/settings.json` against a copy taken before a live run.
+
+## What Phase 6 learned about the tools
+
+- A `SendMessage` from a background subagent or a Workflow agent to `"main"` starts a turn of an idle main thread,
+  in the terminal and in T3. A busy one reads it when its current tool call returns.
+- A message by agent id to a running Workflow agent starts a second loop of that agent, and the original loop
+  never reads it. A message to a Workflow agent that has ended fails, or resumes it as `general-purpose`.
+- A module's `$.session.send` always sends as the main conversation, from any loop.
