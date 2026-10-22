@@ -87,6 +87,9 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     assert.equal(job.automaticResumes.length, 1);
     assert.equal(job.attempts.length, 2);
     assert.equal(job.attempts[1].automatic, true);
+    assert.equal(job.attempts[0].state, "dead", "the dead worker's attempt is closed");
+    assert.ok(job.attempts[0].endedAt);
+    assert.equal(job.attempts[1].relayVersion, JSON.parse(fs.readFileSync(new URL("../plugins/relay/.claude-plugin/plugin.json", import.meta.url), "utf8")).version);
     assert.equal(isWorkerAlive(old.server), false, "old app-server is swept after worker-only SIGKILL");
     const state = ctx.fakeState();
     const first = state.threadStarts[0], resumed = state.threadResumes[0];

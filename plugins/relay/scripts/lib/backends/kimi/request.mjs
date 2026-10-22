@@ -27,6 +27,7 @@ export const requestRules = {
   headerKeys: { "kimi-home": "kimiHome" },
   defaultSource: "use Kimi's own default",
   defaultEffort: null,
+  modelFamily: /^kimi-code\//i,
   refusals: {
     mode: { write: ": it has no workspace sandbox, and its shell can write anywhere. Use mode: yolo, or mode: read-only." },
     webSearch: "; ACP cannot remove Kimi's web tools, so only live is supported."

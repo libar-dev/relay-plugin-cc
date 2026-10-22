@@ -209,6 +209,7 @@ test("modes: read-only removes writing tools and allows permission only for read
 test("failed turns, refusals and a server that will not start fail the job with ZCode's words", async t => {
   for (const [options, expected] of [
     [{ failTurn: "Model creation failed", failUnderlying: "Provider Registry has no Model: account:fake-plan/GLM-9" }, /^Model creation failed\nProvider Registry has no Model.*\ncode model_not_found$/],
+    [{ failTurn: "project_token_login_failed" }, /^project_token_login_failed\ncode model_not_found\nZCode's sign-in failed: run `zcode login`, then resume the job\.$/],
     [{ resultType: "error_max_turns" }, /the turn ended with result error_max_turns/],
     [{ rejectSend: true }, /ZCode refused the message \(rejected, proto.fake\): fake refusal/],
     [{ rejectCreate: true }, /ZCode refused the new session \(failed, fault.command.executionFailed\): fake create refusal/],

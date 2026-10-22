@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { absoluteJobsHomeEnv, jobPaths, readJob, TERMINAL_STATES } from "../jobs/store.mjs";
 import { isMessagePending, messageAccount, pendingInboxMessages, postInboxMessage, readOutcome } from "../jobs/messages.mjs";
 import { isWorkerLease, readLease, releaseWorkerLease } from "../jobs/lease.mjs";
+import { inOwnUserScope } from "../util/process.mjs";
 
 export const COMPANION_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..", "companion.mjs");
 
@@ -27,7 +28,8 @@ export function spawnWorker(jobDir, cwd, env = process.env) {
   const paths = jobPaths(jobDir);
   const fd = fs.openSync(paths.stderr, "a");
   try {
-    const child = spawn(process.execPath, [COMPANION_SCRIPT, "worker", jobDir], {
+    const launch = inOwnUserScope(process.execPath, [COMPANION_SCRIPT, "worker", jobDir], { env, description: `relay job worker ${path.basename(jobDir)}` });
+    const child = spawn(launch.command, launch.args, {
       cwd: fs.existsSync(cwd) ? cwd : jobDir,
       env: absoluteJobsHomeEnv(env),
       detached: true,

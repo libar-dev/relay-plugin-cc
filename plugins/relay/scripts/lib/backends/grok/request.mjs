@@ -22,6 +22,7 @@ export const requestRules = {
   headerKeys: { "grok-home": "grokHome" },
   defaultSource: "use Grok's own default",
   defaultEffort: null,
+  modelFamily: /^grok-/i,
   refusals: { webSearch: "; disabling web_search and web_fetch has not been proved in agent mode." },
   priorityTierNote: "fast: true is ignored for Grok; select model: grok-4.7-build-fast instead.",
   complete(request, values, { env }) {

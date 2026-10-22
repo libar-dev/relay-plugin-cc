@@ -251,12 +251,17 @@ function resolveZcodeSelection(request, settings) {
   return { providerId: ref.providerId, modelId: ref.modelId, options: { reasoningLevel: request.effort ?? ZCODE_DEFAULT_EFFORT } };
 }
 
+// ZCode names a failed sign-in in its own words (`project_token_login_failed`). Setup sees only
+// that the credentials file exists, so the job's error says what to run.
+const SIGN_IN_FAILURE = /login_failed|not logged in|unauthori[sz]ed|\b401\b/i;
+
 function turnResult(end, fallbackTurnId) {
   if (!end) return { turnId: fallbackTurnId, turnStatus: "failed", finalMessage: "", error: { message: "ZCode ended the turn without a result." } };
   const finalMessage = String(end.payload.response ?? "");
   if (end.type === "turn.failed") {
     const error = end.payload.error ?? {};
-    const message = [error.message, error.underlyingErrorMessage && error.underlyingErrorMessage !== error.message ? error.underlyingErrorMessage : null, error.code ? `code ${error.code}` : null].filter(Boolean).join("\n");
+    const signIn = SIGN_IN_FAILURE.test(`${error.message ?? ""} ${error.underlyingErrorMessage ?? ""}`) ? "ZCode's sign-in failed: run `zcode login`, then resume the job." : null;
+    const message = [error.message, error.underlyingErrorMessage && error.underlyingErrorMessage !== error.message ? error.underlyingErrorMessage : null, error.code ? `code ${error.code}` : null, signIn].filter(Boolean).join("\n");
     return { turnId: end.turnId, turnStatus: "failed", finalMessage: "", error: { message: message || `ZCode failed the turn in phase ${end.payload.turnPhase ?? "unknown"}.`, data: { code: error.code, type: error.type, retryable: error.retryable } } };
   }
   const result = end.payload.resultType;

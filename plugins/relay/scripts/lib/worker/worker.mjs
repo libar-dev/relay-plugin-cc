@@ -20,6 +20,7 @@ import { truncateCodePoints } from "../util/text.mjs";
 import { acquireWorkerLease, releaseWorkerLease } from "../jobs/lease.mjs";
 import { claimInboxMessages, CLOSED_ACTIONS, newMessageId, owedMessages, pendingInboxMessages, readOutcome, writeOutcome } from "../jobs/messages.mjs";
 import { jobPaths, nowIso, readJob, writeFileAtomic, writeJob } from "../jobs/store.mjs";
+import { PLUGIN_VERSION } from "../util/plugin.mjs";
 import { readProcessStartTime } from "../util/process.mjs";
 import { stopRecordedAppServers, sweptAppServersPatch } from "./recovery.mjs";
 
@@ -327,7 +328,10 @@ async function runWorkerRound(jobDir, options, held) {
   // Begin an attempt: nonterminal state, attempt record and report ownership are written
   // before anything asynchronous, so readers and cancel see the new attempt at once.
   const beginAttempt = (item, extra = {}) => {
-    const attempts = Array.isArray(job.attempts) ? job.attempts : [];
+    // An earlier attempt with no end was the attempt of a worker that died: this worker holds the
+    // lease, so no other runs it. It is closed here, so no attempt reads as running forever.
+    const attempts = (Array.isArray(job.attempts) ? job.attempts : []).map(entry =>
+      entry.endedAt ? entry : { ...entry, state: "dead", endedAt: nowIso(), errorMessage: entry.errorMessage ?? "the worker running this attempt died" });
     if (attempts.length > 0 && fs.existsSync(paths.report)) {
       fs.mkdirSync(paths.attempts, { recursive: true });
       fs.renameSync(paths.report, path.join(paths.attempts, `${attempts.length}-report.md`));
@@ -338,6 +342,7 @@ async function runWorkerRound(jobDir, options, held) {
       automatic: Boolean(item.message?.automatic),
       messageId: item.message?.id ?? null,
       startedAt: nowIso(),
+      relayVersion: PLUGIN_VERSION,
       turnId: null,
       state: "starting"
     };

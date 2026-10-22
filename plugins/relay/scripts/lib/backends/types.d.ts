@@ -102,6 +102,11 @@ export interface RequestRules {
    * "<key>: <value> is not supported for <label>", with its own punctuation.
    */
   refusals: { mode?: Partial<Record<Mode, string>>, webSearch?: string };
+  /**
+   * The model names only this backend runs. A header that names one and no `backend:` is
+   * refused, since the job would go to the default backend.
+   */
+  modelFamily?: RegExp;
   /** The note for an ignored `fast: true` when the backend has no priority tier. */
   priorityTierNote?: string;
   /**

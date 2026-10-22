@@ -94,6 +94,11 @@ still finds its place in another copy of the bundle.
   `turn.started` exists as an event to observe, but Kimi never writes it to the record. Engine
   records and the semantic records travel separate asynchronous paths, so join them by id, never by
   what sits next to what. [source]
+- The order above can break at a turn's end. In one live record (Kimi Code 2.2.0, a review that ran
+  subagents) both turns had `turn.ended` and `prompt.completed` written before the engine's last
+  batch of messages, the final answer included, and `agent.turn.ended` after it. The messages carry
+  no turn id. Relay credits a message to the engine turn running, and a turn ends for relay at its
+  `turn.ended` once its engine turn has ended too, or 10 s after `turn.ended` at most. [live]
 - Kimi's turns come in two kinds. Engine turns are `agent.turn.started` and `agent.turn.ended`.
   Prompt turns are `turn.prompt` and `turn.ended`. A background task's notice that arrives as a
   prompt turn ends runs as a second engine turn inside that prompt turn. [live]

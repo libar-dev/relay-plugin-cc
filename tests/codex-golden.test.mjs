@@ -20,6 +20,7 @@ function normalizer(ctx, id) {
   const walk = (value, key = "") => {
     if (value == null) return value;
     if (["pid", "serverPid"].includes(key)) return "<pid>";
+    if (key === "relayVersion") return "<version>";
     if (key === "startTime" || /^(createdAt|updatedAt|startedAt|endedAt|completedAt)$/.test(key)) return "<time>";
     if (Array.isArray(value)) return value.map(item => walk(item));
     if (typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, walk(v, k)]));

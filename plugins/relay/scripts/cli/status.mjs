@@ -23,7 +23,7 @@ export function handleResult(argv) {
 
 export function handleStatus(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["cwd"],
+    valueOptions: ["cwd", "workflow"],
     booleanOptions: ["json", "all"]
   });
   if (positionals[0]) {
@@ -32,9 +32,13 @@ export function handleStatus(argv) {
     return;
   }
   const cwd = resolveCommandCwd(options);
-  const slug = options.all ? null : repoSlugFor(cwd);
+  // `--workflow <run>`: every job one Workflow run started, in any repository, however many.
+  const workflow = typeof options.workflow === "string" ? options.workflow.trim() : null;
+  const slug = options.all || workflow ? null : repoSlugFor(cwd);
   let dirs = listJobDirs({ slug });
-  if (!options.all) {
+  if (workflow) {
+    dirs = dirs.filter((dir) => readJob(dir)?.relay?.workflowRunId === workflow);
+  } else if (!options.all) {
     // The newest, by each job's record, before any is viewed: only a job the listing shows can
     // make it busy.
     const created = new Map(dirs.map((dir) => [dir, String(readJob(dir)?.createdAt ?? "")]));
@@ -57,5 +61,5 @@ export function handleStatus(argv) {
   }
   const config = readRepoConfig(cwd);
   const header = `jobs-home: ${resolveJobsHome()}\n${slug ? `repo: ${slug}\n` : ""}review-gate: ${config.stopReviewGate ? "enabled" : "disabled"}\nfast-tier: ${readUserConfig().fastTier}\n`;
-  outputResult(header + renderJobList(views, { scope: slug ? "for this repository" : "" }), false);
+  outputResult(header + renderJobList(views, { scope: workflow ? `for workflow ${workflow}` : slug ? "for this repository" : "" }), false);
 }

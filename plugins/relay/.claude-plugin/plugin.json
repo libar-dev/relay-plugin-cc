@@ -1,6 +1,6 @@
 {
   "name": "relay",
-  "version": "2.1.2",
+  "version": "2.2.0",
   "description": "Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents.",
   "author": {
     "name": "Libar"

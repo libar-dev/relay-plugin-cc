@@ -8,7 +8,7 @@ import path from "node:path";
 import { isWorkerAlive } from "./lease.mjs";
 import { isWorkerLease, readLease } from "./lease.mjs";
 import { jobPaths, readJob, TERMINAL_STATES } from "./store.mjs";
-import { messageAccount, readRelayViolations } from "./messages.mjs";
+import { messageAccount, readRelayHandbacks, readRelayViolations } from "./messages.mjs";
 
 export const EXIT = {
   ok: 0,
@@ -63,6 +63,7 @@ export function loadJobView(jobDir, options = {}) {
     const lease = readLease(jobDir);
     const account = messageAccount(jobDir);
     const relayViolations = readRelayViolations(jobDir);
+    const handbacks = readRelayHandbacks(jobDir);
     const again = readJob(jobDir);
     if (!again || jobVersion(again) !== jobVersion(job)) {
       if (pass < VIEW_READS) continue;
@@ -77,7 +78,7 @@ export function loadJobView(jobDir, options = {}) {
     const undelivered = workerLive ? [] : account.undelivered;
     return {
       job, jobDir, paths, ...view, hasReport, report: hasReport ? read.text : null, reportPath: hasReport ? read.path : null,
-      undelivered, dropped: account.dropped, relayViolations
+      undelivered, dropped: account.dropped, relayViolations, handbacks
     };
   }
 }
@@ -195,6 +196,14 @@ export function backendSettingLines(request) {
 }
 
 
+// The lines of a state block that say what became of the job: the ones a workflow script reads.
+// Every other line restates the request (model, effort, mode, cwd, the relay's own id), which the
+// script already holds, or only informs (session, note).
+export const OUTCOME_KEYS = new Set([
+  "state", "job", "kind", "duration", "attempts", "report", "dir", "error", "stalled", "relay-violation",
+  "undelivered", "not-delivered", "automatic-resume", "relay-adopted", "capacity-retries"
+]);
+
 export function renderJobBlock(view) {
   const { job } = view;
   const request = job.request ?? {};
@@ -291,6 +300,19 @@ function firstLine(text) {
   );
 }
 
+// When a relay handed back the ended result of the job's last attempt; null when none did (yet).
+// A relay let go while the job ran handed back no result, though its hand-back is recorded.
+export function handedBackAt(view) {
+  const attempts = Array.isArray(view.job.attempts) ? view.job.attempts.length : 0;
+  return (view.handbacks ?? []).findLast((entry) => entry.attempts === attempts && isTerminalView(entry))?.at ?? null;
+}
+
+// A relay job whose last attempt ended with no hand-back. Only an attempt that records its
+// version can say: before 2.2.0 no hand-back was recorded.
+function notHandedBack(view) {
+  return Boolean(view.job.relay && isTerminalView(view) && view.job.attempts?.at(-1)?.relayVersion && !handedBackAt(view));
+}
+
 function summarizeJob(view) {
   const { job } = view;
   let summary = job.summary ?? "";
@@ -317,6 +339,7 @@ export function renderJobList(views, options = {}) {
       formatDuration(view.job.createdAt, end) ?? "?",
       summarizeJob(view),
       ...relayListPart(view.job.relay),
+      ...(notHandedBack(view) ? ["not handed back"] : []),
       ...(view.job.automaticResumes?.length ? [`automatic-resumes: ${view.job.automaticResumes.length}`] : [])
     ];
     lines.push(parts.join("  "));
@@ -351,6 +374,7 @@ export function jobViewJson(view) {
     summary: summarizeJob(view),
     relay: view.job.relay ?? null,
     relayViolations: view.relayViolations ?? [],
+    handedBackAt: view.job.relay ? handedBackAt(view) : null,
     automaticResumes: view.job.automaticResumes ?? [],
     attemptRecords: view.job.attempts ?? [],
     server: view.job.server ?? null,

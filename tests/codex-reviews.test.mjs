@@ -155,6 +155,7 @@ test("review records its events and report in a job directory", () => {
   const [{ dir, job }] = findJobDirs(repo);
   assert.equal(job.kind, "review");
   assert.equal(job.state, "completed");
+  assert.equal(job.attempts[0].relayVersion, JSON.parse(fs.readFileSync(new URL("../plugins/relay/.claude-plugin/plugin.json", import.meta.url), "utf8")).version);
   const events = fs.readFileSync(path.join(dir, "events.jsonl"), "utf8");
   assert.match(events, /Reviewed the changed files and checked the likely regression paths/);
   assert.match(events, /"method":"item\/completed"/);

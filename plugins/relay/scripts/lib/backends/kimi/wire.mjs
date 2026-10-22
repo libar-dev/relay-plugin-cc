@@ -53,7 +53,11 @@ const NEWLINE = 0x0a;
 // run of its loop; a prompt turn (`turn.prompt`, `turn.ended`) is what a prompt, or a turn of
 // Kimi's own, asked for. They share ids but not ends: a background task's notice that comes as a
 // prompt turn ends runs as a second engine turn inside that prompt turn. Kimi is busy while
-// either kind runs, and messages belong to the prompt turn.
+// either kind runs, and messages belong to the prompt turn. The engine writes its messages and its
+// own end on one path and `turn.ended` on another, so a turn's last messages can follow its
+// `turn.ended`: a message goes to the engine turn's prompt turn while that engine turn runs. An
+// engine turn with no prompt turn of its own (a notice run inside one) belongs to the prompt turn
+// that ran when it started.
 export class KimiWire {
   /** @param {() => string | null} locate */
   constructor(locate) {
@@ -70,6 +74,8 @@ export class KimiWire {
     this.running = null;
     /** @type {number | null} */
     this.engine = null;
+    /** The prompt turn running when the engine turn started. @type {number | null} */
+    this.engineOwner = null;
     // User messages Kimi kept in its context by id, for a prompt blocked before its input record.
     /** @type {Map<string, string[]>} */
     this.userMessages = new Map();
@@ -80,6 +86,12 @@ export class KimiWire {
 
   /** Whether a turn runs now, either kind: Kimi's own or one relay sent. */
   get busy() { return this.running !== null || this.engine !== null; }
+
+  /** The prompt turn the running engine turn belongs to, or null. */
+  get engineTurn() {
+    if (this.engine === null) return null;
+    return this.turns.has(this.engine) ? this.engine : this.engineOwner;
+  }
 
   read() {
     this.file ??= this.locate();
@@ -114,7 +126,7 @@ export class KimiWire {
   }
 
   // A new server process: a turn the record left open belonged to one that died.
-  forgetRunning() { this.running = null; this.engine = null; }
+  forgetRunning() { this.running = null; this.engine = null; this.engineOwner = null; }
 
   /**
    * The first prompt relay sent with this text, first recorded at or after byte `from`. Only the
@@ -165,6 +177,7 @@ export class KimiWire {
     switch (record.type) {
       case "agent.turn.started":
         this.engine = record.turnId;
+        this.engineOwner = this.running;
         if (typeof record.queueItemId === "string" && this.prompts.has(record.queueItemId)) this.started(record.queueItemId, record.turnId, at);
         return;
       case "turn.prompt": {
@@ -191,7 +204,7 @@ export class KimiWire {
         return;
       }
       case "agent.turn.ended":
-        if (this.engine === record.turnId) this.engine = null;
+        if (this.engine === record.turnId) { this.engine = null; this.engineOwner = null; }
         return;
       case "turn.ended": {
         this.turn(record.turnId).ended = record;
@@ -208,7 +221,8 @@ export class KimiWire {
           this.inputOf(prompt, message.content);
           return;
         }
-        const turn = this.running === null ? null : this.turns.get(this.running);
+        const owner = this.engineTurn ?? this.running;
+        const turn = owner === null ? null : this.turns.get(owner);
         if (!turn || !message) return;
         if (message.role === "tool") turn.didWork = true;
         if (message.role !== "assistant") return;

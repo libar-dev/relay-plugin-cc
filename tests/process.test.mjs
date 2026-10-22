@@ -6,7 +6,7 @@ import { makeTempDir, writeExecutable } from "./support/helpers.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { isProcessAlive, isProcessIdentityAlive, readProcessStartTime, terminateProcessTree, listProcesses, liveSnapshotMembers, stopProcessSnapshot } from "../plugins/relay/scripts/lib/util/process.mjs";
+import { inOwnUserScope, isProcessAlive, isProcessIdentityAlive, readProcessStartTime, terminateProcessTree, listProcesses, liveSnapshotMembers, stopProcessSnapshot } from "../plugins/relay/scripts/lib/util/process.mjs";
 
 test("terminateProcessTree signals the pid when the group kill fails with ESRCH", () => {
   const calls = [];
@@ -106,4 +106,17 @@ exec /bin/ps "$@"
   // marked cancelled, reads dead.
   await waitFor(() => !isProcessIdentityAlive(worker) && !isProcessIdentityAlive(server), 5000);
   assert.match(companion(ctx, ['status', id]).stdout, /^state: dead$/m);
+});
+
+test("a worker started from a unit of the user's systemd goes through systemd-run --user --scope, and only then", () => {
+  const service = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/t3code.service\n";
+  const scoped = inOwnUserScope("node", ["companion.mjs", "worker", "/j"], { platform: "linux", env: {}, cgroup: service, probe: () => true, description: "relay job worker j" });
+  assert.equal(scoped.command, "systemd-run");
+  assert.deepEqual(scoped.args, ["--user", "--scope", "--quiet", "--collect", "--description=relay job worker j", "--", "node", "companion.mjs", "worker", "/j"]);
+  const plain = { command: "node", args: ["w"] };
+  assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "darwin", env: {}, cgroup: service, probe: () => true }), plain, "not Linux");
+  assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "linux", env: { RELAY_WORKER_SCOPE: "off" }, cgroup: service, probe: () => true }), plain, "turned off");
+  assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "linux", env: {}, cgroup: "0::/user.slice/user-1000.slice/session-7.scope\n", probe: () => true }), plain, "a login session");
+  assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "linux", env: {}, cgroup: "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-p1-i2.scope\n", probe: () => true }), plain, "already a scope");
+  assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "linux", env: {}, cgroup: service, probe: () => false }), plain, "systemd-run cannot make a scope");
 });

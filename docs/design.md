@@ -144,7 +144,11 @@ lives, the companion never writes `job.json`; it talks to the worker through the
 time, holding the job's lease. It starts the backend server, runs turns, acts on inbox messages,
 writes the report, and alone writes `job.json` while it lives, recording its pid and process start
 time, a heartbeat every 10 seconds and the last event's time. Detached, it outlives the agent and the
-Claude session. With the start time in its identity, a dead worker and a pid with a different
+Claude session. On Linux a new session is not enough: stopping a systemd unit kills every process in
+its cgroup, and T3 Code's server runs as `t3code.service`, so its restart killed the workers it had
+started. A worker started from a unit of the user's systemd runs in a scope of its own
+(`systemd-run --user --scope`, same pid). On macOS, quitting T3 Code has killed workers too; that
+cause is not known. With the start time in its identity, a dead worker and a pid with a different
 recorded start time read as dead (openai/codex-plugin-cc#704: a dead worker shown as running forever).
 
 **The backend server.** A worker starts its own `codex app-server`, `grok agent ... stdio`,

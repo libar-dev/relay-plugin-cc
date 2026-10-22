@@ -449,3 +449,22 @@ timerTest("default thread/read deadline is ten seconds", async t => {
   assert.equal(result.error.message, "thread/read: no reply in 10 s");
   assert.equal(result.finalMessage, "Candidate report");
 });
+
+test("the Codex event log keeps only a turn's last diff, by thread and turn, before that turn's turn/completed", async () => {
+  const { codexEventRecorder } = await import("../plugins/relay/scripts/lib/backends/codex/index.mjs");
+  const written = [];
+  let touched = 0;
+  const recorder = codexEventRecorder((n) => written.push(n), () => { touched += 1; });
+  const diff = (threadId, turnId, text) => ({ method: "turn/diff/updated", params: { threadId, turnId, diff: text } });
+  const completed = (threadId, turnId) => ({ method: "turn/completed", params: { threadId, turn: { id: turnId } } });
+  const shown = () => written.map((n) => n.params.diff ?? `${n.method} ${n.params.threadId}`);
+  // A parent turn's diffs interleave with a subagent's turn, which completes first.
+  for (const n of [diff("p", "a", "1"), { method: "item/completed", params: { threadId: "p", turnId: "a" } }, diff("c", "x", "c1"), diff("p", "a", "12"),
+    completed("c", "x"), diff("p", "a", "123"), completed("p", "a"), diff("p", "b", "2"), diff("c", "y", "c2")]) recorder.record(n);
+  assert.deepEqual(shown(), ["item/completed p", "c1", "turn/completed c", "123", "turn/completed p"]);
+  recorder.flush();
+  assert.deepEqual(shown().slice(5), ["2", "c2"], "the worker's end writes each turn's last diff");
+  recorder.flush();
+  assert.equal(written.length, 7);
+  assert.equal(touched, 9, "every notification still advances the heartbeat");
+});
