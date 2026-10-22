@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { main, parseArgs } from '../scripts/live/suite.mjs';
 import { analyzeCheck, BACKENDS, BACKEND_NAMES, MODELS, STEER_DELIVERY, JOBS_HOME_EXPR,
   readTranscript, transcriptCalls, runSpan, hasMarker, claudeCodeVersionOf, leadModelOf,
   formatSeconds, readJob, scopeToRun, promptText, runLine } from '../scripts/live/lib/evidence.mjs';
@@ -554,8 +556,8 @@ test('formatSeconds uses one decimal and an en dash for a range', () => {
 });
 
 test('registry keeps the prompt checks\' interface, with the command checks between continue and stop', () => {
-  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless', 'stop', 'session-end', 'spawn-check']);
-  assert.equal(new Set(checks.map(check => check.id)).size, 10);
+  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless', 'stop', 'session-end', 'spawn-check', 'status-line']);
+  assert.equal(new Set(checks.map(check => check.id)).size, 11);
   for (const check of checks.filter(check => !['commands', 'transfer', 'headless'].includes(check.id))) {
     assert.match(check.id, /^[a-z0-9-]+$/);
     assert.equal(typeof check.title, 'string');
@@ -568,7 +570,7 @@ test('registry keeps the prompt checks\' interface, with the command checks betw
     assert.ok(Array.isArray(check.surfaces));
     assert.ok(Array.isArray(check.probes));
     assert.equal(check.timeoutMinutes, check.id === 'steer-main' ? 20 : 15);
-    assert.deepEqual(check.surfaces, ['steer-plugin', 'session-end'].includes(check.id) ? ['terminal'] : ['terminal', 't3']);
+    assert.deepEqual(check.surfaces, ['steer-plugin', 'session-end', 'status-line'].includes(check.id) ? ['terminal'] : ['terminal', 't3']);
     assert.deepEqual(check.probes, check.id === 'steer-plugin' ? ['wake-probe'] : []);
     assert.equal(getCheck(check.id), check);
     if (check.probes.length) assert.deepEqual(check.surfaces, ['terminal']);
@@ -2586,3 +2588,170 @@ for (const when of ['start', 'wait']) {
     assert.deepEqual(ctx.run.setup.cancellations, [{ jobId: 'job-1', status: 'cancelled' }]);
   });
 }
+
+function statusInput(dir) {
+  const run = { ...read(path.join(dir, 'run.json')), jobsHome: path.join(dir, 'jobs'),
+    transcript: path.join(dir, 'transcript.jsonl') };
+  return { ...input(dir, run.backends), run, evidenceDir: dir };
+}
+
+test('status-line is terminal only and run all includes it', async () => {
+  const check = getCheck('status-line');
+  assert.deepEqual(check.surfaces, ['terminal']);
+  assert.equal(typeof check.runTerminal, 'function');
+  assert.deepEqual(parseArgs(['run', 'status-line'], checks, BACKENDS).backends, BACKENDS);
+  assert.ok(parseArgs(['run', 'all'], checks, BACKENDS).checks.includes('status-line'));
+  const warnings = [];
+  assert.equal(await main(['prepare', 'status-line', '--surface', 't3', '--work-dir', '/tmp'], checks,
+    evidenceReaders, { warn: text => warnings.push(text) }), 1);
+  assert.deepEqual(warnings, ['status-line does not support t3.']);
+  assert.doesNotMatch(check.prompt({ runId: 'synthetic-run' }), /relay: /);
+});
+
+test('status-line reduced screen fixture passes for all four backends with both timings', () => {
+  const data = statusInput(path.join(fixture, 'status-line')), check = getCheck('status-line');
+  const analyzed = check.analyze(data);
+  assert.deepEqual(analyzed.results, BACKENDS.map(backend => ({ backend, model: MODELS[backend],
+    relayVersion: '3.0.0-test', delivery: null, timings: { shownSeconds: [3], clearedSeconds: [4] }, result: 'pass', reason: null })));
+  assert.equal(analyzed.evidence.files.length, 3);
+  assert.equal(analyzed.evidence.agents.length, 4);
+  assert.equal(check.cell(analyzed.results[0]), 'count shown in 3.0 s, cleared in 4.0 s');
+});
+
+for (const [failure, file, text, reason] of [
+  ['never appears', 'running', '  ❯\n', /No screen shows relay: 4 running/],
+  ['shows another count', 'running', 'relay: 3 running\n', /No screen shows relay: 4 running/],
+  ['never clears', 'cleared', 'relay: 1 dead · 2 owed\n', /never clears/],
+  ['keeps a wrapped count', 'cleared', 'relay: 4\nrunning\n', /never clears/],
+  ['wraps the words', 'running', 'relay: 4\nrunning\n', /No screen shows relay: 4 running/]
+]) {
+  test(`status-line rejects a screen where the line ${failure}`, t => {
+    const dir = copy(t, 'status-line');
+    fs.writeFileSync(path.join(dir, `screen-${file}.txt`), text);
+    const results = getCheck('status-line').analyze(statusInput(dir)).results;
+    for (const row of results) { assert.equal(row.result, 'fail'); assert.match(row.reason, reason); }
+  });
+}
+
+test('status-line judges the words without depending on the separator punctuation', t => {
+  const dir = copy(t, 'status-line');
+  fs.writeFileSync(path.join(dir, 'screen-running.txt'), '  relay: 4 running | bypass permissions on\n');
+  assert.ok(getCheck('status-line').analyze(statusInput(dir)).results.every(row => row.result === 'pass'));
+});
+
+test('status-line rejects observations beyond either 60 second bound', t => {
+  const data = statusInput(copy(t, 'status-line')), check = getCheck('status-line');
+  for (const phase of ['running', 'cleared']) {
+    const changed = structuredClone(data);
+    changed.run.statusLine.screens.find(row => row.phase === phase).at = '2026-10-22T10:02:00.000Z';
+    for (const row of check.analyze(changed).results) {
+      assert.equal(row.result, 'fail'); assert.match(row.reason, /60 second bounds/);
+    }
+  }
+});
+
+test('status-line records replay from copied screens and jobs after the originals disappear', t => {
+  const dir = copy(t, 'status-line'), data = statusInput(dir), check = getCheck('status-line');
+  const recordsDir = path.join(dir, 'records');
+  const first = analyzeRun(data.run, dir, [check], evidenceReaders, { recordsDir });
+  assert.ok(first.records.every(row => row.result === 'pass'));
+  assert.ok(first.records.every(row => row.finishedAt === data.run.checkFinishedAt));
+  for (const screen of data.run.statusLine.screens) fs.rmSync(path.join(dir, screen.file));
+  fs.rmSync(data.transcript);
+  fs.rmSync(data.jobsHome, { recursive: true });
+  assert.deepEqual(analyzeRun(data.run, dir, [check], evidenceReaders, { recordsDir, fromCopy: true }).records, first.records);
+});
+
+function statusDriver(t, failure) {
+  const dir = temp(t), jobsHome = path.join(dir, 'jobs'), controller = new AbortController();
+  fs.mkdirSync(jobsHome);
+  const run = { runId: 'synthetic-run', check: 'status-line', backends: BACKENDS, surface: 'terminal',
+    relayVersion: '3.0.0-test', jobsHome, jobsHomeCreated: true, workDir: dir, pluginDir: '/build/relay' };
+  const calls = [], check = getCheck('status-line');
+  let clock = Date.parse('2026-10-22T10:00:00.000Z'), ready = false, starts = 0, cancels = 0, runningReads = 0, clearedReads = 0;
+  const ctx = { ...run, run, evidenceDir: dir, save() { write(path.join(dir, 'run.json'), run); },
+    async paneDriver(input, selected, options) {
+      assert.equal(input, ctx); assert.equal(options.keep, true);
+      assert.equal(selected.completed([{ type: 'assistant', message: { content: [{ type: 'text', text: check.marker }] } }]), true);
+      run.pane = 'fake-pane'; run.promptSentAt = new Date(clock).toISOString();
+      fs.copyFileSync(path.join(fixture, 'status-line/transcript.jsonl'), path.join(dir, 'transcript.jsonl'));
+      run.transcript = path.join(dir, 'transcript.jsonl');
+      run.completed = ready = true;
+    } };
+  const dependencies = { env: { RELAY_JOBS_CANCEL_GRACE_MS: '0', CLAUDECODE: '1' }, signal: controller.signal,
+    now: () => clock, sleep: async ms => { clock += ms; },
+    drive(args) {
+      calls.push(args);
+      if (args[0] === 'stop') return '';
+      assert.deepEqual(args, ['screen', 'fake-pane']);
+      if (!starts) return '  ❯\n';
+      if (!cancels) {
+        if (failure === 'interrupted') controller.abort(new Error('Interrupted.'));
+        return ++runningReads > 2 && failure !== 'never appears' ? 'relay: 4 running · bypass permissions on\n' : '  ❯\n';
+      }
+      return ++clearedReads > 3 && failure !== 'never clears' ? '  ❯\n' : 'relay: 1 running\n';
+    },
+    async execute(command, args, options) {
+      assert.equal(command, process.execPath); assert.equal(args[0], '/build/relay/scripts/companion.mjs');
+      assert.equal(options.cwd, dir); assert.equal(options.env.RELAY_JOBS_HOME, jobsHome);
+      assert.equal(options.env.CLAUDECODE, undefined); assert.equal(options.detached, true);
+      assert.equal(ready, true);
+      if (args[1] === 'cancel') {
+        assert.equal(options.timeout, 40000); assert.equal(options.signal, undefined);
+        cancels++; clock += 1000;
+        edit(dir, `jobs/repo/${args[2]}/job.json`, job => { job.state = 'cancelled'; });
+        return { stdout: '' };
+      }
+      assert.equal(args[1], 'start'); assert.equal(args[2], '--prompt-file');
+      const backend = BACKENDS[starts++], id = `${backend}-job`, jobDir = path.join(jobsHome, 'repo', id);
+      const prompt = fs.readFileSync(args[3], 'utf8');
+      assert.ok(prompt.includes(`model: ${MODELS[backend]}\neffort: low\n---\n`));
+      assert.match(prompt, /`sleep 150` exactly once and wait for it/);
+      assert.doesNotMatch(prompt, /relay: /);
+      write(path.join(jobDir, 'job.json'), { id, state: 'running', request: { backend, model: MODELS[backend] }, attempts: [{ relayVersion: run.relayVersion }] });
+      clock += 1000;
+      const stdout = `job: ${id}\ndir: ${jobDir}\n`;
+      if (failure === 'partial start') throw Object.assign(new Error('Start failed after its receipt.'), { stdout });
+      return { stdout };
+    } };
+  return { ctx, dependencies, state: () => ({ calls, starts, cancels, runningReads, clearedReads }) };
+}
+
+test('status-line runTerminal starts all backends in one ready pane, captures screens and cancels before clearing', async t => {
+  const { ctx, dependencies, state } = statusDriver(t);
+  await getCheck('status-line').runTerminal(ctx, dependencies);
+  const analyzed = getCheck('status-line').analyze(statusInput(ctx.evidenceDir));
+  assert.ok(analyzed.results.every(row => row.result === 'pass'));
+  assert.deepEqual(analyzed.results[0].timings, { shownSeconds: [2], clearedSeconds: [3] });
+  assert.equal(state().starts, 4); assert.equal(state().cancels, 4);
+  assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
+  assert.equal(ctx.run.statusLine.screens.length, 8);
+  assert.equal(ctx.run.completed, true);
+});
+
+for (const failure of ['never appears', 'never clears', 'interrupted', 'partial start']) {
+  test(`status-line runTerminal cleans up when ${failure}`, async t => {
+    const { ctx, dependencies, state } = statusDriver(t, failure);
+    await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies),
+      failure === 'interrupted' ? /Interrupted/ : failure === 'partial start' ? /Start failed/ : /within 60 seconds/);
+    assert.equal(state().cancels, state().starts);
+    assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
+    assert.equal(ctx.run.completed, false);
+    assert.ok(ctx.run.error);
+    if (failure === 'never appears') assert.equal(state().runningReads, 61);
+    if (failure === 'never clears') assert.equal(state().clearedReads, 61);
+  });
+}
+
+test('pane screen captures visible physical lines without joining or scrollback', t => {
+  const dir = temp(t), bin = path.join(dir, 'bin'), log = path.join(dir, 'args.json');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!${process.execPath}\n` +
+    `require('node:fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));\n` +
+    'process.stdout.write("relay: 4\\nrunning\\n");\n', { mode: 0o755 });
+  const result = spawnSync('bash', [fileURLToPath(new URL('../scripts/smoke/pane.sh', import.meta.url)), 'screen', 'test-pane'],
+    { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_RUNTIME_DIR: dir } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'relay: 4\nrunning\n');
+  assert.deepEqual(read(log), ['-S', path.join(dir, 'claude-tmux/tmux.sock'), 'capture-pane', '-p', '-t', '=test-pane:']);
+});

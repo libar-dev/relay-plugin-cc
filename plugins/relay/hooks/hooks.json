@@ -1,5 +1,5 @@
 {
-  "description": "Session exports, the optional stop-time review gate, the relay:job relay hook, which carries the relay's prompt, messages and report, a TaskStop hook that cancels a stopped relay's job, and a module that checks a relay:job prompt's header at the spawn, wakes a relay's wait when a message is queued for it, and answers /relay:status, /relay:result, /relay:cancel and /relay:transfer itself, with no model turn.",
+  "description": "Session exports, the optional stop-time review gate, the relay:job relay hook, which carries the relay's prompt, messages and report, a TaskStop hook that cancels a stopped relay's job, and a module that checks a relay:job prompt's header at the spawn, wakes a relay's wait when a message is queued for it, answers /relay:status, /relay:result, /relay:cancel and /relay:transfer itself, with no model turn, and shows a status line of the repository's running jobs in the terminal and the desktop app.",
   "modules": [
     "./mod/register.js"
   ],

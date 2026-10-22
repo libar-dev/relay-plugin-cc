@@ -6,7 +6,7 @@
 // each session.send test also proves the hook ran: by the wake it ran, or by the agent list it
 // read. Each agent.spawn test does the same by the check it ran, or by a deny that kept the
 // spawn from the engine.
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const AGENTS = [
   { id: 'a-lead', name: 'lead', description: 'lead', type: 'general-purpose', status: 'running' },
@@ -713,4 +713,190 @@ test('a hook that fails is answered by its .catch, never by the markdown command
   expect(seen.runs.map((r) => r.argv)).toEqual([companionArgv('result', 'j-1')])
   expect(result.exitCode).toBe(1)
   expect(result.text).toMatch(/^\/relay:result j-1\n\nThe relay module failed while answering it: .+\. Run `node "[^"]*" result j-1` in a shell to see its output\.$/)
+})
+
+// The status line. Its timer starts at session.start on the kit's mocked clock, so a test raises
+// session.start and moves the clock; nothing beneath answers the session's surfaces, the listing
+// or the line, so each test answers them, and every line below is one the module set.
+
+const STATUS_ARGV = [
+  'node',
+  expect.stringMatching(/^\/.*\/scripts\/companion\.mjs$/),
+  'status',
+  '--json',
+  '--active',
+  '--limit',
+  '200',
+]
+
+type StatusOptions = {
+  surfaces?: () => string[]
+  run?: () => unknown
+}
+
+// The engine beneath the plugin for the status line: the session's start, directory and
+// surfaces, a process runner answering the listing, and the line, each recording what reached it.
+async function statusEngine($: any, on: any, options: StatusOptions = {}) {
+  const runs: any[] = []
+  const lines: (string | undefined)[] = []
+  let surfaceReads = 0
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('session.cwd', () => ({ value: CWD }))
+  on('session.surfaces', () => {
+    surfaceReads++
+    return { value: options.surfaces ? options.surfaces() : ['terminal'] }
+  })
+  on('process.run', (_: unknown, e: any) => {
+    runs.push(e)
+    return options.run ? options.run() : { value: listing([]) }
+  })
+  on('ui.status', (_: unknown, e: any) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  const clock = mock.clock(on)
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  return { runs, lines, clock, surfaceReads: () => surfaceReads }
+}
+
+// A listing as `companion status --json --active` prints it, cut to the fields the line reads.
+const listing = (jobs: object[], nextCursor: string | null = null) =>
+  printed(JSON.stringify({ schema: 'relay.status/1', relayVersion: '3.0.0', relayBuild: null, active: true, limit: 200, jobs, nextCursor }))
+
+const job = (id: string, state: string, undeliveredCount = 0) => ({ id, state, undeliveredCount })
+
+const failed = (kind: string, exitCode: number) =>
+  printed(JSON.stringify({ schema: 'relay.status/1', relayVersion: '3.0.0', relayBuild: null, error: { kind, message: kind } }), '', exitCode)
+
+test('with no surface, ticks run no process', async ($, on) => {
+  let surfaces: string[] = []
+  const seen = await statusEngine($, on, { surfaces: () => surfaces })
+
+  await seen.clock.advance(15000)
+
+  expect(seen.surfaceReads()).toBe(3)
+  expect(seen.runs).toHaveLength(0)
+  expect(seen.lines).toEqual([])
+
+  // The same timer reads once a surface draws, so it was running above.
+  surfaces = ['terminal']
+  await seen.clock.advance(5000)
+  expect(seen.runs).toHaveLength(1)
+})
+
+test('a tick runs the active listing by argv in the session directory, every five seconds', async ($, on) => {
+  const seen = await statusEngine($, on)
+
+  await seen.clock.advance(4999)
+  expect(seen.runs).toHaveLength(0)
+  await seen.clock.advance(1)
+  await seen.clock.advance(5000)
+
+  expect(seen.runs).toEqual([
+    { argv: STATUS_ARGV, init: { cwd: CWD, timeoutMs: 10000 } },
+    { argv: STATUS_ARGV, init: { cwd: CWD, timeoutMs: 10000 } },
+  ])
+})
+
+test('a second session.start starts no second timer', async ($, on) => {
+  const seen = await statusEngine($, on)
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+
+  await seen.clock.advance(5000)
+
+  expect(seen.runs).toHaveLength(1)
+})
+
+test('the line counts running, dead and owed jobs, leaves out a part at 0, and clears with none', async ($, on) => {
+  const answers = [
+    listing([job('j-2', 'running'), job('j-1', 'starting')]),
+    listing([
+      job('j-4', 'running'),
+      job('j-3', 'starting'),
+      job('j-2', 'dead', 1),
+      // A row's owed list is cut to a few ids; its count is not.
+      { ...job('j-1', 'completed', 22), undelivered: Array.from({ length: 20 }, (_, i) => 'm-' + i) },
+    ]),
+    listing([job('j-1', 'dead')]),
+    listing([job('j-1', 'cancelled', 2)]),
+    listing([]),
+  ]
+  let next = 0
+  const seen = await statusEngine($, on, { run: () => ({ value: answers[next++] }) })
+
+  for (let i = 0; i < answers.length; i++) {
+    await seen.clock.advance(5000)
+  }
+
+  expect(seen.lines).toEqual(['relay: 2 running', 'relay: 2 running · 1 dead · 23 owed', 'relay: 1 dead', 'relay: 2 owed', undefined])
+})
+
+test('with more pages, the running count carries a +', async ($, on) => {
+  const seen = await statusEngine($, on, {
+    run: () => ({ value: listing([job('j-3', 'running'), job('j-2', 'running'), job('j-1', 'dead')], 'WyJ4IiwiaiJd') }),
+  })
+
+  await seen.clock.advance(5000)
+
+  expect(seen.lines).toEqual(['relay: 2+ running · 1 dead'])
+})
+
+test('a busy listing keeps the line, and the next good answer replaces it', async ($, on) => {
+  const answers = [listing([job('j-1', 'running')]), failed('busy', 4), listing([job('j-1', 'dead')])]
+  let next = 0
+  const seen = await statusEngine($, on, { run: () => ({ value: answers[next++] }) })
+
+  await seen.clock.advance(15000)
+
+  expect(seen.runs).toHaveLength(3)
+  expect(seen.lines).toEqual(['relay: 1 running', 'relay: 1 dead'])
+})
+
+test('every other failure shows the status as unavailable until a good answer', async ($, on) => {
+  const answers: Array<() => unknown> = [
+    // Still running at the timeout, and a child that never started: $.process.run rejects.
+    () => ({ deny: 'timed out after 10000 ms' }),
+    () => ({ deny: 'spawn node ENOENT' }),
+    () => ({ value: { ...listing([job('j-1', 'running')]), isStdoutTruncated: true } }),
+    () => ({ value: printed('{"schema":"relay.status/1","jobs":[') }),
+    () => ({ value: printed(JSON.stringify({ schema: 'relay.result/1', jobs: [] })) }),
+    () => ({ value: failed('error', 1) }),
+    () => ({ value: failed('usage', 1) }),
+    // Busy only with busy's exit code.
+    () => ({ value: failed('busy', 1) }),
+    () => ({ value: { ...listing([job('j-1', 'running')]), exitCode: 1 } }),
+    () => ({ value: listing([job('j-1', 'running')]) }),
+  ]
+  let next = 0
+  const seen = await statusEngine($, on, { run: () => answers[next++]() })
+
+  for (let i = 0; i < answers.length; i++) {
+    await seen.clock.advance(5000)
+  }
+
+  expect(seen.runs).toHaveLength(answers.length)
+  expect(seen.lines).toEqual([...Array(answers.length - 1).fill('relay: status unavailable'), 'relay: 1 running'])
+})
+
+test('a tick while a read is in flight runs nothing', async ($, on) => {
+  let answer: (value: unknown) => void = () => {}
+  let held = true
+  const seen = await statusEngine($, on, {
+    run: () => (held ? new Promise((resolve) => (answer = resolve)) : { value: listing([job('j-1', 'dead')]) }),
+  })
+
+  await seen.clock.advance(5000)
+  await seen.clock.advance(10000)
+  expect(seen.surfaceReads()).toBe(3)
+  expect(seen.runs).toHaveLength(1)
+  expect(seen.lines).toEqual([])
+
+  held = false
+  answer({ value: listing([job('j-1', 'running')]) })
+  await seen.clock.settle()
+  expect(seen.lines).toEqual(['relay: 1 running'])
+
+  await seen.clock.advance(5000)
+  expect(seen.runs).toHaveLength(2)
+  expect(seen.lines).toEqual(['relay: 1 running', 'relay: 1 dead'])
 })

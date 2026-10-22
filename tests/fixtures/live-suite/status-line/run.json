@@ -1,0 +1,64 @@
+{
+  "runId": "synthetic-run",
+  "check": "status-line",
+  "surface": "terminal",
+  "backends": [
+    "codex",
+    "grok",
+    "zcode",
+    "kimi"
+  ],
+  "relayVersion": "3.0.0-test",
+  "completed": true,
+  "promptSentAt": "2026-10-22T10:00:00.000Z",
+  "checkFinishedAt": "2026-10-22T10:00:16.000Z",
+  "setup": {
+    "jobs": {
+      "codex": {
+        "running": {
+          "id": "codex-job",
+          "jobDir": "repo/codex-job"
+        }
+      },
+      "grok": {
+        "running": {
+          "id": "grok-job",
+          "jobDir": "repo/grok-job"
+        }
+      },
+      "zcode": {
+        "running": {
+          "id": "zcode-job",
+          "jobDir": "repo/zcode-job"
+        }
+      },
+      "kimi": {
+        "running": {
+          "id": "kimi-job",
+          "jobDir": "repo/kimi-job"
+        }
+      }
+    }
+  },
+  "statusLine": {
+    "startedAt": "2026-10-22T10:00:07.000Z",
+    "cancelledAt": "2026-10-22T10:00:12.000Z",
+    "screens": [
+      {
+        "phase": "before",
+        "file": "screen-before.txt",
+        "at": "2026-10-22T10:00:03.000Z"
+      },
+      {
+        "phase": "running",
+        "file": "screen-running.txt",
+        "at": "2026-10-22T10:00:10.000Z"
+      },
+      {
+        "phase": "cleared",
+        "file": "screen-cleared.txt",
+        "at": "2026-10-22T10:00:16.000Z"
+      }
+    ]
+  }
+}

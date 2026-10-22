@@ -20,6 +20,7 @@ holds the checks; the records below name the builds.
 | Stop a running job with TaskStop | cancelled in 0.4 s | cancelled in 0.2 s | cancelled in 0.3 s | cancelled in 0.5 s |
 | End the Claude session during a job; the job runs on | ran on and completed 149.8 s after the session ended | ran on and completed 148.9 s after the session ended | ran on and completed 176.3 s after the session ended | ran on and completed 154.9 s after the session ended |
 | Spawn with a bad header fails at once | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs |
+| Status line counts this repository's running jobs | — | — | — | — |
 
 ## T3 Code
 

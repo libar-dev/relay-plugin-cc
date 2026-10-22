@@ -1,0 +1,2 @@
+{"type": "user", "entrypoint": "cli", "version": "2.1.308", "timestamp": "2026-10-22T10:00:00.000Z", "message": {"content": "Live suite run synthetic-run.\nDo not run any tool. Reply with exactly this line and nothing else:\nLIVE-STATUS-LINE-READY\n"}}
+{"type": "assistant", "timestamp": "2026-10-22T10:00:02.000Z", "message": {"model": "claude-sonnet-5-5", "content": [{"type": "text", "text": "LIVE-STATUS-LINE-READY"}]}}
