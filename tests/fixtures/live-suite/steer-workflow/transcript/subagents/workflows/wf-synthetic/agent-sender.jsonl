@@ -1,0 +1,1 @@
+{"type": "assistant", "isSidechain": true, "timestamp": "2026-10-22T10:00:30.000Z", "message": {"content": [{"type": "tool_use", "id": "send-one", "name": "SendMessage", "input": {"to": "relay-one", "message": "steer from a workflow agent for codex", "summary": "Synthetic send", "recipient": "relay-one", "content": "steer from a workflow agent for codex"}}]}}

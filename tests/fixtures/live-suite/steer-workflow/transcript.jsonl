@@ -1,0 +1,2 @@
+{"type": "assistant", "isSidechain": false, "timestamp": "2026-10-22T10:00:00.000Z", "message": {"content": [{"type": "tool_use", "id": "spawn-one", "name": "Agent", "input": {"subagent_type": "relay:job", "name": "steer-codex", "prompt": "model: gpt-6.1-sol\neffort: low\n---\nSynthetic brief."}}]}}
+{"type": "user", "isSidechain": false, "timestamp": "2026-10-22T10:00:01.000Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "spawn-one", "content": [{"type": "text", "text": "agentId: relay-one"}]}]}, "toolUseResult": {"agentId": "relay-one"}}

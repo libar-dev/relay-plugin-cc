@@ -1,0 +1,729 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { main, parseArgs, runChecks, usage, UsageError } from '../scripts/live/suite.mjs';
+import { analyzeRun, copyEvidence, createRun, evidenceRoot, findRunTranscript, findTranscript, makeRecords,
+  readJson, recordKeys, runDirectory, runId, writeJson, writeRecords } from '../scripts/live/lib/runs.mjs';
+import { claudeArgs, inspectDebug, paneStartArgs, runTerminal } from '../scripts/live/lib/terminal.mjs';
+import { readRecords, renderTable, staleMessage } from '../scripts/live/lib/table.mjs';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const suite = pathToFileURL(path.join(root, 'scripts/live/suite.mjs')).href;
+
+// These checks and readers also run in child processes, without importing the live checks.
+function fakeSetup(fs, path) {
+  const BACKENDS = ['codex', 'grok', 'zcode', 'kimi'];
+  const BACKEND_NAMES = { codex: 'Codex', grok: 'Grok Build', zcode: 'ZCode', kimi: 'Kimi Code' };
+  const textOf = entry => typeof entry.message?.content === 'string' ? entry.message.content :
+    (entry.message?.content ?? []).filter(block => block.type === 'text').map(block => block.text).join('\n');
+  const hasLine = (entry, line) => textOf(entry).split('\n').some(text => text.trimEnd() === line);
+  const readers = {
+    BACKENDS, BACKEND_NAMES,
+    readTranscript(file) {
+      return fs.readFileSync(file, 'utf8').split('\n').flatMap((line, i) => {
+        if (!line.trim()) return [];
+        try { return [JSON.parse(line)]; }
+        catch { throw new Error(`Invalid JSON at ${file}:${i + 1}`); }
+      });
+    },
+    claudeCodeVersionOf: entries => entries.find(entry => !entry.isSidechain && entry.version)?.version ?? null,
+    leadModelOf: entries => entries.find(entry => !entry.isSidechain && entry.type === 'assistant')?.message?.model ?? null,
+    hasMarker: (entries, marker) => entries.some(entry => !entry.isSidechain && entry.type === 'assistant' && hasLine(entry, marker)),
+    runSpan(entries, id, marker) {
+      const start = entries.findIndex(entry => !entry.isSidechain && entry.type === 'user' && hasLine(entry, `Live suite run ${id}.`));
+      const finish = start < 0 ? null : entries.slice(start + 1).find(entry => !entry.isSidechain && entry.type === 'assistant' && hasLine(entry, marker));
+      return { startedAt: entries[start]?.timestamp ?? null,
+        finishedAt: (finish ?? entries.findLast(entry => entry.timestamp))?.timestamp ?? null };
+    }
+  };
+  const check = {
+    id: 'fake', title: 'A fake check', surfaces: ['terminal', 't3'], probes: [], timeoutMinutes: 7, marker: 'FAKE-DONE',
+    prompt: ({ runId, backends }) => `Live suite run ${runId}.\nCheck ${backends.join(',')}.\nPrint FAKE-DONE.\n`,
+    analyze(input) {
+      const evidence = { transcripts: [input.transcript], agents: [] };
+      const results = input.backends.map(backend => {
+        const pointer = path.join(input.jobsHome, 'relays', `${backend}.json`);
+        let result = 'pass', reason = null;
+        if (fs.existsSync(pointer)) {
+          const saved = JSON.parse(fs.readFileSync(pointer, 'utf8'));
+          const jobDir = path.resolve(input.jobsHome, saved.jobDir);
+          evidence.agents.push({ agentId: backend, pointer, jobDir });
+          if (saved.transcriptPath) {
+            evidence.transcripts.push(saved.transcriptPath);
+            if (!fs.existsSync(saved.transcriptPath)) { result = 'fail'; reason = 'Missing relay transcript.'; }
+          }
+          if (JSON.parse(fs.readFileSync(path.join(jobDir, 'job.json'), 'utf8')).state !== 'completed') {
+            result = 'fail'; reason = 'The job did not complete.';
+          }
+        }
+        return { backend, model: `model-${backend}`, relayVersion: input.relayVersion,
+          delivery: 'in-turn', timings: { deliveredSeconds: [1.5] }, result, reason };
+      });
+      return { results, details: [{ transcript: input.transcript, jobsHome: input.jobsHome }], evidence };
+    },
+    cell: record => `delivered in ${record.timings.deliveredSeconds[0]} s`
+  };
+  return { readers, registry: [check, { ...check, id: 'probe', title: 'A probe check', surfaces: ['terminal'], probes: ['wake-probe'] },
+    { ...check, id: 't3-only', title: 'A T3 check', surfaces: ['t3'] }] };
+}
+const { readers, registry } = fakeSetup(fs, path);
+const check = registry[0];
+const id = '20261022T103015Z-fake-t3-1a2b';
+const start = '2026-10-22T10:30:15.000Z';
+const finish = '2026-10-22T10:30:18.500Z';
+function entries(run = id, marker = 'FAKE-DONE') {
+  return [
+    { type: 'user', timestamp: start, version: '2.1.308', message: { content: `Live suite run ${run}.` } },
+    { type: 'assistant', timestamp: finish, message: { model: 'claude-sonnet-5-5', content: [{ type: 'text', text: marker }] } }
+  ];
+}
+function writeTranscript(file, rows = entries()) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+}
+function scratch(t) {
+  const dir = fs.mkdtempSync('/tmp/relay-live-suite-test-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const workDir = path.join(dir, 'work');
+  fs.mkdirSync(workDir);
+  const env = { ...process.env, RELAY_LIVE_HOME: path.join(dir, 'live'), XDG_STATE_HOME: path.join(dir, 'state'),
+    CLAUDE_CONFIG_DIR: path.join(dir, 'config'), RELAY_JOBS_HOME: path.join(dir, 'jobs') };
+  return { dir, workDir, env, recordsDir: path.join(dir, 'records') };
+}
+function receipt(ctx) {
+  const marketplace = path.join(ctx.dir, 'marketplace');
+  writeJson(path.join(marketplace, 'relay/.claude-plugin/plugin.json'), { name: 'relay', version: '3.0.0-test' });
+  const real = fs.realpathSync(ctx.workDir);
+  const hash = createHash('sha256').update(real).digest('hex');
+  writeJson(path.join(ctx.env.XDG_STATE_HOME, 'relay-plugin-cc/smoke-installs', `${hash}.json`), { dir: real, marketplace });
+  return path.join(marketplace, 'relay');
+}
+function cli(ctx, args, driver = '') {
+  const source = `import fs from 'node:fs'; import path from 'node:path';
+    import { main } from ${JSON.stringify(suite)};
+    const { registry, readers } = (${fakeSetup.toString()})(fs, path);
+    ${driver}
+    process.exitCode = await main(process.argv.slice(1), registry, readers, ${driver ? '{ driver }' : '{}'});`;
+  return spawnSync(process.execPath, ['--input-type=module', '-e', source, '--', ...args], { env: ctx.env, encoding: 'utf8' });
+}
+function baseRun(overrides = {}) {
+  return { runId: id, check: 'fake', surface: 't3', backends: [...readers.BACKENDS], relayVersion: '3.0.0-test',
+    preparedAt: start, marker: check.marker, ...overrides };
+}
+function analyzed(run = baseRun()) {
+  return { results: run.backends.map(backend => ({ backend, model: `model-${backend}`, relayVersion: run.relayVersion,
+    delivery: 'in-turn', timings: { deliveredSeconds: [1.5] }, result: 'pass', reason: null })),
+  details: [{ path: '/tmp/evidence-only' }], evidence: { transcripts: [], agents: [] } };
+}
+const record = overrides => ({ ...makeRecords(baseRun(), check, analyzed(), entries(), readers)[0], ...overrides });
+
+const invalidArgs = [[], ['unknown'], ['list', 'extra'], ['list', '--keep'], ['run'], ['run', 'missing'],
+  ['run', 'all', 'fake'], ['run', 'fake', 'fake'], ['run', 't3-only'], ['run', 'all', '--work-dir', '/tmp/work'],
+  ['run', 'fake', 'probe', '--jobs-home', '/tmp/jobs'], ['run', 'fake', '--backends', 'other'],
+  ['run', 'fake', '--backends', 'codex,codex'], ['run', 'fake', '--backends', 'codex,'],
+  ['run', 'fake', '--timeout-minutes', '0'], ['run', 'fake', '--timeout-minutes', '-1'],
+  ['run', 'fake', '--timeout-minutes', 'NaN'], ['run', 'fake', '--timeout-minutes', 'Infinity'],
+  ['run', 'fake', '--plugin-dir'], ['run', 'fake', '--plugin-dir', '--keep'], ['run', 'fake', '--unknown'],
+  ['run', 'fake', '--keep', '--keep'], ['prepare'], ['prepare', 'missing', '--surface', 't3', '--work-dir', '/tmp'],
+  ['prepare', 'fake'], ['prepare', 'fake', '--surface', 'terminal', '--work-dir', '/tmp'],
+  ['prepare', 'fake', 'probe', '--surface', 't3', '--work-dir', '/tmp'], ['analyze'], ['analyze', '../other'],
+  ['analyze', id, id], ['analyze', id, '--from-copy', '--transcript', '/tmp/a'],
+  ['analyze', id, '--from-copy', '--jobs-home', '/tmp/a'], ['table', 'extra'], ['table', '--out'], ['table', '--keep']];
+
+test('argument parsing covers each subcommand, defaults, ordering and overrides', () => {
+  const parse = args => parseArgs(args, registry, readers.BACKENDS);
+  assert.deepEqual(parse(['list']), { command: 'list' });
+  assert.deepEqual(parse(['--help']), { help: true });
+  assert.deepEqual(parse(['run', 'all']).checks, ['fake', 'probe']);
+  assert.deepEqual(parse(['run', 'fake']).backends, readers.BACKENDS);
+  assert.equal(parse(['run', 'fake']).model, 'sonnet');
+  const run = parse(['run', 'probe', 'fake', '--backends', 'kimi,codex', '--model', 'opus', '--timeout-minutes', '0.5',
+    '--plugin-dir', './plugins/relay', '--records-dir', '/tmp/records', '--keep']);
+  assert.deepEqual(run.checks, ['probe', 'fake']);
+  assert.deepEqual(run.backends, ['codex', 'kimi']);
+  assert.equal(run.timeoutMinutes, 0.5);
+  assert.equal(run.model, 'opus');
+  assert.equal(run.keep, true);
+  assert.equal(run.pluginDir, path.resolve('plugins/relay'));
+  assert.equal(run.recordsDir, '/tmp/records');
+  const single = parse(['run', 'fake', '--work-dir', '/tmp/work', '--jobs-home', '/tmp/jobs']);
+  assert.equal(single.workDir, '/tmp/work');
+  assert.equal(single.jobsHome, '/tmp/jobs');
+  assert.deepEqual(parse(['prepare', 'fake', '--surface', 't3', '--work-dir', '/tmp/work', '--backends', 'grok']).backends, ['grok']);
+  assert.equal(parse(['prepare', 'fake', '--surface', 't3', '--work-dir', '/tmp/work']).checkId, 'fake');
+  const analyze = parse(['analyze', id, '--transcript', '/tmp/session', '--jobs-home', '/tmp/jobs', '--records-dir', '/tmp/records']);
+  assert.equal(analyze.runId, id);
+  assert.equal(analyze.transcript, '/tmp/session');
+  assert.equal(analyze.jobsHome, '/tmp/jobs');
+  assert.equal(parse(['analyze', id, '--from-copy']).fromCopy, true);
+  assert.deepEqual(parse(['table', '--records-dir', '/tmp/records', '--out', '/tmp/table', '--relay-version', 'v1', '--check']),
+    { command: 'table', recordsDir: '/tmp/records', out: '/tmp/table', relayVersion: 'v1', check: true });
+  for (const args of invalidArgs) assert.throws(() => parse(args), UsageError, args.join(' '));
+});
+
+test('CLI usage errors exit 2, and help and list have exact output', t => {
+  const ctx = scratch(t);
+  for (const args of invalidArgs) {
+    const result = cli(ctx, args);
+    assert.equal(result.status, 2, `${args.join(' ')}: ${result.stderr}`);
+    assert.ok(result.stderr.trim());
+  }
+  assert.equal(cli(ctx, ['--help']).stdout, usage);
+  const listed = cli(ctx, ['list']);
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.equal(listed.stdout, 'fake\tterminal,t3\t-\tA fake check\nprobe\tterminal\twake-probe\tA probe check\nt3-only\tt3\t-\tA T3 check\n');
+  assert.equal(fs.existsSync(ctx.env.RELAY_LIVE_HOME), false);
+});
+
+test('run ids, evidence roots and private run folders', t => {
+  const ctx = scratch(t);
+  assert.equal(runId('steer-main', 'terminal', new Date(start), '1a2b'), '20261022T103015Z-steer-main-terminal-1a2b');
+  assert.match(runId('fake', 't3'), /^\d{8}T\d{6}Z-fake-t3-[a-f0-9]{4}$/);
+  assert.equal(evidenceRoot(ctx.env), ctx.env.RELAY_LIVE_HOME);
+  assert.equal(evidenceRoot({ XDG_STATE_HOME: ctx.dir }), path.join(ctx.dir, 'relay-plugin-cc/live'));
+  const created = createRun(ctx.env.RELAY_LIVE_HOME, check, baseRun({ workDir: ctx.workDir }));
+  assert.equal(fs.statSync(created.evidenceDir).mode & 0o777, 0o700);
+  assert.equal(readJson(path.join(created.evidenceDir, 'run.json')).marker, 'FAKE-DONE');
+  assert.equal(fs.readFileSync(path.join(created.evidenceDir, 'prompt.txt'), 'utf8'), check.prompt(created.run));
+  assert.throws(() => runDirectory(ctx.dir, '../../elsewhere'), /Invalid run id/);
+});
+
+test('records have the exact keys, canonical backend order and no paths', () => {
+  const run = baseRun({ backends: ['kimi', 'codex', 'zcode', 'grok'] });
+  const result = analyzed(run);
+  result.details.push({ path: '/private/path' });
+  result.results[0].reason = 'Cannot read /tmp/private/job.json';
+  result.results[0].result = 'fail';
+  const records = makeRecords(run, check, result, entries(), readers);
+  assert.deepEqual(records.map(row => row.backend), readers.BACKENDS);
+  for (const row of records) {
+    assert.deepEqual(Object.keys(row), recordKeys);
+    assert.equal(row.claudeCodeVersion, '2.1.308');
+    assert.equal(row.leadModel, 'claude-sonnet-5-5');
+    assert.equal(row.platform, process.platform);
+    assert.equal(row.startedAt, start);
+    assert.equal(row.finishedAt, finish);
+    assert.equal(row.durationSeconds, 3.5);
+    assert.equal(row.evidence, `runs/${id}`);
+    assert.doesNotMatch(JSON.stringify(row), /\/tmp\/|\/private\//);
+    assert.equal(Object.hasOwn(row, 'details'), false);
+  }
+  assert.equal(records[3].reason, 'Cannot read [path]');
+  assert.equal(makeRecords(run, check, result, [], readers)[0].durationSeconds, null);
+});
+
+test('a missing marker fails every backend and keeps each check reason', () => {
+  const result = analyzed();
+  result.results[0].result = 'fail';
+  result.results[0].reason = 'The delivery was late.';
+  const transcript = entries(id, 'not finished');
+  transcript.push({ type: 'user', message: { content: 'FAKE-DONE' } },
+    { type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'FAKE-DONE' }] } });
+  const records = makeRecords(baseRun(), check, result, transcript, readers);
+  assert.deepEqual(records.map(row => row.result), ['fail', 'fail', 'fail', 'fail']);
+  assert.equal(records[0].reason, 'The lead did not print FAKE-DONE. The delivery was late.');
+  assert.equal(records[1].reason, 'The lead did not print FAKE-DONE.');
+});
+
+test('missing results become fail records, using the run error when available', () => {
+  const result = analyzed();
+  result.results = result.results.slice(1);
+  const records = makeRecords(baseRun({ error: 'Interrupted.' }), check, result, entries(), readers);
+  assert.equal(records.length, 4);
+  assert.equal(records[0].result, 'fail');
+  assert.equal(records[0].reason, 'Interrupted.');
+  assert.equal(records[0].model, null);
+  assert.deepEqual(records[0].timings, {});
+  assert.equal(makeRecords(baseRun(), check, result, entries(), readers)[0].reason, 'The check produced no result for codex.');
+});
+
+test('records go to both destinations and no prompt means no record', t => {
+  const ctx = scratch(t);
+  const dir = path.join(ctx.dir, 'evidence');
+  fs.mkdirSync(dir);
+  const rows = [record()];
+  assert.equal(writeRecords(baseRun(), rows, dir, ctx.recordsDir), null);
+  assert.equal(fs.existsSync(ctx.recordsDir), false);
+  assert.equal(fs.existsSync(path.join(dir, 'records.jsonl')), false);
+  const file = writeRecords(baseRun({ promptSentAt: start }), rows, dir, ctx.recordsDir);
+  const expected = JSON.stringify(rows[0]) + '\n';
+  assert.equal(file, path.join(ctx.recordsDir, `${id}.jsonl`));
+  assert.equal(fs.readFileSync(file, 'utf8'), expected);
+  assert.equal(fs.readFileSync(path.join(dir, 'records.jsonl'), 'utf8'), expected);
+});
+
+const emptyTable = `# What the live suite has passed
+
+<!-- Generated by \`node scripts/live/suite.mjs table\` from docs/live/records/. Do not edit it by hand. -->
+
+Each cell is the latest record of a check on one backend and surface, shown only when it passed. A dash is a
+check that has not passed there: not run yet, or failed in its latest run. [scripts/live/](../../scripts/live/)
+holds the checks; the records below name the builds.
+
+## Terminal
+
+| Check | Codex | Grok Build | ZCode | Kimi Code |
+|---|---|---|---|---|
+| A fake check | — | — | — | — |
+| A probe check | — | — | — | — |
+
+## T3 Code
+
+| Check | Codex | Grok Build | ZCode | Kimi Code |
+|---|---|---|---|---|
+| A fake check | — | — | — | — |
+| A T3 check | — | — | — | — |
+
+## How a backend takes a message sent while its turn runs
+
+- **Into the running turn**: Codex (\`turn/steer\`), Grok Build (\`_x.ai/interject\`) and ZCode (\`sendText\` with
+  \`guide\`) add the message to the turn that is running.
+- **As the next turn**: Kimi Code. ACP has no steer, and a running Kimi turn takes no message. The message
+  reaches the job as fast as on the other backends, waits for the running turn to end, and then runs as a turn of
+  its own; the running turn never sees it.
+- **A new turn on the same session**: a message sent after the job ended continues the backend session the job
+  ran in.
+
+## Records behind each cell
+
+| Check | Surface | Backend | Model | Relay | Claude Code | Lead | Date | Record |
+|---|---|---|---|---|---|---|---|---|
+`;
+
+test('empty table has exact surrounding text, all sections and dashed cells', () => {
+  assert.equal(renderTable([], registry, readers), emptyTable);
+  assert.equal(renderTable([record({ check: 'unregistered' }), record({ check: 'probe', surface: 't3' }),
+    record({ surface: 'desktop' }), record({ backend: 'unknown' })], registry, readers), emptyTable);
+});
+
+test('latest table record wins by finish then run id; a latest failure hides a pass', () => {
+  const older = record({ runId: 'older', finishedAt: '2026-10-21T12:00:00Z', timings: { deliveredSeconds: [99] } });
+  const first = record({ runId: 'aaa', timings: { deliveredSeconds: [2] } });
+  const latest = record({ runId: 'zzz', timings: { deliveredSeconds: [3] } });
+  const rows = [latest, older, first];
+  const table = renderTable(rows, registry, readers);
+  assert.equal(table, renderTable(rows.toReversed(), registry, readers));
+  assert.match(table, /\| A fake check \| delivered in 3 s \| — \| — \| — \|/);
+  assert.match(table, /\| fake \| t3 \| codex \| model-codex \| 3\.0\.0-test \| 2\.1\.308 \| claude-sonnet-5-5 \| 2026-10-22 \| \[zzz\]\(records\/zzz.jsonl\) \|/);
+  assert.doesNotMatch(table, /99 s|2 s|records\/aaa/);
+  assert.equal(renderTable([...rows, record({ runId: 'zzzz', result: 'fail', reason: 'Failed.' })], registry, readers), emptyTable);
+  assert.match(renderTable([...rows, record({ runId: 'zzzz', relayVersion: 'v2', result: 'fail' })], registry, readers, '3.0.0-test'), /delivered in 3 s/);
+  assert.equal(renderTable(rows, registry, readers, 'missing'), emptyTable);
+});
+
+test('table CLI writes, checks without writing, filters versions, and reports file:line', t => {
+  const ctx = scratch(t);
+  const out = path.join(ctx.dir, 'capabilities.md');
+  const args = ['table', '--records-dir', ctx.recordsDir, '--out', out];
+  const stale = cli(ctx, [...args, '--check']);
+  assert.equal(stale.status, 1);
+  assert.equal(stale.stderr, staleMessage + '\n');
+  assert.equal(fs.existsSync(out), false);
+  assert.equal(cli(ctx, args).status, 0);
+  assert.equal(fs.readFileSync(out, 'utf8'), emptyTable);
+  assert.equal(cli(ctx, [...args, '--check']).status, 0);
+  fs.writeFileSync(out, 'stale');
+  assert.equal(cli(ctx, [...args, '--check']).status, 1);
+  assert.equal(fs.readFileSync(out, 'utf8'), 'stale');
+  fs.mkdirSync(ctx.recordsDir);
+  const file = path.join(ctx.recordsDir, 'one.jsonl');
+  fs.writeFileSync(file, JSON.stringify(record()) + '\n');
+  assert.equal(cli(ctx, [...args, '--relay-version', 'missing']).status, 0);
+  assert.equal(fs.readFileSync(out, 'utf8'), emptyTable);
+  assert.equal(cli(ctx, args).status, 0);
+  assert.match(fs.readFileSync(out, 'utf8'), /delivered in 1.5 s/);
+  for (const line of ['{bad}', '{}', 'null']) {
+    fs.writeFileSync(file, '\n' + line + '\n');
+    assert.throws(() => readRecords(ctx.recordsDir), error => error.message.includes(`${file}:2`));
+    const result = cli(ctx, args);
+    assert.equal(result.status, 1);
+    assert.ok(result.stderr.includes(`${file}:2`));
+  }
+});
+
+test('prepare requires a receipt, refuses terminal-only checks, and uses a realpath hash', t => {
+  const ctx = scratch(t);
+  const args = ['prepare', 'fake', '--surface', 't3', '--work-dir', ctx.workDir, '--backends', 'kimi,codex'];
+  const refused = cli(ctx, args);
+  assert.equal(refused.status, 1);
+  assert.equal(refused.stderr, `No smoke install for ${ctx.workDir}. Run scripts/smoke/install-local.sh ${ctx.workDir} first.\n`);
+  assert.equal(fs.existsSync(ctx.env.RELAY_LIVE_HOME), false);
+  const pluginDir = receipt(ctx);
+  const probe = cli(ctx, ['prepare', 'probe', '--surface', 't3', '--work-dir', ctx.workDir]);
+  assert.equal(probe.status, 1);
+  assert.equal(probe.stderr, 'probe does not support t3.\n');
+  const alias = path.join(ctx.dir, 'alias');
+  fs.symlinkSync(ctx.workDir, alias);
+  const result = cli(ctx, ['prepare', 'fake', '--surface', 't3', '--work-dir', alias, '--backends', 'kimi,codex']);
+  assert.equal(result.status, 0, result.stderr);
+  const [runId, promptFile, separator] = result.stdout.split('\n');
+  assert.match(runId, /^\d{8}T\d{6}Z-fake-t3-[a-f0-9]{4}$/);
+  assert.equal(promptFile, path.join(ctx.env.RELAY_LIVE_HOME, 'runs', runId, 'prompt.txt'));
+  assert.equal(separator, '---');
+  const run = readJson(path.join(path.dirname(promptFile), 'run.json'));
+  assert.equal(run.workDir, ctx.workDir);
+  assert.equal(run.pluginDir, pluginDir);
+  assert.equal(run.relayVersion, '3.0.0-test');
+  assert.deepEqual(run.backends, ['codex', 'kimi']);
+  assert.equal(run.surface, 't3');
+  assert.equal(run.marker, 'FAKE-DONE');
+  assert.ok(Number.isFinite(Date.parse(run.preparedAt)));
+  assert.equal(result.stdout, `${runId}\n${promptFile}\n---\n${check.prompt(run)}`);
+});
+
+test('transcript discovery checks the slug first and then all folders newest first', t => {
+  const ctx = scratch(t);
+  const projects = path.join(ctx.env.CLAUDE_CONFIG_DIR, 'projects');
+  const slug = ctx.workDir.replace(/[^a-zA-Z0-9]/g, '-');
+  const preferred = path.join(projects, slug, 'old.jsonl');
+  const newer = path.join(projects, 'other', 'new.jsonl');
+  const newest = path.join(projects, 'elsewhere', 'newest.jsonl');
+  for (const [file, time] of [[preferred, 1000], [newer, 2000], [newest, 3000]]) {
+    writeTranscript(file); fs.utimesSync(file, time, time);
+  }
+  const find = () => findRunTranscript(ctx.workDir, id, ctx.env.CLAUDE_CONFIG_DIR, readers.readTranscript);
+  assert.equal(find(), preferred);
+  const preferredNew = path.join(projects, slug, 'newer.jsonl');
+  writeTranscript(preferredNew); fs.utimesSync(preferredNew, 1500, 1500);
+  assert.equal(find(), preferredNew);
+  fs.rmSync(path.dirname(preferred), { recursive: true });
+  assert.equal(find(), newest);
+  writeTranscript(newest, [{ ...entries()[0], isSidechain: true }]);
+  assert.equal(find(), newer);
+  writeTranscript(newer, [{ ...entries()[0], type: 'assistant' }]);
+  assert.equal(find(), null);
+});
+
+test('session discovery ports the old debug-id cases and handles hashed project folders', t => {
+  const ctx = scratch(t);
+  const sessionId = '12345678-1234-1234-1234-123456789abc';
+  const project = path.join(ctx.dir, 'projects', '-tmp-steer-test');
+  const target = path.join(project, `${sessionId}.jsonl`);
+  writeTranscript(target, [{}]);
+  const debug = `/tmp/debug/${sessionId}.txt`;
+  assert.equal(findTranscript('/tmp/steer-test', debug, ctx.dir, readers.readTranscript), target);
+  assert.equal(findTranscript('/tmp/no-match', debug, ctx.dir, readers.readTranscript), null);
+  writeTranscript(target, [{ cwd: '/tmp/no-match' }]);
+  assert.equal(findTranscript('/tmp/no-match', debug, ctx.dir, readers.readTranscript), target);
+  assert.throws(() => findTranscript(ctx.workDir, '/tmp/debug/bad.txt', ctx.dir, readers.readTranscript), /No session id/);
+});
+
+function evidenceFixture(ctx, runId = id) {
+  const transcript = path.join(ctx.dir, 'source/session.jsonl');
+  writeTranscript(transcript, entries(runId));
+  const workflow = path.join(ctx.dir, 'source/session/subagents/workflows/one/agent-workflow.jsonl');
+  writeTranscript(workflow, [{ type: 'assistant', isSidechain: true }]);
+  const jobsHome = path.join(ctx.dir, 'source-jobs');
+  const jobDir = path.join(jobsHome, 'repo/job');
+  const relayTranscript = path.join(jobDir, 'attempt/transcript.jsonl');
+  writeTranscript(relayTranscript, [{}]);
+  writeJson(path.join(jobDir, 'job.json'), { state: 'completed' });
+  for (const lock of ['job.lock.d', 'worker.lease.d', 'nested/other.lock.d']) writeJson(path.join(jobDir, lock, 'owner.json'), {});
+  const pointer = path.join(jobsHome, 'relays/codex.json');
+  writeJson(pointer, { jobDir, transcriptPath: relayTranscript });
+  return { transcript, workflow, jobsHome, jobDir, pointer, relayTranscript };
+}
+
+test('evidence copy preserves workflow paths, rewrites pointers and skips lock folders', t => {
+  const ctx = scratch(t);
+  const input = evidenceFixture(ctx);
+  const dir = path.join(ctx.dir, 'evidence');
+  const result = { ...analyzed(), evidence: { transcripts: [input.transcript, input.workflow, input.relayTranscript],
+    agents: [{ agentId: 'codex', pointer: input.pointer, jobDir: input.jobDir }] } };
+  const copied = copyEvidence(baseRun(input), result, dir);
+  assert.equal(copied.transcript, path.join(dir, 'copy/session/session.jsonl'));
+  assert.equal(fs.existsSync(path.join(dir, 'copy/session/session/subagents/workflows/one/agent-workflow.jsonl')), true);
+  const pointer = readJson(path.join(copied.jobsHome, 'relays/codex.json'));
+  assert.equal(pointer.jobDir, path.join(copied.jobsHome, 'repo/job'));
+  assert.equal(pointer.transcriptPath, path.join(pointer.jobDir, 'attempt/transcript.jsonl'));
+  assert.equal(fs.existsSync(pointer.transcriptPath), true);
+  assert.deepEqual(readJson(path.join(pointer.jobDir, 'job.json')), { state: 'completed' });
+  for (const lock of ['job.lock.d', 'worker.lease.d', 'nested/other.lock.d']) assert.equal(fs.existsSync(path.join(pointer.jobDir, lock)), false);
+});
+
+test('analyze CLI discovers prepared runs, uses overrides, and replays exactly from the copy', t => {
+  const ctx = scratch(t);
+  receipt(ctx);
+  const prepared = cli(ctx, ['prepare', 'fake', '--surface', 't3', '--work-dir', ctx.workDir, '--backends', 'codex']);
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const runId = prepared.stdout.split('\n')[0];
+  const input = evidenceFixture(ctx, runId);
+  const slug = ctx.workDir.replace(/[^a-zA-Z0-9]/g, '-');
+  const discovered = path.join(ctx.env.CLAUDE_CONFIG_DIR, 'projects', slug, 'main.jsonl');
+  writeTranscript(discovered, entries(runId));
+  const runDir = runDirectory(ctx.env.RELAY_LIVE_HOME, runId);
+  const args = ['analyze', runId, '--records-dir', ctx.recordsDir];
+  const first = cli(ctx, [...args, '--jobs-home', input.jobsHome]);
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(readJson(path.join(runDir, 'run.json')).transcript, discovered);
+  writeTranscript(discovered, entries(runId, 'not done'));
+  const explicit = cli(ctx, [...args, '--transcript', input.transcript, '--jobs-home', input.jobsHome]);
+  assert.equal(explicit.status, 0, explicit.stderr);
+  assert.match(explicit.stdout, /fake codex: pass delivered in 1.5 s/);
+  const metadata = readJson(path.join(runDir, 'run.json'));
+  assert.equal(metadata.transcript, input.transcript);
+  assert.equal(metadata.jobsHome, input.jobsHome);
+  const file = path.join(ctx.recordsDir, `${runId}.jsonl`);
+  const original = fs.readFileSync(file, 'utf8');
+  assert.equal(fs.readFileSync(path.join(runDir, 'records.jsonl'), 'utf8'), original);
+  assert.equal(JSON.parse(original).result, 'pass');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runDir, 'details.jsonl'), 'utf8')),
+    { transcript: input.transcript, jobsHome: input.jobsHome });
+  fs.rmSync(input.jobsHome, { recursive: true });
+  fs.rmSync(path.dirname(input.transcript), { recursive: true });
+  fs.rmSync(ctx.env.CLAUDE_CONFIG_DIR, { recursive: true });
+  const replay = cli(ctx, [...args, '--from-copy']);
+  assert.equal(replay.status, 0, replay.stderr);
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
+  assert.equal(fs.readFileSync(path.join(runDir, 'records.jsonl'), 'utf8'), original);
+});
+
+test('analyze uses environment jobs home, refuses absent run prompts and names malformed transcript lines', t => {
+  const ctx = scratch(t);
+  const created = createRun(ctx.env.RELAY_LIVE_HOME, check, { surface: 't3', backends: ['codex'], workDir: ctx.workDir, relayVersion: 'test' });
+  const transcript = path.join(ctx.dir, 'main.jsonl');
+  writeTranscript(transcript, entries(created.run.runId));
+  const calls = [];
+  const custom = { ...check, analyze(input) { calls.push(input); return analyzed(created.run); } };
+  const result = analyzeRun(created.run, created.evidenceDir, [custom], readers, { transcript, recordsDir: ctx.recordsDir, env: ctx.env });
+  assert.equal(calls[0].jobsHome, ctx.env.RELAY_JOBS_HOME);
+  assert.equal(result.records[0].result, 'pass');
+  assert.equal(result.records[0].relayVersion, 'test');
+  const untouched = { ...created.run }; delete untouched.promptSentAt;
+  writeTranscript(transcript, entries('different-run'));
+  assert.throws(() => analyzeRun(untouched, created.evidenceDir, [custom], readers, { transcript, recordsDir: ctx.recordsDir, env: ctx.env }), /no prompt/);
+  fs.writeFileSync(transcript, '{}\n{bad}\n');
+  const bad = cli(ctx, ['analyze', created.run.runId, '--transcript', transcript, '--records-dir', ctx.recordsDir]);
+  assert.equal(bad.status, 1);
+  assert.equal(bad.stderr, `Invalid JSON at ${transcript}:2\n`);
+});
+
+test('debug inspection recognizes relay and probe modules and rejects load errors', () => {
+  const log = '[DEBUG] Read hooks.json for plugin relay (enabled=true): /tmp/plugin/hooks/hooks.json\n' +
+    '[DEBUG] Hooks: SessionStart:startup [node "/tmp/plugin/scripts/hooks/session-lifecycle.mjs"] (plugin relay@inline)\n' +
+    '[DEBUG] hooks module relay@inline loaded (environment 5); events: session.send\n';
+  assert.equal(inspectDebug(log, '/tmp/plugin').moduleLoaded, true);
+  assert.equal(inspectDebug(log, '/tmp/plugin').pluginRead, true);
+  assert.equal(inspectDebug(log, '/tmp/plugin').startup, true);
+  assert.equal(inspectDebug(log, '/tmp/other').pluginRead, false);
+  const failed = inspectDebug(log + '[ERROR] /tmp/plugin/hooks/mod/register.js failed to load', '/tmp/plugin');
+  assert.equal(failed.moduleLoaded, false);
+  assert.equal(failed.moduleErrors.length, 1);
+  const probe = '[DEBUG] Read hooks.json for plugin wake-probe (enabled=true): /tmp/probe/hooks/hooks.json\n' +
+    '[DEBUG] hooks module wake-probe@inline loaded (environment 6)\n';
+  assert.equal(inspectDebug(probe, '/tmp/probe', 'wake-probe').pluginRead, true);
+  assert.equal(inspectDebug(probe, '/tmp/probe', 'wake-probe').moduleLoaded, true);
+  assert.equal(inspectDebug(probe, '/tmp/probe', 'wake-probe').startup, false);
+  assert.equal(inspectDebug(probe + '[ERROR] /tmp/probe/hooks/register.js failed to load', '/tmp/probe', 'wake-probe').moduleLoaded, false);
+  assert.equal(inspectDebug('hooks module wake-probe@inline not loaded', '/tmp/probe', 'wake-probe').moduleLoaded, false);
+});
+
+test('terminal argv includes every plugin, the session bypass setting and model, with no config env override', () => {
+  const ctx = { pluginDir: '/tmp/relay', probeDirs: ['/tmp/probe one', '/tmp/probe-two'], sessionId: 'uuid', model: 'sonnet',
+    workDir: '/tmp/work', jobsHome: '/tmp/jobs', CLAUDE_CONFIG_DIR: '/tmp/should-not-be-added' };
+  const expected = ['claude', '--plugin-dir', '/tmp/relay', '--plugin-dir', '/tmp/probe one', '--plugin-dir', '/tmp/probe-two',
+    '--dangerously-skip-permissions', '--settings', '{"skipDangerousModePermissionPrompt":true}', '--debug', '--session-id', 'uuid', '--model', 'sonnet'];
+  assert.deepEqual(claudeArgs(ctx), expected);
+  const args = paneStartArgs(ctx, 'pane-name', 'uuid');
+  assert.deepEqual(args, ['start', 'pane-name', '/tmp/work', '--env', 'RELAY_JOBS_HOME=/tmp/jobs', '--', ...expected]);
+  assert.equal(args.some(arg => arg.includes('CLAUDE_CONFIG_DIR')), false);
+});
+
+const fakeDriver = `const driver = async (ctx, check, { run }) => {
+  const settings = path.join(process.env.CLAUDE_CONFIG_DIR, 'settings.json');
+  if (process.env.SETTINGS_ACTION === 'write') {
+    fs.mkdirSync(path.dirname(settings), { recursive: true }); fs.writeFileSync(settings, '{"changed":true}');
+  }
+  if (process.env.SETTINGS_ACTION === 'delete') fs.rmSync(settings);
+  if (process.env.SETUP_FAILURE) throw new Error('Setup failed.');
+  const transcript = path.join(ctx.evidenceDir, 'original.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'user', timestamp: '2026-10-22T10:30:15.000Z', version: '2.1.308', message: { content: 'Live suite run ' + ctx.runId + '.' } },
+    { type: 'assistant', timestamp: '2026-10-22T10:30:18.500Z', message: { model: 'sonnet', content: [{ type: 'text', text: process.env.NO_MARKER ? 'unfinished' : check.marker }] } }
+  ].map(JSON.stringify).join('\\n') + '\\n');
+  run.promptSentAt = '2026-10-22T10:30:15.000Z'; run.transcript = transcript;
+};`;
+
+for (const state of ['unchanged', 'absent', 'changed', 'created', 'deleted']) {
+  test(`settings guard in a child process: ${state}`, t => {
+    const ctx = scratch(t);
+    const pluginDir = receipt(ctx);
+    const settings = path.join(ctx.env.CLAUDE_CONFIG_DIR, 'settings.json');
+    const existed = !['absent', 'created'].includes(state);
+    const before = '{ "original": true }\n';
+    if (existed) { fs.mkdirSync(path.dirname(settings), { recursive: true }); fs.writeFileSync(settings, before); }
+    if (['changed', 'created'].includes(state)) ctx.env.SETTINGS_ACTION = 'write';
+    if (state === 'deleted') ctx.env.SETTINGS_ACTION = 'delete';
+    const result = cli(ctx, ['run', 'fake', '--plugin-dir', pluginDir, '--work-dir', ctx.workDir,
+      '--jobs-home', ctx.env.RELAY_JOBS_HOME, '--records-dir', ctx.recordsDir, '--backends', 'codex'], fakeDriver);
+    const changed = !['unchanged', 'absent'].includes(state);
+    assert.equal(result.status, changed ? 1 : 0, result.stderr);
+    const runDir = path.join(ctx.env.RELAY_LIVE_HOME, 'runs', fs.readdirSync(path.join(ctx.env.RELAY_LIVE_HOME, 'runs'))[0]);
+    const run = readJson(path.join(runDir, 'run.json'));
+    assert.equal(run.settingsChanged, changed);
+    assert.equal(readRecords(ctx.recordsDir)[0].result, 'pass');
+    const copy = path.join(runDir, 'settings.before.json');
+    assert.equal(fs.existsSync(copy), changed);
+    if (changed) {
+      assert.equal(run.settingsExistedBefore, existed);
+      assert.equal(fs.readFileSync(copy, 'utf8'), existed ? before : 'null\n');
+      assert.equal(result.stderr, `~/.claude/settings.json changed during the run; compare it with ${copy}\n`);
+    } else assert.equal(result.stderr, '');
+  });
+}
+
+test('a setup failure writes no record, and a sent prompt without a marker writes failures', t => {
+  const ctx = scratch(t);
+  const pluginDir = receipt(ctx);
+  const args = ['run', 'fake', '--plugin-dir', pluginDir, '--work-dir', ctx.workDir, '--jobs-home', ctx.env.RELAY_JOBS_HOME,
+    '--records-dir', ctx.recordsDir];
+  ctx.env.SETUP_FAILURE = '1';
+  const failed = cli(ctx, args, fakeDriver);
+  assert.equal(failed.status, 1);
+  assert.equal(failed.stderr, 'Setup failed.\n');
+  assert.equal(fs.existsSync(ctx.recordsDir), false);
+  const runs = path.join(ctx.env.RELAY_LIVE_HOME, 'runs');
+  const runDir = path.join(runs, fs.readdirSync(runs)[0]);
+  assert.equal(fs.existsSync(path.join(runDir, 'records.jsonl')), false);
+  assert.equal(readJson(path.join(runDir, 'run.json')).error, 'Setup failed.');
+  delete ctx.env.SETUP_FAILURE;
+  ctx.env.NO_MARKER = '1';
+  const missing = cli(ctx, args, fakeDriver);
+  assert.equal(missing.status, 1, missing.stderr);
+  assert.deepEqual(readRecords(ctx.recordsDir).map(row => row.result), ['fail', 'fail', 'fail', 'fail']);
+  assert.ok(readRecords(ctx.recordsDir).every(row => row.reason === 'The lead did not print FAKE-DONE.'));
+});
+
+test('runTerminal override receives the contract context and skips the pane driver', async t => {
+  const ctx = scratch(t);
+  const pluginDir = receipt(ctx);
+  let called = 0, driverCalls = 0, seen;
+  const override = { ...check, async runTerminal(input) {
+    called++; seen = input;
+    const transcript = path.join(input.evidenceDir, 'override.jsonl');
+    writeTranscript(transcript, entries(input.runId));
+    return { ...analyzed(baseRun({ backends: input.backends })), evidence: { transcripts: [transcript], agents: [] } };
+  } };
+  const options = parseArgs(['run', 'fake', '--plugin-dir', pluginDir, '--work-dir', ctx.workDir,
+    '--jobs-home', ctx.env.RELAY_JOBS_HOME, '--records-dir', ctx.recordsDir, '--backends', 'codex'], [override], readers.BACKENDS);
+  const status = await runChecks(options, [override], readers, { env: ctx.env, log() {}, warn() {}, driver() { driverCalls++; throw new Error('Pane driver called'); } });
+  assert.equal(status, 0);
+  assert.equal(called, 1);
+  assert.equal(driverCalls, 0);
+  assert.deepEqual(Object.keys(seen), ['runId', 'backends', 'pluginDir', 'probeDirs', 'workDir', 'jobsHome', 'evidenceDir', 'model', 'timeoutMinutes']);
+  assert.equal(seen.timeoutMinutes, 7);
+  assert.equal(seen.model, 'sonnet');
+  assert.deepEqual(seen.backends, ['codex']);
+  assert.equal(readRecords(ctx.recordsDir)[0].result, 'pass');
+});
+
+for (const mode of ['complete', 'bypass', 'module-error', 'SIGINT', 'SIGTERM']) {
+  test(`terminal driver with a fake pane: ${mode}`, async t => {
+    const ctx = scratch(t);
+    fs.mkdirSync(path.join(ctx.workDir, '.git'));
+    const created = createRun(ctx.env.RELAY_LIVE_HOME, registry[1], { surface: 'terminal', backends: ['codex'],
+      workDir: ctx.workDir, jobsHome: ctx.env.RELAY_JOBS_HOME, relayVersion: 'test' });
+    const input = { runId: created.run.runId, backends: ['codex'], pluginDir: '/tmp/plugin', probeDirs: ['/tmp/probe'],
+      workDir: ctx.workDir, jobsHome: ctx.env.RELAY_JOBS_HOME, evidenceDir: created.evidenceDir, model: 'sonnet', timeoutMinutes: 1 };
+    const calls = [];
+    let polls = 0, transcript;
+    const drive = (args, prompt) => {
+      calls.push(args);
+      if (args[0] === 'start') {
+        const sessionId = args[args.indexOf('--session-id') + 1];
+        transcript = path.join(ctx.env.CLAUDE_CONFIG_DIR, 'projects', ctx.workDir.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);
+        const debug = path.join(ctx.env.CLAUDE_CONFIG_DIR, 'debug', `${sessionId}.txt`);
+        fs.mkdirSync(path.dirname(debug), { recursive: true });
+        fs.writeFileSync(debug, '[DEBUG] Read hooks.json for plugin relay (enabled=true): /tmp/plugin/hooks/hooks.json\n' +
+          '[DEBUG] hooks module relay@inline loaded\n' +
+          '[DEBUG] Read hooks.json for plugin wake-probe (enabled=true): /tmp/probe/hooks/hooks.json\n' +
+          (mode === 'module-error' ? '[ERROR] hooks module wake-probe@inline failed to load\n' : '[DEBUG] hooks module wake-probe@inline loaded\n'));
+      }
+      if (args[0] === 'read' && args[2] === '0') {
+        if (mode === 'bypass') return 'bypass permissions: Yes, I accept';
+        return polls++ === 0 ? 'Yes, I trust this folder' : 'ready';
+      }
+      if (args[0] === 'send') {
+        assert.equal(prompt, check.prompt({ runId: input.runId, backends: ['codex'] }));
+        writeTranscript(transcript, entries(input.runId));
+        if (mode.startsWith('SIG')) process.emit(mode);
+      }
+      if (args[0] === 'read') return 'FAKE-DONE';
+      return 'pane command';
+    };
+    const before = [process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')];
+    const action = runTerminal(input, registry[1], { run: created.run, save() {}, readers, env: ctx.env, drive,
+      pause: async () => {}, log() {}, warn() {}, keep: mode.startsWith('SIG') });
+    if (mode === 'complete') await action;
+    else await assert.rejects(action, mode === 'bypass' ? /bypass-permissions dialog/ : mode === 'module-error' ? /wake-probe hooks module failed/ : /Interrupted/);
+    assert.equal(calls.filter(args => args[0] === 'stop').length, 1);
+    assert.equal(calls.filter(args => args[0] === 'send').length, ['bypass', 'module-error'].includes(mode) ? 0 : 1);
+    assert.equal(calls.some(args => args[0] === 'trust'), mode !== 'bypass');
+    assert.equal(Boolean(created.run.promptSentAt), !['bypass', 'module-error'].includes(mode));
+    if (created.run.promptSentAt) assert.equal(created.run.transcript, transcript);
+    assert.equal(created.run.interrupted, mode.startsWith('SIG'));
+    assert.deepEqual([process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')], before);
+  });
+}
+
+test('run all executes checks serially in fresh work and jobs folders and canonical backend order', async t => {
+  const ctx = scratch(t);
+  const pluginDir = receipt(ctx);
+  const options = parseArgs(['run', 'all', '--plugin-dir', pluginDir, '--records-dir', ctx.recordsDir,
+    '--backends', 'kimi,codex', '--timeout-minutes', '3'], registry, readers.BACKENDS);
+  const calls = [];
+  let active = false;
+  const status = await main(['run', 'all', '--plugin-dir', pluginDir, '--records-dir', ctx.recordsDir,
+    '--backends', 'kimi,codex', '--timeout-minutes', '3'], registry, readers, { env: ctx.env, log() {}, warn() {},
+    driver: async (input, selected, { run }) => {
+      assert.equal(active, false); active = true;
+      calls.push([selected.id, input]);
+      t.after(() => {
+        fs.rmSync(input.workDir, { recursive: true, force: true });
+        fs.rmSync(input.jobsHome, { recursive: true, force: true });
+      });
+      await Promise.resolve();
+      writeTranscript(path.join(input.evidenceDir, 'main.jsonl'), entries(input.runId));
+      run.promptSentAt = start;
+      run.transcript = path.join(input.evidenceDir, 'main.jsonl');
+      active = false;
+    } });
+  assert.equal(status, 0);
+  assert.deepEqual(calls.map(([id]) => id), options.checks);
+  assert.notEqual(calls[0][1].workDir, calls[1][1].workDir);
+  assert.notEqual(calls[0][1].jobsHome, calls[1][1].jobsHome);
+  for (const [, input] of calls) {
+    assert.match(input.workDir, /^\/tmp\/relay-live-work-/);
+    assert.match(input.jobsHome, /^\/tmp\/relay-live-jobs-/);
+    assert.deepEqual(input.backends, ['codex', 'kimi']);
+    assert.equal(input.timeoutMinutes, 3);
+  }
+  assert.equal(readRecords(ctx.recordsDir).length, 4);
+  assert.deepEqual(calls[1][1].probeDirs, [path.join(root, 'scripts/live/probes/wake-probe')]);
+});
+
+test('a sent prompt with no transcript records failures that replay from empty copied evidence', t => {
+  const ctx = scratch(t);
+  const created = createRun(ctx.env.RELAY_LIVE_HOME, check, { surface: 'terminal', backends: ['codex'],
+    workDir: ctx.workDir, jobsHome: ctx.env.RELAY_JOBS_HOME, relayVersion: 'test', promptSentAt: start });
+  const first = analyzeRun(created.run, created.evidenceDir, registry, readers, { recordsDir: ctx.recordsDir, env: ctx.env });
+  assert.equal(first.records[0].result, 'fail');
+  assert.equal(first.records[0].reason, 'The lead did not print FAKE-DONE.');
+  assert.equal(first.records[0].startedAt, null);
+  assert.equal(first.records[0].finishedAt, null);
+  assert.equal(first.records[0].durationSeconds, null);
+  fs.rmSync(created.run.transcript);
+  const replay = analyzeRun(created.run, created.evidenceDir, registry, readers, { recordsDir: ctx.recordsDir, env: ctx.env, fromCopy: true });
+  assert.deepEqual(replay.records, first.records);
+});
+
+// The capability table in the repository is generated from the records beside it; a hand edit,
+// or a record committed without regenerating the table, fails here.
+test('the committed capability table matches the committed records', () => {
+  const result = spawnSync(process.execPath, [path.join(root, 'scripts/live/suite.mjs'), 'table', '--check'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+});

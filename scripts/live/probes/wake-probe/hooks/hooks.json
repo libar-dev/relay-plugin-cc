@@ -1,0 +1,4 @@
+{
+  "description": "A module that registers the tool mcp__wake-probe__send and answers its calls by sending the message with $.session.send.",
+  "modules": ["./register.js"]
+}

@@ -1,0 +1,5 @@
+{
+  "name": "wake-probe",
+  "version": "0.1.0",
+  "description": "Live-suite probe for relay: a tool the model calls to send a message to an agent with $.session.send, the path a plugin's button takes."
+}
