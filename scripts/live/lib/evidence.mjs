@@ -83,7 +83,7 @@ export function formatSeconds(list) {
   const values = list.filter(Number.isFinite);
   if (!values.length) return '—';
   const low = Math.min(...values), high = Math.max(...values);
-  return `${low.toFixed(1)}${low === high ? '' : `–${high.toFixed(1)}`} s`;
+  return `${low.toFixed(1)}${low.toFixed(1) === high.toFixed(1) ? '' : `–${high.toFixed(1)}`} s`;
 }
 
 export function toolCalls(entries, sidechain = false) {
@@ -494,9 +494,11 @@ export function commandRuns(entries, run = {}) {
     if (!input) continue;
     let endIndex = entries.findIndex((entry, index) => index > i && commandBoundary(entry));
     if (endIndex < 0) endIndex = entries.length;
+    // Claude Code 2.1.308 records a command a plugin answered without its arguments, in the input
+    // entry and in `commandRun` alike, so the answer is matched by the command's name; a check reads
+    // which job a command reached from its output.
     const answerIndex = entries.findIndex((entry, index) => index > i && index < endIndex && !entry.isSidechain &&
-      entry.type === 'system' && entry.subtype === 'local_command' &&
-      entry.commandRun?.command === input.command && entry.commandRun?.args === input.args);
+      entry.type === 'system' && entry.subtype === 'local_command' && entry.commandRun?.command === input.command);
     const answer = answerIndex < 0 ? null : entries[answerIndex];
     const enqueue = entries.slice(previousAnswer + 1, i).findLast(entry => !entry.isSidechain &&
       entry.type === 'queue-operation' && entry.operation === 'enqueue');

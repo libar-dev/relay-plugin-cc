@@ -398,7 +398,9 @@ about 80 ms, before the sender's `SendMessage` returns.
 shell (`node <plugin root>/scripts/companion.mjs <command> <arguments as typed>`, in the session's directory), and
 its output is the command's answer. No model turn starts and nothing costs tokens: `claude -p "/relay:status"`
 reports `num_turns: 0`. A model no longer retells the output, so nothing has to ask it not to summarize a report.
-Like every plugin command, these run once the current turn has ended.
+Like every plugin command, these run once the current turn has ended. Claude Code 2.1.308 shows and
+records a command a plugin answered without its arguments (`/relay:result`, not `/relay:result <job>`);
+the hook gets them, and the output names the job.
 
 Every surface draws the answer as Markdown. The terminal draws a command's text as Markdown, where a `---` line
 right after the state block turns the block into a heading, and T3 Code shows it as the assistant's message, with

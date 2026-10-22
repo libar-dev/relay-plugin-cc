@@ -73,7 +73,8 @@ export function plannedCommands(run) {
 }
 
 export function requireCommand(row, text) {
-  if (!row || `/${row.command}${row.args ? ` ${row.args}` : ''}` !== text || !row.answer) throw new Error(`Missing answer to ${text}.`);
+  // The transcript holds the command without its arguments (see commandRuns).
+  if (!row || `/${row.command}` !== text.split(' ')[0] || !row.answer) throw new Error(`Missing answer to ${text}.`);
   if (row.plugin !== 'relay') throw new Error(`${text} was not answered by relay.`);
   if (!row.noModelReply) throw new Error(`Model reply after ${text}.`);
   if (row.seconds === null || row.seconds < 0) throw new Error(`Missing or invalid start time for ${text}.`);
@@ -144,7 +145,9 @@ export default {
         requireStatus(parsed[0], done, 'completed');
         requireStatus(parsed[0], running, 'running');
         requireResult(parsed[1], done);
-        if (!parsed[2].verbatim.split('\n').includes('state: cancelled') || running.job.state !== 'cancelled') throw new Error('Cancel has the wrong state.');
+        const cancelled = parsed[2].verbatim.split('\n');
+        if (!cancelled.includes(`job: ${running.id}`)) throw new Error('Cancel shows another job.');
+        if (!cancelled.includes('state: cancelled') || running.job.state !== 'cancelled') throw new Error('Cancel has the wrong state.');
         requireStatus(parsed[3], running, 'cancelled');
         result.timings = { answeredSeconds: [0, 1, 3].map(index => rows[relevant[index].index].seconds),
           cancelledSeconds: [rows[relevant[2].index].seconds] };

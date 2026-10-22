@@ -1376,8 +1376,12 @@ test('timing uses sentAt first, otherwise the latest enqueue since the previous 
   const b = commandEntries('t3', '/relay:status', moduleAnswer('No jobs.\n'), 1).filter(entry => entry.type !== 'queue-operation');
   assert.deepEqual(commandRuns([...a, ...b]).map(row => row.seconds), [1, null]);
   assert.deepEqual(commandRuns([...a, ...b], { commands: [{ sentAt: '2026-10-22T12:00:00Z' }, { sentAt: '2026-10-22T12:00:10Z' }] }).map(row => row.seconds), [2, 2]);
+  // Claude Code records a plugin-answered command without its arguments, so only the name pairs.
+  const noArgs = structuredClone(a);
+  noArgs.at(-1).commandRun.args = '';
+  assert.notEqual(commandRuns(noArgs)[0].answer, null);
   const mismatch = structuredClone(a);
-  mismatch.at(-1).commandRun.args = 'wrong';
+  mismatch.at(-1).commandRun.command = 'relay:result';
   assert.equal(commandRuns(mismatch)[0].answer, null);
   const later = [...mismatch, ...b];
   assert.equal(commandRuns(later)[0].answer, null, 'a later command cannot supply the missing answer');
