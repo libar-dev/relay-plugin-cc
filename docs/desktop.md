@@ -23,7 +23,7 @@ Checked with: Claude for Mac 3.6556.1 (8e298a), its Claude Code 2.1.308, relay 3
 ## Requirements
 
 - **The Code tab's own Claude Code, 2.1.307 or later.** The app ships a Claude Code of its own, whose version
-  can differ from the `claude` in your terminal. The app has no slash command that prints it. On macOS, the
+  can differ from the `claude` in your terminal. We found no command in the app that prints it. On macOS, the
   folder names in `~/Library/Application Support/Claude/claude-code/` are the versions it holds.
 - **The backends**, installed and signed in on the machine where the session runs, as for the CLI
   ([README](../README.md#backends)). The app starts Claude Code with its own environment, so check that a session
@@ -41,8 +41,8 @@ claude plugin marketplace add libar-dev/relay-plugin-cc
 claude plugin install relay@libar-relay
 ```
 
-Add the marketplace with the CLI; the app has no way to add one. A session that was open before the install does
-not have the plugin: start a new session in the Code tab.
+Add the marketplace with the CLI; we found no way to add one in the app. A session that was open before the
+install does not have the plugin: start a new session in the Code tab.
 
 The app also loads the MCP servers in its own `claude_desktop_config.json`. On a name clash, its entry wins over
 the one in `~/.claude.json`.
