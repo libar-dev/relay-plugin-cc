@@ -22,7 +22,7 @@ it: where the work goes, what each step must pass, and how the work was done in 
    `scripts/live/checks/`.
 3. **Phases 2 and 3**, as two PRs that can run at the same time: commands answered by the module, and the spawn
    check with TaskStop cancelling the job (D2). Both add hooks to `hooks/mod/register.js`; whichever merges second
-   rebases.
+   rebases. Phase 3: PR #PRNUM.
 4. **Phase 4**, in this order: the companion's `--json` changed in place (the board reads it), the status line,
    the board pane.
 5. **Phase 6**, the investigation report, at any point. No code.
@@ -77,6 +77,19 @@ What worked in Phase 1:
   with `args {"dir": "/home/darkomijic/dev-libar/relay-plugin-cc-smoke"}` and its plain fan-out, then
   `scripts/smoke/uninstall-local.sh`. For T3, the T3 project `relay-plugin-cc-smoke` points at that folder, and
   its threads load the installed build.
+
+## What Phase 3 learned about the tools
+
+- Claude Code keeps one marketplace registry per config, so two smoke folders cannot both hold `relay@relay-smoke`.
+  A second folder installs with `scripts/smoke/install-local.sh DIR --name relay-smoke-<suffix>`; the receipt keeps
+  the name, and `uninstall-local.sh` reads it.
+- A command hook's output reaches the transcript as an attachment (`hook_additional_context`, with the tool call's
+  id), so a check can prove the hook ran and what it said.
+- `pane.sh pid NAME` prints the pane's process id, which is Claude's. Scanning process arguments for a session id
+  is no proof: the tmux server keeps the command line of the session that started it.
+- A lead told to pass a script verbatim may end it with a newline.
+- `suite.mjs analyze --from-copy` rewrites `run.json`, `details.jsonl` and `records.jsonl` in the run's folder; a
+  read-only replay copies the folder under `/tmp` and points `RELAY_LIVE_HOME` at the copy.
 
 ## What Phase 1 learned about the tools
 

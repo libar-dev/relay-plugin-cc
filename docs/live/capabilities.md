@@ -10,23 +10,23 @@ holds the checks; the records below name the builds.
 
 | Check | Codex | Grok Build | ZCode | Kimi Code |
 |---|---|---|---|---|
-| Steer a running job with the main thread's SendMessage | into the running turn, delivered in 2.2–2.8 s | into the running turn, delivered in 2.2–4.8 s | into the running turn, delivered in 2.8–3.3 s | as the next turn, delivered in 2.2–2.8 s |
-| Steer a running job with a Workflow agent's SendMessage | into the running turn, delivered in 3.3 s | into the running turn, delivered in 2.9 s | into the running turn, delivered in 4.4 s | as the next turn, delivered in 3.3 s |
-| Steer a running job with a plugin's session.send | into the running turn, delivered in 3.1 s | into the running turn, delivered in 4.4 s | into the running turn, delivered in 3.2 s | as the next turn, delivered in 3.3 s |
-| Continue a job after its hand-back | a new turn of the job, delivered in 2.5 s | a new turn of the job, delivered in 2.2 s | a new turn of the job, delivered in 2.3 s | a new turn of the job, delivered in 3.2 s |
-| Stop a running job with TaskStop | — | — | — | — |
-| End the Claude session during a job; the job runs on | — | — | — | — |
-| Spawn with a bad header fails at once | — | — | — | — |
+| Steer a running job with the main thread's SendMessage | into the running turn, delivered in 2.1–3.0 s | into the running turn, delivered in 2.2–2.9 s | into the running turn, delivered in 1.7–3.3 s | as the next turn, delivered in 1.7–3.3 s |
+| Steer a running job with a Workflow agent's SendMessage | into the running turn, delivered in 3.7 s | into the running turn, delivered in 3.2 s | into the running turn, delivered in 3.7 s | as the next turn, delivered in 3.3 s |
+| Steer a running job with a plugin's session.send | into the running turn, delivered in 3.4 s | into the running turn, delivered in 4.4 s | into the running turn, delivered in 3.6 s | as the next turn, delivered in 3.3 s |
+| Continue a job after its hand-back | a new turn of the job, delivered in 3.2 s | a new turn of the job, delivered in 3.6 s | a new turn of the job, delivered in 4.3 s | a new turn of the job, delivered in 2.6 s |
+| Stop a running job with TaskStop | cancelled in 0.3 s | cancelled in 0.3 s | cancelled in 0.4 s | cancelled in 0.5 s |
+| End the Claude session during a job; the job runs on | ran on and completed 150.6 s after the session ended | ran on and completed 147.1 s after the session ended | ran on and completed 193.6 s after the session ended | ran on and completed 152.6 s after the session ended |
+| Spawn with a bad header fails at once | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs |
 
 ## T3 Code
 
 | Check | Codex | Grok Build | ZCode | Kimi Code |
 |---|---|---|---|---|
-| Steer a running job with the main thread's SendMessage | into the running turn, delivered in 2.0–4.2 s | into the running turn, delivered in 1.8–5.9 s | into the running turn, delivered in 2.3–6.2 s | as the next turn, delivered in 2.1–5.9 s |
+| Steer a running job with the main thread's SendMessage | into the running turn, delivered in 1.4–4.3 s | into the running turn, delivered in 2.3–5.5 s | into the running turn, delivered in 2.2–5.9 s | as the next turn, delivered in 2.6–6.1 s |
 | Steer a running job with a Workflow agent's SendMessage | into the running turn, delivered in 5.4 s | into the running turn, delivered in 6.3 s | into the running turn, delivered in 7.3 s | as the next turn, delivered in 6.3 s |
 | Continue a job after its hand-back | a new turn of the job, delivered in 4.6 s | a new turn of the job, delivered in 3.9 s | a new turn of the job, delivered in 4.3 s | a new turn of the job, delivered in 4.0 s |
-| Stop a running job with TaskStop | — | — | — | — |
-| Spawn with a bad header fails at once | — | — | — | — |
+| Stop a running job with TaskStop | cancelled in 0.4 s | cancelled in 0.4 s | cancelled in 0.4 s | cancelled in 0.6 s |
+| Spawn with a bad header fails at once | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs | refused at the spawn with the parser's message; a valid header runs |
 
 ## How each backend took a message
 
@@ -38,26 +38,38 @@ holds the checks; the records below name the builds.
 
 | Check | Surface | Backend | Model | Relay | Claude Code | Lead | Date | Record |
 |---|---|---|---|---|---|---|---|---|
-| steer-main | terminal | codex | gpt-6.1-sol | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100750Z-steer-main-terminal-bc89](records/20261022T100750Z-steer-main-terminal-bc89.jsonl) |
-| steer-main | terminal | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100750Z-steer-main-terminal-bc89](records/20261022T100750Z-steer-main-terminal-bc89.jsonl) |
-| steer-main | terminal | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100750Z-steer-main-terminal-bc89](records/20261022T100750Z-steer-main-terminal-bc89.jsonl) |
-| steer-main | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100750Z-steer-main-terminal-bc89](records/20261022T100750Z-steer-main-terminal-bc89.jsonl) |
-| steer-workflow | terminal | codex | gpt-6.1-sol | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101336Z-steer-workflow-terminal-842a](records/20261022T101336Z-steer-workflow-terminal-842a.jsonl) |
-| steer-workflow | terminal | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101336Z-steer-workflow-terminal-842a](records/20261022T101336Z-steer-workflow-terminal-842a.jsonl) |
-| steer-workflow | terminal | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101336Z-steer-workflow-terminal-842a](records/20261022T101336Z-steer-workflow-terminal-842a.jsonl) |
-| steer-workflow | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101336Z-steer-workflow-terminal-842a](records/20261022T101336Z-steer-workflow-terminal-842a.jsonl) |
-| steer-plugin | terminal | codex | gpt-6.1-sol | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101809Z-steer-plugin-terminal-23fe](records/20261022T101809Z-steer-plugin-terminal-23fe.jsonl) |
-| steer-plugin | terminal | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101809Z-steer-plugin-terminal-23fe](records/20261022T101809Z-steer-plugin-terminal-23fe.jsonl) |
-| steer-plugin | terminal | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101809Z-steer-plugin-terminal-23fe](records/20261022T101809Z-steer-plugin-terminal-23fe.jsonl) |
-| steer-plugin | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T101809Z-steer-plugin-terminal-23fe](records/20261022T101809Z-steer-plugin-terminal-23fe.jsonl) |
-| continue | terminal | codex | gpt-6.1-sol | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T102242Z-continue-terminal-c6dd](records/20261022T102242Z-continue-terminal-c6dd.jsonl) |
-| continue | terminal | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T102242Z-continue-terminal-c6dd](records/20261022T102242Z-continue-terminal-c6dd.jsonl) |
-| continue | terminal | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T102242Z-continue-terminal-c6dd](records/20261022T102242Z-continue-terminal-c6dd.jsonl) |
-| continue | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T102242Z-continue-terminal-c6dd](records/20261022T102242Z-continue-terminal-c6dd.jsonl) |
-| steer-main | t3 | codex | gpt-6.1-sol | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-steer-main-t3-f226](records/20261022T100753Z-steer-main-t3-f226.jsonl) |
-| steer-main | t3 | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-steer-main-t3-f226](records/20261022T100753Z-steer-main-t3-f226.jsonl) |
-| steer-main | t3 | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-steer-main-t3-f226](records/20261022T100753Z-steer-main-t3-f226.jsonl) |
-| steer-main | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-steer-main-t3-f226](records/20261022T100753Z-steer-main-t3-f226.jsonl) |
+| steer-main | terminal | codex | gpt-6.1-sol | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130008Z-steer-main-terminal-77bb](records/20261022T130008Z-steer-main-terminal-77bb.jsonl) |
+| steer-main | terminal | grok | grok-4.7 | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130008Z-steer-main-terminal-77bb](records/20261022T130008Z-steer-main-terminal-77bb.jsonl) |
+| steer-main | terminal | zcode | glm-5.3-flash | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130008Z-steer-main-terminal-77bb](records/20261022T130008Z-steer-main-terminal-77bb.jsonl) |
+| steer-main | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130008Z-steer-main-terminal-77bb](records/20261022T130008Z-steer-main-terminal-77bb.jsonl) |
+| steer-workflow | terminal | codex | gpt-6.1-sol | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130545Z-steer-workflow-terminal-2913](records/20261022T130545Z-steer-workflow-terminal-2913.jsonl) |
+| steer-workflow | terminal | grok | grok-4.7 | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130545Z-steer-workflow-terminal-2913](records/20261022T130545Z-steer-workflow-terminal-2913.jsonl) |
+| steer-workflow | terminal | zcode | glm-5.3-flash | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130545Z-steer-workflow-terminal-2913](records/20261022T130545Z-steer-workflow-terminal-2913.jsonl) |
+| steer-workflow | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130545Z-steer-workflow-terminal-2913](records/20261022T130545Z-steer-workflow-terminal-2913.jsonl) |
+| steer-plugin | terminal | codex | gpt-6.1-sol | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131029Z-steer-plugin-terminal-c691](records/20261022T131029Z-steer-plugin-terminal-c691.jsonl) |
+| steer-plugin | terminal | grok | grok-4.7 | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131029Z-steer-plugin-terminal-c691](records/20261022T131029Z-steer-plugin-terminal-c691.jsonl) |
+| steer-plugin | terminal | zcode | glm-5.3-flash | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131029Z-steer-plugin-terminal-c691](records/20261022T131029Z-steer-plugin-terminal-c691.jsonl) |
+| steer-plugin | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131029Z-steer-plugin-terminal-c691](records/20261022T131029Z-steer-plugin-terminal-c691.jsonl) |
+| continue | terminal | codex | gpt-6.1-sol | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131519Z-continue-terminal-554d](records/20261022T131519Z-continue-terminal-554d.jsonl) |
+| continue | terminal | grok | grok-4.7 | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131519Z-continue-terminal-554d](records/20261022T131519Z-continue-terminal-554d.jsonl) |
+| continue | terminal | zcode | glm-5.3-flash | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131519Z-continue-terminal-554d](records/20261022T131519Z-continue-terminal-554d.jsonl) |
+| continue | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131519Z-continue-terminal-554d](records/20261022T131519Z-continue-terminal-554d.jsonl) |
+| stop | terminal | codex | gpt-6.1-sol | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131737Z-stop-terminal-83ce](records/20261022T131737Z-stop-terminal-83ce.jsonl) |
+| stop | terminal | grok | grok-4.7 | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131737Z-stop-terminal-83ce](records/20261022T131737Z-stop-terminal-83ce.jsonl) |
+| stop | terminal | zcode | glm-5.3-flash | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131737Z-stop-terminal-83ce](records/20261022T131737Z-stop-terminal-83ce.jsonl) |
+| stop | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T131737Z-stop-terminal-83ce](records/20261022T131737Z-stop-terminal-83ce.jsonl) |
+| session-end | terminal | codex | gpt-6.1-sol | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T132034Z-session-end-terminal-1dcd](records/20261022T132034Z-session-end-terminal-1dcd.jsonl) |
+| session-end | terminal | grok | grok-4.7 | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T132034Z-session-end-terminal-1dcd](records/20261022T132034Z-session-end-terminal-1dcd.jsonl) |
+| session-end | terminal | zcode | glm-5.3-flash | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T132034Z-session-end-terminal-1dcd](records/20261022T132034Z-session-end-terminal-1dcd.jsonl) |
+| session-end | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T132034Z-session-end-terminal-1dcd](records/20261022T132034Z-session-end-terminal-1dcd.jsonl) |
+| spawn-check | terminal | codex | gpt-6.1-sol | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T132407Z-spawn-check-terminal-4133](records/20261022T132407Z-spawn-check-terminal-4133.jsonl) |
+| spawn-check | terminal | grok | grok-4.7 | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T132407Z-spawn-check-terminal-4133](records/20261022T132407Z-spawn-check-terminal-4133.jsonl) |
+| spawn-check | terminal | zcode | glm-5.3-flash | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T132407Z-spawn-check-terminal-4133](records/20261022T132407Z-spawn-check-terminal-4133.jsonl) |
+| spawn-check | terminal | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T132407Z-spawn-check-terminal-4133](records/20261022T132407Z-spawn-check-terminal-4133.jsonl) |
+| steer-main | t3 | codex | gpt-6.1-sol | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130235Z-steer-main-t3-b1ba](records/20261022T130235Z-steer-main-t3-b1ba.jsonl) |
+| steer-main | t3 | grok | grok-4.7 | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130235Z-steer-main-t3-b1ba](records/20261022T130235Z-steer-main-t3-b1ba.jsonl) |
+| steer-main | t3 | zcode | glm-5.3-flash | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130235Z-steer-main-t3-b1ba](records/20261022T130235Z-steer-main-t3-b1ba.jsonl) |
+| steer-main | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130235Z-steer-main-t3-b1ba](records/20261022T130235Z-steer-main-t3-b1ba.jsonl) |
 | steer-workflow | t3 | codex | gpt-6.1-sol | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-steer-workflow-t3-1af0](records/20261022T100753Z-steer-workflow-t3-1af0.jsonl) |
 | steer-workflow | t3 | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-steer-workflow-t3-1af0](records/20261022T100753Z-steer-workflow-t3-1af0.jsonl) |
 | steer-workflow | t3 | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-steer-workflow-t3-1af0](records/20261022T100753Z-steer-workflow-t3-1af0.jsonl) |
@@ -66,3 +78,11 @@ holds the checks; the records below name the builds.
 | continue | t3 | grok | grok-4.7 | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-continue-t3-c51f](records/20261022T100753Z-continue-t3-c51f.jsonl) |
 | continue | t3 | zcode | glm-5.3-flash | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-continue-t3-c51f](records/20261022T100753Z-continue-t3-c51f.jsonl) |
 | continue | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.2 (6adeeaf74779) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T100753Z-continue-t3-c51f](records/20261022T100753Z-continue-t3-c51f.jsonl) |
+| stop | t3 | codex | gpt-6.1-sol | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130015Z-stop-t3-9798](records/20261022T130015Z-stop-t3-9798.jsonl) |
+| stop | t3 | grok | grok-4.7 | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130015Z-stop-t3-9798](records/20261022T130015Z-stop-t3-9798.jsonl) |
+| stop | t3 | zcode | glm-5.3-flash | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130015Z-stop-t3-9798](records/20261022T130015Z-stop-t3-9798.jsonl) |
+| stop | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130015Z-stop-t3-9798](records/20261022T130015Z-stop-t3-9798.jsonl) |
+| spawn-check | t3 | codex | gpt-6.1-sol | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130015Z-spawn-check-t3-ae52](records/20261022T130015Z-spawn-check-t3-ae52.jsonl) |
+| spawn-check | t3 | grok | grok-4.7 | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130015Z-spawn-check-t3-ae52](records/20261022T130015Z-spawn-check-t3-ae52.jsonl) |
+| spawn-check | t3 | zcode | glm-5.3-flash | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130015Z-spawn-check-t3-ae52](records/20261022T130015Z-spawn-check-t3-ae52.jsonl) |
+| spawn-check | t3 | kimi | kimi-code/kimi-for-coding | 3.0.0-dev.3 (9487e38f01c1) | 2.1.308 | claude-sonnet-5-5 | 2026-10-22 | [20261022T130015Z-spawn-check-t3-ae52](records/20261022T130015Z-spawn-check-t3-ae52.jsonl) |
