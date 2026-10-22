@@ -118,3 +118,48 @@ test("after a prompt turn that ran a notification as a second engine turn, a pro
   assert.equal(result.turnStatus, "failed");
   assert.equal(result.teardown, true);
 });
+
+test("a turn's last messages that Kimi records after its turn.ended, up to the engine turn's end, are its report", async t => {
+  /** @type {any} */
+  let ctx;
+  const assistant = (text, toolCalls = []) => line({ type: "agent.message.appended", kind: "event", message: { message: { role: "assistant", content: [{ type: "text", text }], toolCalls } } });
+  const tool = line({ type: "agent.message.appended", kind: "event", message: { message: { role: "tool", content: [{ type: "text", text: "ok" }] } } });
+  ctx = await scripted(t, async () => {
+    // As in a live record: the engine's batch of messages, the final answer included, drains
+    // after the prompt turn's turn.ended and prompt.completed, then the engine turn ends.
+    ctx.append(line({ type: "agent.message.appended", kind: "event", message: { message: { role: "user", content: [{ type: "text", text: "Review." }] }, meta: { source: "input", promptId: "p0", origin: { kind: "user" } } } })
+      + line({ type: "agent.turn.started", kind: "event", turnId: 0, queueItemId: "p0" })
+      + line({ type: "turn.prompt", agentId: "main", input: [{ type: "text", text: "Review." }], origin: { kind: "user" }, promptId: "p0", turnId: 0 })
+      + assistant("Reading.", [{ id: "c1" }]) + tool
+      + turnEnded(0)
+      + line({ type: "prompt.completed", promptId: "p0", reason: "completed" }));
+    setTimeout(() => ctx.append(assistant("Checking more.", [{ id: "c2" }]) + tool + assistant("The review.")), 100);
+    setTimeout(() => ctx.append(line({ type: "agent.turn.ended", kind: "event", turnId: 0, outcome: "done" })), 150);
+    return { stopReason: "end_turn" };
+  });
+  const result = await ctx.run("Review.");
+  assert.equal(result.turnStatus, "completed", JSON.stringify(result.error));
+  assert.equal(result.finalMessage, "The review.");
+});
+
+test("a notice's answer that Kimi records after its prompt turn's turn.ended, in a second engine turn, is the report", async t => {
+  /** @type {any} */
+  let ctx;
+  const assistant = (text, toolCalls = []) => line({ type: "agent.message.appended", kind: "event", message: { message: { role: "assistant", content: [{ type: "text", text }], toolCalls } } });
+  ctx = await scripted(t, async () => {
+    ctx.append(line({ type: "agent.message.appended", kind: "event", message: { message: { role: "user", content: [{ type: "text", text: "Start it." }] }, meta: { source: "input", promptId: "p0", origin: { kind: "user" } } } })
+      + line({ type: "agent.turn.started", kind: "event", turnId: 0, queueItemId: "p0" })
+      + line({ type: "turn.prompt", agentId: "main", input: [{ type: "text", text: "Start it." }], origin: { kind: "user" }, promptId: "p0", turnId: 0 })
+      + assistant("Started.")
+      + line({ type: "agent.turn.ended", kind: "event", turnId: 0, outcome: "done" })
+      // The task's notice runs as engine turn 1 inside prompt turn 0, whose turn.ended comes first.
+      + line({ type: "agent.turn.started", kind: "event", turnId: 1 })
+      + turnEnded(0));
+    setTimeout(() => ctx.append(assistant("The task finished.")), 100);
+    setTimeout(() => ctx.append(line({ type: "agent.turn.ended", kind: "event", turnId: 1, outcome: "done" })), 150);
+    return { stopReason: "end_turn" };
+  });
+  const result = await ctx.run("Start it.");
+  assert.equal(result.turnStatus, "completed", JSON.stringify(result.error));
+  assert.equal(result.finalMessage, "Started.The task finished.");
+});

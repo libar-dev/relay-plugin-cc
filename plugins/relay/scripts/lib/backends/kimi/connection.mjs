@@ -242,6 +242,7 @@ export class KimiConnection {
   // queued prompt runs Kimi's prompt hooks first, and busy time must not use the grace up.
   async watch(text, run, response, options, signal) {
     let idleSince = null;
+    let endedSince = null;
     for (;;) {
       const wire = this.wire.read();
       const prompt = wire.promptSince(run.from, text);
@@ -250,7 +251,16 @@ export class KimiConnection {
         options.onTurnId(prompt.promptId);
       }
       const turn = prompt?.turnId == null ? null : wire.turns.get(prompt.turnId);
-      if (turn?.ended) return { kind: "ended", turn };
+      // The turn's last messages can follow its `turn.ended`, up to the end of the engine turn
+      // that runs for it. The record decides the outcome then, and a record that never ends the
+      // engine turn holds the run for the grace at most.
+      if (turn?.ended) {
+        if (wire.engineTurn !== turn.turnId) return { kind: "ended", turn };
+        endedSince ??= Date.now();
+        if (Date.now() - endedSince >= SETTLE_MS || signal.aborted) return { kind: "ended", turn };
+        await sleep(POLL_MS, undefined, { signal }).catch(() => {});
+        continue;
+      }
       // Blocked by a hook, or cancelled, before a turn existed for it.
       if (prompt?.terminal && !prompt.started) return { kind: "terminal", record: prompt.terminal };
       if (response.error) return { kind: "rejected", error: response.error };
