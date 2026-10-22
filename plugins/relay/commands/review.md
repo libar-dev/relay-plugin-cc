@@ -1,7 +1,7 @@
 ---
 description: Run a read-only code review of the local git diff (working tree or branch): Codex's own reviewer on Codex, the plugin's review prompt on Grok, ZCode or Kimi; pick one with --backend
 argument-hint: '[--wait|--background] [--backend codex|grok|zcode|kimi] [--model <m>] [--effort <e>] [--grok-home H] [--kimi-home H] [--base <ref>] [--scope auto|working-tree|branch]'
-allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
+allowed-tools: Write, Read, Glob, Grep, Bash(node:*), AskUserQuestion
 ---
 
 Run a code review. On Codex it is Codex's own reviewer; on Grok, ZCode and Kimi it is the plugin's review prompt on a fresh read-only session, with the diff inlined in the prompt.
@@ -19,11 +19,12 @@ Execution mode rules:
 - If the raw arguments include `--wait`, do not ask. Run the review in the foreground.
 - If the raw arguments include `--background`, do not ask. Run the review in a Claude background task.
 - Otherwise, when the user typed the command, estimate the review size before asking:
-  - For working-tree review, start with `git status --short --untracked-files=all`.
-  - For working-tree review, also inspect both `git diff --shortstat --cached` and `git diff --shortstat`.
-  - For base-branch review, use `git diff --shortstat <base>...HEAD`.
-  - Treat untracked files or directories as reviewable work even when `git diff --shortstat` is empty.
-  - Only conclude there is nothing to review when the relevant working-tree status is empty or the explicit branch diff is empty.
+  - Prepare the argument file as described below, then run this fixed estimate command and read its output:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" review --estimate --args-file "<args-file>"
+```
+  - The estimate calls `resolveReviewTarget`, just as the review does: an explicit base selects the branch; `auto` selects the working tree when dirty and the branch otherwise. Use its target label, unique file count, untracked count and shortstat; do not rebuild target selection or a Git command from the arguments.
+  - Untracked files count as reviewable work. Only conclude there is nothing to review when the estimate succeeds and reports zero files for its selected target. On an estimate error, return the error and stop.
   - Recommend waiting only when the review is clearly tiny, roughly 1-2 files total and no sign of a broader directory-sized change.
   - In every other case, including unclear size, recommend background.
   - When in doubt, run the review instead of declaring that there is nothing to review.
@@ -42,9 +43,23 @@ Backend selection (the flags mirror a job header's keys):
 Grok, ZCode and Kimi read only the inlined diff: above two files or 256 KiB the review is refused with a message that names `--base`, `--scope` and Codex. Return that message as it is. A Grok review always runs under Grok's `read-only` profile; where Grok refuses that profile (on a Mac whose `/var/run/docker.sock` is a symlink, or on Linux where it cannot reach a runtime socket such as `/run/podman/podman.sock`), the review fails with Grok's error. A Kimi review runs in Kimi's `default` mode: every permission request is rejected, and relay refuses the file writes and terminal commands Kimi sends through the client. That is not an OS sandbox: Kimi's hooks, the MCP servers and plugins it starts, and its other local operations can still have side effects.
 
 Argument handling:
-- Preserve the user's arguments exactly in the quoted heredoc below; never interpolate them into shell command arguments or a JavaScript string.
-- Keep the opening delimiter quoted and the closing delimiter at column one. If its exact line occurs in the user's text, choose a new delimiter absent from that text and change both delimiter lines before running. Do not indent, escape, or otherwise rewrite the text.
-- `--args-stdin` removes the one framing newline before the closing delimiter, then uses the same raw-argument parser as the single-string form.
+
+Before any companion call, allocate a private argument file with this fixed command (it contains no user text):
+
+```bash
+node -e 'const fs = require("node:fs"); const dir = fs.mkdtempSync("/tmp/relay-args-"); console.log(dir + "/args.txt");'
+```
+
+Use `Write` with `file_path` set to the printed absolute path and `content` set to the raw slash-command arguments exactly, including empty text and trailing newlines. Do not add a framing newline. In every companion recipe, replace only `<args-file>` with that generated path. Never put argument values in Bash source, shell arguments, JavaScript source, or a heredoc; do not build other commands from them. `--args-file` reads the exact file content with the single-string argument parser. Allocate and write it once; reuse it for the estimate and the selected review flow. Writing this temporary transport file is permitted by the review-only constraint; do not write project files.
+
+After the final foreground call (including an error or an empty estimate), remove the file and its private directory with the fixed cleanup command below. For a background review, keep the file until its completion notification, then clean up; do not wait in the launching turn.
+
+```bash
+node -e 'const fs = require("node:fs"); const path = require("node:path"); fs.unlinkSync(process.argv[1]); fs.rmdirSync(path.dirname(process.argv[1]));' "<args-file>"
+```
+
+Reject NUL-containing arguments with a usage error; do not normalize them or retry through a shell. File contents do not count toward the shell command's argument-size limit: use the same file route for long input and never fall back to embedding it in a command.
+
 - Do not strip `--wait` or `--background` yourself.
 - Do not add extra review instructions or rewrite the user's intent.
 - The companion script parses `--wait` and `--background`, but Claude Code's `Bash(..., run_in_background: true)` is what actually detaches the run.
@@ -54,9 +69,7 @@ Argument handling:
 Foreground flow:
 - Run:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" review --args-stdin <<'RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD'
-$ARGUMENTS
-RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" review --args-file "<args-file>"
 ```
 - Return the command stdout verbatim, exactly as-is.
 - Do not paraphrase, summarize, or add commentary before or after it. The one exception is the foreground line above, first, when you invoked the command yourself.
@@ -65,9 +78,7 @@ RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD
 Background flow:
 - Launch this command with `Bash`, setting `description: "Review"` and `run_in_background: true`:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" review --args-stdin <<'RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD'
-$ARGUMENTS
-RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" review --args-file "<args-file>"
 ```
 - Do not call `BashOutput` or wait for completion in this turn.
 - After launching the command, tell the user: "The review started in the background. Check `/relay:status` for progress."

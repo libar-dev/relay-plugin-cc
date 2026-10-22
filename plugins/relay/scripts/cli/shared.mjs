@@ -1,4 +1,5 @@
 import { default as fs } from "node:fs";
+import os from "node:os";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
 import { parseArgs, splitRawArgumentString } from "../lib/util/args.mjs";
@@ -59,18 +60,35 @@ function normalizeArgv(argv) {
 
 export function parseCommandInput(argv, config = {}) {
   let tokens;
-  if (config.argsStdin && argv.includes("--args-stdin")) {
-    // This transport is separate from command options: all user arguments go in
-    // stdin. Only the setup recipe's fixed --json may accompany the selector.
-    if (argv.filter(token => token === "--args-stdin").length !== 1 || argv.some(token => token !== "--args-stdin" && token !== "--json")) {
-      throw new UsageError("--args-stdin accepts only --json alongside it; put command arguments on stdin.");
+  if (config.argsStdin && (argv.includes("--args-stdin") || argv.includes("--args-file"))) {
+    // Transport selectors are separate from user options. The recipe's fixed flags
+    // may accompany them; everything supplied by the user belongs in the payload.
+    const fixed = new Set(["--json", ...(config.transportOptions ?? [])]);
+    const rest = [];
+    let selector = null;
+    let file = null;
+    for (let index = 0; index < argv.length; index += 1) {
+      const token = argv[index];
+      if (token === "--args-stdin" || token === "--args-file") {
+        if (selector) throw new UsageError("Use exactly one --args-stdin or --args-file selector.");
+        selector = token;
+        if (token === "--args-file") {
+          file = argv[++index];
+          if (!file || file.startsWith("--")) throw new UsageError("--args-file requires a path.");
+        }
+      } else if (fixed.has(token)) {
+        rest.push(token);
+      } else {
+        throw new UsageError("Put command arguments in the transport payload, not alongside --args-stdin or --args-file.");
+      }
     }
-    const framed = fs.readFileSync(0, "utf8");
-    // A heredoc adds one LF before its delimiter. Remove only that framing LF,
-    // preserving user newlines, trailing backslashes and even unmatched quotes.
-    const raw = framed.endsWith("\n") ? framed.slice(0, -1) : framed;
-    tokens = [...argv.filter(token => token !== "--args-stdin"), ...normalizeArgv([raw])];
-    // Error rendering must not read stdin a second time if parsing fails.
+    const framed = fs.readFileSync(file ?? 0, "utf8");
+    // Retain the original stdin interface's framing rule. Files have no framing:
+    // Write's exact content, including trailing newlines, goes to the raw parser.
+    const raw = selector === "--args-stdin" && framed.endsWith("\n") ? framed.slice(0, -1) : framed;
+    if (raw.includes("\0")) throw new UsageError("Raw arguments must not contain NUL.");
+    tokens = [...rest, ...normalizeArgv([raw])];
+    // Error rendering must not read the transport again if parsing fails.
     parsedJson = tokens.some(token => token === "--json" || (token.startsWith("--json=") && token !== "--json=false"));
   } else {
     tokens = normalizeArgv(argv);
@@ -88,7 +106,10 @@ export function parseCommandInput(argv, config = {}) {
 
 
 export function resolveCommandCwd(options = {}) {
-  return options.cwd ? path.resolve(process.cwd(), options.cwd) : process.cwd();
+  const cwd = options.cwd;
+  if (cwd === "~") return os.homedir();
+  if (cwd?.startsWith("~/")) return path.resolve(os.homedir(), cwd.slice(2));
+  return cwd ? path.resolve(process.cwd(), cwd) : process.cwd();
 }
 
 

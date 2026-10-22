@@ -592,21 +592,47 @@ The parts:
 12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
     owner decides.
 
-### D73. Model-run commands carry arguments on stdin (release lead)
+### D73. Model-run commands carry arguments in a Write-created file (release lead)
 
-`review`, `adversarial-review` and `setup` use a quoted heredoc and the companion's `--args-stdin`
-option, including background reviews and setup's rerun. The delimiter must be absent as a whole line
-from the user's text; the command instructions require choosing another if it occurs. The companion
-removes exactly one framing LF and feeds the text to the existing single-string parser, preserving
-its quoting, whitespace and flag semantics. Only a fixed `--json` may accompany the stdin selector.
-Foreground output, exit codes, review-size estimation and Claude's background task behavior stay as
-before. `rescue` already passes its request as prose to `relay:job` and needs no shell transport.
+`review`, `adversarial-review` and `setup` allocate a private directory with a fixed Node command,
+then use Claude's `Write` tool to write the raw slash-command arguments without involving a shell.
+All three commands allow `Write`. The companion's `--args-file <path>` reads the exact text, with no
+framing newline, and uses the existing single-string parser. Only the generated path enters Bash;
+argument values never do, including during estimation. The same file serves the estimate and the
+foreground or background review, and setup's post-install rerun. Cleanup follows the last foreground
+call, setup's completion/error, or the background completion notification. No waiting is added to the
+background launch. Output and exit codes are preserved. `rescue` passes its brief as Agent prose.
 
-The skills review's High 1 showed that putting substituted `$ARGUMENTS` in shell source executes
-backticks and `$()` before the read-only review starts. Double quotes do not prevent this; setup's
-unquoted substitution also lets user quotes change argument boundaries. Relying on model-generated
-shell escaping or a JavaScript string was rejected because it requires getting nested quoting right
-on every invocation. A model-built argv helper would add machinery without improving on a quoted
-heredoc. The module's existing argv calls are unchanged. Tests execute every documented shell recipe
-with literal probes and compare stdin parsing with the single-string form; all fail against the
-original implementation.
+`review --estimate` and `adversarial-review --estimate` accept either file or stdin transport. They
+call `resolveReviewTarget` with the review's options, then print the target label, unique file count,
+untracked count and shortstat, without a backend call or job. An explicit base selects branch scope;
+`auto` selects a dirty working tree or, when clean, the branch. Branch estimates use the same
+merge-base comparison as reviews. Invalid and option-like revisions are rejected, and Git receives
+argv with `shell: false`; revision validation terminates options before the supplied revision.
+Claude reads the estimate instead of constructing a Git command from `--base`.
+
+Reviews retain their established single-string grammar. Setup moves from shell word splitting and
+expansion to that grammar: **no `$VAR` expansion**, command substitution or glob expansion. Quotes
+group whitespace; **backslash is an escape even inside quotes**, so a literal backslash must be
+doubled. Empty quoted words are dropped, making an empty option value a missing-value error.
+`--cwd` explicitly expands a leading `~/` (or bare `~`) as the home options already do; no other
+shell expansion is restored. These changes are the point: user text must not execute commands or
+silently select values through the shell's environment. Use absolute paths or `~/` instead of
+`$HOME`. Preserving setup's former shell grammar separately was rejected in favor of one documented,
+non-evaluating parser; review parsing is unchanged.
+
+The original quoted-heredoc design prevented ordinary substitutions but depended on Claude checking
+for a delimiter collision. A public delimiter, even with a random suffix, cannot guarantee that the
+text stays out of shell source. The file route costs one allocation and a Write call, fits all flows,
+and removes that boundary entirely, so it replaces heredocs. Double quotes, model-generated shell
+escaping and JavaScript strings were also rejected. The original `--args-stdin` API remains available
+with its one-final-LF framing rule; recipes no longer use it. Either transport rejects NUL rather
+than silently normalizing or retrying. Large file payloads have no shell argument-size limit; there
+is no new raw-input size cap or shell fallback.
+
+Tests extract every companion recipe, including estimates, audit inline shell instructions, and
+exercise hostile text, delimiter lines, empty/dash/CRLF input, replacement-pattern text and long
+input. They check transport selector errors, parser parity, home shorthand and target selection.
+The command changes do not fix `hooks/mod/register.js`: its normal argv execution is safe, but
+`companionShell` still needs to render raw arguments as one correctly escaped shell word or replace
+the executable rerun with safe recovery guidance. That file belongs to the hooks module PR.

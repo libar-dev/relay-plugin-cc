@@ -66,8 +66,18 @@ function measureCombinedGitOutputBytes(cwd, argSets, maxBytes) {
   return totalBytes;
 }
 
+// Resolve as a commit with option parsing terminated before the supplied revision.
+// Reject option-like input explicitly, including flags meaningful to downstream Git calls.
+function resolveBaseCommit(cwd, baseRef) {
+  if (typeof baseRef !== "string" || !baseRef || baseRef.startsWith("-") || baseRef.includes("\0")) {
+    throw new Error("--base must be a non-option commit revision.");
+  }
+  return gitChecked(cwd, ["rev-parse", "--verify", "--end-of-options", `${baseRef}^{commit}`]).stdout.trim();
+}
+
 function buildBranchComparison(cwd, baseRef) {
-  const mergeBase = gitChecked(cwd, ["merge-base", "HEAD", baseRef]).stdout.trim();
+  const baseCommit = resolveBaseCommit(cwd, baseRef);
+  const mergeBase = gitChecked(cwd, ["merge-base", "HEAD", baseCommit]).stdout.trim();
   return {
     mergeBase,
     commitRange: `${mergeBase}..HEAD`,
@@ -140,7 +150,8 @@ export function resolveReviewTarget(cwd, options = {}) {
   const state = getWorkingTreeState(cwd);
   const supportedScopes = new Set(["auto", "working-tree", "branch"]);
 
-  if (baseRef) {
+  if (baseRef != null) {
+    resolveBaseCommit(cwd, baseRef);
     return {
       mode: "branch",
       label: `branch diff against ${baseRef}`,
@@ -187,6 +198,29 @@ export function resolveReviewTarget(cwd, options = {}) {
     label: `branch diff against ${detectedBase}`,
     baseRef: detectedBase,
     explicit: false
+  };
+}
+
+// A read-only size estimate for exactly the selected target. No backend or job is
+// needed. Count unique paths so a staged and unstaged edit is one file.
+export function estimateReviewSize(cwd, target) {
+  const repoRoot = getRepoRoot(cwd);
+  if (target.mode === "branch") {
+    const comparison = buildBranchComparison(repoRoot, target.baseRef);
+    const files = gitChecked(repoRoot, ["diff", "--name-only", "-z", comparison.commitRange, "--"]).stdout.split("\0").filter(Boolean);
+    const shortstat = gitChecked(repoRoot, ["diff", "--shortstat", comparison.commitRange, "--"]).stdout.trim();
+    return { fileCount: files.length, shortstat, untrackedCount: 0 };
+  }
+  const paths = args => gitChecked(repoRoot, args).stdout.split("\0").filter(Boolean);
+  const staged = paths(["diff", "--cached", "--name-only", "-z"]);
+  const unstaged = paths(["diff", "--name-only", "-z"]);
+  const untracked = paths(["ls-files", "--others", "--exclude-standard", "-z"]);
+  const stagedStat = gitChecked(repoRoot, ["diff", "--shortstat", "--cached"]).stdout.trim();
+  const unstagedStat = gitChecked(repoRoot, ["diff", "--shortstat"]).stdout.trim();
+  return {
+    fileCount: listUniqueFiles(staged, unstaged, untracked).length,
+    shortstat: [`staged: ${stagedStat || "(none)"}`, `unstaged: ${unstagedStat || "(none)"}`].join("\n"),
+    untrackedCount: untracked.length
   };
 }
 

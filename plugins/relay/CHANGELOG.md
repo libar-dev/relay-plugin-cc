@@ -125,10 +125,19 @@ Phase 6, an investigation (the plugin does not change):
 
 Fixes from the pre-releases:
 
-- `/relay:review`, `/relay:adversarial-review` and `/relay:setup` pass raw arguments to the companion
-  through a quoted heredoc and `--args-stdin`, in both review modes and on setup's rerun. Backticks,
-  `$(...)`, dollar signs, quotes and newlines in user text no longer become executable shell syntax.
-  The companion uses its existing raw-argument parser; output and exit codes are unchanged.
+- `/relay:review`, `/relay:adversarial-review` and `/relay:setup` use `Write` to put raw arguments in
+  a private file and pass only its path through `--args-file`, including background reviews and
+  setup's rerun. Argument values never enter shell source; heredoc delimiter collisions are removed.
+  Output and exit codes are unchanged. The stdin API remains available but is no longer the recipe.
+- Review-size estimation now runs in the companion with the review's target resolver and merge-base
+  rules, including clean `auto` selecting branch changes. It prints the target label, unique file
+  count, untracked count and shortstat without a backend/job. Invalid or option-like bases stay inert.
+- Reviews retain their single-string parser; setup switches from shell splitting/expansion to that
+  parser. No `$VAR` expansion, command substitution or glob expansion happens: that is the point of
+  keeping argument text out of the shell. Quotes group whitespace; backslash is an escape even inside
+  quotes, so double literal backslashes. Empty quoted values are missing-value errors. Use absolute
+  or `~/` paths instead of `$HOME`; `--cwd` now supports `~/` and bare `~`, as home options do.
+  Transport payloads reject NUL; file contents avoid the shell command argument-size limit.
 
 Docs:
 

@@ -1,17 +1,34 @@
 ---
 description: Check every backend the relay can run (Codex, Grok, ZCode, Kimi): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier or job MCP servers
 argument-hint: '[--backend codex|grok|zcode|kimi] [--grok-home H|--kimi-home H] [--enable-review-gate|--disable-review-gate] [--fast-tier allowed|off] [--job-mcp-off names|none]'
-allowed-tools: Bash(node:*), Bash(npm:*), AskUserQuestion
+allowed-tools: Write, Bash(node:*), Bash(npm:*), AskUserQuestion
 ---
 
-Pass the user's arguments literally in the quoted heredoc below; never interpolate them into shell command arguments or a JavaScript string. Keep the opening delimiter quoted and the closing delimiter at column one. If its exact line occurs in the user's text, choose a new delimiter absent from that text and change both delimiter lines before running. Do not indent, escape, or otherwise rewrite the text. `--args-stdin` removes the one framing newline before the closing delimiter, then uses the same raw-argument parser as the single-string form. Use this transport on the rerun too.
+Raw slash-command arguments:
+`$ARGUMENTS`
+
+Before any companion call, allocate a private argument file with this fixed command (it contains no user text):
+
+```bash
+node -e 'const fs = require("node:fs"); const dir = fs.mkdtempSync("/tmp/relay-args-"); console.log(dir + "/args.txt");'
+```
+
+Use `Write` with `file_path` set to the printed absolute path and `content` set to the raw slash-command arguments exactly, including empty text and trailing newlines. Do not add a framing newline. In every companion recipe, replace only `<args-file>` with that generated path. Never put argument values in Bash source, shell arguments, JavaScript source, or a heredoc; do not build other commands from them. `--args-file` reads the exact file content with the single-string argument parser. Allocate and write it once; reuse it for the initial call and the post-install rerun.
+
+After setup finishes or stops (including an error), remove the file and its private directory with the fixed cleanup command below.
+
+```bash
+node -e 'const fs = require("node:fs"); const path = require("node:path"); fs.unlinkSync(process.argv[1]); fs.rmdirSync(path.dirname(process.argv[1]));' "<args-file>"
+```
+
+Reject NUL-containing arguments with a usage error; do not normalize them or retry through a shell. File contents do not count toward the shell command's argument-size limit: use the same file route for long input and never fall back to embedding it in a command.
+
+Setup now uses relay's raw-argument grammar instead of shell word splitting and expansion. `$VAR`, command substitutions and globs are literal. Use an absolute path or `~/` for homes and `--cwd` (`~` alone also means the home directory). Quotes group whitespace; backslash is an escape even inside quotes, so double a literal backslash. Empty quoted words are dropped: an empty value is a missing-value error. This prevents argument text from executing shell syntax or selecting paths through environment expansion.
 
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-stdin <<'RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD'
-$ARGUMENTS
-RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-file "<args-file>"
 ```
 
 The output is one JSON object (`schema: "relay.setup/1"`). When it holds `error`, print its `message` and stop.
@@ -76,9 +93,7 @@ npm install -g @openai/codex
 - Then rerun:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-stdin <<'RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD'
-$ARGUMENTS
-RELAY_ARGS_8F4C2B7D91E64A0BA35D6E2C9F1087AD
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-file "<args-file>"
 ```
 
 If Codex is already installed or npm is unavailable:
