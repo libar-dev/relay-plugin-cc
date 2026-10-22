@@ -673,7 +673,7 @@ The funding principles ([funding.md](funding.md)) add no product feature. Four p
   Grok's `write` and `read-only`, not built in 3.0, unsupported until proven).
 - **A short demo** of steering a running job while a second agent joins. It needs Phase 1's
   two-second steer to be watchable, and the board to be visible. That is one more reason the terminal board is in
-  scope.
+  scope. 3.0 ships no recording of it: feature screenshots and a user guide replace it (D60).
 - **Exact backend semantics.** Kimi takes no mid-turn steer, and read-only
   modes are not an OS sandbox. The board labels Kimi's message as "Queue next turn", and the matrix states the
   limit instead of marking it supported.
