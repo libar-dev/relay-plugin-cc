@@ -57,7 +57,7 @@ export function focusedText(screen) {
   return text.trim();
 }
 export const steerText = (kind, backend) => `board steer ${kind} ${backend}`;
-export const continueText = (kind, backend) => `board continue ${kind} ${backend}: run sleep 60 once, then reply one line`;
+export const continueText = (kind, backend) => `board continue ${kind} ${backend}: sleep 60 once; reply one line`;
 const brief = backend => `Run the shell command \`sleep 120\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Then reply with one line: board done ${backend}. If a queued message arrives as a later turn, reply with one line without sleeping again.`;
 export function boardWorkflow(backends) {
   return 'export const meta = { name: \'live-board\', description: \'Board Workflow relays\' }\n' +
@@ -112,10 +112,26 @@ function workflowTranscripts(input, item, evidence) {
   evidence.transcripts.push(...[...files].filter(file => !evidence.transcripts.includes(file)));
   return [...files].map(file => [path.relative(root, file), readTranscript(file)]);
 }
-function handback(jobDir, attempt) {
-  const file = path.join(jobDir, 'relay-handbacks.jsonl');
+function handback(item, attempt, before = Infinity) {
+  if (attempt?.state !== 'completed') return null;
+  const file = path.join(item.jobDir, 'relay-handbacks.jsonl');
   return fs.existsSync(file) && readTranscript(file).findLast(entry =>
-    entry.attempts === attempt && (ended(entry) || entry.state === 'dead'));
+    entry.agentId === item.agentId && entry.by == null && entry.attempts === attempt.attempt && entry.state === 'completed' &&
+    Date.parse(entry.at) >= Date.parse(attempt.endedAt) && Date.parse(entry.at) < before);
+}
+function leadDelivery(entries, agentId, returned, before = Infinity) {
+  return entries.some(entry => {
+    if (entry.isSidechain || !(Date.parse(entry.timestamp) >= Date.parse(returned.at) && Date.parse(entry.timestamp) < before)) return false;
+    const result = entry.toolUseResult;
+    if (entry.type === 'user' && result?.agentId === agentId && ['send', 'flagged'].includes(result.handback) &&
+        result.handbackReport?.text?.trim() && entry.message?.content?.some(block => block.type === 'tool_result' && !block.is_error)) return true;
+    // Phase 6 captures delivery as a queued_command; older transcripts use a user message.
+    const text = entry.type === 'attachment' && entry.attachment?.type === 'queued_command' ? entry.attachment.prompt :
+      entry.type === 'user' ? textContent(entry.message?.content) : '';
+    const notification = text?.match(/<task-notification>([\s\S]*?)<\/task-notification>/)?.[1];
+    return notification?.match(/<task-id>([^<]+)<\/task-id>/)?.[1] === agentId &&
+      /<status>completed<\/status>/.test(notification) && Boolean(notification.match(/<result>([\s\S]*?)<\/result>/)?.[1]?.trim());
+  });
 }
 
 const hasRow = (screen, job) => screen.split('\n').some(line => line.includes(`${job.id} · ${job.request.backend} · `) && / · attempt \d+\b/.test(line));
@@ -273,7 +289,10 @@ export default {
       for (let tries = 1; ; tries++) {
         const until = now() + 4000;
         let pending = true;
-        while (now() < until && (pending = plain(drive(['screen-escapes', run.pane])).includes(`${label} board ${action} ${item.kind} ${item.backend}`))) await sleep(250);
+        while (now() < until && (pending = plain(drive(['screen-escapes', run.pane])).split('\n').some(line => {
+          const field = line.slice(line.lastIndexOf('│') + 1).trimStart();
+          return field.startsWith(label) && (field.includes(text.slice(0, 20)) || field.includes(text.slice(-20)));
+        }))) await sleep(250);
         if (!pending || tries === 3) break;
         await click(label); bytes('0d');
       }
@@ -326,10 +345,14 @@ export default {
         }, 15000, Date.parse(receipt.at));
         capture(`cancel-${item.backend}`);
       }
-      await waitFor('Agent continuations to be handed back', () => continued.filter(({ item }) => item.kind === 'agent').every(({ item, attempt }) => {
-        const target = readJob(item.jobDir).attempts.find(entry => entry.attempt === attempt);
-        return target && ended(target) && handback(item.jobDir, attempt);
-      }), 600000);
+      await waitFor('Agent continuations to be handed back and delivered to the lead', () => {
+        const entries = scopeToRun(readTranscript(run.transcript), run.runId);
+        return continued.filter(({ item }) => item.kind === 'agent').every(({ item, attempt }) => {
+          const target = readJob(item.jobDir).attempts.find(entry => entry.attempt === attempt);
+          const returned = handback(item, target);
+          return returned && leadDelivery(entries, item.agentId, returned);
+        });
+      }, 600000);
       drive(['stop', run.pane]);
       const wide = { sessionId: run.sessionId, pane: run.pane, transcript: run.transcript, debugLog: run.debugLog,
         startupEvidence: run.startupEvidence, promptSentAt: run.promptSentAt };
@@ -422,10 +445,11 @@ export default {
                   target.messageId !== message.id || target.source !== 'continue' || outcome.action !== 'turn-started') throw new Error('Continue has no new attempt after the job ended.');
               requireVersion(target, input.relayVersion);
               if (kind === 'agent') {
-                const returned = handback(jobDir, target.attempt);
-                if (!ended(target) || !returned || !(Date.parse(returned.at) >= Date.parse(target.endedAt) && Date.parse(returned.at) < end)) {
-                  throw new Error('Agent continuation has no terminal hand-back for its attempt before the runner finished.');
+                const returned = handback(item, target, end);
+                if (!returned) {
+                  throw new Error('Agent continuation has no completed hand-back from its relay for its attempt before the runner finished.');
                 }
+                if (!leadDelivery(entries, item.agentId, returned, end)) throw new Error('Agent continuation report was not delivered to the lead before the runner finished.');
               }
               elapsed = seconds(target.startedAt, action.at, 60, 'Continue');
             } else {

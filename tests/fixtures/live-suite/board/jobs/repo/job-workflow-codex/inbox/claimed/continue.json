@@ -2,5 +2,5 @@
   "id": "continue",
   "kind": "continue",
   "createdAt": "2026-10-22T10:02:31.000Z",
-  "text": "board continue workflow codex: run sleep 60 once, then reply one line"
+  "text": "board continue workflow codex: sleep 60 once; reply one line"
 }

@@ -2,7 +2,7 @@
   "kind": "continue",
   "status": "done",
   "messageId": "continue",
-  "text": "board continue agent kimi: run sleep 60 once, then reply one line",
+  "text": "board continue agent kimi: sleep 60 once; reply one line",
   "postedAt": "2026-10-22T10:02:31.000Z",
   "at": "2026-10-22T10:02:31.000Z"
 }

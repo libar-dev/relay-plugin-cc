@@ -29,7 +29,7 @@
         "backend": "codex",
         "action": "continue",
         "at": "2026-10-22T10:02:30.000Z",
-        "text": "board continue agent codex: run sleep 60 once, then reply one line"
+        "text": "board continue agent codex: sleep 60 once; reply one line"
       },
       {
         "runId": "synthetic-run",
@@ -57,7 +57,7 @@
         "backend": "codex",
         "action": "continue",
         "at": "2026-10-22T10:02:30.000Z",
-        "text": "board continue workflow codex: run sleep 60 once, then reply one line",
+        "text": "board continue workflow codex: sleep 60 once; reply one line",
         "relayFiles": [
           "subagents/workflows/wf-board/agent-workflow-codex.jsonl"
         ],
@@ -95,7 +95,7 @@
         "backend": "kimi",
         "action": "continue",
         "at": "2026-10-22T10:02:30.000Z",
-        "text": "board continue agent kimi: run sleep 60 once, then reply one line"
+        "text": "board continue agent kimi: sleep 60 once; reply one line"
       },
       {
         "runId": "synthetic-run",
@@ -123,7 +123,7 @@
         "backend": "kimi",
         "action": "continue",
         "at": "2026-10-22T10:02:30.000Z",
-        "text": "board continue workflow kimi: run sleep 60 once, then reply one line",
+        "text": "board continue workflow kimi: sleep 60 once; reply one line",
         "relayFiles": [
           "subagents/workflows/wf-board/agent-workflow-kimi.jsonl"
         ],
