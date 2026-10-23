@@ -8,9 +8,34 @@ The cuts started on Thursday 22 October, 23:45 CEST, and go on as issues are fou
 from pre.2, by your call of 23 October, which ended the 48-hour hold; use them and test them.
 
 This page lists each cut and its known issues, a check to run after each install, what should happen while you
-work, how to note a problem, and how a machine is switched. The [README](../../README.md) explains relay itself; the
-user guide comes with a later docs PR. Two words used below: a *relay* is the small Claude agent (Haiku) that runs
-one job and *hands back* its result; the *job* runs on Codex, Grok Build, ZCode or Kimi Code.
+work, how to note a problem, and how a machine is switched. The [user guide](../guide.md) walks through relay itself,
+and the [README](../../README.md) is the reference. Two words used below: a *relay* is the small Claude agent (Haiku)
+that runs one job and *hands back* its result; the *job* runs on Codex, Grok Build, ZCode or Kimi Code.
+
+## pre.3 (to be cut)
+
+<!-- Pending: when pre.3 is cut, its version, tag and commit, what merged into it, how it was checked, and its known
+issues. Until then this lists what is planned for it, from the PRs open or merged for it. -->
+
+Planned for pre.3:
+
+- **The status line and the board** (#24, #25), in the terminal: see the user guide's
+  [status line](../guide.md#the-status-line) and [board](../guide.md#the-board). The desktop app's are checked after
+  pre.3 is installed.
+- **The stop notice** (#30). When you stop a relay agent yourself (`x` in the agent list, Esc at its view's prompt,
+  `ctrl+x ctrl+k`, or the desktop app's Stop button) and its job runs on, relay says so, in a line of the transcript
+  that is not sent to Claude and in a toast for 20 seconds: `<agent> was stopped, and its job <job> keeps running.
+  /relay:cancel <job> cancels it, /relay:result <job> shows it.` TaskStop and the message `cancel` cancel the job and
+  show no notice, and a Workflow's agents show none.
+- **Relay never leaves Claude Code's sandbox unasked** (D79; pre.2's known issue 4). On an `EPERM` under the
+  sandbox, Claude stops and offers the two choices: add the jobs home to the sandbox's write paths, or run without
+  the sandbox.
+- **Workflow jobs are steered and continued by their job id,** with the companion's `steer` and `continue`, not by a
+  message to the Workflow's relay agent. The board's Continue for an ended Workflow job goes by its id too (#31).
+- **`/relay:review` on Codex prints Codex's own stderr**, such as a noisy MCP server's warnings;
+  `/relay:setup --job-mcp-off <name>` turns that server off for Codex jobs and reviews.
+- **Quotes and apostrophes in `/relay:adversarial-review`'s focus text** group words and are removed; the command's
+  argument hint now says so.
 
 ## pre.2
 
@@ -45,10 +70,15 @@ Its known issues, with what to do meanwhile:
    `relay-violation:` line, and `/relay:result <job>` has the block and the report.
 2. **A line typed to a relay while it waits takes up to about nine minutes to arrive:** nothing wakes the relay for
    it yet. For a steer within seconds, send the message through Claude, or stop the relay with one Esc at its prompt
-   and then send the line (see "Typing to a relay" below).
+   and then send the line (see "Typing to a relay" below). Both hold for a relay the Agent tool started; for a
+   Workflow job, ask Claude to steer it by its job id with the companion's `steer` (from pre.3, the board's Steer
+   does the same).
 3. **`/relay:transfer` takes no job id** (pre.1's issue 5).
-4. **Not yet checked live:** the new handling of text given to the review and setup commands, in default permission
-   mode (Claude may ask before it writes the text to a file), under the sandbox, and with `--background`.
+4. **Under Claude Code's sandbox, the companion cannot write `~/.relay-jobs`** (`EPERM`), and Claude runs it again
+   outside the sandbox without asking. Meanwhile, have libar-infra add the jobs home to your user settings,
+   `{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}` in `~/.claude/settings.json`; to forbid every
+   unsandboxed retry, also `sandbox.allowUnsandboxedCommands: false`. pre.3 stops and asks instead (D79). The text
+   handling itself passed its live checks on pre.2, in default permission mode and with `--background`.
 5. **T3 Code's own issues** still apply: see "Issues of T3 Code, on every cut".
 
 ## pre.1
@@ -194,14 +224,17 @@ unless a line says otherwise. The others are relay's documented behaviour.
   turn. A line typed into its view: not measured. So steer, continue or cancel a Workflow job by its job id: ask
   Claude to use the companion's `steer`, `continue` or `cancel` on it, or type `/relay:cancel <job>`.
 - **To cancel one job of a running Workflow,** use `/relay:cancel <job>`, from another thread if the lead holds its
-  turn. TaskStop finds no task for one agent of a Workflow.
+  turn. TaskStop finds no task for one agent of a Workflow, except while a second loop that a message started still
+  runs: a TaskStop on it cancels the job.
 - `/relay:status --workflow <run>` lists every job of a run, in any repository, cancelled ones included (checked by
   typing it after a resume, on the installed pre.1).
 - **Do not resume a Workflow under a different cut** from the one that started it: that has not been tested. Let it
   finish, or read its jobs with `/relay:result`.
 - **`not handed back`** means no relay handed back the job's result: its agent was stopped by hand, died or was let
-  go, or its Workflow stopped before the job ended (in pre.1, also after a TaskStop on its agent: known issue 3). The
-  mark clears when a resumed relay hands the result back. `/relay:result <job>` has the report either way.
+  go, or its Workflow stopped before the job ended (in pre.1, also after a TaskStop on its agent: known issue 3). After
+  a `continue` or `resume` by job id, or the board's direct route, once the relay has ended, it only means no relay
+  handed that attempt back: the collect line above leads there. The mark clears when a resumed relay hands the result
+  back. `/relay:result <job>` has the report either way.
 
 **Stopping**
 - TaskStop on one relay agent, the message `cancel` to it, and `/relay:cancel <job>` each cancel that job within
