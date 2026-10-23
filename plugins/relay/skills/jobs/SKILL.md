@@ -229,20 +229,35 @@ You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:setup` and 
 | `C prune [--older-than 14d] [--all] [--dry-run]` | remove old ended jobs; live workers are kept |
 | `C setup --fast-tier allowed\|off` | with `off`, the default, jobs started from now on ignore `fast: true` and the Codex config sets their tier; with `allowed`, `fast: true` selects `priority` |
 | `C setup --job-mcp-off name,name...\|none` | Codex jobs pass `enabled=false` for each listed name that the Codex home's `config.toml` defines; undefined names are skipped with a note |
-| `C setup --admission on\|off` | turn the user load guard on or off; `RELAY_ADMISSION=off` also bypasses it |
-| `C setup --min-weight N\|default --max-weight N\|default --max-very-heavy N\|default` | override scheduling limits at user scope; ranges 1–1000, 1–10000 and 1–100 respectively |
-| `C setup --model-class "pattern=light,other-*=medium"\|none` | first matching model pattern wins; classes `light`, `medium`, `very-heavy`; `*` matches any run |
+| `C setup --admission on\|off` | turn the shared admission domain on or off; `RELAY_ADMISSION=off` also bypasses it |
+| `C setup --max-very-heavy 1\|2\|default` | lower/reset the shared very-heavy-model quota (default 2 total across backends) |
 | `C setup [--json]` | every backend home found (the Codex home, `~/.grok` and `~/.grok-*`, ZCode, `~/.kimi-code` and `~/.kimi-code-*`): binary and version, sign-in, default model and effort, models, `can`; exits 0 whatever it finds |
 | `C setup --backend codex\|grok\|zcode\|kimi [--grok-home H\|--kimi-home H] [--json]` | one backend home; exits 1 when it is not ready |
 
 A wide fan-out that needs no steering can start its jobs with `C start` a few seconds apart and collect them with `C wait` or `C status`; no Claude agent is held per job. Jobs started within the same second can hit a provider's request-rate limit. For Codex and Grok routes, the worker retries at 30, 60 and 120 s. ZCode and Kimi retry model calls themselves.
 
-A job can wait as `queued` before it starts or between turns: the load guard spaces starts,
-holds new work while memory or load is too high, and holds a backend after a usage or rate
-limit. Keep calling `wait`; queued work remains pending, including in a Workflow. Cancel, steer
-and continue still work. A job deferred without a worker needs its submitter's `wait`, message
-or relay hook to retry; a bare `start` can stay queued until someone waits. `/relay:setup
---admission off`, or `RELAY_ADMISSION=off`, turns the guard off.
+A job can wait as `queued` before it starts or between turns. Keep calling `wait`: queued work
+remains pending and adoptable, including in a Workflow. Cancel, steer and continue still work.
+Jobs without a worker need a submitter/adopter's wait, message or relay hook to retry spawning;
+a bare `start` can stay dormant. The resident waiting-worker limit is `Q = max(8, 2F)`, with a
+64 MiB startup hold per worker; deferred-spawn retries run at most once per admission poll.
+
+The shared guard checks host bytes (`available − otherHolds − J ≥ R`), each finite cgroup
+ancestor separately, macOS memory pressure, five-minute load, provider pauses and 5-second
+start/turn spacing, including foreground reviews. `R = max(2 GiB, 0.15 × total)`; `J = 0.5 GiB`
+for Codex/Grok and `1 GiB` for Kimi/ZCode/unknown, with 30-second holds and no model/effort
+multiplier. Scope margin is `min(0.5 GiB, 10% × limit)`. Healthy machines have no active ceiling;
+`F = min(16, max(2, C−2))` seats applies only at load ≥ `1.5C` or unknown host bytes. Load > `3C`,
+critical host memory or macOS warning/critical pressure can block even the first start.
+The very-heavy-model quota is 2 total (Astra, Kimi K3, identified max/ultra effort), independent
+of memory. Eligible backends with fewer active seats go first. Unknown defaults remain a quota
+coverage limit. Linux uses MemAvailable; macOS uses vm_stat free+inactive and separate pressure.
+
+Memory used later by running tools/tests, native Claude agents, other harness sessions, other
+users and native Windows are outside admission control. Windows visibly bypasses admission;
+missing sensors and guard errors show degraded/bypass notes. Use `/relay:setup --admission off`
+for the shared domain or `RELAY_ADMISSION=off` for an invocation. Guard settings live in the
+admission home, independently of the jobs home; changing jobs home does not disable the guard.
 
 `--json` prints one object whose first fields are `schema` (`relay.<command>/1`), `relayVersion` and `relayBuild`. An error under `--json` is that header with `error: { kind, message }` on stdout, `kind` one of `busy` (exit 4: try again), `not-found`, `usage`, `attempt-changed` or `error`. `C status --json` lists slim rows, newest first, 50 a page (`--limit N`, up to 200), with `nextCursor` for `--cursor`; `--active` lists only jobs that run, died or owe messages. One job (`C status <job> --json`, `result`, `wait`, `cancel`) has every field, among them `attemptRecords` and `messages`, each message with how the job took it.
 

@@ -259,60 +259,64 @@ Each review is a Codex job and costs usage. Turn the gate on for sessions you wa
 
 ### Load guard
 
-New jobs, backend replacements and turns wait as `queued` while memory is short, starts are
-being spaced, capacity is full, or their backend is paused. A running turn continues unchanged.
-The `queued:` line, JSON, status line and board show the reason. Cancel, steer and continue work
-while queued. The guard shares slots, pauses and start times across one user's jobs homes.
+On Linux and macOS, jobs, backend replacements, turns and foreground reviews share a per-user
+admission guard. New work waits as `queued` for memory, pacing, load, quota or a provider pause;
+running turns continue. Status, JSON and the board show the reason and completed wait duration.
+Each live backend job counts as one active seat, retained through warm waits and backend cleanup.
+Eligible waiting backends with the fewest active seats go first, then queue age and job ID.
 
-Scheduling classes are hints: light weighs 1, medium 2, very heavy 3. User model overrides win;
-then `max`/`ultra` effort, `astra` names and Kimi `k3` names are very heavy. `low`/`minimal`/`none`
-effort, `luna`/`flash`/`highspeed` names and names ending in `-fast` are light. Others are medium.
-At most two very heavy jobs run. A backend holding more running weight yields the last medium
-place to another waiting backend.
+Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
+`C = max(1, os.availableParallelism())`:
 
-Defaults use `T = total bytes / 2^30` (GiB) and `C = os.availableParallelism()`:
+- There is no default active ceiling on a healthy machine. Every start/turn needs
+  `hostAvailable − otherHolds − J ≥ R`, where `R = max(2 GiB, 0.15T)` and `J` is
+  `0.5 GiB` for Codex/Grok or `1 GiB` for Kimi/ZCode/unknown backends. Model and effort have
+  a `1.0` multiplier. Startup holds last 30 seconds and replace the job's own previous hold.
+- Every finite cgroup v2 ancestor is tested separately:
+  `max(0, memory.max − memory.current) − otherHoldsInScope − J ≥ min(0.5 GiB, 0.10 × memory.max)`.
+  Sibling private limits are separate; common ancestors include both. A job that can never fit
+  fails with an actionable reason rather than waiting forever.
+- All starts and turns share 5-second spacing. The busy-load allowance is
+  `F = min(16, max(2, C−2))` seats, applied only when five-minute load is at least `1.5C` or
+  host bytes are unknown. Load above `3C`, host bytes after holds below
+  `max(0.75 GiB, 0.05T)`, or macOS warning/critical memory pressure veto new work, even the
+  first job. Host load is skipped with a note when its CPU scope differs from available CPUs.
+- The very-heavy-model **quota** is two concurrent participating jobs total across backends:
+  Astra, the Kimi K3 family, or effective `max`/`ultra` effort. This is a quota/token limit,
+  independent of RAM; ordinary `high`/`xhigh` work is outside it. Opaque default selections
+  remain unknown, so only identified selections are covered.
+- At most `Q = max(8, 2F)` resident waiting workers, including workers being spawned, are kept.
+  Worker creation holds `64 MiB` for 30 seconds against the same host/scope budget. A full
+  worker budget or insufficient memory leaves durable work without a worker and returns its
+  original job ID. Keep calling `wait`: the submitter/adopter's wait, message or relay-hook
+  loop retries worker creation at most once per admission poll (3 seconds by default).
+  A bare `start` can remain dormant until someone waits; there is no background queue service.
+  The limit bounds workers, not all submissions, native transcripts or waiting clients.
 
-- Headroom `R = max(2, T/4)` GiB. Every admission, including below the minimum, needs
-  `available − recent startup reserves − 0.5 × new weight ≥ R` GiB. Each start/turn reserves
-  `0.5 GiB × weight` for 30 seconds; it is a startup allowance.
-- Minimum weight 12 bypasses CPU/load busy conditions. Above it, the machine must be healthy
-  (available after recent reserves ≥ `max(2, 0.15T)` GiB and 5-minute load < `1.5C`), with one
-  above-minimum admission per 10 seconds. The ceiling is `max(12, min(2C, floor((T − R)/0.5)))`;
-  status shows the actual derived ceiling.
-- All starts and turns are spaced by 5 seconds, even if the preceding job finished quickly.
-  Available memory below `max(0.75, 0.05T)` GiB or 5-minute load above `3C` blocks new work.
-- At most `max(8, ceiling)` waiting workers remain resident. Critical pressure or a full waiting
-  budget leaves a durable job without a worker. Its submitter's `wait`, message or relay-hook
-  loop retries from that session's environment. A bare `start` with no later `wait` can stay
-  queued until someone waits; there is no background queue service.
+Linux reads `MemAvailable` (with a labelled Node >=22 fallback). macOS estimates bytes from
+`vm_stat` free+inactive pages using its reported page size, and separately checks
+`kern.memorystatus_vm_pressure_level`. Samples are cached for two seconds per cgroup, with
+bounded probes. Missing sensors show a degraded note while other gates remain effective;
+missing host bytes applies F. Guard/storage errors visibly bypass the guard. A live admission
+lock stays queued and cancellable; a stuck-lock diagnostic identifies the holder and off switch.
 
-Linux uses the minimum of available system memory and `memory.max − memory.current` for every
-ancestor of the worker's cgroup, ignoring unlimited ancestors. Memory readings are cached for
-two seconds per cgroup so a limited session cannot reuse an unlimited scope's reading. macOS reads `sysctl -n kern.memorystatus_level` with a one-second
-timeout and shared two-second cache. A blocked or unreadable sensor shows `readings unavailable`; the guard uses the readings it can
-still obtain. An unexpected
-guard error admits with a note. A live admission lock is never broken: a stuck-lock reason names
-the holder and the off switch.
+Recognized usage refusals pause Codex, Kimi or ZCode for 30 minutes, or a definite reset within
+six hours. Rate pauses start at 60 seconds and double to 15 minutes; Kimi concurrency refusals
+pause for 10 minutes. After a pause, one generation-fenced probe runs; its success clears the
+pause. Refused jobs remain failed for explicit resume. Grok has no refusal classification.
+With the guard effective, Kimi's internal retry default is 3 unless explicitly configured.
 
-Provider-owned usage refusals pause Codex, Kimi or ZCode for 30 minutes, or until a definite
-provider reset instant within six hours. Listed rate refusals pause for 60 seconds, doubling per
-strike to 15 minutes. Kimi concurrent-request refusals pause for 10 minutes. After a pause, one
-probe runs; its success clears the pause. Probe ownership has a two-minute lease including
-startup. Other jobs' successes do not clear it. Pauses expire within six hours. Refused jobs stay failed; resume them explicitly.
-Grok errors have no pause classification. With the guard on, Kimi's retry default is 3 unless
-`KIMI_LOOP_MAX_ATTEMPTS_PER_STEP` is set by the user.
+Turn it off for an invocation with `RELAY_ADMISSION=off`, or domain-wide with
+`/relay:setup --admission off`. `/relay:setup --admission on` restores it;
+`--max-very-heavy 1|2|default` can lower/reset the quota. Settings live in
+`~/.relay-jobs/admission/config.json` (or `RELAY_ADMISSION_HOME/config.json`), shared across jobs
+homes. A custom jobs home cannot disable the guard. Old weight/class controls are ignored.
 
-Turn it off with `/relay:setup --admission off` or `RELAY_ADMISSION=off`. Setup also accepts
-`--min-weight 1..1000|default`, `--max-weight 1..10000|default`, `--max-very-heavy 1..100|default`,
-and `--model-class "pattern=light,other-*=medium"` (or `none`). Class overrides match model names
-case-insensitively; `*` matches any run, and the first match wins. Settings live at user scope.
-
-**Not covered:** memory allocated later by commands already running (tests and builds), native
-Claude agents, other harness sessions, and jobs homes under another user. These affect live
-machine readings but are not controlled by relay slots. Foreground reviews are counted as medium
-but are not gated; transfer and setup metadata probes are not gated. The guard cannot guarantee
-against arbitrary later memory growth. Quota budgets, PSI/pressure signals, measured adaptive
-limits, failed-job retry batches and a background queue service remain future work.
+**Not covered:** memory used later by running tools, tests and builds; native Claude agents;
+other harness sessions; other users; native Windows and other unsupported platforms, where
+admission is a visible no-op. External processes affect live readings but have no managed seats.
+Setup/account/status probes and transfer metadata are outside the gate. Startup admission
+cannot guarantee against later allocations, missing readings, guard failures or explicit bypass.
 
 ### Codex configuration
 
