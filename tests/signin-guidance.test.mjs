@@ -60,6 +60,8 @@ for (const backend of ["grok", "kimi"]) {
         // Markdown command advice must retain newlines and embedded backticks when copied.
         if (/[`\n]/.test(command)) {
           assert.ok(text.includes(`\n${command}\n`), "use a fenced block for multiline/backtick commands");
+        } else {
+          assert.ok(text.includes(`\`${command}\``), "put a one-line command in inline code");
         }
       }
       assert.equal(fake.state().starts.length, 0, "setup makes no model call");
