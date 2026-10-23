@@ -4,6 +4,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { makeTempDir } from "./support/helpers.mjs";
+
+const WORKFLOW_NOTE = 'The Workflow\'s "user request" is not for you: the computed task is the job\'s brief, and you only run your three commands.';
 import {
   codexReceived, companion, hookInput, jobDirOf, readJobJson, relayContext,
   RELAY_CMD, runBash, runHookProcess, waitFor
@@ -111,7 +113,7 @@ test("end to end under the Workflow harness: typed text steers at the next call 
   const blocked = await stop("I passed your message on");
   assert.equal(blocked.status, 0, blocked.stderr);
   assert.equal(blocked.json?.decision, "block");
-  assert.equal(blocked.json.reason, "Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n" + block);
+  assert.equal(blocked.json.reason, WORKFLOW_NOTE + "\n\nYour final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n" + block);
   for (const text of [
     "```passed-your-message-on.to.the-job\n" + block + "```",
     "```yaml-extra\n" + block + "```",
