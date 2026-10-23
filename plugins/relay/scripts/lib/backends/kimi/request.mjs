@@ -1,3 +1,4 @@
+import { shellAssignment } from "../../util/shell.mjs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -11,7 +12,7 @@ export function resolveKimiHome(value, env = process.env) { return kimiHomeSelec
 
 // The sign-in a home needs. Without --region, Kimi signs a home with no stored login and no
 // region marker in to mainland China (kimi.com), so the command names the region.
-export function kimiLoginCommand(home) { return `KIMI_CODE_HOME=${home} kimi login --region global`; }
+export function kimiLoginCommand(home) { return `${shellAssignment("KIMI_CODE_HOME", home)} kimi login --region global`; }
 export const KIMI_REGION_HINT = "--region mainland-cn for a kimi.com account";
 function resolveKimiHomePath(text, env) {
   const userDir = env.HOME || env.USERPROFILE || os.homedir();

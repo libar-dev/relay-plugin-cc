@@ -1,4 +1,6 @@
+import { cleanupArgumentFile, isGeneratedArgumentFile } from "../lib/util/argument-file.mjs";
 import { default as fs } from "node:fs";
+import os from "node:os";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
 import { parseArgs, splitRawArgumentString } from "../lib/util/args.mjs";
@@ -58,7 +60,38 @@ function normalizeArgv(argv) {
 
 
 export function parseCommandInput(argv, config = {}) {
-  const parsed = parseArgs(normalizeArgv(argv), {
+  let tokens;
+  if (config.argsFile && argv.includes("--args-file")) {
+    // Transport selectors are separate from user options. The recipe's fixed flags
+    // may accompany them; everything supplied by the user belongs in the payload.
+    const fixed = new Set(["--json"]);
+    const rest = [];
+    let selected = false;
+    let file = null;
+    for (let index = 0; index < argv.length; index += 1) {
+      const token = argv[index];
+      if (token === "--args-file") {
+        if (selected) throw new UsageError("Use exactly one --args-file selector.");
+        selected = true;
+        file = argv[++index];
+        if (!file || file.startsWith("--")) throw new UsageError("--args-file requires a path.");
+      } else if (fixed.has(token)) {
+        rest.push(token);
+      } else {
+        throw new UsageError("Put command arguments in the transport payload, not alongside --args-file.");
+      }
+    }
+    // Files have no framing: keep Write's exact content, including trailing newlines.
+    const raw = fs.readFileSync(file, "utf8");
+    if (config.consumeArgsFile && isGeneratedArgumentFile(file)) cleanupArgumentFile(file);
+    if (raw.includes("\0")) throw new UsageError("Raw arguments must not contain NUL.");
+    tokens = [...rest, ...normalizeArgv([raw])];
+    // Error rendering must not read the transport again if parsing fails.
+    parsedJson = tokens.some(token => token === "--json" || (token.startsWith("--json=") && token !== "--json=false"));
+  } else {
+    tokens = normalizeArgv(argv);
+  }
+  const parsed = parseArgs(tokens, {
     ...config,
     aliasMap: {
       C: "cwd",
@@ -71,7 +104,10 @@ export function parseCommandInput(argv, config = {}) {
 
 
 export function resolveCommandCwd(options = {}) {
-  return options.cwd ? path.resolve(process.cwd(), options.cwd) : process.cwd();
+  const cwd = options.cwd;
+  if (cwd === "~") return os.homedir();
+  if (cwd?.startsWith("~/")) return path.resolve(os.homedir(), cwd.slice(2));
+  return cwd ? path.resolve(process.cwd(), cwd) : process.cwd();
 }
 
 

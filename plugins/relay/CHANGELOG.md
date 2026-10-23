@@ -162,6 +162,19 @@ Fixes from the pre-releases:
   being dropped in silence (the harness's own `task-notification` notices are skipped), and the same
   transcript problem is recorded once, not again at every hook call.
 - The live suite has a check `typed` (terminal only: T3 Code draws no agent view).
+- Arguments that held backticks, `$(…)` or `$VAR` ran in Claude's shell before the companion started.
+  `/relay:review`, `/relay:adversarial-review` and `/relay:setup` use `Write` to put raw arguments in
+  a private temporary file. Only its path enters the shell, and a review removes the file as soon as
+  it reads it. Background reviews and setup's rerun use the same route. Output and exit codes are
+  unchanged.
+- Review-size estimation runs in the companion with the review's target and merge-base rules.
+  Clean `auto` includes branch changes. The estimate prints the target, file count, untracked count
+  and shortstat. It starts no backend or job. Invalid or option-like bases are refused.
+- Setup uses the review commands' single-string parser. Variables, command substitutions and globs
+  are literal. Quotes group whitespace. Backslash escapes even inside quotes; double literal
+  backslashes. Empty quoted values are missing-value errors. Use absolute or `~/` paths.
+  Commands with `--cwd` also accept `~/` and bare `~`. NUL is rejected. Long input uses the same file.
+- Grok and Kimi sign-in advice quotes home paths for safe copying into a shell.
 
 Docs:
 
