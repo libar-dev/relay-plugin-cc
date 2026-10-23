@@ -66,3 +66,10 @@ test("passes, but a fake refused", () => {
   assert.equal(result.status, 1, result.stdout + result.stderr);
   assert.match(result.stdout, /A test pointed a fake backend at a real home:\s+fake grok refused to write under the real home \/real: \/real\/\.grok/);
 });
+
+test("test isolation disables an inherited admission-on override", () => {
+  const source = `await import(${JSON.stringify(new URL("./support/isolate-env.mjs", import.meta.url).href)}); console.log("admission:" + process.env.RELAY_ADMISSION);`;
+  const result = run(process.execPath, ["--input-type=module", "-e", source], { env: { ...process.env, RELAY_ADMISSION: "on" } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^admission:off$/m);
+});

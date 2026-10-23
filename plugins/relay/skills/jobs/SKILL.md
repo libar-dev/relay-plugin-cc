@@ -168,7 +168,7 @@ dir: ~/.relay-jobs/<repo>/<job>
 <report>
 ```
 
-- `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the worker died, and its automatic retry was spent or a cancel was under way), or `queued` (waiting for the load guard; `queued:` says why), `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
+- `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the worker died, and its automatic retry was spent or a cancel was under way), `queued` (waiting for the load guard; `queued:` says why), `starting`, or `running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
 - `completed` means the job finished its answer, not that its commands passed. Read the report.
 - Lines that may appear: `queued:`, `refusal:`, `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (messages to the job, acknowledged and not run yet; `resume` runs them; it says nothing about the report), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
 
@@ -254,8 +254,8 @@ critical host memory or macOS warning/critical pressure can block even the first
 Load and warning pressure hold only new jobs; admitted jobs continue turns, retries and
 replacement backends. Critical host memory or critical pressure holds next turns too,
 with the reason shown in their queued block.
-The very-heavy-model quota is 2 total (Astra, Kimi K3, identified max/ultra effort), independent
-of memory. Eligible backends with fewer active seats go first. Unknown defaults remain a quota
+The very-heavy-model quota is 2 total (GPT-6 Astra and the Kimi K3 family, at any effort), a quota/token
+limit independent of memory. Other models do not count at any effort. Eligible backends with fewer active seats go first. Unknown defaults remain a quota
 coverage limit. Linux uses MemAvailable; macOS uses its free percentage (kern.memorystatus_level) times total memory, falling back to vm_stat free+inactive, and separate pressure.
 
 Memory used later by running tools/tests, native Claude agents, other harness sessions, other

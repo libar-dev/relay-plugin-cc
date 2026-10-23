@@ -10,14 +10,14 @@ import { setup, jobDirs, waitFor } from "./support/job-helpers.mjs";
 import { initGitRepo, run } from "./support/helpers.mjs";
 import { readJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 
-for (const native of [true, false]) test(`foreground ${native ? "native" : "ordinary"} review waits, forwards identity hooks and releases after close`, async t => {
+for (const native of [true, false]) test(`foreground ${native ? "native" : "ordinary"} review waits, forwards identity hooks and releases after close`, { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
   const ctx = setup(t, { behavior: "review-ok" });
   initGitRepo(ctx.work);
   fs.writeFileSync(path.join(ctx.work, "example.js"), "export const value = 1;\n");
   run("git", ["add", "."], { cwd: ctx.work }); run("git", ["commit", "-m", "fixture"], { cwd: ctx.work });
   fs.writeFileSync(path.join(ctx.work, "example.js"), "export const value = 2;\n");
   const home = path.join(ctx.root, "admission"), fixture = path.join(ctx.root, "readings.json");
-  const values = { ...ctx.env, RELAY_ADMISSION: "on", RELAY_ADMISSION_HOME: home, RELAY_ADMISSION_READINGS: fixture, RELAY_ADMISSION_POLL_MS: "20" };
+  const values = { ...ctx.env, RELAY_ADMISSION: "on", RELAY_ADMISSION_HOME: home, RELAY_TEST_ADMISSION_READINGS: fixture, RELAY_ADMISSION_POLL_MS: "20" };
   const previous = Object.fromEntries(Object.keys(values).map(k => [k, process.env[k]]));
   for (const [k, v] of Object.entries(values)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   t.after(() => { for (const [k, v] of Object.entries(previous)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });

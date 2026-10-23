@@ -50,6 +50,8 @@ test("cancel while queued launches no backend and releases its slot", async t =>
   await running;
   const job = readJob(s.dir);
   assert.equal(job.state, "cancelled");
+  assert.equal(job.admission.state, "cancelled");
+  assert.match(job.admission.reason, /memory/); assert.ok(job.admission.since);
   assert.equal(job.attempts.at(-1).state, "cancelled");
   assert.equal(fs.existsSync(path.join(s.ctx.bin, "fake-codex-state.json")), false);
   assert.equal(fs.existsSync(path.join(s.ctx.env.RELAY_ADMISSION_HOME, "slots", `${job.id}.json`)), false);
@@ -180,8 +182,8 @@ test("an impossible backend scope fails clearly without connecting or retrying",
 test("deferred worker retries are throttled across callers at the admission poll interval", async t => {
   const { retryQueuedWorker } = await import("../plugins/relay/scripts/lib/worker/delivery.mjs");
   const s = seed(t);
-  s.ctx.env.RELAY_ADMISSION_READINGS = path.join(s.ctx.root, "readings.json");
-  fs.writeFileSync(s.ctx.env.RELAY_ADMISSION_READINGS, JSON.stringify({ totalBytes: 64 * GiB, availableBytes: 0, cores: 8, load5: 0 }));
+  s.ctx.env.RELAY_TEST_ADMISSION_READINGS = path.join(s.ctx.root, "readings.json");
+  fs.writeFileSync(s.ctx.env.RELAY_TEST_ADMISSION_READINGS, JSON.stringify({ totalBytes: 64 * GiB, availableBytes: 0, cores: 8, load5: 0 }));
   const job = readJob(s.dir);
   writeJob(s.dir, { ...job, state: "queued", admission: { state: "waiting", waitKind: "worker", since: new Date().toISOString() } });
   let now = Date.now(); t.mock.method(Date, "now", () => now);
@@ -234,4 +236,25 @@ test("dormant workerless jobs stop deferring the repository review gate after fi
   const job = readJob(s.dir);
   writeJob(s.dir, { ...job, admission: { ...job.admission, workerRetryAt: new Date(now + 15 * 60000 + 1).toISOString() } });
   assert.equal(findActiveJob(s.ctx.work, now + 15 * 60000 + 1).id, job.id, "an adopter makes it active again");
+});
+
+test("a heartbeat during slow probe startup releases the claim without provider success", async t => {
+  const { recordRefusal, listPauses } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const s = seed(t); s.unblock();
+  s.options.env.RELAY_JOBS_HEARTBEAT_MS = "10";
+  const home = s.ctx.env.RELAY_ADMISSION_HOME, deps = { ...s.options.admission, env: s.ctx.env };
+  recordRefusal(home, "codex", { kind: "rate" }, "previous-job", deps);
+  s.tick(D.ratePauseMs);
+  const backend = backendNamed("codex"), connect = backend.connect;
+  let paused;
+  t.mock.method(backend, "connect", async (...args) => {
+    assert.ok(listPauses(s.ctx.env, deps)[0].probing);
+    s.tick(D.probeMs);
+    await waitFor(() => { paused = JSON.parse(fs.readFileSync(path.join(home, "pauses", "codex.json"))); return paused && !paused.probe; });
+    assert.equal(paused.strikes, 1);
+    return connect(...args);
+  });
+  await runWorker(s.dir, s.options);
+  assert.equal(readJob(s.dir).state, "completed");
+  assert.equal(listPauses(s.ctx.env, deps)[0].strikes, 1, "completion of a released generation cannot clear the pause");
 });

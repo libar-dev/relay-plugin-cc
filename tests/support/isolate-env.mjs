@@ -154,7 +154,7 @@ if (!process.env.RELAY_HOME_FOR_TESTS) {
 process.env.HOME = process.env.RELAY_HOME_FOR_TESTS;
 process.env.USERPROFILE = process.env.RELAY_HOME_FOR_TESTS;
 // Existing suites must not depend on real machine pressure or admission pacing.
-process.env.RELAY_ADMISSION ??= "off";
+process.env.RELAY_ADMISSION = "off";
 delete process.env.CODEX_HOME;
 delete process.env.GROK_HOME;
 
