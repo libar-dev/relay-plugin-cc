@@ -87,15 +87,42 @@ function stateBlockLines(value) {
   return String(value ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 }
 
+function quoteLine(line, other = "") {
+  if (line.length <= 160) return JSON.stringify(line);
+  let at = 0;
+  while (at < line.length && line[at] === other[at]) at += 1;
+  const start = Math.max(0, at - 60), end = start + 160;
+  return JSON.stringify(`${start > 0 ? "…" : ""}${line.slice(start, end)}${line.length > end ? "…" : ""}`);
+}
+
 function firstDifferingLine(text, expected, stateBlock) {
   const lines = stateBlock ? stateBlockLines : (value) => trimEnd(value).split("\n");
   const written = lines(withoutOuterFence(text, expected));
   const required = lines(expected);
   // Only diagnose a recognisable job block; prose keeps the general instruction.
   if (![written, required].every((block) => block[0]?.startsWith("state: ") && block[1]?.startsWith("job: "))) return "";
+  if (stateBlock) {
+    const key = (line) => line.slice(0, line.indexOf(":"));
+    const remaining = [...required];
+    for (const line of written) {
+      const index = remaining.indexOf(line);
+      if (index !== -1) { remaining.splice(index, 1); continue; }
+      const counterpart = remaining.find((other) => key(other) === key(line));
+      return counterpart
+        ? `One line differs: you wrote ${quoteLine(line, counterpart)}; it must be ${quoteLine(counterpart, line)}.\n`
+        : `Remove this line, which is not in the result: ${quoteLine(line)}.\n`;
+    }
+    const missing = remaining.find((line) => OUTCOME_KEYS.has(key(line)));
+    return missing ? `A line is missing: ${quoteLine(missing)}.\n` : "";
+  }
   for (let index = 0; index < Math.max(written.length, required.length); index += 1) {
     if (written[index] !== required[index]) {
-      return `One line differs: you wrote ${JSON.stringify(written[index] ?? "(missing line)")}; it must be ${JSON.stringify(required[index] ?? "(no line)")}.\n`;
+      if (required[index] === undefined) {
+        const extra = written.slice(index).find((line) => line.trim() !== "");
+        return `Remove this line, which is not in the result: ${quoteLine(extra)}.\n`;
+      }
+      if (written[index] === undefined) return `A line is missing: ${quoteLine(required[index])}.\n`;
+      return `One line differs: you wrote ${quoteLine(written[index], required[index])}; it must be ${quoteLine(required[index], written[index])}.\n`;
     }
   }
   return "";
@@ -459,9 +486,11 @@ async function handleSubagentStop(input, env = process.env) {
   }
   const matches = stateBlock ? matchesStateBlock(input.last_assistant_message, expected) : trimEnd(withoutOuterFence(input.last_assistant_message, expected)) === trimEnd(expected);
   if (expected != null && !matches) {
+    const difference = firstDifferingLine(input.last_assistant_message, expected, stateBlock);
+    const reply = `Reply with exactly this text and nothing else, with no code fence around it:\n${expected}`;
     problems.push({
       kind: "final-message",
-      reason: `Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n${firstDifferingLine(input.last_assistant_message, expected, stateBlock)}${expected}`
+      reason: `Your final message must be exactly the job's result, with nothing added or removed.${difference ? `\n${difference}` : " "}${reply}`
     });
   }
   if (problems.length === 0) {
