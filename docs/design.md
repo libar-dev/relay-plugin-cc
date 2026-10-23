@@ -694,7 +694,7 @@ content, the origin kinds `coordinator`, `peer`, `human` and `task-notification`
 types, and the coordinator's and the typed message's wrappers. From the Workflow harness: the
 transcript path, the marker lines, two system-prompt notes, two trailers, the meta file, the
 journal's `started` lines and the three retry suffixes. From the Mod API's `turn.complete` (an
-agent's `reason: "aborted"`), `tool.call` on `TaskStop` (its `task_id`), `$.agent.list()` (id, name, type
+agent's `reason: "aborted"`), `tool.call` on `TaskStop` (its `task_id`, and its answer's `task_id`), `$.agent.list()` (id, name, type
 and status), and `agent.spawn`: the agent
 type, the prompt, `resume`, and the placeholder a Workflow run that withholds its script puts in
 the prompt. From `TaskStop`'s `PostToolUse`: the stopped task's id in its result.
@@ -1153,8 +1153,8 @@ following the listing's pages, and stays silent when the job is not `starting` o
 dead), when no job is found, and where nothing draws (T3, `claude -p`); it shows the notice after the
 turn has completed, never holding it. Measured with `x to stop` and Esc; ctrl+x ctrl+k and Desktop's
 Stop button raise, as far as known, the same signal, but neither is checked live with the notice yet. A TaskStop raises the same `turn.complete`, after
-its `tool.call`; the module remembers the agents a TaskStop named there and shows them no notice, since
-the TaskStop hook cancels their jobs. A Workflow's agents are not listed, so their stops show none. A
+its `tool.call`; the module remembers the agents a TaskStop named there, narrows that to the agent the
+call's answer names, and shows it no notice, since the TaskStop hook cancels its job. A Workflow's agents are not listed, so their stops show none. A
 line typed in the view right after Esc resumes the relay and is delivered at once: a steer while the
 job runs, a continue once it has ended. In the terminal, ↓ and Enter open the view with the cursor
 still in the agent list; ↑ (as many times as ↓) reaches the view's prompt, and the first Esc does

@@ -466,12 +466,14 @@ view prompt, ctrl+x ctrl+k, Desktop's Stop button) leaves its job running, with 
 `turn.complete` hook sees such a stop (`reason: "aborted"`, the agent then listed `killed`), finds the job with
 `companion status --all --active --json`, and shows a line in the transcript and a toast naming the job, with
 `/relay:cancel` and `/relay:result`. A TaskStop raises the same signal; a `tool.call` hook on `TaskStop` marks the
-agents it names first, and they get no notice, since the TaskStop hook cancels their jobs. The live check
+agents it names first, kept in `$.state` across a reload and narrowed to the agent stopped once the call answers, and
+that agent gets no notice, since the TaskStop hook cancels its job. The live check
 `stop-notice` drives the three stops on Codex in the terminal.
 
 What held: the measured signals were the same on Claude Code 2.1.309 as on 2.1.308, and the notice needed no
 companion change: Phase 4's slim `status --json` rows carry the relay's agent id. What is left: a Workflow's
-agents are never listed, so a stop of one shows no notice. ctrl+x ctrl+k and Desktop's Stop button are not checked live with the
+agents are never listed, so a stop of one shows no notice, and none is shown where nothing draws the session (T3
+Code, `claude -p`). ctrl+x ctrl+k and Desktop's Stop button are not checked live with the
 notice yet; the M3 lead can check the Stop button when it next runs the Desktop pass.
 
 ## Phase 4: the terminal and Desktop board (separate PRs)
