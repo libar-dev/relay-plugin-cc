@@ -7,6 +7,7 @@ import process from "node:process";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { listJobDirs, readJob, readJsonOrNull, writeJsonAtomic, writeJob, TERMINAL_STATES } from "../jobs/store.mjs";
+import { pendingInboxMessages } from "../jobs/messages.mjs";
 import { acquireOwnership, releaseOwnership, readOwnership } from "../util/ownership.mjs";
 import { isProcessAlive, isProcessIdentityAlive, readProcessStartTime } from "../util/process.mjs";
 
@@ -595,8 +596,16 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
     if (!["linux", "darwin"].includes(platform)) { process.stderr.write(`relay load guard: admission unsupported on ${platform}; worker bypassed\n`); return launch(); }
     const config = deps.readAdmissionConfig(env);
     if (!admissionEnabled(env, config, platform)) return launch();
-    const home = admissionHome(env), machine = machineReading(home, deps), settings = guardSettings(config, machine), job = readJob(jobDir);
+    const home = admissionHome(env);
+    let machine = machineReading(home, deps);
+    for (let retry = 0; machine.refreshing && retry < 10; retry++) {
+      deps.lockSleep(25 + Math.floor(50 * deps.random()));
+      machine = machineReading(home, deps);
+    }
+    const settings = guardSettings(config, machine), job = readJob(jobDir);
     const decision = retryLock(home, deps, () => {
+      const job = readJob(jobDir);
+      if (TERMINAL_STATES.has(job?.state) && pendingInboxMessages(jobDir).length === 0) return null;
       const all = slots(home, deps), existing = all.find(s => s.jobId === job.id);
       if (existing && ((existing.state === "spawning" && age(deps.now(), existing.since, DEFAULTS.spawnGraceMs)) || deps.isAlive({ pid: existing.pid, startTime: existing.processStart }))) return null;
       const waiting = all.filter(s => s.state !== "running").length;
@@ -612,8 +621,10 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
       writeSlot(home, slot);
       try {
         spawned = launch();
-        writeJob(jobDir, { ...job, state: "starting", worker: null, launchPendingAt: iso(deps.now()),
-          admission: { ...job.admission, waitKind: "spawned" } });
+        const cur = readJob(jobDir);
+        if (cur?.state === "queued" && cur.admission?.waitKind === "worker")
+          writeJob(jobDir, { ...cur, state: "starting", worker: null, launchPendingAt: iso(deps.now()),
+            admission: { ...cur.admission, waitKind: "spawned" } });
         return spawned;
       }
       catch (e) { fs.rmSync(slotFile(home, job.id), { force: true }); throw e; }

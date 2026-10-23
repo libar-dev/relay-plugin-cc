@@ -9,6 +9,7 @@ import { acquireOwnership, releaseOwnership } from "../plugins/relay/scripts/lib
 import { computeJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { retryQueuedWorker } from "../plugins/relay/scripts/lib/worker/delivery.mjs";
 import { writeJob, readJob, writeJsonAtomic } from "../plugins/relay/scripts/lib/jobs/store.mjs";
+import { postInboxMessage } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 const GiB = 2 ** 30;
 function setup(t, config = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-admission-"));
@@ -483,6 +484,79 @@ test("a deferred spawn that exits before saving becomes dead after grace without
   assert.equal(computeJobView(job, { now: s.deps.now() + 60001 }).state, "dead");
   for (let n = 0; n < 3; n++) assert.equal(retryQueuedWorker(c.jobDir, s.env), null);
   assert.equal(launches, 1);
+});
+
+for (const state of ["cancelled", "completed"]) for (const pending of [false, true]) {
+  test(`spawn preserves ${state} jobs with pending inbox work=${pending}`, t => {
+    const s = setup(t), c = s.ctx();
+    writeJob(c.jobDir, { id: c.jobId, request: c.request, state, worker: null, completedAt: new Date(s.deps.now()).toISOString() });
+    if (pending) postInboxMessage(c.jobDir, { id: "follow-up", type: "continue", text: "Continue the synthetic task" });
+    const before = fs.readFileSync(path.join(c.jobDir, "job.json"), "utf8");
+    let launches = 0;
+    assert.equal(spawnWithAdmission(c.jobDir, s.env, () => { launches++; return 123; }, s.deps), pending ? 123 : null);
+    assert.equal(launches, pending ? 1 : 0);
+    assert.equal(fs.readFileSync(path.join(c.jobDir, "job.json"), "utf8"), before);
+    if (!pending) assert.equal(fs.existsSync(path.join(s.home, "slots", `${c.jobId}.json`)), false);
+  });
+}
+
+test("spawn preserves a child save made before launch returns", t => {
+  const s = setup(t), c = s.ctx();
+  writeJob(c.jobDir, { id: c.jobId, request: c.request, state: "queued", admission: { state: "waiting", waitKind: "worker" } });
+  const child = { ...readJob(c.jobDir), state: "queued", worker: c.me, admission: { state: "waiting", waitKind: "memory" } };
+  let saved;
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => { writeJob(c.jobDir, child); saved = readJob(c.jobDir); return 123; }, s.deps), 123);
+  assert.deepEqual(readJob(c.jobDir), saved);
+});
+
+test("spawn rechecks cancellation after acquiring a contended admission lock", t => {
+  const s = setup(t), c = s.ctx();
+  writeJob(c.jobDir, { id: c.jobId, request: c.request, state: "queued", admission: { state: "waiting", waitKind: "worker" } });
+  const file = path.join(s.home, "admission.lock"); fs.mkdirSync(s.home, { recursive: true });
+  acquireOwnership(file, { pid: process.pid }); t.after(() => releaseOwnership(file));
+  const cancelled = { ...readJob(c.jobDir), state: "cancelled", errorMessage: "Synthetic cancellation" };
+  let saved;
+  const deps = { ...s.deps, lockSleep() { writeJob(c.jobDir, cancelled); saved = readJob(c.jobDir); releaseOwnership(file); } };
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => assert.fail("must not launch"), deps), null);
+  assert.deepEqual(readJob(c.jobDir), saved);
+});
+
+test("spawn retries a busy sensor refresh and launches without writing queued", t => {
+  const s = setup(t), c = s.ctx();
+  writeJob(c.jobDir, { id: c.jobId, request: c.request, state: "starting" });
+  const before = fs.readFileSync(path.join(c.jobDir, "job.json"), "utf8");
+  const file = path.join(s.home, "machine-darwin.lock"); fs.mkdirSync(s.home, { recursive: true });
+  acquireOwnership(file, { pid: process.pid, startTime: null }); t.after(() => releaseOwnership(file));
+  const sleeps = [], writes = [];
+  const sensor = { totalmem: () => 64 * GiB, availableParallelism: () => 10, loadavg: () => [0, 0, 0] };
+  const sysctl = bin => ({ status: 0, stdout: bin.endsWith("vm_stat") ? "page size of 16384 bytes\nPages free: 2000000.\nPages inactive: 0.\n" : "1" });
+  const rename = fs.renameSync;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === path.join(c.jobDir, "job.json")) writes.push(JSON.parse(fs.readFileSync(from, "utf8")).state);
+    return rename(from, to);
+  });
+  let reads = 0;
+  const deps = { ...s.deps, readMachine: args => { reads++; return readMachineDefault({ ...args, platform: "darwin", sensor, sysctl }); },
+    lockSleep: ms => { sleeps.push(ms); releaseOwnership(file); } };
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => 123, deps), 123);
+  assert.equal(reads, 2); assert.deepEqual(sleeps, [25]);
+  assert.deepEqual(writes, []);
+  assert.equal(fs.readFileSync(path.join(c.jobDir, "job.json"), "utf8"), before);
+});
+
+test("persistent sensor refresh defers only after a bounded jittered retry", t => {
+  const s = setup(t), c = s.ctx();
+  writeJob(c.jobDir, { id: c.jobId, request: c.request, state: "starting" });
+  s.setMachine({ refreshing: true, availableBytes: null });
+  const sleeps = [];
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => assert.fail("must not launch"), {
+    ...s.deps, random: () => 0.999, lockSleep: ms => sleeps.push(ms)
+  }), null);
+  assert.equal(sleeps.length, 10); assert.ok(sleeps.every(ms => ms >= 25 && ms <= 75));
+  assert.ok(sleeps.reduce((sum, ms) => sum + ms, 0) <= 1000);
+  const job = readJob(c.jobDir);
+  assert.equal(job.state, "queued"); assert.equal(job.admission.waitKind, "worker");
+  assert.equal(job.admission.reason, "sensor refresh in progress");
 });
 
 test("short admission-lock contention retries a healthy start before deferring", t => {
