@@ -278,9 +278,11 @@ Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
   fails with an actionable reason rather than waiting forever.
 - All starts and turns share 5-second spacing. The busy-load allowance is
   `F = min(16, max(2, C−2))` seats, applied only when five-minute load is at least `1.5C` or
-  host bytes are unknown. Load above `3C`, host bytes after holds below
-  `max(0.75 GiB, 0.05T)`, or macOS warning/critical memory pressure veto new work, even the
-  first job. Host load is skipped with a note when its CPU scope differs from available CPUs.
+  host bytes are unknown, for new jobs only. Load above `3C` and macOS warning pressure
+  hold new jobs; admitted jobs can continue turns, retries and replacement backends.
+  Host bytes after holds below `max(0.75 GiB, 0.05T)` or macOS critical pressure hold
+  those next turns too, with a visible reason. Host load is skipped with a note when its
+  CPU scope differs from available CPUs.
 - The very-heavy-model **quota** is two concurrent participating jobs total across backends:
   Astra, the Kimi K3 family, or effective `max`/`ultra` effort. This is a quota/token limit,
   independent of RAM; ordinary `high`/`xhigh` work is outside it. Opaque default selections
@@ -291,12 +293,15 @@ Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
   original job ID. Keep calling `wait`: the submitter/adopter's wait, message or relay-hook
   loop retries worker creation at most once per admission poll (3 seconds by default).
   A bare `start` can remain dormant until someone waits; there is no background queue service.
+  `status` only reads jobs: use `wait <job>` to adopt deferred work. A workerless job with no
+  spawn retry for 15 minutes stops deferring the stop-time review gate; it remains adoptable.
   The limit bounds workers, not all submissions, native transcripts or waiting clients.
 
 Linux reads `MemAvailable` (with a labelled Node >=22 fallback). macOS estimates bytes from
 `vm_stat` free+inactive pages using its reported page size, and separately checks
 `kern.memorystatus_vm_pressure_level`. Samples are cached for two seconds per cgroup, with
-bounded probes. Missing sensors show a degraded note while other gates remain effective;
+bounded probes. A busy refresh reuses a sample less than ten seconds old or waits for the
+refresh to finish. Missing sensors show a degraded note while other gates remain effective;
 missing host bytes applies F. Guard/storage errors visibly bypass the guard. A live admission
 lock stays queued and cancellable; a stuck-lock diagnostic identifies the holder and off switch.
 

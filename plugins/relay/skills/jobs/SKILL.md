@@ -200,7 +200,7 @@ A message reaches the job within seconds: the plugin's hooks module ends the rel
     if (r.state !== 'completed' || r.undelivered) return { step: 'writer-3', state: r.state, undelivered: r.undelivered, error: r.error, job: r.job }
 
 - The relay retypes the block. The hook accepts it with a line left out that restates the request or only informs (`relay:`, `model:`, `mode:`, `cwd:`, `session:`, `note:` and the like), never with an outcome line left out (`state:`, `job:`, `duration:`, `report:`, `dir:`, `error:`, `undelivered:` and the like) or any line changed. A return with no `state:` line comes from a relay that was let go or a Claude Code failure such as a usage limit, and its job may still run: find it by label with `C status --workflow <run> --json` (50 jobs a page; `--cursor <nextCursor>` lists the next).
-- A relay is a Claude agent and spends Claude usage for its job's whole run. When Claude's usage limit ends the relays, their jobs run on; collect them with `C status --workflow <run>` or `C status --all`.
+- A relay is a Claude agent and spends Claude usage for its job's whole run. When Claude's usage limit ends the relays, running jobs continue. Find their ids with `C status --workflow <run>` or `C status --all`, then run `C wait <job>` for each pending job to adopt deferred work and collect its result.
 - Give a `relay:job` agent no `schema`. A script cannot read files either: for structured data, ask the brief for the shape, then hand `r.report` to a Claude agent that has the schema: `agent(\`Read ${r.report} and return its findings.\`, { schema: FINDINGS })`.
 - The agent holds its slot for the job's whole run, so size a launch by job length. `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` caps how many run at once.
 - A retried or resumed call takes over its running job. Two calls with the same prompt and label are two jobs. Adoption is not a follow-up: a script cannot send a new turn to a job it names. To continue a finished job from a workflow, give a Claude agent the job id and have it run `C continue <job> --message-file F`.
@@ -234,12 +234,14 @@ You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:setup` and 
 | `C setup [--json]` | every backend home found (the Codex home, `~/.grok` and `~/.grok-*`, ZCode, `~/.kimi-code` and `~/.kimi-code-*`): binary and version, sign-in, default model and effort, models, `can`; exits 0 whatever it finds |
 | `C setup --backend codex\|grok\|zcode\|kimi [--grok-home H\|--kimi-home H] [--json]` | one backend home; exits 1 when it is not ready |
 
-A wide fan-out that needs no steering can start its jobs with `C start` a few seconds apart and collect them with `C wait` or `C status`; no Claude agent is held per job. Jobs started within the same second can hit a provider's request-rate limit. For Codex and Grok routes, the worker retries at 30, 60 and 120 s. ZCode and Kimi retry model calls themselves.
+A wide fan-out that needs no steering can start its jobs with `C start` a few seconds apart and collect each with `C wait <job>`; `C status` only reads jobs and does not start deferred work; no Claude agent is held per job. Jobs started within the same second can hit a provider's request-rate limit. For Codex and Grok routes, the worker retries at 30, 60 and 120 s. ZCode and Kimi retry model calls themselves.
 
 A job can wait as `queued` before it starts or between turns. Keep calling `wait`: queued work
 remains pending and adoptable, including in a Workflow. Cancel, steer and continue still work.
 Jobs without a worker need a submitter/adopter's wait, message or relay hook to retry spawning;
-a bare `start` can stay dormant. The resident waiting-worker limit is `Q = max(8, 2F)`, with a
+a bare `start` can stay dormant. `status` alone does not start deferred work: use `C wait <job>`.
+A workerless job with no spawn retry for 15 minutes stops deferring the stop-time review gate.
+The resident waiting-worker limit is `Q = max(8, 2F)`, with a
 64 MiB startup hold per worker; deferred-spawn retries run at most once per admission poll.
 
 The shared guard checks host bytes (`available − otherHolds − J ≥ R`), each finite cgroup
@@ -249,6 +251,9 @@ for Codex/Grok and `1 GiB` for Kimi/ZCode/unknown, with 30-second holds and no m
 multiplier. Scope margin is `min(0.5 GiB, 10% × limit)`. Healthy machines have no active ceiling;
 `F = min(16, max(2, C−2))` seats applies only at load ≥ `1.5C` or unknown host bytes. Load > `3C`,
 critical host memory or macOS warning/critical pressure can block even the first start.
+Load and warning pressure hold only new jobs; admitted jobs continue turns, retries and
+replacement backends. Critical host memory or critical pressure holds next turns too,
+with the reason shown in their queued block.
 The very-heavy-model quota is 2 total (Astra, Kimi K3, identified max/ultra effort), independent
 of memory. Eligible backends with fewer active seats go first. Unknown defaults remain a quota
 coverage limit. Linux uses MemAvailable; macOS uses vm_stat free+inactive and separate pressure.

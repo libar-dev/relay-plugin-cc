@@ -2,6 +2,11 @@
 
 ## 3.0.0-dev.15
 
+- Restart Claude sessions after upgrading so all job readers and workers use the load guard.
+  Deferred-spawn retries refresh the start grace for older readers while a waiter is active.
+- Keep admitted jobs moving under high CPU load or macOS warning pressure; critical host
+  memory and critical pressure still hold next turns with a visible reason.
+
 - Add a per-user load guard for worker launches and turns, with memory headroom, startup
   holds, shared five-second pacing, a two-job very-heavy-model quota and a bounded resident queue.
   Healthy machines have no fixed active ceiling; host and finite cgroup memory tests are separate. Deferred jobs remain

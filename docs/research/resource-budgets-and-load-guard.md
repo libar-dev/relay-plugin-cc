@@ -1,5 +1,8 @@
 # Relay resource budgets and minimum load guard
 
+> Research input: the [README’s Load guard section](../../README.md#load-guard) describes
+> what ships and takes precedence wherever this research proposes different behavior.
+
 ## Consolidated research and implementation brief
 
 **23 October 2026 · Codex, Grok, ZCode, Kimi and Claude · macOS, Linux and Windows**
@@ -32,9 +35,9 @@ The model name and ordinary reasoning effort are weak predictors of local resour
 
 For the four additional Claude models, use **M / 1 GiB as the provisional floor for a fresh, independent Claude Code or SDK process**. Use **L / 2 GiB for its ordinary coding workload**, rising with its tools. A native Claude subagent shares its parent process: do not charge another independent-harness floor for every subagent or Haiku Relay wrapper. Its incremental cost is unmeasured and is not zero. [^s47][^s48]
 
-The reported Fedora incident involved only four or five Relay jobs alongside test suites, Claude sessions and T3 delegates, followed by roughly ten threads being steered together. This points to synchronized starts and local tool bursts as the first problems to address. A start guard reduces those risks; tests that begin later and already-running processes can still exhaust memory. Serializing full test suites is therefore part of the useful minimum.
+A reported resource-exhaustion incident involved Relay jobs alongside test suites and other agent sessions, followed by synchronized steering. This points to synchronized starts and local tool bursts as the first problems to address. A start guard reduces those risks; tests that begin later and already-running processes can still exhaust memory. Serializing full test suites is therefore part of the useful minimum.
 
-This report consolidates the initial resource research, the supplied load-guard design excerpt, the follow-up Claude Code Guide investigation, and current primary documentation. It is self-contained; the earlier PDF and pasted transcript are not required to understand the recommendations. No measurements were taken on the user’s computers, and no repository changes were made.
+This report consolidates the initial resource research, the supplied load-guard design excerpt, the follow-up Claude Code Guide investigation, and current primary documentation. It is self-contained; the earlier PDF and pasted transcript are not required to understand the recommendations. No local measurements were taken, and no repository changes were made.
 
 ### Version and evidence boundaries
 
@@ -157,7 +160,7 @@ The class in this table is a **provisional floor for a fresh independent harness
 | Claude Sonnet 5.5 / `claude-sonnet-5-5` | low, medium, high, xhigh, max [^s53] | M / 1 GiB |
 | Claude Haiku 5.5 / `claude-haiku-5-5` | low, medium, high, xhigh, max [^s54] | M / 1 GiB |
 
-For Codex, model/list returns supportedReasoningEfforts and defaultReasoningEffort; availability depends on client and account. Do not turn the API list into a hardcoded CLI validation list. For Kimi, generic accepted configuration strings do not mean each model supports them; its model entries carry support_efforts and default_effort. ZCode's native default max differs from Relay's high default shown in the user's setup. [^s10][^s19][^s20]
+For Codex, model/list returns supportedReasoningEfforts and defaultReasoningEffort; availability depends on client and account. Do not turn the API list into a hardcoded CLI validation list. For Kimi, generic accepted configuration strings do not mean each model supports them; its model entries carry support_efforts and default_effort. ZCode's native default max differs from Relay's high default in the inspected setup. [^s10][^s19][^s20]
 
 A 256k or 1M context window is a service capability, not a local model-memory allocation. Actual transcript bytes, returned reasoning, image payloads and retained copies are the local variables to measure. Keep backend version, model, effective effort and context/history size in future telemetry, while using a 1.0 effort multiplier for the first guard.
 
@@ -400,7 +403,7 @@ Seat diversity and memory fairness are different: one 4 GiB allowance and one 0.
 
 A paused backend or a job that cannot fit is not an eligible claimant to the last free seat. Reconsider when it becomes eligible; otherwise one blocked request can idle the whole machine. A probe after a provider pause still passes the local memory, count and stagger checks. Preserve one-probe-at-a-time behavior and leave the originally refused job failed until explicitly resumed, as the draft proposes.
 
-A concrete immediate improvement matches the reported Fedora incident: Relay's package test script is node --test tests/*.test.mjs. Node's file concurrency normally scales with available parallelism. Several independent suites can therefore multiply worker counts. [^s39][^s40]
+A concrete immediate improvement addresses synchronized test load: Relay's package test script is node --test tests/*.test.mjs. Node's file concurrency normally scales with available parallelism. Several independent suites can therefore multiply worker counts. [^s39][^s40]
 
 ```text
 node --test --test-concurrency=1 tests/*.test.mjs
@@ -458,7 +461,7 @@ The pasted investigation is useful input, but some statements are superseded by 
 
 ## Sources and provenance
 
-Vendor documentation and original experiments/reports were inspected for this research on 23 October 2026. Mutable documentation may change; repository links are pinned where the inspected baseline matters. Source footnotes distinguish original reports from controlled measurements. The user-provided incident, setup output, draft and Claude Guide investigation are contextual inputs, not independently measured machine data. Recommendations and numerical policy defaults are the analysis of this report.
+Vendor documentation and original experiments/reports were inspected for this research on 23 October 2026. Mutable documentation may change; repository links are pinned where the inspected baseline matters. Source footnotes distinguish original reports from controlled measurements. Incident reports, setup examples, drafts and the Claude Guide investigation are contextual inputs, not independently measured machine data. Recommendations and numerical policy defaults are the analysis of this report.
 
 No private sign-in details or credentials from the setup are reproduced.
 
