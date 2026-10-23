@@ -11,6 +11,9 @@ import { fileURLToPath } from "node:url";
 import { absoluteJobsHomeEnv, jobPaths, readJob, TERMINAL_STATES } from "../jobs/store.mjs";
 import { isMessagePending, messageAccount, pendingInboxMessages, postInboxMessage, readOutcome } from "../jobs/messages.mjs";
 import { isWorkerLease, readLease, releaseWorkerLease } from "../jobs/lease.mjs";
+import { spawnWithAdmission } from "./admission.mjs";
+import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
+import { holderAlive } from "./admission.mjs";
 import { inOwnUserScope } from "../util/process.mjs";
 
 export const COMPANION_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..", "companion.mjs");
@@ -25,6 +28,13 @@ function sleep(ms) {
 }
 
 export function spawnWorker(jobDir, cwd, env = process.env) {
+  const lease = jobPaths(jobDir).lease;
+  if (!acquireOwnership(lease, { pid: process.pid, startTime: null, role: "spawn" }, { isAlive: holderAlive })) return null;
+  try { return spawnWithAdmission(jobDir, env, () => spawnWorkerProcess(jobDir, cwd, env)); }
+  finally { releaseOwnership(lease); }
+}
+
+function spawnWorkerProcess(jobDir, cwd, env) {
   const paths = jobPaths(jobDir);
   const fd = fs.openSync(paths.stderr, "a");
   try {
@@ -99,7 +109,7 @@ export async function awaitOutcome(jobDir, messageId, options = {}) {
     if (outcome && (live || !messageAccount(jobDir).undelivered.includes(messageId) || attemptEnded(jobDir, messageId))) {
       return { outcome, spawned, consumer: true };
     }
-    if (options.wait === false && live) {
+    if (options.wait === false && (live || readJob(jobDir)?.state === "queued")) {
       return { outcome: null, spawned, consumer: true };
     }
     if (Date.now() >= deadline) {
@@ -107,10 +117,10 @@ export async function awaitOutcome(jobDir, messageId, options = {}) {
     }
     if ((isMessagePending(jobDir, messageId) || messageAccount(jobDir).undelivered.includes(messageId)) && !live && Date.now() - lastSpawnAt > 5000) {
       const job = readJob(jobDir);
-      if (!workerJustSpawned(job)) {
-        spawnWorker(jobDir, job?.request?.cwd ?? process.cwd(), env);
+      if (job?.admission?.waitKind === "worker" || !workerJustSpawned(job)) {
+        const pid = spawnWorker(jobDir, job?.request?.cwd ?? process.cwd(), env);
         lastSpawnAt = Date.now();
-        spawned += 1;
+        if (pid) spawned += 1;
       }
     }
     await sleep(Math.max(10, Math.min(pollMs, deadline - Date.now())));
@@ -122,4 +132,12 @@ export async function deliverMessage(jobDir, kind, text, extra = {}, options = {
   const message = postInboxMessage(jobDir, { kind, text, ...extra });
   const { outcome, spawned } = await awaitOutcome(jobDir, message.id, options);
   return { message, outcome, spawned };
+}
+
+export function retryQueuedWorker(jobDir, env = process.env) {
+  const job = readJob(jobDir);
+  if (job?.state === "queued" && job.admission?.waitKind === "worker" && !hasLiveWorker(jobDir)) {
+    return spawnWorker(jobDir, job.request?.cwd ?? process.cwd(), env);
+  }
+  return null;
 }

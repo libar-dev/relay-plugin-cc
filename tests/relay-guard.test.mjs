@@ -1431,6 +1431,10 @@ test("a queued Workflow stays pending through repeated hand-back and stop attemp
   const dir = jobDirOf(ctx, jobId);
   const file = path.join(dir, "job.json");
   const job = JSON.parse(fs.readFileSync(file, "utf8"));
+  ctx.env.RELAY_ADMISSION = "on";
+  ctx.env.RELAY_ADMISSION_HOME = path.join(ctx.root ?? path.dirname(dir), "synthetic-admission");
+  ctx.env.RELAY_ADMISSION_READINGS = path.join(dir, "synthetic-readings.json");
+  fs.writeFileSync(ctx.env.RELAY_ADMISSION_READINGS, JSON.stringify({ availableBytes: 0, totalBytes: 40 * 2 ** 30, cores: 8, load5: 0 }));
   fs.writeFileSync(file, JSON.stringify({ ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker", reason: "memory low", since: new Date().toISOString() } }));
   for (let i = 0; i < RELAY_BLOCK_BUDGET + 2; i++) {
     assert.equal(decision(await pre(ctx, "SubagentHandback", { message: "done" })), "deny");

@@ -39,6 +39,31 @@ const positive = (value, max, fallback) => Number.isInteger(value) && value > 0 
 export function admissionHome(env = process.env) {
   return path.resolve(env.RELAY_ADMISSION_HOME || path.join(os.homedir(), ".relay-jobs", "admission"));
 }
+export function admissionEnabled(env = process.env, config = readUserConfig(env)) {
+  return String(env.RELAY_ADMISSION).toLowerCase() !== "off" && config.admission !== "off";
+}
+export function guardSettings(config = {}, machine = { totalBytes: os.totalmem(), cores: os.availableParallelism() }) {
+  const total = machine.totalBytes / GiB;
+  const headroom = Math.max(DEFAULTS.headroomGiB, total * DEFAULTS.headroomFraction);
+  const minWeight = positive(config.minWeight, 1000, DEFAULTS.minWeight);
+  const ceiling = Math.max(DEFAULTS.minWeight, Math.min(DEFAULTS.ceilingCores * machine.cores, Math.floor((total - headroom) / DEFAULTS.reserveGiBPerWeight)));
+  return { minWeight, maxWeight: Math.max(minWeight, positive(config.maxWeight, 10000, ceiling)),
+    maxVeryHeavy: positive(config.maxVeryHeavy, 100, DEFAULTS.maxVeryHeavy), modelClasses: validModelClasses(config.modelClasses), headroomBytes: headroom * GiB };
+}
+export function validModelClasses(entries) {
+  return Array.isArray(entries) ? entries.filter(e => e && /^[0-9A-Za-z._:/*-]{1,100}$/.test(e.pattern) && Object.hasOwn(WEIGHTS, e.class)) : [];
+}
+export function modelClass({ backend = "codex", model, effort } = {}, overrides = []) {
+  const m = model === "default" ? "" : String(model ?? "").toLowerCase();
+  const e = String(effort ?? "").toLowerCase();
+  for (const rule of validModelClasses(overrides)) {
+    const pattern = rule.pattern.toLowerCase().split("*").map(p => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+    if (new RegExp(pattern).test(m)) return rule.class;
+  }
+  if (DEFAULTS.heavyEfforts.includes(e) || DEFAULTS.heavyModel.test(m) || (backend === "kimi" && DEFAULTS.kimiHeavyModel.test(m))) return "very-heavy";
+  return DEFAULTS.lightEfforts.includes(e) || DEFAULTS.lightModel.test(m) ? "light" : "medium";
+}
+
 // Admission alone uses this bounded batch cache, including ownership and legacy reads.
 const processCaches = new Map();
 export function holderAlive(identity, { platform = process.platform, now = Date.now(), ps = spawnSync } = {}) {
@@ -71,7 +96,7 @@ function self(deps) {
 function dependencies(deps = {}) {
   const env = deps.env ?? process.env;
   const now = deps.now ?? Date.now;
-  return { env, now, random: Math.random, readUserConfig, 
+  return { env, now, random: Math.random, readUserConfig, readMachine: readMachineDefault,
     isAlive: identity => holderAlive(identity, { platform: deps.platform, now: now() }), ...deps };
 }
 function lock(home, deps, fn) {
@@ -80,6 +105,64 @@ function lock(home, deps, fn) {
   if (!acquireOwnership(file, { ...self(deps), since: iso(deps.now()) }, { isAlive: deps.isAlive })) return { locked: false, holder: readOwnership(file, { isAlive: deps.isAlive }) };
   try { return { locked: true, value: fn() }; }
   finally { releaseOwnership(file); }
+}
+export function readMachineDefault({ home = admissionHome(), platform = process.platform, now = Date.now(), env = process.env, sensor = os, sysctl = spawnSync } = {}) {
+  // Test hook: subprocess fixtures supply synthetic readings; never used implicitly.
+  if (env.RELAY_ADMISSION_READINGS) {
+    const fixture = readJsonOrNull(env.RELAY_ADMISSION_READINGS);
+    if (!fixture) throw new Error("invalid admission readings");
+    return { notes: [], ...fixture };
+  }
+  const notes = [];
+  const read = (name, fn, positiveOnly = false) => {
+    try { const n = fn(); if (!Number.isFinite(n) || n < 0 || (positiveOnly && n === 0)) throw new Error("invalid reading"); return n; }
+    catch (e) { notes.push(`${name} not read (${e.message})`); return null; }
+  };
+  const totalBytes = read("total memory", () => sensor.totalmem(), true);
+  const cores = read("cores", () => sensor.availableParallelism(), true) ?? 1;
+  const load5 = read("load", () => { if (platform === "win32") throw new Error("not available on this system"); return sensor.loadavg()[1]; });
+  let availableBytes;
+  if (platform !== "darwin") availableBytes = read("memory", () => sensor.freemem());
+  else {
+    const file = path.join(home, ".machine.json");
+    const cached = readJsonOrNull(file);
+    if (cached && now >= cached.at && now - cached.at < DEFAULTS.sensorCacheMs) {
+      availableBytes = cached.availableBytes; notes.push(...(cached.notes ?? []));
+    } else {
+      fs.mkdirSync(home, { recursive: true });
+      const owner = path.join(home, "machine.lock");
+      const alive = identity => holderAlive(identity, { platform, now });
+      if (!acquireOwnership(owner, { pid: process.pid, startTime: null }, { isAlive: alive })) {
+        availableBytes = null; notes.push("memory not read (sensor refresh in progress)");
+      } else try {
+        availableBytes = read("memory", () => {
+          const r = sysctl("sysctl", ["-n", "kern.memorystatus_level"], { timeout: 1000, encoding: "utf8" });
+          const value = String(r.stdout ?? "").trim();
+          if (r.error || r.status !== 0 || !/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 100 || !totalBytes) throw new Error("sysctl kern.memorystatus_level failed");
+          return Number(value) / 100 * totalBytes;
+        });
+        writeJsonAtomic(file, { at: now, availableBytes, notes: notes.filter(n => n.startsWith("memory")) });
+      } finally { releaseOwnership(owner); }
+    }
+  }
+  return { totalBytes, cores, availableBytes, load5, notes };
+}
+function machineReading(home, deps) {
+  try {
+    const m = deps.readMachine({ home, env: deps.env, now: deps.now(), platform: deps.platform });
+    const valid = n => typeof n === "number" && Number.isFinite(n) && n >= 0;
+    return { ...m, availableBytes: valid(m.availableBytes) ? m.availableBytes : null, load5: valid(m.load5) ? m.load5 : null,
+      totalBytes: valid(m.totalBytes) && m.totalBytes > 0 ? m.totalBytes : os.totalmem(), cores: valid(m.cores) && m.cores > 0 ? m.cores : os.availableParallelism(), notes: m.notes ?? [] };
+  } catch (e) { return { totalBytes: os.totalmem(), cores: os.availableParallelism(), availableBytes: null, load5: null, notes: [`sensors not read (${e.message})`] }; }
+}
+export function machineState(machine, pendingBytes = 0) {
+  const { totalBytes: t, availableBytes: a, load5: l, cores: c } = machine;
+  const effective = a === null ? null : a - pendingBytes;
+  if (effective !== null && effective < Math.max(DEFAULTS.criticalGiB * GiB, t * DEFAULTS.criticalFraction)) return { state: "critical", detail: "machine critical: memory low" };
+  if (l !== null && l > DEFAULTS.criticalLoadPerCore * c) return { state: "critical", detail: `machine critical: 5-minute load ${l.toFixed(1)} on ${c} cores` };
+  if (a === null && l === null) return { state: "unknown", detail: "machine readings unavailable" };
+  const healthy = (effective === null || effective >= Math.max(DEFAULTS.healthyGiB * GiB, t * DEFAULTS.healthyFraction)) && (l === null || l < DEFAULTS.healthyLoadPerCore * c);
+  return { state: healthy ? "healthy" : "busy", detail: null };
 }
 function files(dir) { try { return fs.readdirSync(dir); } catch (e) { if (e.code === "ENOENT") return []; throw e; } }
 function slotFile(home, id) { if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error("invalid job id"); return path.join(home, "slots", `${id}.json`); }
@@ -94,7 +177,7 @@ function slots(home, deps, clean = true) {
     if (name.endsWith(".tmp")) { if (clean && deps.now() - fs.statSync(file).mtimeMs > 60000) fs.rmSync(file, { force: true }); continue; }
     if (!/^[A-Za-z0-9_-]+\.json$/.test(name)) continue;
     const s = readJsonOrNull(file);
-    if (!s || s.v !== 1 || !Object.hasOwn(WEIGHTS, s.class) || !["waiting", "running", "spawning"].includes(s.state)) {
+    if (!s || s.v !== 1 || typeof s.jobDir !== "string" || typeof s.jobId !== "string" || !Object.hasOwn(WEIGHTS, s.class) || !["waiting", "running", "spawning"].includes(s.state)) {
       if (clean && deps.now() - fs.statSync(file).mtimeMs > 10000) fs.rmSync(file, { force: true }); continue;
     }
     const live = (s.state === "spawning" && age(deps.now(), s.since, DEFAULTS.spawnGraceMs)) || deps.isAlive({ pid: s.pid, startTime: s.processStart });
@@ -117,6 +200,74 @@ function legacyJobs(home, current, slotted, deps) {
   return dirs.map(d => typeof d === "string" ? readJob(d) : d).filter(j => j?.id && j.id !== current && !slotted.some(s => s.jobId === j.id) && j.state !== "queued" &&
     ((!TERMINAL_STATES.has(j.state) && deps.isAlive(j.worker)) || serversAlive(j, deps)));
 }
+function recordFor(slot, notes, reason = null, waitKind = null) {
+  return { state: reason ? "waiting" : "admitted", reason, waitKind, since: reason ? slot.since : null, admittedAt: slot.admittedAt ?? null, class: slot.class, weight: slot.weight, probe: Boolean(slot.probe), notes };
+}
+function bypass(ctx, error = null) {
+  const notes = error ? [`admitted without the guard (${error.message ?? error})`] : ["load guard off"];
+  if (error) process.stderr.write(`relay load guard: admitted job ${ctx.jobId} without the guard: ${error.message ?? error}\n`);
+  return { admit: true, slot: null, record: { state: "bypassed", notes } };
+}
+const lockWaits = new Map();
+export function admit(ctx, injected = {}) {
+  const deps = dependencies(injected), home = ctx.home ?? admissionHome(deps.env), now = deps.now();
+  try {
+    const config = deps.readUserConfig(deps.env);
+    if (!admissionEnabled(deps.env, config)) return bypass(ctx);
+    const machine = machineReading(home, deps), settings = guardSettings(config, machine);
+    // Discover outside the lock; membership and live records are reconciled inside it.
+    if (!deps.scanUnslotted) directories(deps.env, now);
+    const cls = modelClass(ctx.request, settings.modelClasses), w = WEIGHTS[cls];
+    const mine = { v: 1, jobId: ctx.jobId, jobDir: ctx.jobDir, pid: ctx.me.pid, processStart: ctx.me.startTime,
+      backend: ctx.request.backend ?? "codex", model: ctx.request.model, class: cls, weight: w,
+      since: ctx.waitingSince ?? iso(now), checkedAt: iso(now), probe: false, probeGeneration: null };
+    const wait = (reason, waitKind, existing = null) => {
+      const slot = existing?.state === "running" ? { ...existing, checkedAt: iso(now) } : { ...mine, spawnAt: readJsonOrNull(slotFile(home, ctx.jobId))?.spawnAt ?? null, state: "waiting", waitKind };
+      writeSlot(home, slot);
+      return { admit: false, reason, waitKind, retryMs: Number(deps.env.RELAY_ADMISSION_POLL_MS) || DEFAULTS.pollMs * (0.67 + 0.67 * deps.random()), slot, record: recordFor({ ...slot, since: mine.since }, machine.notes, reason, waitKind) };
+    };
+    const decision = lock(home, deps, () => {
+      const all = slots(home, deps), existing = all.find(s => s.jobId === ctx.jobId && s.state === "running");
+      const running = all.filter(s => s.jobId !== ctx.jobId && s.state === "running");
+      const legacy = legacyJobs(home, ctx.jobId, all, deps);
+      const used = running.reduce((n, s) => n + s.weight, 0) + legacy.length * WEIGHTS.medium;
+      const pending = running.filter(s => age(now, s.admittedAt, DEFAULTS.reserveMs)).reduce((n, s) => n + s.weight * DEFAULTS.reserveGiBPerWeight * GiB, 0);
+      const state = machineState(machine, pending);
+      if (state.state === "critical") return wait(state.detail, "critical", existing);
+      const effective = machine.availableBytes === null ? null : machine.availableBytes - pending - w * DEFAULTS.reserveGiBPerWeight * GiB;
+      if (effective !== null && effective < settings.headroomBytes) return wait(`memory low: ${(machine.availableBytes / GiB).toFixed(1)} GiB available; ${(settings.headroomBytes / GiB).toFixed(1)} GiB headroom required after startup reserves`, "memory", existing);
+      const timing = readJsonOrNull(path.join(home, "timing.json")) ?? {};
+      if (age(now, timing.lastStart, DEFAULTS.spacingMs)) return wait("staggering starts: another job or turn just started", "stagger", existing);
+      let aboveMin = false;
+      if (!existing) {
+        const vh = running.filter(s => s.class === "very-heavy").length;
+        if (cls === "very-heavy" && vh >= settings.maxVeryHeavy) return wait(`very heavy limit: ${vh} of ${settings.maxVeryHeavy} very heavy jobs running`, "very-heavy");
+        const fitsMin = used + w <= settings.minWeight;
+        if (!fitsMin && (state.state !== "healthy" || used + w > settings.maxWeight)) return wait(state.state !== "healthy" ? `machine busy: weight ${used} of the minimum ${settings.minWeight} in use` : `at the ceiling: weight ${used} of ${settings.maxWeight} in use`, "weight");
+        aboveMin = !fitsMin;
+        if (aboveMin && age(now, timing.lastAboveMin, DEFAULTS.aboveMinSpacingMs)) return wait("one start above the minimum per spacing interval", "spacing");
+        const limit = fitsMin ? settings.minWeight : settings.maxWeight;
+        const weightOf = b => running.filter(s => s.backend === b).reduce((n, s) => n + s.weight, 0) + legacy.filter(j => (j.request?.backend ?? "codex") === b).length * WEIGHTS.medium;
+        const other = all.find(s => s.jobId !== ctx.jobId && s.state === "waiting" && s.backend !== mine.backend && ["weight", "spacing", "stagger", "fair-share"].includes(s.waitKind) && weightOf(s.backend) < weightOf(mine.backend));
+        if (limit - (used + w) < WEIGHTS.medium && other) return wait(`fair share: the last free weight is held for a waiting ${other.backend} job`, "fair-share");
+      }
+      const slot = { ...mine, spawnAt: all.find(s => s.jobId === ctx.jobId)?.spawnAt ?? null, state: "running", admittedAt: iso(now), aboveMin };
+      writeSlot(home, slot);
+      writeJsonAtomic(path.join(home, "timing.json"), { ...timing, lastStart: iso(now), ...(aboveMin ? { lastAboveMin: iso(now) } : {}) });
+      return { admit: true, slot, record: recordFor(slot, machine.notes) };
+    });
+    const key = `${home}:${ctx.jobId}`;
+    if (decision.locked) { lockWaits.delete(key); return decision.value; }
+    if (!lockWaits.has(key)) lockWaits.set(key, now);
+    const stuck = now - lockWaits.get(key) >= DEFAULTS.stuckLockMs;
+    const reason = stuck ? `admission lock stuck (held by pid ${decision.holder?.pid ?? "unknown"} since ${decision.holder?.since ?? "unknown"}); RELAY_ADMISSION=off bypasses` : "admission lock busy";
+    return { admit: false, reason, waitKind: "lock", retryMs: DEFAULTS.pollMs, slot: null, record: recordFor(mine, machine.notes, reason, "lock") };
+  } catch (e) { return bypass(ctx, e); }
+}
+// A warm worker keeps its weight, but every new turn/replacement refreshes pacing
+// and memory allowance through exactly the same gate.
+export const checkBackend = admit;
+
 export function releaseSlot(home, jobId, me, injected = {}) {
   const deps = dependencies(injected);
   try {
@@ -129,4 +280,67 @@ export function releaseSlot(home, jobId, me, injected = {}) {
       return true;
     }).value ?? false;
   } catch { return false; }
+}
+
+export function describeGuard(env = process.env, { readSensors = true } = {}, injected = {}) {
+  const deps = dependencies({ ...injected, env });
+  try {
+    const enabled = admissionEnabled(env, deps.readUserConfig(env));
+    if (!enabled) return { enabled, reason: String(env.RELAY_ADMISSION).toLowerCase() === "off" ? "RELAY_ADMISSION=off" : "setup", pauses: [] };
+    const home = admissionHome(env), pauses = [];
+    if (!readSensors) return { enabled, pauses };
+    const machine = machineReading(home, deps), all = slots(home, deps, false);
+    const running = all.filter(s => s.state === "running");
+    const legacy = legacyJobs(home, null, all, deps);
+    return { enabled, ...machine, state: machineState(machine).state, ...guardSettings(deps.readUserConfig(env), machine), usedWeight: running.reduce((n, s) => n + s.weight, 0) + legacy.length * WEIGHTS.medium,
+      veryHeavy: running.filter(s => s.class === "very-heavy").length, waiting: all.filter(s => s.state !== "running").length, pauses };
+  } catch (e) { return { enabled: true, error: e.message, pauses: [] }; }
+}
+export function renderGuard(snapshot) {
+  if (!snapshot.enabled) return [`load-guard: off (${snapshot.reason})`];
+  if (snapshot.error) return [`load-guard: on (state unreadable: ${snapshot.error})`];
+  const memory = snapshot.availableBytes === null ? "memory not read" : `memory ${(snapshot.availableBytes / GiB).toFixed(1)} of ${(snapshot.totalBytes / GiB).toFixed(1)} GiB available`;
+  return [`load-guard: on · ${snapshot.state} · weight ${snapshot.usedWeight} of ${snapshot.minWeight} minimum, ceiling ${snapshot.maxWeight} · very heavy ${snapshot.veryHeavy} of ${snapshot.maxVeryHeavy} · ${memory} · load ${snapshot.load5 ?? "not read"} on ${snapshot.cores} cores`,
+    ...(snapshot.notes ?? []).map(n => `note: load guard: ${n}`), ];
+}
+
+// Reserve a waiting-worker place and spawn while holding the admission lock. The
+// caller owns retries; completing workers never launch another session's jobs.
+export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
+  const deps = dependencies({ ...injected, env });
+  let spawned = null;
+  try {
+    const config = deps.readUserConfig(env);
+    if (!admissionEnabled(env, config)) return spawn();
+    const home = admissionHome(env), machine = machineReading(home, deps), settings = guardSettings(config, machine), job = readJob(jobDir);
+    const decision = lock(home, deps, () => {
+      const all = slots(home, deps), existing = all.find(s => s.jobId === job.id);
+      if (existing && ((existing.state === "spawning" && age(deps.now(), existing.since, DEFAULTS.spawnGraceMs)) || deps.isAlive({ pid: existing.pid, startTime: existing.processStart }))) return null;
+      const waiting = all.filter(s => s.state !== "running").length;
+      const bound = Math.max(DEFAULTS.minWaitingWorkers, settings.maxWeight * DEFAULTS.waitingPerCeiling);
+      let reason = machineState(machine).state === "critical" ? machineState(machine).detail : waiting >= bound ? `waiting worker limit: ${waiting} of ${bound}` : null;
+      // Pending spawn allowances are included, so a synchronized queue cannot
+      // consume the critical floor before its worker readings become visible.
+      const spawnReserve = all.filter(s => s.state !== "running" && age(deps.now(), s.spawnAt ?? s.since, DEFAULTS.reserveMs)).reduce((n, s) => n + PENDING_BYTES[s.class], 0);
+      const cls = modelClass(job.request, settings.modelClasses);
+      if (!reason && machine.availableBytes !== null && machine.availableBytes - spawnReserve - PENDING_BYTES[cls] < Math.max(DEFAULTS.criticalGiB * GiB, machine.totalBytes * DEFAULTS.criticalFraction)) reason = "machine critical: memory reserved for waiting workers";
+      if (reason) {
+        writeJob(jobDir, { ...job, state: "queued", worker: null, admission: { state: "waiting", reason, waitKind: "worker", since: job.admission?.since ?? iso(deps.now()), class: cls, weight: WEIGHTS[cls], notes: machine.notes } });
+        return null;
+      }
+      const slot = { v: 1, jobId: job.id, jobDir, pid: null, processStart: null, backend: job.request.backend ?? "codex", class: cls, weight: WEIGHTS[cls], state: "spawning", spawnAt: iso(deps.now()), since: iso(deps.now()) };
+      writeSlot(home, slot);
+      try { spawned = spawn(); return spawned; }
+      catch (e) { fs.rmSync(slotFile(home, job.id), { force: true }); throw e; }
+    });
+    if (!decision.locked) {
+      writeJob(jobDir, { ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker", reason: "admission lock busy", since: job.admission?.since ?? iso(deps.now()), notes: [] } });
+      return null;
+    }
+    return decision.value;
+  } catch (e) {
+    if (spawned) return spawned;
+    process.stderr.write(`relay load guard: worker spawn bypassed (${e.message})\n`);
+    return spawn();
+  }
 }

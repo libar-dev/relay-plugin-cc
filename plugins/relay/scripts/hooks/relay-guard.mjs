@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { retryQueuedWorker } from "../lib/worker/delivery.mjs";
 // The relay:job relay hook. Code carries every piece of content; the relay model carries
 // none. It acts only inside a relay subagent (agent type relay:job and an agent id).
 //
@@ -364,6 +365,7 @@ async function handlePreToolUse(input, env = process.env) {
   const agentId = input.agent_id;
   const pointer = agentId ? readRelayPointer(env, agentId) : {};
   const jobDir = findRelayJob(env, agentId);
+  if (jobDir) retryQueuedWorker(jobDir, env);
   const sync = jobDir ? await syncRelayMessages(input, jobDir, { env, wait: true }) : null;
   if (input.tool_name !== "SubagentHandback" && agentId) {
     // The relay acted: a later stop without a new hand-back is checked in full.
