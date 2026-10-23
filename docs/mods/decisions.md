@@ -642,7 +642,7 @@ Claude Code draws as `⚠ relay: 2 running · 1 dead · 3 owed` (it puts the plu
 so the text leaves `relay: ` out). Running is `starting` and `running`, dead is `dead`, owed is the sum of the rows'
 `undeliveredCount`; a part at 0 is left out, and with all three at 0 the line is cleared. It reads
 `companion status --json --active --limit 200` in the session's directory, by argv with a 10 s timeout, one read at a
-time. More pages write the running count with a `+`; a busy answer keeps the line; any other failure shows
+time. More pages put a `+` on every count shown, each then a lower bound; a busy answer keeps the line; any other failure shows
 `status unavailable` until the next good answer.
 
 It reads only while `$.session.surfaces()` is not empty, so in an Agent SDK host such as T3 Code, where nothing
@@ -669,3 +669,21 @@ reaches the pane at any time in the fullscreen layout (`CLAUDE_CODE_NO_FLICKER=1
 transcript from 110 columns). On the main screen, the default, the inline pane takes no clicks. So while relays run in
 the background, which is when the board is most useful, it is driven by the mouse in the fullscreen layout, or by keys
 once the lead is idle. The docs say so; the live check drives the wide session by clicks and the narrow one by keys.
+
+### D71. Setup asks a signed-out Grok home twice (release lead)
+
+The end-to-end suite's first run on 3.0.0-dev.4 read Grok as signed out ("You are not authenticated") while Grok jobs
+in the same run worked, and a later setup read it signed in. `/relay:setup` now runs `grok models` once more, a
+second later, before it reports a home signed out; a home that answers signed in either time is signed in. A truly
+signed-out home costs one more listing and a second. Rejected: a line in grok-home.md, which would leave every
+reader of setup's output, Claude included, to second-guess a "signed out" that is usually right.
+
+### D72. Setup shows Kimi as `steer (next turn)` (release lead)
+
+Setup listed `steer` only for a backend that steers its running turn, so Kimi's line had no steering at all, and
+Claude rendered it as "no steering" (the M3's CLI pass, screenshot C3). A message to a running Kimi job is taken as
+its next turn. `/relay:setup` runs `companion setup --json`, and Claude renders the JSON, so `commands/setup.md`
+now tells Claude that `can.steer` is steering the running turn and that a backend without it is written
+`steer (next turn)`; `companion setup`'s text page says the same in Kimi's `can:` line, from a capability note. The
+JSON's `can.steer` keeps its meaning, so a script reading it is unchanged. Rejected: a new JSON field, which would
+change the block's shape for one word of rendering.

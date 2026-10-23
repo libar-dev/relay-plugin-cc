@@ -505,18 +505,17 @@ The later PRs, in this light:
 ### The status line (done, on `release/3.0`)
 
 What shipped (D63): `2 running · 1 dead · 3 owed` for the session's repository, from `status --json --active
---limit 200`, cleared when all three are 0, `+` on the running count when more pages exist, kept on a busy answer,
+--limit 200`, cleared when all three are 0, `+` on every count when more pages exist, kept on a busy answer,
 `status unavailable` on any other failure. A five-second timer from `session.start`, one per load of the module; a
 tick reads only while a surface draws, one read at a time; a cleared line reads every thirty seconds, and every five
 for thirty seconds after a relay event the module saw or a busy answer. Two review rounds by GPT-6.1 Sol and Opus 5.5
 and their fixes; the `status-line` live check in the terminal, whose runner now answers the trust dialog in two steps,
 presses Enter again on an unsent paste, and refuses an installed copy's hooks module beside the build.
 
-Live results (the Fedora machine, Claude Code 2.1.308, Sonnet 5.5 lead, all four backends; records in
-`docs/live/records/`): the line read `4 running` 30 s after the check started one job per backend with the companion,
-a start the module does not see, so the cleared line's thirty-second read found them; before D63 it took 4 s. It
-cleared 20 s after the cancel began: the cancel of four jobs took 11 s, and the check confirms a clear on two
-captures more than five seconds apart.
+Live results (the Fedora machine, Claude Code 2.1.309, Sonnet 5.5 lead, all four backends, on f6205e4; records in
+`docs/live/records/`): the line read `4 running` 29.7 s after the check started one job per backend with the
+companion, a start the module does not see, so the cleared line's thirty-second read found them (before D63 it took
+4 s). It cleared 9.5 s after the cancel began, timed from the first capture without it.
 
 ### After the status line: what held and what changed
 
