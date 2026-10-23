@@ -511,11 +511,10 @@ for thirty seconds after a relay event the module saw or a busy answer. Two revi
 and their fixes; the `status-line` live check in the terminal, whose runner now answers the trust dialog in two steps,
 presses Enter again on an unsent paste, and refuses an installed copy's hooks module beside the build.
 
-Live results (the Fedora machine, Claude Code 2.1.308, Sonnet 5.5 lead, all four backends; records in
-`docs/live/records/`): the line read `4 running` 30 s after the check started one job per backend with the companion,
-a start the module does not see, so the cleared line's thirty-second read found them; before D63 it took 4 s. It
-cleared 20 s after the cancel began: the cancel of four jobs took 11 s, and the check confirms a clear on two
-captures more than five seconds apart.
+Live results (the Fedora machine, Claude Code 2.1.309, Sonnet 5.5 lead, all four backends, on f6205e4; records in
+`docs/live/records/`): the line read `4 running` 29.7 s after the check started one job per backend with the
+companion, a start the module does not see, so the cleared line's thirty-second read found them (before D63 it took
+4 s). It cleared 9.5 s after the cancel began, timed from the first capture without it.
 
 ### After the status line: what held and what changed
 
