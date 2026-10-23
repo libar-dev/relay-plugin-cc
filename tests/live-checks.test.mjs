@@ -2897,6 +2897,18 @@ test('status-line stops the pane of an interrupted run even under --keep', async
   assert.equal(state().cancels, state().starts);
 });
 
+test('status-line keeps the first failure in run.error when cleanup fails too', async t => {
+  const { ctx, dependencies } = statusDriver(t, 'never appears');
+  const execute = dependencies.execute;
+  dependencies.execute = async (command, args, options) => {
+    if (args[1] === 'cancel') throw new Error('Cancel failed.');
+    return execute(command, args, options);
+  };
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Could not cancel/);
+  assert.match(ctx.run.error, /did not show the running count within 60 seconds/);
+  assert.equal(ctx.run.completed, false);
+});
+
 test('status-line stops after failed cleanup when --keep is absent', async t => {
   const { ctx, dependencies, state } = statusDriver(t, 'cancel failure');
   await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Could not cancel/);

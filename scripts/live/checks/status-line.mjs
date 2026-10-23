@@ -172,11 +172,11 @@ export default {
       throw error;
     } finally {
       try { if (ownsHome) await cancel(); }
-      catch (error) { run.completed = false; run.error = error.message; throw error; }
+      catch (error) { run.completed = false; run.error ??= error.message; throw error; }
       finally {
         // The ordinary driver kept the pane for --keep; an interrupted run stops it anyway, as that driver does.
         try { if (run.pane && (stopRequested || run.interrupted || signal?.aborted)) drive(['stop', run.pane]); }
-        catch (error) { run.completed = false; run.error = error.message; throw error; }
+        catch (error) { run.completed = false; run.error ??= error.message; throw error; }
         finally { run.checkFinishedAt = stamp(); ctx.save(); }
       }
     }
