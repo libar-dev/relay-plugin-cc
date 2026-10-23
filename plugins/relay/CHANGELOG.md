@@ -237,7 +237,8 @@ Fixes from the pre-releases:
   `/relay:result <job>` to read it (D96). Until now the job ran on with no word. `TaskStop` and the message
   `cancel` still cancel the job, and show no notice. Checked live with `x to stop` and Esc; ctrl+x ctrl+k and
   the desktop app's Stop button are expected to behave the same but are not checked live yet. A Workflow's
-  relays, which Claude Code does not list, get no notice.
+  relays, which Claude Code does not list, get no notice, and none is shown where nothing draws the session
+  (T3 Code, `claude -p`).
 
 Docs:
 

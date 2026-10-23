@@ -353,14 +353,17 @@ const NOTICE_MS = 20000;
 const NOTICE_PAGES = 10;
 
 // The marks TaskStops left: each agent id, or text the call named, with its mark's end (null when
-// the clock could not be read, a mark for good).
+// the clock could not be read).
 const stopMarks = atom({ plugin: "relay", key: "stopMarks" }, {});
+// The marks a write keeps. The value lives in the session's state across reloads, and marks a
+// stop never uses (a shell's, an agent stopped before it began a turn) would otherwise pile up.
+const MOST_MARKS = 50;
 
 // Marks the agents a TaskStop names until TASK_STOP_MS after it. The model passes an agent's id
-// or its name, and two agents may hold one name, so every match is marked; the text itself is
-// marked too, so the notice still finds the mark when the list cannot be read here. relay-stop
-// also reads the older `shell_id`. A clock that cannot be read marks for good: no notice is the
-// old behaviour. Lapsed marks are dropped at each write, so the value stays small.
+// or its name, and two agents may hold one name, so every agent that matches is marked by its id;
+// a name mark would also pass by a later agent of that name. The text itself is marked only when
+// the list cannot be read here or names no such agent. relay-stop also reads the older
+// `shell_id`. A clock that cannot be read marks with no end: no notice is the old behaviour.
 async function markTaskStop($, e) {
   const named = [e.task_id, e.shell_id].find((one) => typeof one === "string" && one !== "");
   if (named === undefined) {
@@ -368,33 +371,43 @@ async function markTaskStop($, e) {
   }
   const at = await now($);
   const until = at === null ? null : at + TASK_STOP_MS;
-  const marks = { [named]: until };
+  let ids = [];
   try {
-    for (const agent of await $.agent.list()) {
-      if (agent.id === named || agent.name === named) {
-        marks[agent.id] = until;
-      }
-    }
+    ids = (await $.agent.list()).filter((agent) => agent.id === named || agent.name === named).map((agent) => agent.id);
   } catch {
     // The text alone is marked.
   }
-  await update($, stopMarks, (held) => {
-    const kept = Object.entries(held ?? {}).filter(([, end]) => at === null || end === null || end >= at);
-    return { ...Object.fromEntries(kept), ...marks };
-  });
+  const marks = Object.fromEntries((ids.length === 0 ? [named] : ids).map((key) => [key, until]));
+  await update($, stopMarks, (held) => keptMarks(held ?? {}, marks, at));
 }
 
-// Whether a TaskStop marked the agent, by its id or by its name, within its mark's time. Both
-// marks are used up, so a later stop of the agent by a person shows its notice.
+// The marks held and the new ones, as a write keeps them. Once the clock reads, a mark with no
+// end gets the usual minute from now, so it lapses too; lapsed marks are dropped, and only the
+// MOST_MARKS newest are kept, the latest end first and the new marks before older ones of the
+// same end.
+function keptMarks(held, marks, at) {
+  const entries = [...Object.entries(held).filter(([key]) => !Object.hasOwn(marks, key)), ...Object.entries(marks)]
+    .map(([key, end]) => [key, at !== null && end === null ? at + TASK_STOP_MS : end])
+    .filter(([, end]) => at === null || end === null || end >= at)
+    .reverse();
+  entries.sort(([, one], [, other]) => (other ?? Infinity) - (one ?? Infinity));
+  return Object.fromEntries(entries.slice(0, MOST_MARKS));
+}
+
+// Whether a TaskStop marked the agent within its mark's time, and only that mark is used up, so a
+// later stop of the agent by a person shows its notice. Its id mark is the agent's own; a name
+// mark, made when the TaskStop could not tell the agents apart, counts only when the agent has
+// no id mark, so a TaskStop that named another agent of the name by its id keeps that mark.
 async function isMarked($, agent) {
-  const held = await read($, stopMarks);
-  const keys = [agent.id, agent.name].filter((key) => typeof key === "string" && key !== "" && Object.hasOwn(held, key));
-  if (keys.length === 0) {
+  const held = (await read($, stopMarks)) ?? {};
+  const at = await now($);
+  const isLive = (key) => typeof key === "string" && key !== "" && Object.hasOwn(held, key) && (at === null || held[key] === null || at <= held[key]);
+  const key = [agent.id, agent.name].find(isLive);
+  if (key === undefined) {
     return false;
   }
-  await update($, stopMarks, (marks) => Object.fromEntries(Object.entries(marks).filter(([key]) => !keys.includes(key))));
-  const at = await now($);
-  return at === null || keys.some((key) => held[key] === null || at <= held[key]);
+  await update($, stopMarks, (marks) => Object.fromEntries(Object.entries(marks ?? {}).filter(([one]) => one !== key)));
+  return true;
 }
 
 // The job whose current relay is the agent and that is still at work, or undefined. The listing

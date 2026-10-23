@@ -147,10 +147,11 @@ test('stop-notice navigation recognizes the recorded m2 x and Escape aftermath',
   const x = fs.readFileSync(path.join(fixture, 'screen-x-2s.txt'), 'utf8').replaceAll('notice-x', 'stop-x')
     .replaceAll('typed-probe: ', '').replaceAll('was stopped; its job', 'was stopped, and its job').replaceAll('job-mvjvy00r-ed1b2608', 'job-x');
   const esc = fs.readFileSync(path.join(fixture, 'screen-esc-2s.txt'), 'utf8').replaceAll('notice-esc', 'stop-esc');
-  screens[3] = x; screens[15] = esc;
-  const nav = navigation(dir, screens);
-  await driveStops(nav.ctx, nav);
+  screens[3] = [x, x, screens[3]]; screens[15] = esc;
+  const nav = navigation(dir, screens), waits = [];
+  await driveStops(nav.ctx, { ...nav, record: (kind, detail) => waits.push({ kind, ...detail }) });
   assert.deepEqual(nav.calls.filter(call => call[0] === 'keys').map(call => call[2]), keys);
+  assert.ok(waits.filter(wait => wait.kind.endsWith('-idle')).every(wait => wait.found && wait.elapsedMs >= 1000));
 });
 
 function terminal(t, { lostX = false, startupFailure = false, cancelFailure = false, queued = false, noToast = false } = {}) {
@@ -292,7 +293,7 @@ test('stop-notice terminal waits for the busy lead before main-view keys and the
     const receipt = ctx.run.stopNotice.codex[key];
     const event = rows.find(row => row.attachment?.prompt?.includes(`<task-id>${receipt.agentId}</task-id>`));
     const end = rows.find(row => row.subtype === 'turn_duration' && row.timestamp > event.timestamp);
-    assert.ok(actions[stop + 1].at >= Date.parse(end.timestamp), `${key}: no key until the notification turn ends`);
+    assert.ok(actions[stop + 1].at >= Date.parse(end.timestamp) + 1000, `${key}: no key until the ended notification turn stays quiet`);
     const wait = ctx.run.stopNotice.waits.find(wait => wait.kind === `${key}-main-idle`);
     assert.equal(wait.source, 'turn_duration');
     assert.ok(wait.elapsedMs >= 2000);
@@ -300,6 +301,7 @@ test('stop-notice terminal waits for the busy lead before main-view keys and the
   const send = actions.find(item => item.args[0] === 'send');
   const wait = ctx.run.stopNotice.waits.find(wait => wait.kind === 'esc-send-idle');
   assert.equal(wait.found, true);
+  assert.ok(wait.elapsedMs >= 1000);
   assert.ok(send.at >= Date.parse(wait.at));
   assert.deepEqual(actions.filter(item => item.args[0] === 'keys').map(item => item.args[2]), keys);
 });
@@ -333,18 +335,58 @@ test('stop-notice navigation bounds a busy lead without driving another key', as
   await assert.rejects(driveStops(nav.ctx, { ...nav, entries, record: (kind, detail) => waits.push({ kind, ...detail }) }), /x-main-idle within 30 seconds/);
   assert.deepEqual(nav.actions.map(item => item.args[2]), ['Down', 'Down', 'x']);
   assert.equal(waits.at(-1).found, false); assert.equal(waits.at(-1).elapsedMs, 30000);
+  assert.equal(fs.readFileSync(path.join(dir, waits.at(-1).screen), 'utf8'), screens[3]);
 });
 
-test('stop-notice navigation accepts the idle screen when the turn-duration row is absent', async t => {
+for (const missing of ['task notification', 'turn-duration row']) test(`stop-notice navigation waits on an idle screen without the ${missing}`, async t => {
   const { dir } = setup(t), screens = json(path.join(fixture, 'screens.json'));
   screens[3] = fs.readFileSync(path.join(fixture, 'screen-main-idle.txt'), 'utf8');
-  screens[15] = screens[15].replace('◯ main', '◯ main idle') + '\nAgent "stop-esc" was stopped by user\n';
-  for (const index of [17, 18, 19]) screens[index] += '\nAgent "stop-esc" was stopped by user\n';
   const nav = navigation(dir, screens), waits = [];
   const drive = args => nav.drive(args).replace(/^\* Choreographing…\n/, '');
-  await driveStops(nav.ctx, { ...nav, drive, entries: () => [], record: (kind, detail) => waits.push({ kind, ...detail }) });
-  assert.deepEqual(waits.filter(wait => wait.kind.endsWith('-idle')).map(wait => wait.source), ['screen', 'screen', 'screen']);
+  const entries = () => missing === 'task notification' ? [] : nav.entries().filter(row => row.subtype !== 'turn_duration');
+  await assert.rejects(driveStops(nav.ctx, { ...nav, drive, entries, record: (kind, detail) => waits.push({ kind, ...detail }) }), /x-main-idle within 30 seconds/);
+  assert.deepEqual(nav.actions.map(item => item.args[2]), ['Down', 'Down', 'x']);
+  assert.equal(waits.at(-1).found, false); assert.equal(waits.at(-1).elapsedMs, 30000);
+  assert.equal(fs.readFileSync(path.join(dir, waits.at(-1).screen), 'utf8'), screens[3]);
+});
+
+for (const busy of ['* Choreographing…', 'esc to interrupt']) test(`stop-notice navigation waits past an old turn end while the screen shows ${busy}`, async t => {
+  const { dir } = setup(t), nav = navigation(dir), waits = [];
+  const quietAt = nav.now() + 8000;
+  const drive = args => {
+    const screen = nav.drive(args);
+    return args[0] === 'read' && nav.actions.at(-1)?.args[2] === 'x' && nav.now() < quietAt ? `${busy}\n${screen}` : screen;
+  };
+  await driveStops(nav.ctx, { ...nav, drive, record: (kind, detail) => waits.push({ kind, ...detail }) });
+  assert.ok(nav.actions[3].at >= quietAt + 1000);
+  assert.equal(waits.find(wait => wait.kind === 'x-main-idle').source, 'turn_duration');
   assert.deepEqual(nav.actions.filter(item => item.args[0] === 'keys').map(item => item.args[2]), keys);
+});
+
+for (const start of [
+  { type: 'user', message: { content: 'Another turn' } },
+  { type: 'assistant', message: { content: [{ type: 'text', text: 'Working' }] } },
+  { type: 'attachment', attachment: { type: 'queued_command', origin: { kind: 'task-notification' }, prompt: 'Another notification' } }
+]) test(`stop-notice navigation waits when a later ${start.type} row starts a turn on a quiet screen`, async t => {
+  const { dir } = setup(t), nav = navigation(dir), waits = [];
+  const rows = readTranscript(path.join(dir, 'transcript.jsonl')).slice(0, 12);
+  rows.push({ ...start, timestamp: '2026-10-23T10:00:33.500Z' });
+  const entries = () => rows.filter(row => Date.parse(row.timestamp) <= nav.now());
+  const drive = args => nav.drive(args).replace(/^\* Choreographing…\n/, '');
+  await assert.rejects(driveStops(nav.ctx, { ...nav, drive, entries, record: (kind, detail) => waits.push({ kind, ...detail }) }), /x-main-idle within 30 seconds/);
+  assert.deepEqual(nav.actions.map(item => item.args[2]), ['Down', 'Down', 'x']);
+  assert.equal(waits.at(-1).elapsedMs, 30000);
+});
+
+test('stop-notice navigation restarts the quiet interval when the screen becomes busy again', async t => {
+  const { dir } = setup(t), nav = navigation(dir);
+  const busyAt = Date.parse('2026-10-23T10:00:33.250Z'), quietAt = busyAt + 250;
+  const drive = args => {
+    const screen = nav.drive(args);
+    return args[0] === 'read' && nav.now() >= busyAt && nav.now() < quietAt ? `* Choreographing…\n${screen}` : screen;
+  };
+  await driveStops(nav.ctx, { ...nav, drive });
+  assert.ok(nav.actions[3].at >= quietAt + 1000);
 });
 
 test('stop-notice navigation polls a delayed toast and records when it appeared', async t => {

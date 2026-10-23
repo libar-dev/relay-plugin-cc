@@ -143,7 +143,8 @@ agent returns the new report. The message `cancel` cancels the job. In the termi
 own view (↓ in the footer, Enter, then ↑ to its prompt) reaches the job too, at the relay's next step: up
 to nine minutes later, or as a new turn once the job has ended. Esc at that prompt, or `x` in the agent
 list, stops the relay agent and leaves the job running, and for a relay the Agent tool started, relay shows
-a notice naming the job, with `/relay:cancel` and `/relay:result`; a line typed right after Esc resumes the relay
+a notice naming the job, with `/relay:cancel` and `/relay:result` (none where nothing draws the session, such as T3
+Code or `claude -p`); a line typed right after Esc resumes the relay
 and reaches the job at once, steering it while it runs. `/relay:cancel <job>` cancels the job.
 
 **In a workflow.** A Workflow script runs a job with `agent(prompt, { agentType: 'relay:job' })` and

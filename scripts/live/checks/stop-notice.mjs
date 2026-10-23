@@ -138,18 +138,26 @@ export async function driveStops(ctx, { drive = pane, sleep = pause, now = Date.
     nav.verify(value, () => Boolean(found), `${kind} within ${timeoutMs / 1000} seconds`);
     return value;
   };
-  const idle = (nav, value, key, phase) => poll(nav, value, `${key}-${phase}-idle`, screen => {
-    const event = notification(entries(), receipt(key));
-    if (event && turnEnd(entries(), event.timestamp)) return 'turn_duration';
-    // An empty input is also drawn during a turn; require the notification and no busy indicator.
-    const busy = /esc to interrupt|^[ \t]*[✢✳✶✻✽*·].*…/mu.test(screen);
-    const mainRow = nav.rows(screen).find(row => row.name === 'main');
-    const notified = event || screen.includes(`Agent "stop-${key}" was stopped by user`);
-    if (notified && !busy && (mainRow?.idle || mainRow?.viewed && !screen.includes('Message @') && /^\s*❯[ \t\u00a0]*$/m.test(screen))) {
-      return 'screen';
-    }
-    return false;
-  }, 30000);
+  const idle = (nav, value, key, phase) => {
+    let quietSince, endedAt;
+    return poll(nav, value, `${key}-${phase}-idle`, screen => {
+      const rows = entries().filter(entry => !entry.isSidechain);
+      const event = notification(rows, receipt(key));
+      const end = rows.findLastIndex(entry => entry.type === 'system' && entry.subtype === 'turn_duration');
+      const pending = rows.slice(end + 1).some(entry => ['user', 'assistant', 'queued_command'].includes(entry.type) ||
+        entry.type === 'attachment' && entry.attachment?.type === 'queued_command');
+      const busy = /esc to interrupt|^[ \t]*[✢✳✶✻✽*·].*…/mu.test(screen);
+      if (!event || end <= rows.indexOf(event) || !(Date.parse(rows[end].timestamp) > Date.parse(event.timestamp)) || pending || busy) {
+        quietSince = endedAt = undefined;
+        return false;
+      }
+      // The stopped line precedes the notification turn, and an old turn end cannot prove the screen is quiet.
+      if (endedAt !== rows[end].timestamp) quietSince = undefined;
+      endedAt = rows[end].timestamp;
+      quietSince ??= now();
+      return now() - quietSince >= 1000 && 'turn_duration';
+    }, 30000);
+  };
   const main = async (nav, value) => {
     if (nav.prompt('main')(value)) return value;
     if (nav.cursor(value) === null) value = await nav.key('Down', next => nav.cursor(next) !== null, 'a selected footer row');
