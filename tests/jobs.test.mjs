@@ -971,3 +971,135 @@ test("a model of another backend's family with no backend: is refused before lau
   assert.equal(buildLaunchRequest({ model: "glm-5.3", effort: "high", backend: "zcode" }).backend, "zcode");
   assert.equal(buildLaunchRequest({ model: "gpt-6-sol", effort: "high" }).backend, "codex");
 });
+
+// Small CLI refusal and reader branches from the D60 coverage review. These records
+// need no backend process: only the live-worker resume case starts a real fake worker.
+function branchJob(ctx, id, patch = {}) {
+  const { jobDir } = createJobDir(ctx.work, id, ctx.env);
+  writeJob(jobDir, {
+    id, kind: "task", state: "completed", createdAt: "2026-01-01T00:00:00.000Z",
+    request: { model: "gpt-test", effort: "low", backend: "codex", cwd: ctx.work },
+    attempts: [], ...patch
+  });
+  return jobDir;
+}
+
+test("CLI refuses an empty message before posting anything", () => {
+  const ctx = setup();
+  const dir = branchJob(ctx, "job-empty-message");
+  const message = path.join(ctx.work, "empty.txt");
+  fs.writeFileSync(message, " \n\t ");
+  const result = companion(ctx, ["steer", "job-empty-message", "--message-file", message]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "The message is empty.\n");
+  assert.deepEqual(fs.readdirSync(path.join(dir, "inbox")).sort(), ["claimed", "outcomes"]);
+});
+
+test("CLI resume refuses a job with a live worker and sends no message", async (t) => {
+  const ctx = setup();
+  ctx.env.FAKE_CODEX_RELEASE_FILE = path.join(ctx.work, "release");
+  const id = startJob(ctx, HEADER, "[held] Resume must refuse.");
+  t.after(() => companion(ctx, ["cancel", id]));
+  await waitFor(() => readJobJson(ctx, id).state === "running" && ctx.fakeState().turnStarts?.length === 1);
+  const before = readJobJson(ctx, id);
+  const result = companion(ctx, ["resume", id]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, `Job ${id} is running with a live worker. Use steer or continue.\n`);
+  assert.deepEqual(readJobJson(ctx, id).attempts, before.attempts);
+  assert.deepEqual(fs.readdirSync(path.join(jobDirOf(ctx, id), "inbox")).sort(), ["claimed", "outcomes"]);
+});
+
+test("CLI steer refuses a relay job: only task jobs take messages", () => {
+  const ctx = setup();
+  const id = "job-relay-refusal";
+  const dir = branchJob(ctx, id, { kind: "relay" });
+  const result = companion(ctx, ["steer", id, "--message", "Do not deliver this."]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, `Job ${id} is a relay job. Only task jobs take messages.\n`);
+  assert.deepEqual(fs.readdirSync(path.join(dir, "inbox")).sort(), ["claimed", "outcomes"]);
+});
+
+test("CLI start --from-relay requires both hook-added arguments", () => {
+  const ctx = setup();
+  for (const flags of [[], ["--relay-agent", "agent-missing-transcript"], ["--relay-transcript", "/missing/transcript.jsonl"]]) {
+    const result = companion(ctx, ["start", "--from-relay", ...flags]);
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdout, "state: not started\nerror: start --from-relay needs --relay-transcript and --relay-agent, which the relay hook adds. The hook did not run, so the prompt is unknown.\n");
+  }
+  assert.deepEqual(fs.readdirSync(ctx.home).filter(name => name !== "relays"), []);
+});
+
+test("CLI findJobDir resolves a unique job prefix", () => {
+  const ctx = setup();
+  branchJob(ctx, "job-prefix-one");
+  branchJob(ctx, "job-other-two");
+  const result = companion(ctx, ["status", "job-prefix"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^job: job-prefix-one$/m);
+  assert.equal(result.stderr, "");
+});
+
+test("CLI findJobDir refuses an ambiguous job prefix", () => {
+  const ctx = setup();
+  branchJob(ctx, "job-prefix-one");
+  branchJob(ctx, "job-prefix-two");
+  const result = companion(ctx, ["status", "job-prefix"]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, 'Job reference "job-prefix" is ambiguous. Use the full job id.\n');
+});
+
+test("CLI status prints the stalled job's last event time", () => {
+  const ctx = setup();
+  const at = "2026-01-02T03:04:05.000Z";
+  branchJob(ctx, "job-stalled-line", { state: "running", worker: { pid: process.pid }, lastEventAt: at });
+  const result = companion(ctx, ["status", "job-stalled-line"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /^state: running$/m);
+  assert.deepEqual(result.stdout.split("\n").filter(line => line.startsWith("stalled:")), [`stalled: no event since ${at}`]);
+});
+
+for (const command of ["status", "result", "wait", "cancel"]) {
+  test(`CLI ${command} reports No job.json for a corrupt job record`, () => {
+    const ctx = setup();
+    const id = `job-corrupt-${command}`;
+    const dir = branchJob(ctx, id);
+    fs.writeFileSync(path.join(dir, "job.json"), '{"state":');
+    const result = companion(ctx, [command, id]);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, `No job.json in ${dir}.\n`);
+    assert.equal(fs.readFileSync(path.join(dir, "job.json"), "utf8"), '{"state":');
+    if (command === "cancel") assert.deepEqual(fs.readdirSync(path.join(dir, "cancelling")), []);
+  });
+}
+
+test("SessionStart without CLAUDE_ENV_FILE succeeds without output", () => {
+  const env = { ...process.env };
+  delete env.CLAUDE_ENV_FILE;
+  const result = run("node", [SESSION_HOOK, "SessionStart"], { env, input: JSON.stringify({ session_id: "sess-no-env-file" }) });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+});
+
+test("SessionStart appends the export when its env file cannot be read", (t) => {
+  const envFile = path.join(makeTempDir(), "write-only-env.sh");
+  fs.writeFileSync(envFile, "export OTHER=1\n");
+  fs.chmodSync(envFile, 0o200);
+  t.after(() => fs.chmodSync(envFile, 0o600));
+  assert.throws(() => fs.readFileSync(envFile, "utf8"), { code: "EACCES" });
+  const result = run("node", [SESSION_HOOK, "SessionStart"], {
+    env: { ...process.env, CLAUDE_ENV_FILE: envFile }, input: JSON.stringify({ session_id: "sess-write-only" })
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  fs.chmodSync(envFile, 0o600);
+  assert.equal(fs.readFileSync(envFile, "utf8"), "export OTHER=1\nexport RELAY_COMPANION_SESSION_ID='sess-write-only'\n");
+});
