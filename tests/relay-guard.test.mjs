@@ -1423,3 +1423,28 @@ test("a Workflow relay that never runs start gets the Workflow correction with i
   assert.ok(jobId);
   assert.equal(waitJob(ctx, jobId).status, 0);
 });
+
+test("a queued Workflow stays pending through repeated hand-back and stop attempts beyond the escape budget", async () => {
+  const ctx = relayContext("job", { workflow: WORKFLOW, turnMs: 100 });
+  ctx.append(ctx.userRequest(), ctx.environment(), ctx.workflowPrompt("computedTask", QUICK), ctx.snapshot("string"));
+  const { jobId } = await relayStart(ctx);
+  assert.ok(jobId);
+  assert.equal(waitJob(ctx, jobId).status, 0);
+  const dir = jobDirOf(ctx, jobId);
+  const file = path.join(dir, "job.json");
+  const job = JSON.parse(fs.readFileSync(file, "utf8"));
+  ctx.env.RELAY_ADMISSION = "on";
+  ctx.env.RELAY_ADMISSION_HOME = path.join(ctx.root ?? path.dirname(dir), "synthetic-admission");
+  ctx.env.RELAY_ADMISSION_READINGS = path.join(dir, "synthetic-readings.json");
+  fs.writeFileSync(ctx.env.RELAY_ADMISSION_READINGS, JSON.stringify({ availableBytes: 0, totalBytes: 40 * 2 ** 30, cores: 8, load5: 0 }));
+  fs.writeFileSync(file, JSON.stringify({ ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker", reason: "memory low", since: new Date().toISOString() } }));
+  for (let i = 0; i < RELAY_BLOCK_BUDGET + 2; i++) {
+    assert.equal(decision(await pre(ctx, "SubagentHandback", { message: "done" })), "deny");
+    const blocked = await stop(ctx, "done");
+    assert.equal(blocked?.decision, "block");
+    assert.ok(blocked.reason.startsWith(WORKFLOW_NOTE));
+  }
+  const result = JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout);
+  assert.equal(result.state, "queued");
+  assert.equal(result.handedBackAt, null);
+});

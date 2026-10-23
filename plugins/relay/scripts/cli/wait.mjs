@@ -1,5 +1,6 @@
 import { parseCommandInput, envNumber, sleep, printJson } from "./shared.mjs";
 import { default as process } from "node:process";
+import { retryQueuedWorker } from "../lib/worker/delivery.mjs";
 import { resumeDeadJobOnce } from "../lib/worker/recovery.mjs";
 import { findJobDir, jobPaths, readJsonOrNull } from "../lib/jobs/store.mjs";
 import { UsageError } from "../lib/jobs/request.mjs";
@@ -44,6 +45,7 @@ export async function handleWait(argv) {
   };
   let view = read();
   for (;;) {
+    if (view?.state === "queued" && Date.now() < deadline) retryQueuedWorker(jobDir);
     if (view && options["auto-resume"] && view.state === "dead" && Date.now() < deadline) {
       const recovery = await resumeDeadJobOnce(jobDir);
       if (recovery === "busy") {

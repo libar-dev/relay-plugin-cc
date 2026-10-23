@@ -168,9 +168,9 @@ dir: ~/.relay-jobs/<repo>/<job>
 <report>
 ```
 
-- `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the worker died, and its automatic retry was spent or a cancel was under way), or `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
+- `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the worker died, and its automatic retry was spent or a cancel was under way), or `queued` (waiting for the load guard; `queued:` says why), `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
 - `completed` means the job finished its answer, not that its commands passed. Read the report.
-- Lines that may appear: `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (messages to the job, acknowledged and not run yet; `resume` runs them; it says nothing about the report), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
+- Lines that may appear: `queued:`, `refusal:`, `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (messages to the job, acknowledged and not run yet; `resume` runs them; it says nothing about the report), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
 
 `status` marks a relay job that ended with no hand-back of its result `not handed back` (`notHandedBack: true` in `--json`): its caller died or gave up, and `C result <job>` has the report. A job a `TaskStop` cancelled counts as handed back: the TaskStop result carried its block.
 
@@ -200,7 +200,7 @@ A message reaches the job within seconds: the plugin's hooks module ends the rel
     if (r.state !== 'completed' || r.undelivered) return { step: 'writer-3', state: r.state, undelivered: r.undelivered, error: r.error, job: r.job }
 
 - The relay retypes the block. The hook accepts it with a line left out that restates the request or only informs (`relay:`, `model:`, `mode:`, `cwd:`, `session:`, `note:` and the like), never with an outcome line left out (`state:`, `job:`, `duration:`, `report:`, `dir:`, `error:`, `undelivered:` and the like) or any line changed. A return with no `state:` line comes from a relay that was let go or a Claude Code failure such as a usage limit, and its job may still run: find it by label with `C status --workflow <run> --json` (50 jobs a page; `--cursor <nextCursor>` lists the next).
-- A relay is a Claude agent and spends Claude usage for its job's whole run. When Claude's usage limit ends the relays, their jobs run on; collect them with `C status --workflow <run>` or `C status --all`.
+- A relay is a Claude agent and spends Claude usage for its job's whole run. When Claude's usage limit ends the relays, running jobs continue. Find their ids with `C status --workflow <run>` or `C status --all`, then run `C wait <job>` for each pending job to adopt deferred work and collect its result.
 - Give a `relay:job` agent no `schema`. A script cannot read files either: for structured data, ask the brief for the shape, then hand `r.report` to a Claude agent that has the schema: `agent(\`Read ${r.report} and return its findings.\`, { schema: FINDINGS })`.
 - The agent holds its slot for the job's whole run, so size a launch by job length. `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` caps how many run at once.
 - A retried or resumed call takes over its running job. Two calls with the same prompt and label are two jobs. Adoption is not a follow-up: a script cannot send a new turn to a job it names. To continue a finished job from a workflow, give a Claude agent the job id and have it run `C continue <job> --message-file F`.
@@ -229,10 +229,40 @@ You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:setup` and 
 | `C prune [--older-than 14d] [--all] [--dry-run]` | remove old ended jobs; live workers are kept |
 | `C setup --fast-tier allowed\|off` | with `off`, the default, jobs started from now on ignore `fast: true` and the Codex config sets their tier; with `allowed`, `fast: true` selects `priority` |
 | `C setup --job-mcp-off name,name...\|none` | Codex jobs pass `enabled=false` for each listed name that the Codex home's `config.toml` defines; undefined names are skipped with a note |
+| `C setup --admission on\|off` | turn the shared admission domain on or off; `RELAY_ADMISSION=off` also bypasses it |
+| `C setup --max-very-heavy 1\|2\|default` | lower/reset the shared very-heavy-model quota (default 2 total across backends) |
 | `C setup [--json]` | every backend home found (the Codex home, `~/.grok` and `~/.grok-*`, ZCode, `~/.kimi-code` and `~/.kimi-code-*`): binary and version, sign-in, default model and effort, models, `can`; exits 0 whatever it finds |
 | `C setup --backend codex\|grok\|zcode\|kimi [--grok-home H\|--kimi-home H] [--json]` | one backend home; exits 1 when it is not ready |
 
-A wide fan-out that needs no steering can start its jobs with `C start` a few seconds apart and collect them with `C wait` or `C status`; no Claude agent is held per job. Jobs started within the same second can hit a provider's request-rate limit. For Codex and Grok routes, the worker retries at 30, 60 and 120 s. ZCode and Kimi retry model calls themselves.
+A wide fan-out that needs no steering can start its jobs with `C start` a few seconds apart and collect each with `C wait <job>`; `C status` only reads jobs and does not start deferred work; no Claude agent is held per job. Jobs started within the same second can hit a provider's request-rate limit. For Codex and Grok routes, the worker retries at 30, 60 and 120 s. ZCode and Kimi retry model calls themselves.
+
+A job can wait as `queued` before it starts or between turns. Keep calling `wait`: queued work
+remains pending and adoptable, including in a Workflow. Cancel, steer and continue still work.
+Jobs without a worker need a submitter/adopter's wait, message or relay hook to retry spawning;
+a bare `start` can stay dormant. `status` alone does not start deferred work: use `C wait <job>`.
+A workerless job with no spawn retry for 15 minutes stops deferring the stop-time review gate.
+The resident waiting-worker limit is `Q = max(8, 2F)`, with a
+64 MiB startup hold per worker; deferred-spawn retries run at most once per admission poll.
+
+The shared guard checks host bytes (`available − otherHolds − J ≥ R`), each finite cgroup
+ancestor separately, macOS memory pressure, five-minute load, provider pauses and 5-second
+start/turn spacing, including foreground reviews. `R = max(2 GiB, 0.15 × total)`; `J = 0.5 GiB`
+for Codex/Grok and `1 GiB` for Kimi/ZCode/unknown, with 30-second holds and no model/effort
+multiplier. Scope margin is `min(0.5 GiB, 10% × limit)`. Healthy machines have no active ceiling;
+`F = min(16, max(2, C−2))` seats applies only at load ≥ `1.5C` or unknown host bytes. Load > `3C`,
+critical host memory or macOS warning/critical pressure can block even the first start.
+Load and warning pressure hold only new jobs; admitted jobs continue turns, retries and
+replacement backends. Critical host memory or critical pressure holds next turns too,
+with the reason shown in their queued block.
+The very-heavy-model quota is 2 total (Astra, Kimi K3, identified max/ultra effort), independent
+of memory. Eligible backends with fewer active seats go first. Unknown defaults remain a quota
+coverage limit. Linux uses MemAvailable; macOS uses vm_stat free+inactive and separate pressure.
+
+Memory used later by running tools/tests, native Claude agents, other harness sessions, other
+users and native Windows are outside admission control. Windows visibly bypasses admission;
+missing sensors and guard errors show degraded/bypass notes. Use `/relay:setup --admission off`
+for the shared domain or `RELAY_ADMISSION=off` for an invocation. Guard settings live in the
+admission home, independently of the jobs home; changing jobs home does not disable the guard.
 
 `--json` prints one object whose first fields are `schema` (`relay.<command>/1`), `relayVersion` and `relayBuild`. An error under `--json` is that header with `error: { kind, message }` on stdout, `kind` one of `busy` (exit 4: try again), `not-found`, `usage`, `attempt-changed` or `error`. `C status --json` lists slim rows, newest first, 50 a page (`--limit N`, up to 200), with `nextCursor` for `--cursor`; `--active` lists only jobs that run, died or owe messages. One job (`C status <job> --json`, `result`, `wait`, `cancel`) has every field, among them `attemptRecords` and `messages`, each message with how the job took it.
 

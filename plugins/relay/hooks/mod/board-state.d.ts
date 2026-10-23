@@ -4,11 +4,12 @@
 
 export type RelayBoardJob = {
   id: string;
-  state: "starting" | "running" | "completed" | "failed" | "cancelled" | "dead";
+  state: "queued" | "starting" | "running" | "completed" | "failed" | "cancelled" | "dead";
   backend: string;
   model: string | null;
   effort: string | null;
   attempts: number;
+  admission?: { reason: string | null; since: string | null; admittedAt: string | null } | null;
   completedAt: string | null;
   reportPath: string | null;
   relay: {
@@ -67,6 +68,7 @@ export type RelayBoardRetry = {
   text: string;
   kind: "steer" | "continue";
   attempts: number;
+  admission?: { reason: string | null; since: string | null; admittedAt: string | null } | null;
 };
 
 declare module "claude-code" {

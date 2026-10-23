@@ -1,3 +1,4 @@
+import { describeGuard, renderGuard } from "../lib/worker/admission.mjs";
 import { parseCommandInput, resolveJobReference, printJson, resolveCommandCwd } from "./shared.mjs";
 import { default as process } from "node:process";
 import { findJobDir, listJobDirs, readJob, repoSlugFor, resolveJobsHome, TERMINAL_STATES } from "../lib/jobs/store.mjs";
@@ -72,6 +73,7 @@ function printListing(dirs, { slug, workflow, options, limit, cursor }) {
     lastKey = key(job);
   }
   printJson("status", {
+    loadGuard: describeGuard(process.env, { readSensors: false }),
     jobsHome: resolveJobsHome(), scope: workflow ? "workflow" : options.all ? "all" : "repository",
     repoSlug: slug, workflowRunId: workflow || null, active: Boolean(options.active), limit, jobs,
     nextCursor: more ? Buffer.from(JSON.stringify(lastKey)).toString("base64url") : null
@@ -135,5 +137,5 @@ export function handleStatus(argv) {
   views = sortViewsNewestFirst(views);
   const config = readRepoConfig(cwd);
   const header = `jobs-home: ${resolveJobsHome()}\n${slug ? `repo: ${slug}\n` : ""}review-gate: ${config.stopReviewGate ? "enabled" : "disabled"}\nfast-tier: ${readUserConfig().fastTier}\nrelay-version: ${PLUGIN_VERSION}${PLUGIN_BUILD !== null ? ` (${PLUGIN_BUILD})` : ""}\n`;
-  process.stdout.write(header + renderJobList(views, { scope: workflow ? `for workflow ${workflow}` : slug ? "for this repository" : "" }));
+  process.stdout.write(header + renderGuard(describeGuard(process.env)).join("\n") + "\n" + renderJobList(views, { scope: workflow ? `for workflow ${workflow}` : slug ? "for this repository" : "" }));
 }

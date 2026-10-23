@@ -163,15 +163,16 @@ async function handleStartFromRelay(options) {
   const jobDir = createTaskJob(request, brief, {
     relay: { agentId, transcriptPath, promptUuid: transcript.prompt.uuid, promptSha256: hash, ...provenance, ...(journalKey ? { journalKey } : {}), stringReturn }
   });
-  const job = readJob(jobDir);
+  let job = readJob(jobDir);
   writeRelayPointer(process.env, { agentId, transcriptPath, jobId: job.id, jobDir, startError: null });
   spawnWorker(jobDir, request.cwd);
+  job = readJob(jobDir);
   for (const problem of transcript.problems) {
     appendRelayViolation(jobDir, { kind: "transcript", reason: `messages could not be checked: ${problem}`, agentId });
   }
   await deliverRelayMessages(jobDir, transcript.messages, { wait: false });
   if (options.json) printJson("start", { jobId: job.id, state: job.state, jobDir, notes: request.notes, ...backendJson(request) });
-  else process.stdout.write(startBlock(job, jobDir, request));
+  else process.stdout.write(startBlock(job, jobDir, request, job.state));
 }
 
 
@@ -189,5 +190,5 @@ export async function handleStart(argv) {
     printJson("start", { jobId: job.id, state: job.state, jobDir, notes: request.notes, ...backendJson(request) });
     return;
   }
-  process.stdout.write(startBlock(job, jobDir, request));
+  process.stdout.write(startBlock(job, jobDir, request, job.state));
 }

@@ -15,9 +15,10 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
+import { admit, admissionHome, releaseSlot, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded, wasAdmitted } from "./admission.mjs";
 import { backendFor } from "../backends/index.mjs";
 import { truncateCodePoints } from "../util/text.mjs";
-import { acquireWorkerLease, releaseWorkerLease } from "../jobs/lease.mjs";
+import { acquireWorkerLease, releaseWorkerLease, readLease } from "../jobs/lease.mjs";
 import { claimInboxMessages, CLOSED_ACTIONS, newMessageId, owedMessages, pendingInboxMessages, readOutcome, writeOutcome } from "../jobs/messages.mjs";
 import { jobPaths, nowIso, readJob, writeFileAtomic, writeJob } from "../jobs/store.mjs";
 import { PLUGIN_VERSION } from "../util/plugin.mjs";
@@ -71,6 +72,7 @@ function capacityDelaysFrom(env = process.env) {
 
 function settings(env = process.env) {
   return {
+    admissionPollMs: envNumber(env, "RELAY_ADMISSION_POLL_MS", DEFAULTS.pollMs),
     pollMs: envNumber(env, "RELAY_JOBS_POLL_MS", 250),
     heartbeatMs: envNumber(env, "RELAY_JOBS_HEARTBEAT_MS", 10000),
     capacityDelaysMs: capacityDelaysFrom(env)
@@ -118,6 +120,11 @@ function isCapacityError(error) {
 // and runs in the next round. After the lease is gone the inbox is read once more, and a
 // message found then is taken with a fresh lease (or by the worker that took it first).
 export async function runWorker(jobDir, options = {}) {
+  // The submitting process may still be publishing its spawn reservation.
+  const spawnDeadline = Date.now() + DEFAULTS.spawnGraceMs;
+  while (readLease(jobDir)?.role === "spawn" && Date.now() < spawnDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
   let result = null;
   let held = null;
   for (;;) {
@@ -167,6 +174,10 @@ async function runWorkerRound(jobDir, options, held) {
   }
 
   const backend = backendFor(job.request);
+  const admissionDeps = { env: { ...process.env, ...options.env }, ...options.admission };
+  const home = admissionHome(admissionDeps.env);
+  let slot = null;
+  const guardOn = admissionEnabled(admissionDeps.env, undefined, admissionDeps.platform ?? process.platform);
   let lastEventAt = job.lastEventAt ?? null;
   const save = (patch = {}) => {
     job = { ...job, ...patch, lastEventAt, heartbeatAt: nowIso() };
@@ -380,6 +391,7 @@ async function runWorkerRound(jobDir, options, held) {
       startedAt: job.startedAt ?? attempt.startedAt,
       completedAt: null,
       errorMessage: null,
+      refusal: null,
       turnId: null,
       attempts: [...attempts, attempt]
     });
@@ -474,7 +486,15 @@ async function runWorkerRound(jobDir, options, held) {
 
   let current = beginAttempt(queue.shift(), me_record);
 
-  const heartbeat = setInterval(() => save({}), config.heartbeatMs);
+  const completeProbe = () => {
+    if (slot?.probe && probeSucceeded(home, backend.name, job.id, admissionDeps, slot.probeGeneration)) {
+      slot = { ...slot, probe: false, probeGeneration: null, probeAt: null };
+    }
+  };
+  const heartbeat = setInterval(() => {
+    save({});
+    if (slot?.probeAt && (admissionDeps.now ?? Date.now)() - Date.parse(slot.probeAt) >= DEFAULTS.probeMs) completeProbe();
+  }, config.heartbeatMs);
   heartbeat.unref?.();
   const poller = setInterval(() => {
     try {
@@ -519,6 +539,34 @@ async function runWorkerRound(jobDir, options, held) {
     });
   };
 
+  let granted = false;
+  let admitted = wasAdmitted(job);
+  const waitForAdmission = async () => {
+    for (;;) {
+      if (cancelRequested) return false;
+      const decision = admit({ home, jobId: job.id, jobDir, me, request: { ...job.request, backend: backend.name },
+        admitted, admission: job.admission, waitingSince: job.admission?.state === "waiting" ? job.admission.since : null }, admissionDeps);
+      if (decision.slot) slot = decision.slot;
+      if (decision.permanent) {
+        save({ admission: decision.record });
+        throw Object.assign(new Error(decision.reason), { admissionPermanent: true });
+      }
+      if (decision.admit) {
+        granted = true;
+        admitted = true;
+        touchEvents();
+        save({ state: "starting", firstAdmittedAt: job.firstAdmittedAt ?? decision.record.admittedAt, admission: decision.record });
+        updateAttempt({ state: "starting", admission: decision.record });
+        return true;
+      }
+      if (job.state !== "queued" || job.admission?.reason !== decision.reason) {
+        save({ state: "queued", admission: decision.record });
+        updateAttempt({ state: "queued", admission: decision.record });
+      }
+      await (options.admissionSleep ?? interruptibleSleep)(Math.min(decision.retryMs, config.admissionPollMs), () => cancelRequested);
+    }
+  };
+
   try {
     // The new worker and its attempt are recorded above, before any await, so a cancel or a
     // reader sees them at once. Before it starts an app-server, the worker stops every
@@ -537,6 +585,7 @@ async function runWorkerRound(jobDir, options, held) {
       // The queued work stays owed: a later worker runs it once the old server is gone.
       throw new Error(`A previous worker's app-server is still running after the sweep (${[...servers, ...others].join(", ")}${sweep.cause ? `: ${sweep.cause}` : ""}); no new app-server was started.`);
     }
+    await waitForAdmission();
     for (;;) {
       if (cancelRequested) {
         break;
@@ -591,6 +640,7 @@ async function runWorkerRound(jobDir, options, held) {
             const capacityRetries = [];
             /** @type {import("../backends/types").TurnResult} */
             let result = null;
+            let refusal = null;
             // What the next send carries: the current work, or, once a failed turn did work,
             // the resume message as a continuation on the same thread (never its input again).
             let dispatch = current;
@@ -600,6 +650,11 @@ async function runWorkerRound(jobDir, options, held) {
                 result = { ...result, turnStatus: "interrupted" };
                 break;
               }
+              if (!granted && !(await waitForAdmission())) {
+                result = { ...result, turnStatus: "interrupted" };
+                break;
+              }
+              granted = false;
               try {
                 result = await connection.run({
                   prompt: dispatch.prompt,
@@ -617,11 +672,17 @@ async function runWorkerRound(jobDir, options, held) {
                   }
                 });
               } catch (error) {
-                result = { turnStatus: "failed", error: { message: error.message }, finalMessage: "" };
+                result = { turnStatus: "failed", error: { ...error.data, message: error.message, data: error.data }, finalMessage: "" };
+              }
+              refusal = guardOn && result.turnStatus === "failed" ? classifyRefusal(backend.name, result.error) : null;
+              if (refusal) {
+                const pause = recordRefusal(home, backend.name, refusal, job.id, admissionDeps);
+                save({ refusal: { backend: backend.name, kind: refusal.kind, code: refusal.code,
+                  message: refusal.message, at: nowIso(), pausedUntil: pause?.until ?? null } });
               }
               // A backend that retries model calls itself marks its failures `retryable: false`.
               // Commentary does not stop a retry; work done decides how the retry is sent.
-              const capacity = result.turnStatus === "failed" && result.retryable !== false && (result.capacity || isCapacityError(result.error));
+              const capacity = result.turnStatus === "failed" && (!refusal || refusal.kind === "rate") && result.retryable !== false && (result.capacity || isCapacityError(result.error));
               if (!capacity || retry >= config.capacityDelaysMs.length || cancelRequested) {
                 break;
               }
@@ -656,7 +717,7 @@ async function runWorkerRound(jobDir, options, held) {
               if (message) outcome(message, { action: "dropped", reason });
             }
 
-            if (result.turnStatus !== "completed" && connection.server.exitInfo) {
+            if (result.turnStatus !== "completed" && !refusal && connection.server.exitInfo) {
               throw new Error(backend.endMessage(connection.server.exitInfo));
             }
 
@@ -664,6 +725,7 @@ async function runWorkerRound(jobDir, options, held) {
             let state;
             let errorMessage = null;
             if (result.turnStatus === "completed") {
+              completeProbe();
               state = "completed";
             } else if (result.turnStatus === "interrupted" && cancelRequested) {
               state = "cancelled";
@@ -717,6 +779,8 @@ async function runWorkerRound(jobDir, options, held) {
 
         break;
       } catch (error) {
+        granted = false;
+        if (error.admissionPermanent) throw error;
         accept(claimInboxMessages(jobDir));
         // The process exited and the connection is still draining its pipes: wait for the end
         // record, which the connection completes within its drain time.
@@ -743,6 +807,7 @@ async function runWorkerRound(jobDir, options, held) {
             (current.source === "brief" && job.pendingFirstTurn)) queue.unshift({ ...current, recoveryCandidate: true });
         // The automatic prompt has its own id.
         current = { prompt: DEFAULT_RESUME_MESSAGE, source: "resume", message: null, clientId: recovery.id };
+        if (!(await waitForAdmission())) break;
       }
     }
 
@@ -777,11 +842,16 @@ async function runWorkerRound(jobDir, options, held) {
     // The connection reads the server's output to its end as it closes. A turn can end on the
     // backend's record before the worker has read the updates the server sent ahead of it, so
     // the events are flushed only once the connection has closed.
-    if (connection) {
-      await connection.close().catch(() => {});
-      connection = null;
+    try {
+      if (connection) {
+        await connection.close().catch(() => {});
+        connection = null;
+      }
+      eventRecorder?.flush();
+    } finally {
+      if (slot) releaseSlot(home, job.id, me, admissionDeps);
+      slot = null;
     }
-    eventRecorder?.flush();
   }
 
   return releaseAndReturn({});

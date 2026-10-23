@@ -165,6 +165,7 @@ for (const build of [null, "a3801ed01234-dirty"]) {
       "review-gate: disabled",
       "fast-tier: allowed",
       `relay-version: ${PLUGIN_VERSION}${build !== null ? ` (${build})` : ""}`,
+      "load-guard: off (RELAY_ADMISSION=off)",
       "jobs: 1",
       "",
       "| job   | state     | kind | backend | model/effort | duration | summary | relay |",

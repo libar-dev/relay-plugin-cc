@@ -50,7 +50,7 @@ class CodexConnection {
       });
       return { ...result, capacity: isCapacityError(result.error) };
     } catch (error) {
-      return { turnStatus: "failed", error: { message: error.message }, finalMessage: "", capacity: isCapacityError(error) };
+      return { turnStatus: "failed", error: { ...error.data, message: error.message, data: error.data }, finalMessage: "", capacity: isCapacityError(error) };
     }
   }
 

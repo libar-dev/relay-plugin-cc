@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from "node:timers/promises";
+import { admit, admissionHome, releaseSlot, recordRefusal, classifyRefusal, probeSucceeded } from "../lib/worker/admission.mjs";
 import { parseCommandInput, resolveCommandCwd, firstMeaningfulLine, printJson } from "./shared.mjs";
 import { default as fs } from "node:fs";
 import { default as path } from "node:path";
@@ -29,7 +31,7 @@ function recordForegroundJob(cwd, kind, summary, request) {
   writeJob(jobDir, {
     id,
     kind,
-    state: "running",
+    state: "starting",
     createdAt: nowIso(),
     startedAt: nowIso(),
     repoSlug: slug,
@@ -37,7 +39,7 @@ function recordForegroundJob(cwd, kind, summary, request) {
     request,
     worker: { pid: process.pid, startTime: readProcessStartTime(process.pid), startedAt: nowIso() },
     sessionId: null,
-    attempts: [{ attempt: 1, source: kind, startedAt: nowIso(), relayVersion: PLUGIN_VERSION, state: "running" }]
+    attempts: [{ attempt: 1, source: kind, startedAt: nowIso(), relayVersion: PLUGIN_VERSION, state: "starting" }]
   });
   const paths = jobPaths(jobDir);
   const tap = (notification) => {
@@ -56,7 +58,18 @@ function recordForegroundJob(cwd, kind, summary, request) {
     const job = readJob(jobDir);
     writeJob(jobDir, { ...job, backendState: { ...job.backendState, ...patch } });
   };
-  return { jobDir, tap, finish, saveState };
+  const lifecycle = {
+    onSpawn(proc) {
+      const job = readJob(jobDir);
+      const server = { pid: proc.pid ?? null, startTime: proc.pid ? readProcessStartTime(proc.pid) : null, startedAt: nowIso() };
+      writeJob(jobDir, { ...job, server, serverPid: server.pid, attempts: job.attempts.map((a, i) => i === 0 ? { ...a, servers: [...(a.servers ?? []), server] } : a) });
+    },
+    onEnd(info) {
+      const job = readJob(jobDir);
+      writeJob(jobDir, { ...job, server: { ...job.server, ...info }, attempts: job.attempts.map((a, i) => i === 0 ? { ...a, servers: (a.servers ?? []).map(server => server.pid === info.pid ? { ...server, ...info } : server) } : a) });
+    }
+  };
+  return { jobDir, tap, finish, saveState, lifecycle };
 }
 
 
@@ -158,19 +171,19 @@ function inlineReviewContext(cwd, target, backend) {
 
 
 // A review owns its job record and uses a fresh read-only session and its event recorder.
-function reviewHooks(backend, tap, saveState) {
+function reviewHooks(backend, tap, saveState, lifecycle) {
   const recorder = backend.eventRecorder(tap, () => {});
   const hooks = {
-    env: process.env, state: {},
+    env: process.env, state: {}, ...lifecycle,
     saveState(patch) { saveState(patch); Object.assign(hooks.state, patch); },
     tap: notification => recorder.record(notification)
   };
   return { recorder, hooks };
 }
 
-async function runReviewTurn(request, prompt, tap, saveState) {
+async function runReviewTurn(request, prompt, tap, saveState, lifecycle) {
   const backend = backendFor(request);
-  const { recorder, hooks } = reviewHooks(backend, tap, saveState);
+  const { recorder, hooks } = reviewHooks(backend, tap, saveState, lifecycle);
   const outputSchema = backend.review.schema === "turn" ? readOutputSchema(REVIEW_SCHEMA) : undefined;
   let connection;
   try {
@@ -216,6 +229,7 @@ function adversarialOutcome(run, { backend, reviewName, context }) {
   const validationError = parsed.parsed ? reviewSchemaError(parsed.parsed) : null;
   const invalid = !turnError && (!parsed.parsed || Boolean(validationError));
   return {
+    providerError: run.error,
     exitStatus: invalid ? 1 : run.status,
     sessionId: run.sessionId,
     payload: {
@@ -244,13 +258,14 @@ function adversarialOutcome(run, { backend, reviewName, context }) {
 }
 
 
-async function executeNativeReview({ request, target, reviewName, tap, saveState }) {
+async function executeNativeReview({ request, target, reviewName, tap, saveState, lifecycle }) {
   const backend = backendFor(request);
-  const { recorder, hooks } = reviewHooks(backend, tap, saveState);
+  const { recorder, hooks } = reviewHooks(backend, tap, saveState, lifecycle);
   let result;
   try { result = await backend.review.native(request, target, hooks); }
   finally { recorder.flush(); }
   return {
+    providerError: result.error,
     exitStatus: result.status,
     sessionId: result.sessionId,
     payload: {
@@ -269,14 +284,15 @@ async function executeNativeReview({ request, target, reviewName, tap, saveState
 }
 
 
-async function executeBackendReview({ request, context, focusText, reviewName, tap, saveState }) {
+async function executeBackendReview({ request, context, focusText, reviewName, tap, saveState, lifecycle }) {
   const backend = backendFor(request);
   const prompt = reviewName === "Review" ? buildPlainReviewPrompt(context, backend) : buildAdversarialReviewPrompt(context, focusText, backend);
-  const run = await runReviewTurn({ ...request, cwd: context.repoRoot }, prompt, tap, saveState);
+  const run = await runReviewTurn({ ...request, cwd: context.repoRoot }, prompt, tap, saveState, lifecycle);
   if (reviewName !== "Review") return adversarialOutcome(run, { backend, reviewName, context });
   const { status } = run;
   const errorMessage = status === 0 ? null : run.error.message;
   return {
+    providerError: run.error,
     exitStatus: status,
     sessionId: run.sessionId,
     payload: {
@@ -318,20 +334,52 @@ export async function handleReviewCommand(argv, config) {
   let context = backend.review.inlineDiff ? inlineReviewContext(cwd, target, backend) : null;
 
   const kind = config.reviewName === "Adversarial Review" ? "adversarial-review" : "review";
-  const { tap, finish, saveState } = recordForegroundJob(cwd, kind, `${config.reviewName} ${target.label}`, request);
-  let execution;
+  const { jobDir, tap, finish, saveState, lifecycle } = recordForegroundJob(cwd, kind, `${config.reviewName} ${target.label}`, request);
+  const home = admissionHome(), me = { pid: process.pid, startTime: readProcessStartTime(process.pid) };
+  const jobId = readJob(jobDir).id;
+  let execution, slot;
+  let cancelled = false;
+  const cancel = () => { cancelled = true; };
+  const refusal = error => {
+    const classified = classifyRefusal(backend.name, error);
+    if (classified && slot) recordRefusal(home, backend.name, classified, jobId);
+  };
   try {
+    process.on("SIGINT", cancel); process.on("SIGTERM", cancel);
+    try {
+      let shownReason = null;
+      for (;;) {
+        if (cancelled) throw new Error("Review cancelled while waiting for admission.");
+        const job = readJob(jobDir);
+        const decision = admit({ home, jobDir, jobId, me, request, admission: job.admission,
+          waitingSince: job.admission?.state === "waiting" ? job.admission.since : null });
+        slot = decision.slot ?? slot;
+        writeJob(jobDir, { ...job, state: decision.admit ? "running" : decision.permanent ? "failed" : "queued", admission: decision.record,
+          attempts: job.attempts.map(a => ({ ...a, state: decision.admit ? "running" : "queued", admission: decision.record })) });
+        if (decision.permanent) throw new Error(decision.reason);
+        if (decision.admit) {
+          for (const note of decision.record.notes ?? []) if (note !== "load guard off") process.stderr.write(`relay review: ${note}\n`);
+          break;
+        }
+        if (shownReason !== decision.reason) { process.stderr.write(`relay review queued: ${decision.reason}\n`); shownReason = decision.reason; }
+        const deadline = Date.now() + decision.retryMs;
+        while (!cancelled && Date.now() < deadline) await sleep(Math.min(100, deadline - Date.now()));
+      }
+    } finally { process.off("SIGINT", cancel); process.off("SIGTERM", cancel); }
     if (config.reviewName === "Review" && backend.review.native) {
-      execution = await executeNativeReview({ request, target, reviewName: config.reviewName, tap, saveState });
+      execution = await executeNativeReview({ request, target, reviewName: config.reviewName, tap, saveState, lifecycle });
     } else {
       backend.review.prepare?.(request);
       context ??= collectReviewContext(request.cwd, target);
-      execution = await executeBackendReview({ request, context, focusText, reviewName: config.reviewName, tap, saveState });
+      execution = await executeBackendReview({ request, context, focusText, reviewName: config.reviewName, tap, saveState, lifecycle });
     }
+    if (execution.providerError) refusal(execution.providerError);
+    else if (slot?.probe && execution.exitStatus === 0) probeSucceeded(home, backend.name, jobId, {}, slot.probeGeneration);
   } catch (error) {
-    finish({ state: "failed", errorMessage: error instanceof Error ? error.message : String(error) }, null);
+    refusal(error);
+    finish({ state: cancelled ? "cancelled" : "failed", errorMessage: error instanceof Error ? error.message : String(error) }, null);
     throw error;
-  }
+  } finally { if (slot) releaseSlot(home, jobId, me); }
   finish(
     {
       // The request again: a backend may have added a note while opening its session.

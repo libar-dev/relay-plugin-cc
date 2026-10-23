@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.0.0-dev.15
+
+- Restart Claude sessions after upgrading so all job readers and workers use the load guard.
+  Deferred-spawn retries refresh the start grace for older readers while a waiter is active.
+- Keep admitted jobs moving under high CPU load or macOS warning pressure; critical host
+  memory and critical pressure still hold next turns with a visible reason.
+
+- Add a per-user load guard for worker launches and turns, with memory headroom, startup
+  holds, shared five-second pacing, a two-job very-heavy-model quota and a bounded resident queue.
+  Healthy machines have no fixed active ceiling; host and finite cgroup memory tests are separate. Deferred jobs remain
+  queued and cancellable; submitter waits and relay hooks retry them.
+- Pause recognized provider refusals with a single fenced probe, preserve structured RPC
+  errors, and limit Kimi's default silent retries while the guard is on.
+- Gate foreground reviews, use macOS free+inactive and pressure signals, and visibly bypass
+  native Windows. Keep admission settings shared across jobs homes.
+- Show queued reasons and completed wait timing on job/status/board surfaces and expose an
+  immediate off switch. Running turns are never interrupted by admission.
+
+## 3.0.0-dev.14
+
+- Clarify Workflow relay framing and recovery guidance.
+
 ## 3.0.0 (unreleased)
 
 The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5 and Phase 6's report, built

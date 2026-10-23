@@ -64,6 +64,8 @@ export function readUserConfig(env = process.env) {
   config.mcpOff = Array.isArray(config.mcpOff)
     ? [...new Set(config.mcpOff.filter((name) => typeof name === "string" && MCP_OFF_NAME_PATTERN.test(name)))]
     : [];
+  // Provisional guard settings in jobs homes are deliberately ignored.
+  for (const key of ["admission", "minWeight", "maxWeight", "maxVeryHeavy", "modelClasses"]) delete config[key];
   return config;
 }
 

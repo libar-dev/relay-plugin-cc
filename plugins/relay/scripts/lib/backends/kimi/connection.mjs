@@ -1,3 +1,4 @@
+import { admissionEnabled, DEFAULTS } from "../../worker/admission.mjs";
 import { shellCommandMarkdown } from "../../util/shell.mjs";
 /** @typedef {import("../types").Connection} Connection */
 // Kimi's ACP server, isolated from the worker's message and process accounting. ACP carries the
@@ -48,6 +49,8 @@ export function kimiEnvironment(request, env = process.env) {
   for (const [name, value] of Object.entries(env)) {
     if (!name.startsWith("KIMI_MODEL_") && name !== "KIMI_CODE_TRUST_WORKSPACE") result[name] = value;
   }
+  // Bound silent provider retries while the shared guard holds new work.
+  if (!String(env.KIMI_LOOP_MAX_ATTEMPTS_PER_STEP ?? "").trim() && admissionEnabled(env)) result.KIMI_LOOP_MAX_ATTEMPTS_PER_STEP = DEFAULTS.kimiAttempts;
   return { ...result, KIMI_CODE_HOME: request.kimiHome, KIMI_CODE_NO_AUTO_UPDATE: "1", KIMI_DISABLE_CRON: "1" };
 }
 

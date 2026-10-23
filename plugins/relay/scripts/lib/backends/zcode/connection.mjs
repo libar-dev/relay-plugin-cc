@@ -501,7 +501,7 @@ class ZcodeConnection {
       await live(this, done);
       return { ...turnResult(z.ended.slice(first).at(-1), turnId), ...receipts() };
     } catch (error) {
-      return { turnId, turnStatus: "failed", finalMessage: "", error: { message: error.data ? protocolMessage(error) : error.message }, ...receipts() };
+      return { turnId, turnStatus: "failed", finalMessage: "", error: { message: error.data ? protocolMessage(error) : error.message, data: error.data?.data ?? error.data }, ...receipts() };
     } finally {
       settle();
       z.outstanding.clear();
