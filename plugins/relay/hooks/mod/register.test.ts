@@ -2226,6 +2226,16 @@ const SKIPPED = 'stop notice skipped for a-relay: TaskStop named it'
 const ABORTED = { answer: '', durationMs: 13204, isAborted: true, turnId: 't-1', agentId: 'a-relay', reason: 'aborted' as const }
 const ENGINE_END = { text: 'the engine' }
 const STOPPED = { message: 'Successfully stopped task: a-relay (worker)', task_id: 'a-relay', task_type: 'local_agent', command: 'worker' }
+// What TaskStop answers when there is no such task to stop.
+const REFUSED = { result: 'No task found with ID: worker', text: '<tool_use_error>No task found with ID: worker</tool_use_error>', isError: true }
+
+// What TaskStop answers when it stops what the call named: the record of the agent, which the
+// call may name by its name, or of the shell, under its id.
+function stoppedFor(e: any) {
+  const id = [...AGENTS, KILLED].find((agent) => agent.name === e.task_id)?.id ?? e.task_id
+  const record = { ...STOPPED, message: 'Successfully stopped task: ' + id + ' (' + e.task_id + ')', task_id: id }
+  return { result: record, text: JSON.stringify(record) }
+}
 
 // A slim row of `status --json`, cut to what the notice reads.
 const relayRow = (id: string, agentId: string, state = 'running') => ({ id, state, relay: { agentId, workflowRunId: null } })
@@ -2236,7 +2246,7 @@ type StopOptions = {
   jobs?: () => object[]
   run?: (e: any) => unknown
   // The TaskStop's answer, which a test may hold.
-  stopped?: () => unknown
+  stopped?: (e: any) => unknown
 }
 
 function stopEngine(on: any, options: StopOptions = {}) {
@@ -2275,7 +2285,7 @@ function stopEngine(on: any, options: StopOptions = {}) {
   })
   on('tool.call', { tool: 'TaskStop' }, (_: unknown, e: any) => {
     stops.push(e)
-    return options.stopped ? options.stopped() : { result: STOPPED, text: JSON.stringify(STOPPED) }
+    return options.stopped ? options.stopped(e) : stoppedFor(e)
   })
   const clock = mock.clock(on, { now: NOW })
   return { runs, logs, debugs, toasts, ends, stops, clock, agentLists: () => agentLists }
@@ -2412,7 +2422,7 @@ test('a TaskStop of another agent or of a shell leaves a person\'s stop of the r
 // keeps the session's state. The host's value under relay.stopMarks is answered here, so this
 // copy of the module, which made no TaskStop call, reads the mark the old copy wrote.
 test('a mark an earlier copy of the module wrote in $.state is read after a reload', async ($, on) => {
-  let marks: Record<string, number | null> = { worker: NOW + 60000, 'a-relay': NOW + 60000, 'a-old': NOW - 1 }
+  let marks: Record<string, number | null> = { 'a-relay': NOW + 60000, 'a-old': NOW - 1 }
   let version = 1
   const writes: unknown[] = []
   on('state.get', (_: unknown, e: any, next: any) => (e.key === 'stopMarks' ? { value: { value: marks, version } } : next(e)))
@@ -2431,8 +2441,8 @@ test('a mark an earlier copy of the module wrote in $.state is read after a relo
   expect(seen.runs).toEqual([])
   expect(seen.logs).toEqual([])
   expect(seen.debugs).toEqual([SKIPPED])
-  // Only the relay's id mark is used up; the name mark and the lapsed one are left as they were.
-  expect(writes).toEqual([{ worker: NOW + 60000, 'a-old': NOW - 1 }])
+  // The relay's mark is used up, and the lapsed one is left as it was.
+  expect(writes).toEqual([{ 'a-old': NOW - 1 }])
 })
 
 test('a TaskStop writes its marks in $.state, where a reload keeps them, and drops the lapsed ones', async ($, on) => {
@@ -2458,7 +2468,8 @@ test('a TaskStop writes its marks in $.state, where a reload keeps them, and dro
 test('a TaskStop that names a relay that had finished leaves a new relay of its name, stopped by a person, its notice', async ($, on) => {
   const finished = { ...KILLED, id: 'a-done', status: 'completed' }
   let agents: object[] = [finished]
-  const seen = stopEngine(on, { agents: () => ({ value: agents }) })
+  // TaskStop refuses a task that has ended.
+  const seen = stopEngine(on, { agents: () => ({ value: agents }), stopped: () => REFUSED })
 
   await $.tool.call({ tool: 'TaskStop', task_id: 'worker' } as any)
   // Within the minute, another relay named worker starts and a person stops it.
@@ -2472,16 +2483,24 @@ test('a TaskStop that names a relay that had finished leaves a new relay of its 
 test('with no agent list, a name mark and an id mark for two relays of one name each pass their own relay by', async ($, on) => {
   const other = { ...KILLED, id: 'a-two' }
   let isListed = false
-  const seen = stopEngine(on, { agents: () => (isListed ? { value: [KILLED, other] } : { deny: 'the session is not bound yet' }) })
+  const held: (() => void)[] = []
+  const seen = stopEngine(on, {
+    agents: () => (isListed ? { value: [KILLED, other] } : { deny: 'the session is not bound yet' }),
+    stopped: (e) => new Promise((resolve) => held.push(() => resolve(stoppedFor(e)))),
+  })
 
-  // The first TaskStop names a-relay by its name, the second a-two by its id.
-  await $.tool.call({ tool: 'TaskStop', task_id: 'worker' } as any)
-  await $.tool.call({ tool: 'TaskStop', task_id: 'a-two' } as any)
+  // The first TaskStop names a-relay by its name, the second a-two by its id. Both relays end
+  // while the calls are still out, as measured, so the marks are read as written.
+  const calls = [$.tool.call({ tool: 'TaskStop', task_id: 'worker' } as any), $.tool.call({ tool: 'TaskStop', task_id: 'a-two' } as any)]
+  await seen.clock.settle()
+  expect(seen.stops).toHaveLength(2)
   isListed = true
   // a-two uses up its id mark alone, and a-relay's stop still finds the name mark.
   await stopRelay($, seen, { ...ABORTED, agentId: 'a-two' })
   seen.ends.length = 0
   await stopRelay($, seen)
+  for (const release of held) release()
+  await Promise.all(calls)
 
   expect(seen.runs).toEqual([])
   expect(seen.logs).toEqual([])
@@ -2494,7 +2513,7 @@ test('a mark made while the clock could not be read gets a minute once it reads,
   let time: number | null = null
   on('clock.now', () => (time === null ? { deny: 'no clock' } : { value: time }))
   on('agent.list', () => ({ value: [KILLED] }))
-  on('tool.call', { tool: 'TaskStop' }, () => ({ result: STOPPED, text: JSON.stringify(STOPPED) }))
+  on('tool.call', { tool: 'TaskStop' }, (_: unknown, e: any) => stoppedFor(e))
   const writes: unknown[] = []
   on('state.set', (_: unknown, e: any, next: any) => {
     if (e.key === 'stopMarks') writes.push(e.value)
@@ -2532,6 +2551,171 @@ test('a write keeps the 50 newest marks', async ($, on) => {
   const last = writes[51]
   expect(Object.keys(last).sort()).toEqual(Array.from({ length: 50 }, (_, at) => 'b' + (at + 2)).sort())
   expect(last.b51).toBe(NOW + 51 + 60000)
+})
+
+// The host's value under relay.stopMarks, answered here, with each write the module makes.
+function heldMarks(on: any, start: Record<string, number | null>) {
+  const state = { marks: start, version: 1, writes: [] as Record<string, number | null>[] }
+  on('state.get', (_: unknown, e: any, next: any) => (e.key === 'stopMarks' ? { value: { value: state.marks, version: state.version } } : next(e)))
+  on('state.set', (_: unknown, e: any, next: any) => {
+    if (e.key !== 'stopMarks') {
+      return next(e)
+    }
+    state.writes.push(e.value)
+    state.marks = e.value
+    return { value: { isSet: true, version: ++state.version } }
+  })
+  return state
+}
+
+test('a write that drops a mark past the cap keeps a fresh mark ahead of older ones of the same end', async ($, on) => {
+  // 49 marks written while the clock could not be read.
+  const state = heldMarks(on, Object.fromEntries(Array.from({ length: 49 }, (_, at) => ['b' + at, null])))
+  const seen = stopEngine(on)
+
+  // The clock reads: the relay's mark and the 49 all end a minute from now, the relay's first.
+  await $.tool.call({ tool: 'TaskStop', task_id: 'a-relay' } as any)
+  expect(Object.keys(state.writes[0])).toEqual(['a-relay', ...Array.from({ length: 49 }, (_, at) => 'b' + at)])
+  await seen.clock.advance(1)
+  await $.tool.call({ tool: 'TaskStop', task_id: 'b99' } as any)
+
+  // The oldest of the tied marks goes, and the relay's stop still finds its mark.
+  expect(state.writes).toHaveLength(2)
+  expect(Object.keys(state.writes[1])).toEqual(['b99', 'a-relay', ...Array.from({ length: 48 }, (_, at) => 'b' + at)])
+  await stopRelay($, seen)
+  expect(seen.logs).toEqual([])
+  expect(seen.debugs).toEqual([SKIPPED])
+})
+
+test('a refused TaskStop by the name of a relay no longer listed keeps no mark, so a new relay of that name, stopped by a person, gets its notice', async ($, on) => {
+  let agents: object[] = []
+  let answer: unknown = REFUSED
+  const seen = stopEngine(on, { agents: () => ({ value: agents }), stopped: () => answer })
+
+  for (const refusal of [REFUSED, { deny: 'not now' }]) {
+    // The relay named worker has finished and left the list, so the call marks the text.
+    agents = []
+    answer = refusal
+    await $.tool.call({ tool: 'TaskStop', task_id: 'worker' } as any)
+    // Within the minute, another relay named worker starts and a person stops it.
+    agents = [KILLED]
+    seen.ends.length = 0
+    await stopRelay($, seen)
+  }
+
+  expect(seen.logs.map((e) => e.text)).toEqual([NOTICE, NOTICE])
+  expect(seen.debugs).toEqual([])
+})
+
+test('a TaskStop by a name two listed relays hold keeps the mark of the one it stopped, and the other, stopped by a person, gets its notice', async ($, on) => {
+  const other = { ...KILLED, id: 'a-two' }
+  const seen = stopEngine(on, { agents: () => ({ value: [KILLED, other] }), jobs: () => [relayRow('j-2', 'a-two'), relayRow('j-1', 'a-relay')] })
+
+  // TaskStop stops a-relay.
+  await $.tool.call({ tool: 'TaskStop', task_id: 'worker' } as any)
+  await stopRelay($, seen, { ...ABORTED, agentId: 'a-two' })
+  seen.ends.length = 0
+  await stopRelay($, seen)
+
+  expect(seen.logs.map((e) => e.text)).toEqual([NOTICE.replaceAll('j-1', 'j-2')])
+  expect(seen.debugs).toEqual([SKIPPED])
+})
+
+test('when the stopped relay ends before its TaskStop returns, the other relay of its name keeps no mark and the stopped one gets none again', async ($, on) => {
+  const other = { ...KILLED, id: 'a-two' }
+  let release: () => void = () => {}
+  const state = heldMarks(on, {})
+  const seen = stopEngine(on, {
+    agents: () => ({ value: [KILLED, other] }),
+    jobs: () => [relayRow('j-2', 'a-two'), relayRow('j-1', 'a-relay')],
+    stopped: () => new Promise((resolve) => (release = () => resolve({ result: STOPPED, text: JSON.stringify(STOPPED) }))),
+  })
+
+  await stopWhileTaskStopIsOut($, seen, () => release(), { tool: 'TaskStop', task_id: 'worker' })
+  expect(seen.debugs).toEqual([SKIPPED])
+  expect(state.marks).toEqual({})
+
+  // Within the minute a person stops a-two, and a-relay again once a message resumed it.
+  seen.ends.length = 0
+  await stopRelay($, seen, { ...ABORTED, agentId: 'a-two' })
+  seen.ends.length = 0
+  await stopRelay($, seen)
+  expect(seen.logs.map((e) => e.text)).toEqual([NOTICE.replaceAll('j-1', 'j-2'), NOTICE])
+})
+
+test('with no agent list, a TaskStop by name leaves one mark under the id its answer names, which the relay\'s stop uses', async ($, on) => {
+  const other = { ...KILLED, id: 'a-two' }
+  let isListed = false
+  const state = heldMarks(on, {})
+  const seen = stopEngine(on, {
+    agents: () => (isListed ? { value: [KILLED, other] } : { deny: 'the session is not bound yet' }),
+    jobs: () => [relayRow('j-2', 'a-two'), relayRow('j-1', 'a-relay')],
+  })
+
+  await $.tool.call({ tool: 'TaskStop', task_id: 'worker' } as any)
+  expect(state.writes).toEqual([{ worker: NOW + 60000 }, { 'a-relay': NOW + 60000 }])
+  isListed = true
+  // The other relay of the name, stopped by a person, gets its notice; the stopped one none.
+  await stopRelay($, seen, { ...ABORTED, agentId: 'a-two' })
+  seen.ends.length = 0
+  await stopRelay($, seen)
+
+  expect(seen.logs.map((e) => e.text)).toEqual([NOTICE.replaceAll('j-1', 'j-2')])
+  expect(seen.debugs).toEqual([SKIPPED])
+  expect(state.marks).toEqual({})
+})
+
+test('with no agent list, a TaskStop by name whose relay ends before the call returns leaves no mark after the answer', async ($, on) => {
+  let isListed = false
+  let release: () => void = () => {}
+  const state = heldMarks(on, {})
+  const seen = stopEngine(on, {
+    agents: () => (isListed ? { value: [KILLED] } : { deny: 'the session is not bound yet' }),
+    stopped: () => new Promise((resolve) => (release = () => resolve({ result: STOPPED, text: JSON.stringify(STOPPED) }))),
+  })
+
+  const called = $.tool.call({ tool: 'TaskStop', task_id: 'worker' } as any)
+  await seen.clock.settle()
+  isListed = true
+  seen.ends.length = 0
+  await stopRelay($, seen)
+  release()
+  await called
+
+  expect(seen.logs).toEqual([])
+  expect(seen.debugs).toEqual([SKIPPED])
+  // The name mark was used up at the relay's end, and the answer writes no id mark after it.
+  expect(state.writes).toEqual([{ worker: NOW + 60000 }, {}])
+  expect(state.marks).toEqual({})
+
+  // So the relay, resumed and stopped by a person within the minute, gets its notice.
+  seen.ends.length = 0
+  await stopRelay($, seen)
+  expect(seen.logs.map((e) => e.text)).toEqual([NOTICE])
+})
+
+test('the TaskStop hook hands back the answer it got, and a state write that fails does not fail the call', async ($, on) => {
+  // The answer crosses to the test as a copy, so the context it carries stands for the object.
+  const answer = { result: STOPPED, text: JSON.stringify(STOPPED), context: ['a reminder the engine added'] }
+  let failFrom = 0
+  let writes = 0
+  on('state.set', (_: unknown, e: any, next: any) => {
+    if (e.key !== 'stopMarks') {
+      return next(e)
+    }
+    writes++
+    return writes > failFrom ? { deny: 'the state is full' } : next(e)
+  })
+  const seen = stopEngine(on, { agents: () => ({ value: [KILLED, { ...KILLED, id: 'a-two' }] }), stopped: () => answer })
+
+  // The mark's write fails; then the mark is written and the narrowing write fails.
+  for (const from of [0, 1]) {
+    failFrom = from
+    writes = 0
+    expect(await $.tool.call({ tool: 'TaskStop', task_id: 'worker' } as any)).toStrictEqual(answer)
+    expect(writes).toBe(from + 1)
+  }
+  expect(seen.stops).toHaveLength(2)
 })
 
 test("a TaskStop's mark lapses after a minute, and a later stop by a person shows the notice", async ($, on) => {
