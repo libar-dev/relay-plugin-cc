@@ -3,8 +3,8 @@
 This note is for T3 Code maintainers and users. It explains what relay is, how it fits next to T3 Code, and
 what T3 would need for relay's upcoming Claude Code Mod to show everything it can show elsewhere. The
 findings come from T3 Code 0.1.1-nightly.20261020.3438 (commit fe27e8e3dc12) with Claude Code 2.1.307 and Agent
-SDK 0.3.276. Some of them come from reading T3's shipped JavaScript, not from its source. Corrections are
-welcome.
+SDK 0.3.276; the live suite's records cited in the table ran on Claude Code 2.1.308. Some findings come from
+reading T3's shipped JavaScript, not from its source. Corrections are welcome.
 
 ## What relay is
 

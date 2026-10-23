@@ -83,6 +83,32 @@ as `Agent(relay:job)` does not help here, because Claude Code drops `Agent` allo
 session enters auto mode. If the classifier still blocks a launch, ask for the launch in your own
 message, or leave auto mode for that step.
 
+### Relay and Claude Code's sandbox
+
+Relay keeps its jobs in `~/.relay-jobs`, or in `$RELAY_JOBS_HOME` when you set it. Claude Code's
+sandbox lets a Bash command write, by default, only the working directory, a temporary directory and
+directories you added, so under it the companion fails with `EPERM` ("operation not permitted") when
+it writes the jobs home, as a review does. In a check on 23 October 2026, on Claude Code 2.1.309,
+Claude then ran the review's companion call again with `dangerouslyDisableSandbox`, outside the
+sandbox, and did not ask: an allow rule that matches a command also approves its unsandboxed retry,
+and the review and setup commands allow `Bash(node:*)`. Relay's commands, its relay agent and the
+`relay:jobs` skill now tell Claude to stop at such an error and leave the choice to you:
+
+- Allow the jobs home in the sandbox, in your user settings (`~/.claude/settings.json`); name your
+  `$RELAY_JOBS_HOME` instead when you set one:
+
+  ```json
+  {"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}
+  ```
+
+- Or run relay without the sandbox.
+
+With only the jobs home allowed, a job or review whose backend writes its own home (`~/.codex`,
+`~/.grok`, `~/.kimi-code`, ZCode's) or needs the network may still fail inside the sandbox: that is
+not measured. To forbid every unsandboxed retry, set `sandbox.allowUnsandboxedCommands` to `false`,
+Claude Code's strict sandbox mode; to be asked each time instead, add an ask rule for
+`Bash(dangerouslyDisableSandbox:true)`.
+
 ## The first hour
 
 **Check the backends.** Run `/relay:setup`. It finds every backend home on the machine (the
@@ -134,22 +160,26 @@ relay: <the relay's agent id>
 
 `completed` means the job finished its answer, not that its commands passed. Read the report.
 
-**Talk to it.** A message reaches the job within seconds, for a relay agent started with the Agent tool, as
-here; one that arrives while the job's turn is still starting runs as its next turn. The relay agent waits on the job in steps
-of up to nine minutes, so Claude Code's stall timer never fires on a long job. A message sent to it
-ends the current step, and its hook delivers the message at the next. Send the agent "Also check the retry path in
-src/net/client.mjs." with `SendMessage` while the job runs, and Codex gets it inside the running
-turn. Sent after the job has ended, the same message starts a new turn on the same session, and the
-agent returns the new report. The message `cancel` cancels the job. In the terminal, a line you type into the agent's
-own view (↓ in the footer, Enter, then ↑ to its prompt) reaches the job too, at the relay's next step: up
-to nine minutes later, or as a new turn once the job has ended. Esc at that prompt, or `x` in the agent
-list, stops the relay agent and leaves the job running; a line typed right after Esc resumes the relay
-and reaches the job at once, steering it while it runs. `/relay:cancel <job>` cancels the job.
+**Talk to it.** Started with the Agent tool, as here, a relay agent brings a message to its job
+within seconds; a message that arrives while the job's turn is still starting runs as its next turn.
+The relay agent waits on the job in steps of up to nine minutes, so Claude Code's stall timer never
+fires on a long job. A message sent to it ends the current step, and its hook delivers the message
+at the next. Send the agent "Also check the retry path in src/net/client.mjs." with `SendMessage`
+while the job runs, and Codex gets it inside the running turn. Sent after the job has ended, the
+same message starts a new turn on the same session, and the agent returns the new report. The
+message `cancel` cancels the job. In the terminal, a line you type into the agent's own view (↓ in
+the footer, Enter, then ↑ to its prompt) reaches the job too, at the relay's next step: up to nine
+minutes later, or as a new turn once the job has ended. Esc at that prompt, or `x` in the agent
+list, stops the relay agent and leaves the job running; a line typed right after Esc resumes the
+relay and reaches the job at once, steering it while it runs. `/relay:cancel <job>` cancels the job.
 
 **In a workflow.** A Workflow script runs a job with `agent(prompt, { agentType: 'relay:job' })` and
-gets the state block back as a string. A message to a Workflow relay's agent id is not a sure way to its job: while
-it runs, it starts a second loop of the relay; after it ends, it reaches no job. Steer, continue or cancel a Workflow
-job by its job id with the companion (`steer`, `continue`, `cancel`). The `relay:jobs` skill has the rules, and the section
+gets the state block back as a string. A message to a Workflow relay's agent id is not a sure way to
+its job: while it runs, it starts a second loop of the relay; after it ends, it reaches no job.
+Steer, continue or cancel a Workflow job by its job id with the companion (`steer`, `continue`,
+`cancel`), as the board does: its live check did so on all four backends, each message reaching the
+job within 0.3 s ([docs/live/capabilities.md](docs/live/capabilities.md)). The `relay:jobs` skill
+has the rules, and the section
 [What the relay depends on in Claude Code](#what-the-relay-depends-on-in-claude-code) says what a
 Claude Code update can break.
 
@@ -186,7 +216,7 @@ message: a message sent while it runs becomes the next turn.
 |---|---|
 | `/relay:setup` | every backend home in one shape; `--backend codex\|grok\|zcode\|kimi [--grok-home H\|--kimi-home H]` checks one and exits non-zero when it is not ready |
 | `/relay:setup --fast-tier allowed\|off` | with `off`, the default, jobs ignore `fast: true`; with `allowed`, it asks for the priority tier |
-| `/relay:setup --job-mcp-off name,...\|none` | Codex jobs turn off these MCP servers |
+| `/relay:setup --job-mcp-off name,...\|none` | Codex jobs and reviews turn off these MCP servers |
 | `/relay:rescue <task>` | hand an investigation or a fix to a `relay:job` agent; `--backend`, `--model`, `--effort`, `--grok-home`, `--kimi-home`, `--read-only` and `--write` become its header, `--background` runs the agent in the background |
 | `/relay:status [job] [--all]` | this repository's newest 20 jobs, every repository's with `--all`, or one job's state block |
 | `/relay:result [job]` | a job's state block and report; without a job, the newest finished job of this repository |
@@ -199,11 +229,12 @@ The plugin's hooks module answers `/relay:status`, `/relay:result`, `/relay:canc
 `/relay:transfer` itself: it runs the companion and shows its output, with no model turn and no
 tokens spent. The answer starts with the command as you typed it, then the companion's lines in a
 code block, as it prints them, then a job's report as Markdown, or the job list as a table.
-`claude -p "/relay:result <job>"` exits with the companion's exit code (0 completed, 3 ended
-without a report, 4 running, 5 cancelled), with `--output-format text` or `json`; under
-`stream-json` Claude Code exits 0. These four run only when you type them. When you ask
-in plain words, Claude reads jobs with the companion in Bash, which a session in `default`
-permission mode asks you about, and cancels a job by sending its agent the message `cancel`.
+`claude -p "/relay:result <job>"` exits with the companion's exit code (0 completed with a report;
+3 failed, dead, completed without a report, or messages not yet run; 4 running; 5 cancelled), with
+`--output-format text` or `json`; under `stream-json` Claude Code exits 0. These four run only when
+you type them. When you ask in plain words, Claude reads jobs with the companion in Bash, which a
+session in `default` permission mode asks you about, and cancels a job by sending its agent the
+message `cancel`, or, for a Workflow job, with `companion cancel <job>`.
 
 In the terminal, a status line under the prompt counts the repository's jobs while any are
 running or dead or owe messages: `relay: 2 running · 1 dead · 3 owed`. `/relay-board` opens a
@@ -218,6 +249,15 @@ Claude Code treats each of these runs as a Skill call. A session in `default` pe
 you before Claude runs one, and `claude -p` refuses the call unless it is allowed. To run the two
 reviews without a prompt, allow `Skill(relay:review)` and `Skill(relay:adversarial-review)`, in
 `permissions.allow` or with `claude -p --allowedTools`.
+
+Once it runs, `/relay:review`, `/relay:adversarial-review` or `/relay:setup` shows no permission
+prompt for its own steps: a check in `default` permission mode on Claude Code 2.1.309 saw none.
+Their `allowed-tools` grant `Write`, for the temporary file that carries your arguments, and
+`Bash(node:*)`, for the companion (setup adds `Bash(npm:*)`, for the Codex install it offers).
+`Write` is not yet scoped to a path: the grant would let the command write any file, though its
+instructions name only that temporary one ([decisions.md](docs/mods/decisions.md), D73). The same
+`Bash(node:*)` grant is why Claude could run the companion again outside Claude Code's sandbox
+without asking you (D79; see [Relay and Claude Code's sandbox](#relay-and-claude-codes-sandbox)).
 
 Every job has its own directory under `$RELAY_JOBS_HOME` (default `~/.relay-jobs`), its own
 worker and its own server process. Jobs belong to no Claude session and survive its end. The skill's
@@ -242,6 +282,11 @@ is recorded as a job, so `/relay:status` lists it.
 Grok, ZCode and Kimi read only the diff inlined in their prompt, so they refuse a change above two files
 or 256 KiB before anything starts. An adversarial answer that does not match the review schema
 fails the review with the raw answer in the report.
+
+`/relay:review` on Codex prints Codex's own stderr after the review, under `stderr:`. An MCP server
+of your Codex home can show there, for example one whose OAuth refresh failed. That is Codex's
+output, not a finding: `/relay:setup --job-mcp-off <name>` turns that server off for Codex jobs and
+reviews alike.
 
 ### The stop-time review gate
 

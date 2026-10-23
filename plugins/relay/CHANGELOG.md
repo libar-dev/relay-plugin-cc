@@ -38,11 +38,11 @@ Pre-release cuts:
 
 Phase 1, steer wake:
 
-- A message to a running `relay:job` agent reaches the job within seconds. The plugin has a hooks
-  module, `hooks/mod/register.js`, with one `session.send` hook: when a message is sent to a relay,
-  from the main thread, a subagent or another plugin, it runs `companion wake`, and the relay's
-  current wait returns. The guard then delivers the message as before. Until now a message waited
-  for the wait to end, up to two minutes.
+- A message to a running `relay:job` agent started with the Agent tool reaches the job within seconds. The
+  plugin has a hooks module, `hooks/mod/register.js`, with one `session.send` hook: when a message is sent to
+  a relay, from the main thread, a subagent or another plugin, it runs `companion wake`, and the relay's
+  current wait returns. The guard then delivers the message as before. Until now a message waited for the wait
+  to end, up to two minutes.
 - A relay waits on its job in steps of up to 540 s (Bash timeout 600 s) instead of 120 s, so a long
   job costs its Haiku relay about a quarter of the model calls.
 - A `SendMessage` from another agent, such as an orchestrator subagent or a Workflow agent, now
@@ -86,7 +86,8 @@ Phase 3, spawn and stop like a Claude agent:
   TaskStop on a Workflow comes back with the list of its jobs that keep running. A cancel the hook
   could not finish is told to the caller and shown as a `relay-violation:` line. The
   message `cancel` still cancels a job and lets its relay hand back the cancelled state. TaskStop has no
-  task for one agent of a Workflow; cancel such a job with `C cancel <job>`.
+  task for one agent of a Workflow, except a second loop that a message to it started (D48); cancel such a job
+  with `C cancel <job>`.
 - **A bad header fails at the spawn.** The hooks module has an `agent.spawn` hook: before a
   `relay:job` agent starts, it runs the new `companion check-header`, the parser and request
   builder `start` uses, and refuses the spawn with the parser's message. The Agent call fails, or a
@@ -233,34 +234,51 @@ Fixes from the pre-releases:
   Commands with `--cwd` also accept `~/` and bare `~`. NUL is rejected. Long input uses the same file.
 - Grok and Kimi sign-in advice quotes home paths for safe copying into a shell.
 - The docs no longer promise for a relay a Workflow script started what holds for one the Agent tool started.
-  A message to a running Workflow relay's agent id starts a second loop of it; that loop delivered a steer and a
-  `cancel` in the runs measured, but Claude Code can then write the relay's later entries to a transcript the guard
-  does not read, and a message there never reaches the job. A message after a Workflow relay ended fails, or
-  resumes a general-purpose agent that answers in its place. Steer, continue and cancel a Workflow job by its job
-  id: `C steer`, `C continue` and `C cancel`.
-- The jobs skill and the design say that a message reaching a job while a turn is starting (its first turn, or a
-  continue it accepted, before the backend began that turn) runs as the next turn, after that whole turn.
-- The jobs skill's continue recipe goes on to the result: send once, wait for the job to end, read its state and
-  its open messages, collect the new report. `C steer`, `C continue` and `C resume` exit 4 when the message was
-  posted but no outcome came within 60 s; read the job's messages before sending again, since every call posts
-  a new one.
+  A message to a running Workflow relay's agent id starts a second loop of it. In the one run measured for each, a
+  steer reached the job through that loop, and a `cancel` through the first loop's guard. But Claude Code can then
+  write the relay's later entries to a transcript the guard does not read, and a message there never reaches the
+  job. A message after a Workflow relay ended fails, or resumes a general-purpose agent that answers in its place.
+  Steer, continue and cancel a Workflow job by its job id: `C steer`, `C continue` and `C cancel`, as the board's
+  live check did on all four backends. After its relay ended, a continue by id runs an attempt no relay hands back,
+  so `status` marks it `not handed back`; its report is in `C result`.
+- The jobs skill and the design say that a message reaching a job while a turn is starting (for example its first
+  turn, or a continue or resume it accepted, before the backend began that turn) runs as the next turn, after that
+  whole turn.
+- The jobs skill's continue recipe goes on to the result: send once, wait for the job to end in waits that fit the
+  Bash tool's timeout, read its state and its open messages, run an owed message with `resume` and wait again,
+  then collect the new report. `C steer`, `C continue` and `C resume` exit 4 when the message was posted but no
+  outcome came within 60 s; read the job's messages before sending again, since every call posts a new one.
 - The Workflow example in the jobs skill refuses `report: none` for a step that reads the report, and says that
   `completed` is only the first gate.
 - `dead` and exit 3 are defined as the code has them: `dead` is a job that has not ended whose worker is gone or
   never started within 60 s, whatever recovery did; exit 3 also covers a failed or dead job with a report, and a
   completed job without one.
-- The `result-handling` skill reads the state before the report, keeps a command's verbatim output apart from a
-  result Claude uses, keeps `/relay:review` and `/relay:adversarial-review` review-only, and lets Claude go on with
-  work the user already asked for. It now loads for relay results, state blocks, failed jobs and report files.
+- The `result-handling` skill reads the state before the report, and keeps a command's verbatim output apart from
+  a result Claude uses: Claude adds no line of its own after a command's verbatim output. Any review the user asked
+  for, by a command, `C review`, a `relay:job` brief or a Workflow step, is review-only unless the same request
+  asked for fixes; otherwise Claude goes on with work the user already asked for. It now loads for relay results,
+  state blocks, failed jobs and report files.
 - The `codex-prompting` skill says a relay job cannot ask its caller anything: settle questions before launch, or
   ask for a blocked report that names the missing decision.
 - A relay whose start failed hands back the start output at once, instead of first running `result` with no job
   id, which the hook refused.
-- `/relay:setup` shows each backend's binary path under the table, and prints a block's sign-in `detail`, which can
-  hold a fenced command, below the table instead of in a cell.
+- `/relay:setup` shows each backend's binary path under the table. For a signed-out or missing backend it prints
+  the sign-in `detail`, which can hold a fenced command, below the table instead of in a cell; for a block with an
+  error it prints `error:` with the error below the table, and keeps the sign-in the check read.
+- **Relay never leaves Claude Code's sandbox unasked (D79).** Under the sandbox the companion fails with `EPERM`
+  when it writes the jobs home, and Claude ran a review's companion call again with `dangerouslyDisableSandbox`
+  without asking: the commands' `Bash(node:*)` grant approves that retry. The review and setup commands, the relay
+  agent and the jobs skill now say never to retry without the sandbox unless the user asked, and to offer the two
+  choices: add the jobs home to `sandbox.filesystem.allowWrite` in the user settings, or run without the sandbox.
+- `/relay:adversarial-review`'s argument hint says that quotes and apostrophes in the focus text group words and
+  are removed, as before the argument file.
 
 Docs:
 
+- The README has a section on Claude Code's sandbox, with the setting that allows the jobs home and
+  `sandbox.allowUnsandboxedCommands`; says that the review and setup commands ask no permission for their own
+  steps, and why; and says that `/relay:review` on Codex prints Codex's own stderr, which
+  `/relay:setup --job-mcp-off <name>` quiets for a noisy MCP server, for Codex jobs and reviews alike.
 - [docs/desktop.md](../../docs/desktop.md): relay in the Code tab of the Claude desktop app. It covers what runs
   there, installing with the CLI (the app loads what the CLI installs), the permission modes, a check that it works,
   and how to try a build in one folder. Checked on a Mac in Claude for Mac 3.6556.1 with relay 3.0.0-dev.4.

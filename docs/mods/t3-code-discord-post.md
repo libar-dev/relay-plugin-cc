@@ -5,8 +5,8 @@ Not posted. Replace `<link>` with the URL of `docs/mods/t3-code.md` on `main` on
 ---
 
 Hi all. I maintain relay, an open-source Claude Code plugin that runs Codex, Grok Build, ZCode (GLM) and Kimi
-Code jobs as Claude agents: a main thread starts them with the Agent tool (a Workflow script with `agent()`),
-steers them with SendMessage and gets their reports back.
+Code jobs as Claude agents: a main thread starts them with the Agent tool, steers them with SendMessage and gets
+their reports back, and a Workflow script starts them with `agent()` and steers them by job id.
 
 It complements T3 Code rather than competing with it. For a plain fan-out, T3's own delegates are the better
 fit. Relay is for dynamic workloads inside Claude Code: Workflow scripts and Claude orchestrators whose agents

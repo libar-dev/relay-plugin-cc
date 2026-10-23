@@ -822,6 +822,41 @@ two-family check of the cut's CHANGELOG entry ran before its merge anyway and fo
 know, so a cut's gates are now CI, Greptile and that check, all before the merge and the tag; this replaces D70's
 reviews after the merge. D16's `.coderabbit.yaml` is unchanged.
 
+### D79. Relay never leaves Claude Code's sandbox unasked (owner, 23 October 2026)
+
+The M3 lead ran the live checks D73 left open on pre.2's install, on 23 October with Claude Code 2.1.309. In default
+permission mode no step asked anything, because the commands' `allowed-tools` grant `Write` and `Bash(node:*)`.
+`/relay:review`'s estimate and size question ran on a dirty working tree and on a clean branch, and an option-like
+base was refused. `--background` ran for both review commands. No marker file was created, and no `relay-args-*`
+directory was left. Under Claude Code's sandbox, Write put the argument file in the sandbox's temporary directory,
+and the companion read it. The
+companion then failed with `EPERM` writing the jobs home (`~/.relay-jobs`), which the sandbox does not let a Bash
+command write. Claude ran the companion again with `dangerouslyDisableSandbox`, and the user was not asked. Claude
+Code's sandbox docs say why ("The unsandboxed retry escape hatch"): an allow rule that matches a command also
+approves its unsandboxed retry, and the review and setup commands' `allowed-tools` grant `Bash(node:*)`.
+
+The owner, through the coordinating thread: never bypass the sandbox unasked. On a sandbox `EPERM` (or "operation
+not permitted"), stop and tell the user the two choices:
+- add the jobs home (`~/.relay-jobs`, or `$RELAY_JOBS_HOME`) to the sandbox's write paths, with
+  `{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}` in their user settings;
+- run without the sandbox.
+
+What it changes: `commands/review.md`, `adversarial-review.md` and `setup.md`, `agents/job.md` and the jobs skill
+say it. The README has a section, "Relay and Claude Code's sandbox", which also names
+`sandbox.allowUnsandboxedCommands: false`, Claude Code's strict sandbox mode, as the user's way to forbid every
+unsandboxed retry. A test pins the texts.
+
+Rejected:
+- Documenting that relay leaves the sandbox. It would make a silent bypass the plugin's documented behaviour.
+- Removing `Bash(node:*)` from the commands. The retry would then prompt, but so would every companion call that
+  runs without the sandbox, the usual case.
+
+Open, for after 3.0:
+- Whether the relay agent (`relay:job`) bypasses the sandbox on its own `companion` calls is not measured. Its
+  instructions now forbid it.
+- Whether a job runs inside the sandbox with only the jobs home allowed is not measured. A backend that writes its
+  own home or needs the network may still fail there.
+
 ### D90. One walkthrough, two documents (guide lead)
 
 The guide lead writes one feature walkthrough. It covers every user-facing feature of 3.0 in the order a user meets

@@ -3,7 +3,7 @@
 Use these as starting templates for Codex task prompts or other Codex/GPT prompt construction.
 Copy the smallest recipe that fits the task, then trim anything you do not need.
 For a `relay:job` job, the `mode:` header line sets what Codex may write. The brief's words never change it.
-A `relay:job` job cannot ask its caller anything: where a recipe says to stop and ask, use the relay variant of `default_follow_through_policy` in [prompt-blocks.md](prompt-blocks.md), which ends with a blocked report.
+A `relay:job` job cannot ask its caller anything: for a `relay:job` brief, use the relay variants of `default_follow_through_policy` and `action_safety` in [prompt-blocks.md](prompt-blocks.md), which end with a blocked report.
 
 ## Diagnosis
 

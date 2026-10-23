@@ -32,14 +32,14 @@ When to add blocks:
 
 How to choose prompt shape:
 - Use built-in `review` or `adversarial-review` commands when the job is reviewing local git changes. Those prompts already carry the review contract.
-- Use `task` when the task is diagnosis, planning, research, or implementation and you need to control the prompt more directly. For this plugin, that means a `relay:job` job (see the `jobs` skill).
-- Use SendMessage to the running or finished `relay:job` agent you started with the Agent tool, or `companion.mjs continue <job>` (the way for a Workflow job), for follow-up instructions on the same Codex thread. Send only the delta instruction instead of restating the whole prompt unless the direction changed materially.
+- Use `task` when the task is diagnosis, planning, research, or implementation and you need to control the prompt more directly. For this plugin, that means a `relay:job` job (see the `relay:jobs` skill).
+- Use SendMessage to the running or finished `relay:job` agent you started with the Agent tool, or `C continue <job>` (the way for a Workflow job; `C` is the companion, as the `relay:jobs` skill defines it), for follow-up instructions on the same Codex thread. Send only the delta instruction instead of restating the whole prompt unless the direction changed materially.
 
 Relay jobs run unattended:
 - A `relay:job` job has no way to ask its caller a question in this release, and nobody reads its commentary while it runs. "Stop to ask" and "call out a risky action before taking it" reach no one.
 - Settle every material question before launch, and put the answer in the brief.
-- Where a question can still come up, ask for a blocked report instead: the job takes no action that depends on the answer, and ends with a report that names the missing decision and what it found so far. You get the answer, then continue the job.
-- Name in the brief which irreversible actions the job may take; it takes no other.
+- Where a question can still come up, ask for a blocked report instead: the job takes no action that depends on the answer, and ends with a report that names the missing decision and what it found so far. Get the answer, from the user when the decision is theirs, then continue the job.
+- Name in the brief which irreversible actions the job may take, and tell it to take no other. Nothing enforces that list: only the header's `mode:` limits what the job can write, and the default `yolo` limits nothing.
 - The blocks in the references that say "stop to ask" or "call out" are for an interactive Codex session. For a relay job, use their relay variants there.
 
 Working rules:

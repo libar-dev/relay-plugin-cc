@@ -15,7 +15,7 @@ the [README](../README.md) installation and the commands, and the `relay:jobs` s
 |---|---|
 | `Agent({subagent_type, description, prompt})`, run in the background | `Agent({subagent_type: "relay:job", description, prompt})`, the same |
 | The completion notice carries the agent's final message | The completion notice carries a state block and the job's report, verbatim |
-| `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within seconds; a turn that cannot take it, has just ended, or has not begun yet (the job's first turn or an accepted continue, while the backend's session opens) gets it as the next turn |
+| `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within seconds; a turn that cannot take it, has just ended, or has not begun yet (for example the job's first turn, or a continue or resume it accepted, while the backend's session opens) gets it as the next turn |
 | A line the person types into its view (↓, Enter) reaches it between tool calls | A line typed into its view reaches the job at the relay's next call: when its wait returns, at most 540 s later, or as a new turn once the job has ended; typed after it ended in a view still open, a new turn at once (2.1.309 drops a finished agent from the list unless its view is open) ([The wake](#the-wake)) |
 | `SendMessage` after it ends continues it with its context | `SendMessage` after it ends starts a new turn on the same backend session and returns the new report |
 | `TaskStop` stops it | `TaskStop` stops the relay, and the plugin's hook cancels its job. The message `cancel`, or `companion cancel <job>`, cancels the job and leaves the relay to hand back its state |
@@ -387,7 +387,7 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   never does for a cancelled job. The hook tells the caller which of the run's jobs keep running,
   with the command to cancel one. Cancel one Workflow job with `companion cancel <job>`, at any time.
   The message `cancel` to a running Workflow relay's agent id cancelled its job in the one probe
-  measured, but it travels through a second loop of the relay ([Under the Workflow
+  measured, but it also starts a second loop of the relay ([Under the Workflow
   tool](#under-the-workflow-tool)). A TaskStop that cancelled
   the job records a hand-back (`by: "TaskStop"`): the caller got the cancelled block, so `status` does
   not mark the job `not handed back`.
@@ -482,13 +482,13 @@ second would run its whole bound before the boundary. A message queued just as t
 a continue restarted it, would find no marker at all. A marker that only an earlier boundary covers
 costs one extra wait call; it cannot cause another, because the next call comes after a new boundary.
 
-The wake brings a message to the job within seconds; when the backend takes it is the worker's
-choice. The worker steers a message into a turn only once it has sent that turn to the backend
+The wake brings a message to the job within seconds; when the backend takes it depends on the
+worker. The worker steers a message into a turn only once it has sent that turn to the backend
 (`turnActive` in `worker.mjs`). A steer it claims after it began an attempt and before that, while the
-backend's server starts and the session opens for the job's first turn or for a continue it has accepted
-(`accepted-next-turn`), is queued as the next turn (`queued-next-turn`, "no turn is running") and waits for
-that whole turn. The guard posts every message to a job that has not ended as a steer, so a `SendMessage`
-in that window waits the same way.
+backend's server starts and the session opens (for example for the job's first turn, or for a continue
+or resume it has accepted, `accepted-next-turn`), is queued as the next turn (`queued-next-turn`, "no
+turn is running") and waits for that whole turn. The guard posts every message to a job that has not
+ended as a steer, so a `SendMessage` in that window waits the same way.
 
 A line the person types into the relay's own view (↓ in the footer, Enter, then the prompt
 `Message @<agent>…`) has no wake. No hook names its recipient: at Enter, `session.send`,
@@ -542,7 +542,8 @@ which Claude's own Bash has. The markdown files keep
 the names, descriptions and argument hints for the command picker, and their body only says that the module
 answers the command: Claude Code runs it when the module did not load. Claude does not call these four itself. A
 model's Skill call expands a command's markdown body and never reaches `command.run`, so Claude reads jobs with
-`C status` and `C result` in Bash, which print the same text, and cancels a job by sending its agent `cancel`.
+`C status` and `C result` in Bash, which print the same text, and cancels a job by sending its agent `cancel`, or a
+Workflow job with `C cancel <job>`.
 
 `transfer` gets the session id from `$.session.id()` and finds the session's file by it ([Transfer](#transfer)).
 
@@ -675,8 +676,9 @@ Violations are never removed; `result` and `status` print each as a `relay-viola
   Workflow agent, so the lead addresses one by id. Measured on 2.1.308 by the Phase 3 and Phase 6 threads
   ([decisions.md](mods/decisions.md), D48 and D53); the live suite's `steer-workflow` check measures a
   Workflow agent sending to a relay the Agent tool started, not a message to a Workflow relay.
-  - A steer while it runs: Claude Code starts a second loop of the agent under the same id, and the
-    first loop never reads the message in its turn. In the one run measured, the second loop's guard
+  - A steer while it runs: Claude Code starts a second loop of the agent under the same id. The
+    first loop's model never sees the message; its guard can still read it in the transcript the loops
+    share. In the one run measured, the second loop's guard
     delivered the steer, waited on the job beside the first loop, and sent the lead an extra completion
     notice.
   - The message `cancel` while it runs travels the same way. In the Phase 3 probe, the wake ended the
@@ -695,8 +697,13 @@ Violations are never removed; `result` and `status` print each as a `relay-viola
 
   So a Workflow job is controlled by its job id: `companion steer`, `continue` and `cancel` post to the
   job's inbox with no relay in between ([Every message runs once or is reported](#every-message-runs-once-or-is-reported)).
-  No relay hands back a turn that a continue by id started, so `status` marks the job `not handed back`
-  once that turn ends; `wait` and `result` collect it.
+  The live suite's `board` check did this on all four backends with Claude Code 2.1.309
+  (`docs/live/records/20261023T003501Z-board-terminal-1f82.jsonl`): each steer reached the job 0.17–0.20 s
+  after the send (Kimi took it as its next turn), each continue started a new attempt 0.25–0.27 s after the
+  send, each `cancel --attempt` ended the continued attempt in 1.0–3.5 s, and no message reached a relay's
+  transcript or forked a relay loop. A steer or continue by id to a job whose relay still waits comes back in
+  that relay's block (D61). After its relay ended, a continue by id has no relay to hand back its turn, so
+  `status` marks the job `not handed back` once that turn ends; `wait` and `result` collect it.
 
 ### Adoption by journal key
 

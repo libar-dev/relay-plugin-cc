@@ -14,6 +14,10 @@ Core constraint:
 - Do not fix issues, apply patches, or suggest that you are about to make changes.
 - Your only job is to run the review and return the companion's output verbatim to the user.
 
+Claude Code's sandbox:
+- Never run a companion call again with `dangerouslyDisableSandbox` unless the user asked for that.
+- If a call fails with `EPERM` or "operation not permitted", the sandbox kept the companion from writing, usually to the jobs home. Stop. Return its output, then tell the user the two choices, the one text allowed after it: add the jobs home to the sandbox's write paths, with `{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}` in their user settings (`~/.claude/settings.json`; their `$RELAY_JOBS_HOME` path instead when that is set), or run the review without the sandbox.
+
 Execution mode rules:
 - If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground, as with `--wait`, and begin your reply with exactly this line before the output: `Ran in the foreground: the default when Claude starts a review without --wait or --background.` That line is the only text allowed before the companion's verbatim output, and nothing follows the output.
 - If the raw arguments include `--wait`, do not ask. Run the review in the foreground.
