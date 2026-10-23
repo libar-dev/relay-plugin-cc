@@ -320,6 +320,7 @@ function legacyJobs(home, current, slotted, deps) {
 }
 function pauseFile(home, backend) { if (!backends.includes(backend)) throw new Error("invalid backend"); return path.join(home, "pauses", `${backend}.json`); }
 function pauseRead(home, backend, deps, clean = false, retainProbe = false) {
+  if (!backends.includes(backend)) return null;
   const file = pauseFile(home, backend), p = readJsonOrNull(file), now = deps.now();
   if (!p || p.v !== 1 || !Number.isFinite(Date.parse(p.until)) || !Number.isFinite(Date.parse(p.updatedAt)) || Date.parse(p.updatedAt) > now + DEFAULTS.clockSkewMs || now - Date.parse(p.updatedAt) >= DEFAULTS.pauseExpiryMs) {
     if (clean) fs.rmSync(file, { force: true }); return null;
@@ -413,7 +414,9 @@ export function admit(ctx, injected = {}) {
         if (!warm && (state.state === "busy" || candidateMachine.availableBytes === null) && active.length >= settings.busySeats) return { reason: `busy-load allowance: ${active.length} of ${settings.busySeats} seats in use`, kind: "seats" };
         return null;
       };
-      const blocked = eligible(mine, machine, holds(all, ctx.jobId, now), Boolean(existing));
+      // Structural impossibility is permanent even while a provider/quota is paused.
+      const fit = memoryCheck(machine, settings, [], startupBytes(mine.backend));
+      const blocked = fit?.permanent ? fit : eligible(mine, machine, holds(all, ctx.jobId, now), Boolean(existing));
       if (blocked?.permanent) return { admit: false, permanent: true, reason: blocked.reason, record: { ...recordFor(mine, notes, blocked.reason, blocked.kind), state: "failed" } };
       if (blocked) return wait(blocked.reason, blocked.kind, existing);
       const timing = readJsonOrNull(path.join(home, "timing.json")) ?? {};

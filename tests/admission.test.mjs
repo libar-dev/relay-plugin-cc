@@ -86,6 +86,7 @@ test("pending reservations include the new job and expire; delayed growth still 
 
 test("healthy hosts can retain forty seats and admit the forty-first with five-second spacing", t => {
   const s = setup(t);
+  s.setMachine({ totalBytes: 18 * GiB, availableBytes: 10 * GiB, cores: 12 });
   for (let i = 0; i < 41; i++) {
     assert.equal(admit(s.ctx({ model: "ordinary", effort: "high" }), s.deps).admit, true);
     s.tick(D.spacingMs);
@@ -369,4 +370,22 @@ test("Linux MemAvailable is independent of cgroup headroom; mismatched CPU load 
   } });
   assert.equal(machine.availableBytes, 8 * GiB); assert.equal(machine.load5, null);
   assert.match(machine.notes.join(" "), /scopes differ/);
+});
+
+test("unknown backends use the full startup allowance without provider-pause bypass", t => {
+  const s = setup(t), c = s.ctx({ backend: "synthetic" });
+  const reserve = guardSettings({}, { totalBytes: 128 * GiB, cores: 64 }).headroomBytes;
+  s.setMachine({ availableBytes: reserve + 0.75 * GiB });
+  assert.equal(admit(c, s.deps).waitKind, "memory");
+  s.setMachine({ availableBytes: reserve + GiB });
+  const result = admit(c, s.deps);
+  assert.equal(result.admit, true); assert.equal(result.slot.holdBytes, GiB);
+});
+
+test("impossible fits fail permanently even behind an active provider pause", t => {
+  const s = setup(t);
+  fs.mkdirSync(path.join(s.home, "pauses"), { recursive: true });
+  writeJsonAtomic(path.join(s.home, "pauses", "codex.json"), { v: 1, backend: "codex", kind: "usage", updatedAt: new Date(s.deps.now()).toISOString(), until: new Date(s.deps.now() + 100000).toISOString() });
+  s.setMachine({ totalBytes: GiB });
+  assert.equal(admit(s.ctx(), s.deps).permanent, true);
 });
