@@ -13,8 +13,9 @@
 // job's wait returns within a second and the relay guard delivers the message on its usual path.
 //
 // turn.complete tells the person which job a stop left running. A stop from Claude Code's own
-// controls (x in the agent list, Esc in a relay's view, the desktop app's Stop, ctrl+x ctrl+k)
-// ends the relay's turn as aborted and leaves its job running (D96), and no other event shows it.
+// controls (x in the agent list and Esc in a relay's view, measured; the desktop app's Stop and
+// ctrl+x ctrl+k, not checked live yet) ends the relay's turn as aborted and leaves its job running
+// (D96), and no other event shows it.
 // A timer the hook sets finds the relay's job through the companion and names it, with
 // /relay:cancel and /relay:result, in the transcript and a toast. It runs after the hook has
 // returned, because the engine awaits the hook before it ends the turn, and where nothing draws
