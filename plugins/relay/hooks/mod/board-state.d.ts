@@ -87,6 +87,9 @@ declare module "claude-code" {
         delivered: { since: number; preview: string; line: string } | null;
       } | null;
       boardConfirm: { id: string; attempt: number } | null;
+      // Not the board's: the stop notice's TaskStop marks, an agent id or the text a TaskStop named,
+      // each with the time its mark ends, or null for a mark made when the clock could not be read.
+      stopMarks: Record<string, number | null>;
     };
   }
 }

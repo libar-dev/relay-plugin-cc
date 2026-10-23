@@ -12,6 +12,19 @@
 // hook sees the message leave the sender and runs `companion wake` for the recipient, so a running
 // job's wait returns within a second and the relay guard delivers the message on its usual path.
 //
+// turn.complete tells the person which job a stop left running. A stop from Claude Code's own
+// controls (x in the agent list and Esc in a relay's view, measured; the desktop app's Stop and
+// ctrl+x ctrl+k, not checked live yet) ends the relay's turn as aborted and leaves its job running
+// (D96), and no other event shows it.
+// A timer the hook sets finds the relay's job through the companion and names it, with
+// /relay:cancel and /relay:result, in the transcript and a toast. It runs after the hook has
+// returned, because the engine awaits the hook before it ends the turn, and where nothing draws
+// it does nothing. A TaskStop ends the relay the same way, but its PostToolUse hook
+// (relay-stop.mjs) cancels the job, so a tool.call hook on TaskStop marks the agents the call
+// names, before the stop, narrows the marks to the agent stopped once the call answers, and the
+// notice passes a marked agent by. The marks are kept in `$.state`, so a reload between the call
+// and the relay's end keeps them.
+//
 // It also answers /relay:status, /relay:result, /relay:cancel and /relay:transfer itself: each runs
 // the companion and shows what it printed, with no model turn. The markdown commands of those
 // names only say the module did not load.
@@ -330,6 +343,164 @@ async function poll($, poller, tick) {
   } finally {
     poller.isReading = false;
   }
+}
+
+// A TaskStop's relay ends its turn well within a second of the call. A minute leaves room for a
+// slow session, and a mark that its turn never used (a refused TaskStop) still lapses, so a later
+// stop by a person of the same agent, resumed by a message, shows its notice.
+const TASK_STOP_MS = 60000;
+const NOTICE_MS = 20000;
+// The listing's pages read for one notice: 2000 active or dead jobs, newest first.
+const NOTICE_PAGES = 10;
+
+// The marks TaskStops left: each agent id, or text the call named, with its mark's end (null when
+// the clock could not be read).
+const stopMarks = atom({ plugin: "relay", key: "stopMarks" }, {});
+// The marks a write keeps. The value lives in the session's state across reloads, and marks a
+// stop never uses (a shell's, an agent stopped before it began a turn) would otherwise pile up.
+const MOST_MARKS = 50;
+
+// Marks the agents a TaskStop names until TASK_STOP_MS after it, and resolves what it wrote. The
+// model passes an agent's id or its name, and two agents may hold one name, so every agent that
+// matches is marked by its id; a name mark would also pass by a later agent of that name. The text
+// itself is marked only when the list cannot be read here or names no such agent. relay-stop
+// also reads the older `shell_id`. A clock that cannot be read marks with no end: no notice is the
+// old behaviour.
+async function markTaskStop($, e) {
+  const named = [e.task_id, e.shell_id].find((one) => typeof one === "string" && one !== "");
+  if (named === undefined) {
+    return undefined;
+  }
+  const at = await now($);
+  const until = at === null ? null : at + TASK_STOP_MS;
+  let ids = [];
+  try {
+    ids = (await $.agent.list()).filter((agent) => agent.id === named || agent.name === named).map((agent) => agent.id);
+  } catch {
+    // The text alone is marked.
+  }
+  const keys = ids.length === 0 ? [named] : ids;
+  await update($, stopMarks, (held) => keptMarks(held ?? {}, Object.fromEntries(keys.map((key) => [key, until])), at));
+  return { keys, until };
+}
+
+// The marks held and the new ones, as a write keeps them. Once the clock reads, a mark with no
+// end gets the usual minute from now, so it lapses too; lapsed marks are dropped, and only the
+// MOST_MARKS newest are kept, the latest end first. A write stores the new marks first and the
+// sort is stable, so among marks of one end the newer stay ahead and the cap drops an older one.
+function keptMarks(held, marks, at) {
+  const entries = [...Object.entries(marks), ...Object.entries(held).filter(([key]) => !Object.hasOwn(marks, key))]
+    .map(([key, end]) => [key, at !== null && end === null ? at + TASK_STOP_MS : end])
+    .filter(([, end]) => at === null || end === null || end >= at);
+  entries.sort(([, one], [, other]) => (other ?? Infinity) - (one ?? Infinity));
+  return Object.fromEntries(entries.slice(0, MOST_MARKS));
+}
+
+// The marks after the TaskStop's answer, or null when they stay as they are. Before the stop the
+// call could not tell which agent it would stop, so its marks may name more: a refused call
+// stops nothing and keeps none, and a stop names its agent in the record's `task_id`, which keeps
+// one mark under that id. Only the call's marks still held with its end are touched: one used up
+// means the notice check ran, and one with another end was written again by a later call. A new
+// id mark is written only while one of them is held, and never in place of the agent's own mark
+// already used up, since it would pass by a later stop of that agent by a person.
+function narrowedMarks(held, wrote, answer) {
+  const live = wrote.keys.filter((key) => Object.hasOwn(held, key) && held[key] === wrote.until);
+  if (live.length === 0) {
+    return null;
+  }
+  const isRefused = typeof answer?.deny === "string" || answer?.isError === true;
+  const id = answer?.result?.task_id;
+  if (!isRefused && (typeof id !== "string" || id === "")) {
+    return null;
+  }
+  const rest = Object.entries(held).filter(([key]) => !live.includes(key));
+  if (isRefused || (wrote.keys.includes(id) && !live.includes(id))) {
+    return Object.fromEntries(rest);
+  }
+  if (live.length === 1 && live[0] === id) {
+    return null;
+  }
+  // The id may hold a later call's mark, whose end is kept when it is later.
+  const other = Object.hasOwn(held, id) && !live.includes(id) ? held[id] : undefined;
+  const end = other !== undefined && (other === null || (wrote.until !== null && other > wrote.until)) ? other : wrote.until;
+  return Object.fromEntries([[id, end], ...rest.filter(([key]) => key !== id)]);
+}
+
+// Narrows the call's marks to the agent it stopped, once its answer is in.
+async function narrowTaskStop($, wrote, answer) {
+  if (narrowedMarks((await read($, stopMarks)) ?? {}, wrote, answer) === null) {
+    return;
+  }
+  await update($, stopMarks, (held) => narrowedMarks(held ?? {}, wrote, answer) ?? held ?? {});
+}
+
+// Whether a TaskStop marked the agent within its mark's time, and only that mark is used up, so a
+// later stop of the agent by a person shows its notice. Its id mark is the agent's own; a name
+// mark, made when the TaskStop could not tell the agents apart, counts only when the agent has
+// no id mark, so a TaskStop that named another agent of the name by its id keeps that mark.
+async function isMarked($, agent) {
+  const held = (await read($, stopMarks)) ?? {};
+  const at = await now($);
+  const isLive = (key) => typeof key === "string" && key !== "" && Object.hasOwn(held, key) && (at === null || held[key] === null || at <= held[key]);
+  const key = [agent.id, agent.name].find(isLive);
+  if (key === undefined) {
+    return false;
+  }
+  await update($, stopMarks, (marks) => Object.fromEntries(Object.entries(marks ?? {}).filter(([one]) => one !== key)));
+  return true;
+}
+
+// The job whose current relay is the agent and that is still at work, or undefined. The listing
+// is newest first, so an old job behind newer ones is on a later page.
+async function liveJobOf($, agentId) {
+  let cursor = null;
+  for (let page = 0; page < NOTICE_PAGES; page++) {
+    // --all: a job's `cd:` can put it in another repository; 200, the most a page holds.
+    const args = ["status", "--all", "--active", "--limit", "200", "--json"];
+    if (cursor !== null) {
+      args.push("--cursor", cursor);
+    }
+    const ran = await companionJson($, args, 10000);
+    if (failureOf(ran) !== null || !Array.isArray(ran.answer.jobs)) {
+      return undefined;
+    }
+    // Only a job that is still at work runs on; a dead one waits for its relay or a resume.
+    const job = ran.answer.jobs.find((one) => one?.relay?.agentId === agentId && ["starting", "running"].includes(one.state));
+    if (job !== undefined) {
+      return job;
+    }
+    cursor = typeof ran.answer.nextCursor === "string" && ran.answer.nextCursor !== "" ? ran.answer.nextCursor : null;
+    if (cursor === null) {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+// After a relay's aborted turn: the notice when a surface draws it, a person stopped the relay,
+// its job has not ended, and the job is found. A Workflow's agents are never listed, so they get
+// none; their stop is the Workflow's own.
+async function stopNotice($, e, poller) {
+  if ((await $.session.surfaces()).length === 0) {
+    return;
+  }
+  const agent = (await $.agent.list()).find((one) => one.id === e.agentId);
+  if (agent?.type !== "relay:job" || agent.status !== "killed") {
+    return;
+  }
+  poller.fastUntil = poller.ticks + CLEARED_TICKS;
+  if (await isMarked($, agent)) {
+    // The live check reads this line to tell a mark that worked from a cancel that came first.
+    $.ui.log("stop notice skipped for " + agent.id + ": TaskStop named it", { to: "debug" });
+    return;
+  }
+  const job = await liveJobOf($, agent.id);
+  if (job === undefined) {
+    return;
+  }
+  const text = (agent.name || agent.id) + " was stopped, and its job " + job.id + " keeps running. /relay:cancel " + job.id + " cancels it, /relay:result " + job.id + " shows it.";
+  $.ui.log(text);
+  $.ui.toast(text, { timeoutMs: NOTICE_MS });
 }
 
 const BOARD_PANE = "relay-board";
@@ -954,6 +1125,44 @@ export function register(on) {
       // reaches its bound, so a failed wake only costs time and must not touch the send's result.
     }
     return result;
+  });
+
+  // The mark is written before the stop: the relay's aborted turn can end before the call returns.
+  // The answer then narrows it to the agent stopped. It never decides a stop: the answer goes back
+  // as it came, and a hook that failed or ran past its budget passes the call on too.
+  on("tool.call", { tool: "TaskStop" }, async ($, e, next) => {
+    let wrote;
+    try {
+      wrote = await markTaskStop($, e);
+    } catch {
+      // Unmarked, the relay's stop shows the notice even though relay-stop cancels its job.
+    }
+    const answer = await next(e);
+    if (wrote !== undefined) {
+      try {
+        await narrowTaskStop($, wrote, answer);
+      } catch {
+        // The marks stay as written, and lapse within the minute.
+      }
+    }
+    return answer;
+  }).catch(($, e, next) => next(e));
+
+  // The engine awaits this hook before the turn ends, so the notice's listing runs on a timer
+  // after it has returned, and a slow or stuck listing never holds Claude Code's stop.
+  on("turn.complete", async ($, e, next) => {
+    const completed = await next(e);
+    if (e.agentId != null && e.reason === "aborted") {
+      try {
+        $.clock.after(0, () => {
+          // The stop has happened; a missing notice is the behaviour before it.
+          stopNotice($, e, poller).catch(() => {});
+        });
+      } catch {
+        // No timer, no notice.
+      }
+    }
+    return completed;
   });
 
   // A command marks the event when it ends, after the change it made to a job.

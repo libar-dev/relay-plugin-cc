@@ -1,0 +1,50 @@
+ ▐▛███▛█   Claude Code v2.1.308
+▝▜██████▀  Sonnet 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp/relay-p3-work-0zl4
+
+▎ Debug mode enabled · logging to /home/darkomijic/.claude/debug/0530fa55-1916-4ff0-8dee-15c4b039764c.txt
+
+● Bash(node "/home/darkomijic/.t3/worktrees/relay-plugin-cc/mods-typed-messages/plugins/relay/scripts/companion.mjs" start --from-relay)                                                                
+  ⎿  job: job-mvjvysl0-09d632f5                                                                                                                                                                         
+     state: starting                                                                                                                                                                                    
+     dir: /home/darkomijic/dev-libar/relay-context/mods-typed/runs/m2/jobs/relay-p3-work-0zl4-533fb457/job-mvjvysl0-09d632f5                                                                            
+     … +2 lines (ctrl+o to expand)
+
+● Bash(node "/home/darkomijic/.t3/worktrees/relay-plugin-cc/mods-typed-messages/plugins/relay/scripts/companion.mjs" wait job-mvjvysl0-09d632f5 --timeout-seconds 540)
+  ⎿  Interrupted · What should Claude do instead?
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── @notice-esc ─
+❯ Message @notice-esc…
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  relay-p3-work-0zl4 | Sonnet 5.5 . medium | [█░░░░░░░░░] 51.7k/1.0M (5%)                                                                                                                             
+  ⏵⏵ bypass permissions on (shift+tab to cycle)                                                                                                                                                         
+                typed-probe: relay: notice-esc was stopped; its job job-mvjvysl0-09d632f5 keeps running. /relay:cancel job-mvjvysl0-09d632f5 cancels it, /relay:result job-mvjvysl0-09d632f5 shows it.
+                                                                                                                                                                                                 Debug
+
+  ◯ main
+  ● notice-esc  notice-esc                                                                                                                                                         21s · ↓ 7.3k tokens
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
