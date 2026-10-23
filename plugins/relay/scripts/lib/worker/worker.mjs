@@ -633,6 +633,7 @@ async function runWorkerRound(jobDir, options, held) {
             const capacityRetries = [];
             /** @type {import("../backends/types").TurnResult} */
             let result = null;
+            let refusal = null;
             // What the next send carries: the current work, or, once a failed turn did work,
             // the resume message as a continuation on the same thread (never its input again).
             let dispatch = current;
@@ -665,7 +666,7 @@ async function runWorkerRound(jobDir, options, held) {
               } catch (error) {
                 result = { turnStatus: "failed", error: { ...error.data, message: error.message, data: error.data }, finalMessage: "" };
               }
-              const refusal = guardOn && result.turnStatus === "failed" ? classifyRefusal(backend.name, result.error) : null;
+              refusal = guardOn && result.turnStatus === "failed" ? classifyRefusal(backend.name, result.error) : null;
               if (refusal) {
                 const pause = recordRefusal(home, backend.name, refusal, job.id, admissionDeps);
                 save({ refusal: { backend: backend.name, kind: refusal.kind, code: refusal.code,
@@ -708,7 +709,7 @@ async function runWorkerRound(jobDir, options, held) {
               if (message) outcome(message, { action: "dropped", reason });
             }
 
-            if (result.turnStatus !== "completed" && connection.server.exitInfo) {
+            if (result.turnStatus !== "completed" && !refusal && connection.server.exitInfo) {
               throw new Error(backend.endMessage(connection.server.exitInfo));
             }
 

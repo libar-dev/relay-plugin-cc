@@ -144,3 +144,23 @@ test("guard off creates no admission files during worker execution or cleanup", 
   assert.equal(readJob(s.dir).state, "completed");
   assert.equal(fs.existsSync(s.ctx.env.RELAY_ADMISSION_HOME), false);
 });
+
+test("a provider refusal followed by a backend exit is failed without automatic recovery", async t => {
+  const s = seed(t); s.unblock();
+  const backend = backendNamed("codex"), connect = backend.connect;
+  let connections = 0;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args); connections++;
+    t.mock.method(connection, "run", async () => {
+      connection.client.exitInfo = { code: 1, endedAt: new Date().toISOString() };
+      return { turnStatus: "failed", error: { message: "synthetic usage limit", codexErrorInfo: "usageLimitExceeded" }, finalMessage: "" };
+    });
+    return connection;
+  });
+  await runWorker(s.dir, s.options);
+  const job = readJob(s.dir);
+  assert.equal(job.state, "failed");
+  assert.equal(job.refusal.kind, "usage");
+  assert.equal(connections, 1);
+  assert.equal(job.automaticResumes?.length ?? 0, 0);
+});
