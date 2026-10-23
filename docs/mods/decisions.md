@@ -607,6 +607,11 @@ relay is not listed or has been silent for more than 15 minutes, and a job with 
 `companion steer|continue <job> --message <text> --json`, bounded by the companion's acknowledgement wait
 (`RELAY_JOBS_ACK_TIMEOUT_MS`, 60 s by default) plus 15 s, at most ten minutes.
 
+The read at the press and the companion's enqueue are two steps, and `steer` and `continue` take no expected attempt
+as `cancel --attempt` does (D57): a job that begins another attempt in the moment between them gets the text in that
+attempt, as a `companion steer` from a shell would. Nothing is sent twice, and the message reaches the job it was
+meant for; an attempt check in the worker for messages is left for after 3.0.
+
 "This session" is the session id. Claude Code 2.1.309's `← for agents` moves the conversation to a new id, so the
 jobs it launched before go to the job directly afterwards: nothing is sent twice and no relay loop is forked, but a
 continue of such an ended job runs an attempt nobody hands back to the lead, which the board then shows with its report.

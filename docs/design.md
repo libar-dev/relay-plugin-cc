@@ -1024,6 +1024,9 @@ After a Claude Code update:
 
 **Processes.**
 
+- The board's Steer and Continue read the job, then send: a job that begins another attempt in the moment between
+  the two gets the text in that attempt, as a `companion steer` from a shell would. `steer` and `continue` take no
+  expected attempt as `cancel --attempt` does (D61).
 - `cancel` of a dead job signals the recorded worker pid without checking its start time, and its
   process-group kill can reach a nested job that kept the worker's group.
 - A tool that the backend starts as the turn is interrupted, and that leaves the server's process tree before
