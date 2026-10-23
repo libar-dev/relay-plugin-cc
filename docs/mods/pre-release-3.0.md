@@ -30,10 +30,11 @@ Planned for pre.3:
   `ctrl+x ctrl+k` and the desktop app's Stop button are expected to do the same, and are checked after pre.3 is
   installed. TaskStop and the message `cancel` cancel the job and show no notice; a Workflow's agents, and T3 Code,
   show none.
-- **The sandbox rule** (D79; the skills PR, `mods/skills-text`). Relay's commands, its relay agent and the jobs skill
-  tell Claude to stop on an `EPERM` under the sandbox and offer the two choices: add the jobs home to the sandbox's
-  write paths, or run without the sandbox. These are instructions, not a lock: `sandbox.allowUnsandboxedCommands:
-  false` is what forbids an unsandboxed retry.
+- **Relay under Claude Code's sandbox** (pending the sandbox PR). pre.3 is to fix pre.2's known issue 4, with relay
+  measured under the sandbox end to end, workers included, a supported settings block, and detection that prints it.
+  The skills PR (`mods/skills-text`, D79) already tells Claude to stop on an `EPERM` under the sandbox and offer the
+  two choices, adding the jobs home to the sandbox's write paths or running without the sandbox.
+  <!-- Pending the sandbox PR: replace this entry with the coordinator's final wording. -->
 - **Workflow jobs by their job id** (the skills PR, `mods/skills-text`). The jobs skill and the relay agent tell
   Claude to steer, continue and cancel a Workflow job by its job id, with the companion's `steer`, `continue` and
   `cancel`; a message to a Workflow relay is not sure to reach its job. The board's Steer and Continue already send to
