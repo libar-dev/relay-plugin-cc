@@ -8,15 +8,18 @@ how to try an unreleased build in one folder. The [README](../README.md) has the
 Checked with Claude for Mac 3.6556.1 (8e298a), its Claude Code 2.1.308, relay 3.0.0-dev.4 (2ffd7ba), Codex 0.163.0
 and Node 24.21.0, on macOS 27.2, on 22 October 2026. The check used a local session in Auto mode. It covered
 `/relay:status`, `/relay:setup`, `/relay:result`, a job steered with `SendMessage`, a refused header, `TaskStop` and
-a Workflow job. It did not cover `/relay:cancel`, `/relay:transfer`, the Manual permission mode, an SSH session,
-Windows, or a backend other than Codex.
+a Workflow job. Later checks on the same app, with the same plugin code (3.0.0-dev.4 at 962130b), ran
+`/relay:cancel <job>` and `/relay:transfer` in the Code tab, and the Background tasks Stop button and Esc in an agent's
+view. They did not cover the Manual permission mode, an SSH session, Windows, a backend other than Codex, or the
+status line and the board, which came later.
 
 ## What runs where
 
 - **The Code tab, in a local session.** The check ran `relay:job` agents from the Agent tool and from a Workflow
   script, steering with `SendMessage`, `/relay:status` and `/relay:result` answered with no model turn, the spawn
-  check and `TaskStop`. `/relay:cancel` and `/relay:transfer` are answered the same way as `/relay:status`; the
-  check did not run them.
+  check and `TaskStop`. `/relay:cancel` and `/relay:transfer` are answered the same way as `/relay:status`, each a
+  block with no model turn; the relay's hand-back of a job `/relay:cancel` cancelled arrives as "Message from
+  subagent".
 - **An SSH session.** Anthropic's [desktop docs](https://code.claude.com/docs/en/desktop) say the Code tab can run
   Claude Code on another machine over SSH, reading that machine's `~/.claude`. Relay, the backends and the jobs
   would then live there. The check did not try it.
@@ -131,12 +134,14 @@ the system's temporary folder, and the uninstall refuses to run once that folder
   table with a horizontal scroll bar. The session's transcript records it as a local command's output, with no
   model turn.
 - **Background tasks.** A background `relay:job` agent and a Workflow each appear in the Background tasks panel,
-  with their elapsed time and a stop button. A stopped agent stays there, marked Stopped.
+  with their elapsed time and a stop button. A stopped agent stays there, marked Stopped. The stop button stops the
+  relay agent, not its job: the job runs on to its end, as after `x` in the terminal's agent list. To cancel
+  the job, ask Claude to TaskStop the agent, or use `/relay:cancel <job>`.
 - **The relay's own waits.** The relay agent's `companion wait` calls show in the conversation as
   "Background command completed · Wait for the relay job to finish". They are the relay agent's calls, not the
   main conversation's.
 - **The agent's prompt.** The agent view renders the prompt as Markdown. The header lines run together, and the
   `---` line turns the line above it into a heading. This is display only: the job receives the prompt as it was
-  sent.
+  sent. The view has no input box, so a message reaches a relay only through Claude; Esc in it does nothing.
 - **Session names.** The app names a session after its first message, and lists it under the folder's name in the
   sidebar.

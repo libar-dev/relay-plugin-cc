@@ -11,8 +11,8 @@ the agent waits on it, the job resumes its session once. The agent returns the r
 with a state block that says what happened.
 
 `relay` started as a fork of [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc)
-1.0.6. [NOTICE](NOTICE) keeps the attribution and license terms. [docs/design.md](docs/design.md)
-explains the design.
+1.0.6. [NOTICE](NOTICE) keeps the attribution and license terms. [docs/guide.md](docs/guide.md)
+walks through using relay, and [docs/design.md](docs/design.md) explains the design.
 
 ## Backends
 
@@ -138,8 +138,8 @@ Write only under src/ and tests/. Report the cause, the change and the test run.
 ```
 
 The header sets the job. `model:` and `effort:` are required, and `default` takes the home's own
-setting. The brief after `---` reaches the job byte for byte. When the job ends, the agent returns
-a state block and the report:
+setting (ZCode's effort excepted: relay uses `high` where ZCode's own is `max`). The brief after `---`
+reaches the job byte for byte. When the job ends, the agent returns a state block and the report:
 
 ```
 state: completed
@@ -219,7 +219,7 @@ message: a message sent while it runs becomes the next turn.
 | `/relay:setup --fast-tier allowed\|off` | with `off`, the default, jobs ignore `fast: true`; with `allowed`, it asks for the priority tier |
 | `/relay:setup --job-mcp-off name,...\|none` | Codex jobs and reviews turn off these MCP servers |
 | `/relay:rescue <task>` | hand an investigation or a fix to a `relay:job` agent; `--backend`, `--model`, `--effort`, `--grok-home`, `--kimi-home`, `--read-only` and `--write` become its header, `--background` runs the agent in the background |
-| `/relay:status [job] [--all]` | this repository's newest 20 jobs, every repository's with `--all`, or one job's state block |
+| `/relay:status [job] [--all] [--workflow <run>]` | this repository's newest 20 jobs, every repository's with `--all`, every job of one Workflow run with `--workflow`, or one job's state block |
 | `/relay:result [job]` | a job's state block and report; without a job, the newest finished job of this repository |
 | `/relay:cancel [job]` | interrupt the turn; the worker is killed if the job has not ended 10 s later; without a job, the only active job of this repository |
 | `/relay:review` | a review of the working tree or of a branch, on Codex's own reviewer or, with `--backend grok\|zcode\|kimi`, the plugin's prompt |
