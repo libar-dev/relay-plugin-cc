@@ -275,11 +275,16 @@ function statusText(ran) {
     return UNAVAILABLE;
   }
   let running = 0;
+  let queued = 0;
+  let queuedReason = null;
   let dead = 0;
   let owed = 0;
   for (const job of answer.jobs) {
     if (job?.state === "starting" || job?.state === "running") {
       running++;
+    } else if (job?.state === "queued") {
+      queued++;
+      queuedReason ??= job.admission?.waitKind === "memory" ? "memory low" : job.admission?.reason?.slice(0, 48) ?? "waiting";
     } else if (job?.state === "dead") {
       dead++;
     }
@@ -293,6 +298,7 @@ function statusText(ran) {
   if (running > 0) {
     parts.push(running + more + " running");
   }
+  if (queued > 0) parts.push(queued + more + " queued (" + queuedReason + ")");
   if (dead > 0) {
     parts.push(dead + more + " dead");
   }
@@ -602,6 +608,7 @@ function boardRow(job, at) {
   return {
     id: job.id, state: job.state, backend: job.backend, model: job.model, effort: job.effort, attempts: job.attempts,
     completedAt: job.completedAt, reportPath: job.reportPath, relay,
+    admission: job.admission == null ? null : { reason: job.admission.reason?.slice(0, 300) ?? null, since: job.admission.since ?? null },
     isRelayLost: job.state === "running" && relay !== null && isRelayQuiet(job, at),
     notHandedBack: job.notHandedBack, undeliveredCount: job.undeliveredCount,
     relayViolationCount: job.relayViolationCount, openMessages: job.openMessages,
@@ -630,7 +637,7 @@ function rowText(job) {
 // an attempt, or ends and lands its report. Not `updatedAt`, which the worker's heartbeat rewrites
 // every ten seconds.
 function detailMark(job) {
-  return [job.state, job.attempts, job.openMessages, job.undeliveredCount, job.reportPath, job.completedAt, job.relay?.lastToolAt ?? null].join("|");
+  return [job.state, job.attempts, job.openMessages, job.undeliveredCount, job.reportPath, job.completedAt, job.relay?.lastToolAt ?? null, job.admission?.reason ?? null, job.admission?.since ?? null].join("|");
 }
 
 // Whether the selected job's view is read at this read: a new job, a stale view that is not
@@ -980,6 +987,7 @@ async function drawJob($, { Box, Text, Button, Input, Markdown }, job, board) {
     h(Text, null, "model " + (job.model ?? "default") + " · effort " + (job.effort ?? "default")),
     h(Text, null, relay === null ? "no relay" : "relay " + (relay.label ?? relay.agentId) + (relay.workflowRunId === null ? "" : " · Workflow run " + relay.workflowRunId)),
   ];
+  if (job.state === "queued" && job.admission?.reason) nodes.push(h(Text, null, "queued: " + job.admission.reason + " (since " + (job.admission.since ?? "unknown") + ")"));
   // The mobile app draws no text field. The field is the job's own, so text typed for one job
   // never stays in it for another.
   if (Input !== undefined) {

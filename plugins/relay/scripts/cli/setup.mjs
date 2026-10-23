@@ -1,6 +1,6 @@
 import { parseCommandInput, resolveCommandCwd, printJson } from "./shared.mjs";
 import { default as process } from "node:process";
-import { parseMcpOffSetting, setRepoConfig, setUserConfig, userConfigPath, FAST_TIER_VALUES } from "../lib/jobs/config.mjs";
+import { parseMcpOffSetting, parseModelClassSetting, setRepoConfig, setUserConfig, userConfigPath, FAST_TIER_VALUES } from "../lib/jobs/config.mjs";
 import { UsageError } from "../lib/util/errors.mjs";
 import { BACKENDS, backendNamed, backendNames } from "../lib/backends/index.mjs";
 import { EXIT } from "../lib/jobs/view.mjs";
@@ -13,7 +13,8 @@ import { ensureGitRepository } from "../lib/review/git.mjs";
 
 // `/relay:setup` checks every backend home, or one with `--backend`.
 // Flags are checked before settings are changed or backend checks run.
-const SETUP_SWITCHES = ["enable-review-gate", "disable-review-gate", "fast-tier", "job-mcp-off"];
+const GUARD_FLAGS = { "min-weight": ["minWeight", 1000], "max-weight": ["maxWeight", 10000], "max-very-heavy": ["maxVeryHeavy", 100] };
+const SETUP_SWITCHES = ["admission", "model-class", ...Object.keys(GUARD_FLAGS), "enable-review-gate", "disable-review-gate", "fast-tier", "job-mcp-off"];
 
 
 function setupSelection(options) {
@@ -36,7 +37,7 @@ function setupSelection(options) {
 export async function handleSetup(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     argsFile: true,
-    valueOptions: ["cwd", "fast-tier", "job-mcp-off", ...BACKENDS.flatMap(backend => backend.setup.homeFlag ? [backend.setup.homeFlag] : []), "backend"],
+    valueOptions: ["admission", "model-class", ...Object.keys(GUARD_FLAGS), "cwd", "fast-tier", "job-mcp-off", ...BACKENDS.flatMap(backend => backend.setup.homeFlag ? [backend.setup.homeFlag] : []), "backend"],
     booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
   });
   if (positionals.length) {
@@ -49,10 +50,26 @@ export async function handleSetup(argv) {
     throw new UsageError(`--fast-tier must be allowed or off, not "${options["fast-tier"]}".`);
   }
   const jobMcpOff = options["job-mcp-off"] == null ? null : parseMcpOffSetting(options["job-mcp-off"]);
+  const guardChanges = [];
+  if (options.admission != null) {
+    if (!["on", "off"].includes(options.admission)) throw new UsageError(`--admission must be on or off, not "${options.admission}".`);
+    guardChanges.push(["admission", options.admission]);
+  }
+  for (const [flag, [key, max]] of Object.entries(GUARD_FLAGS)) {
+    if (options[flag] == null) continue;
+    const value = options[flag] === "default" ? null : Number(options[flag]);
+    if (value !== null && (!/^\d+$/.test(options[flag]) || !Number.isInteger(value) || value < 1 || value > Number(max))) throw new UsageError(`--${flag} must be an integer from 1 to ${max}, or default.`);
+    guardChanges.push([key, value]);
+  }
+  if (options["model-class"] != null) guardChanges.push(["modelClasses", parseModelClassSetting(options["model-class"])]);
   const cwd = resolveCommandCwd(options);
   const only = setupSelection(options);
   const actionsTaken = [];
   if (!only) {
+    for (const [key, value] of guardChanges) {
+      setUserConfig(key, value);
+      actionsTaken.push(`Set load guard ${key} to ${value === null ? "default" : JSON.stringify(value)} in ${userConfigPath()}.`);
+    }
     const workspaceRoot = resolveWorkspaceRoot(cwd);
     if (options["enable-review-gate"]) {
       setRepoConfig(cwd, "stopReviewGate", true);

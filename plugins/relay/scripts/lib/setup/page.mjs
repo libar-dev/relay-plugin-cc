@@ -1,3 +1,4 @@
+import { guardSettings, describeGuard, renderGuard } from "../worker/admission.mjs";
 // The setup page: every backend home the relay can run, in one shape, with no model call.
 //
 // Each backend supplies checks for its version, sign-in, settings and models without
@@ -86,7 +87,7 @@ function nextStepsFor(blocks, settings, cwd, env) {
 
 function readSettings(cwd, env = process.env) {
   const user = readUserConfig(env);
-  return { fastTier: user.fastTier, mcpOff: user.mcpOff, reviewGate: Boolean(readRepoConfig(cwd, env).stopReviewGate) };
+  return { loadGuard: { admission: user.admission, ...guardSettings(user) }, fastTier: user.fastTier, mcpOff: user.mcpOff, reviewGate: Boolean(readRepoConfig(cwd, env).stopReviewGate) };
 }
 
 export async function buildSetupPage(cwd, { env = process.env, only = null, actionsTaken = [] } = {}) {
@@ -95,6 +96,7 @@ export async function buildSetupPage(cwd, { env = process.env, only = null, acti
   return {
     ready: only ? backends[0].ready : backends.some(block => block.ready),
     jobsHome: resolveJobsHome(env),
+    loadGuard: describeGuard(env, { readSensors: true }),
     settings,
     backends,
     actionsTaken,
@@ -162,6 +164,9 @@ export function renderSetupPage(page, env = process.env) {
     `jobs home: ${tilde(page.jobsHome, env)}`,
     `settings: fast tier ${settings.fastTier} · job MCP servers off: ${settings.mcpOff.join(", ") || "none"} · review gate ${settings.reviewGate ? "on" : "off"} (this repository)`
   ];
+  const g = settings.loadGuard;
+  if (g) lines.push(`load guard: ${g.admission} · minimum weight ${g.minWeight} · ceiling ${g.maxWeight} · very heavy ${g.maxVeryHeavy} · model classes: ${g.modelClasses.map(e => `${e.pattern}=${e.class}`).join(", ") || "none"}`);
+  if (page.loadGuard) lines.push(...renderGuard(page.loadGuard));
   for (const block of page.backends) lines.push("", ...renderBlock(block, env));
   lines.push("");
   if (page.actionsTaken.length) {

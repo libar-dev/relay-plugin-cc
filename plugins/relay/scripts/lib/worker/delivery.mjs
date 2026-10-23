@@ -9,7 +9,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { absoluteJobsHomeEnv, jobPaths, readJob, TERMINAL_STATES } from "../jobs/store.mjs";
-import { isMessagePending, messageAccount, pendingInboxMessages, postInboxMessage, readOutcome } from "../jobs/messages.mjs";
+import { isMessagePending, messageAccount, pendingInboxMessages, postInboxMessage, readOutcome, writeOutcome } from "../jobs/messages.mjs";
 import { isWorkerLease, readLease, releaseWorkerLease } from "../jobs/lease.mjs";
 import { spawnWithAdmission } from "./admission.mjs";
 import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
@@ -100,6 +100,7 @@ export async function awaitOutcome(jobDir, messageId, options = {}) {
   let lastSpawnAt = 0;
   let spawned = 0;
   for (;;) {
+    retryQueuedWorker(jobDir, env);
     const outcome = readOutcome(jobDir, messageId);
     const live = hasLiveWorker(jobDir);
     // A worker that ran this message in an attempt and then ended the job (a failed resume,
@@ -109,7 +110,13 @@ export async function awaitOutcome(jobDir, messageId, options = {}) {
     if (outcome && (live || !messageAccount(jobDir).undelivered.includes(messageId) || attemptEnded(jobDir, messageId))) {
       return { outcome, spawned, consumer: true };
     }
-    if (options.wait === false && (live || readJob(jobDir)?.state === "queued")) {
+    const deferred = readJob(jobDir);
+    if (!live && deferred?.state === "queued" && deferred.admission?.waitKind === "worker") {
+      const queued = outcome ?? { action: "queued-next-turn", reason: deferred.admission.reason };
+      if (!outcome) writeOutcome(jobDir, messageId, queued);
+      return { outcome: queued, spawned, consumer: true };
+    }
+    if (options.wait === false && live) {
       return { outcome: null, spawned, consumer: true };
     }
     if (Date.now() >= deadline) {

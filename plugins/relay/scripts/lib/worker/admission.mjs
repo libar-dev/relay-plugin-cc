@@ -51,7 +51,7 @@ export function guardSettings(config = {}, machine = { totalBytes: os.totalmem()
     maxVeryHeavy: positive(config.maxVeryHeavy, 100, DEFAULTS.maxVeryHeavy), modelClasses: validModelClasses(config.modelClasses), headroomBytes: headroom * GiB };
 }
 export function validModelClasses(entries) {
-  return Array.isArray(entries) ? entries.filter(e => e && /^[0-9A-Za-z._:/*-]{1,100}$/.test(e.pattern) && Object.hasOwn(WEIGHTS, e.class)) : [];
+  return Array.isArray(entries) ? entries.filter(e => e && typeof e.pattern === "string" && /^[0-9A-Za-z._:/*-]{1,100}$/.test(e.pattern) && Object.hasOwn(WEIGHTS, e.class)) : [];
 }
 /** @param {{ backend?: string, model?: string | null, effort?: string | null }} request */
 export function modelClass({ backend = "codex", model, effort } = {}, overrides = []) {
@@ -182,7 +182,9 @@ function slots(home, deps, clean = true) {
       if (clean && deps.now() - fs.statSync(file).mtimeMs > 10000) fs.rmSync(file, { force: true }); continue;
     }
     const live = (s.state === "spawning" && age(deps.now(), s.since, DEFAULTS.spawnGraceMs)) || deps.isAlive({ pid: s.pid, startTime: s.processStart });
-    if (live || serversAlive(readJob(s.jobDir), deps)) result.push(s);
+    s.weight = WEIGHTS[s.class];
+    const backendLive = serversAlive(readJob(s.jobDir), deps);
+    if (live || backendLive) result.push(!live && backendLive ? { ...s, state: "running" } : s);
     else if (clean) fs.rmSync(file, { force: true });
   }
   return result;
@@ -355,7 +357,7 @@ export function listPauses(env = process.env, injected = {}) {
   const deps = dependencies({ ...injected, env });
   try {
     if (!admissionEnabled(env, deps.readUserConfig(env))) return [];
-    return backends.map(b => pauseRead(admissionHome(env), b, deps)).filter(Boolean).map(p => ({ backend: p.backend, kind: p.kind, code: p.code, until: p.until, strikes: p.strikes, probing: Boolean(p.probe) }));
+    return backends.map(b => pauseRead(admissionHome(env), b, deps, false, true)).filter(Boolean).map(p => ({ backend: p.backend, kind: p.kind, code: p.code, until: p.until, strikes: p.strikes, probing: Boolean(p.probe && age(deps.now(), p.probe.at, DEFAULTS.probeMs)) }));
   } catch { return []; }
 }
 export function describeGuard(env = process.env, { readSensors = true } = {}, injected = {}) {

@@ -2865,3 +2865,19 @@ test('a relay a person stopped makes every tick read for thirty seconds while th
   await seen.clock.settle()
   await readsForThirty(seen)
 })
+
+test('queued jobs appear with a short reason in the status line', async ($, on) => {
+  const seen = await statusEngine($, on, { run: () => ({ value: listing([{ ...job('j-q', 'queued'), admission: { reason: 'memory low: startup reserves', waitKind: 'memory', since: '2025-01-01T00:00:00Z' } }]) }) })
+  await seen.clock.advance(5000)
+  expect(seen.lines.at(-1)).toContain('1 queued (memory low)')
+})
+
+test('a queued board job stays live with reason, since and Queue next turn', async ($, on) => {
+  await boardEngine($, on, { jobs: () => [row('j-q', { state: 'queued', admission: { reason: 'memory low', since: '2025-01-01T00:00:00Z' } })] })
+  const { ui } = await openBoard($, 'terminal')
+  await ui.press({ key: 'job:j-q' })
+  expect((await ui.find({ type: 'Input' }))?.props.label).toBe('Queue next turn')
+  const texts = (await ui.findAll({ type: 'Text' })).map((node: any) => node.text).join(' ')
+  expect(texts).toContain('queued: memory low (since 2025-01-01T00:00:00Z)')
+  await ui.unmount()
+})
