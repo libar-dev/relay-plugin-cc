@@ -16,6 +16,7 @@ the [README](../README.md) installation and the commands, and the `relay:jobs` s
 | `Agent({subagent_type, description, prompt})`, run in the background | `Agent({subagent_type: "relay:job", description, prompt})`, the same |
 | The completion notice carries the agent's final message | The completion notice carries a state block and the job's report, verbatim |
 | `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within seconds; a turn that cannot take it, or has just ended, gets it as the next turn |
+| A line the person types into its view (↓, Enter) reaches it between tool calls | A line typed into its view reaches the job at the relay's next call: when its wait returns, at most 540 s later, or as a new turn once the job has ended; typed after it ended in a view still open, a new turn at once (2.1.309 drops a finished agent from the list unless its view is open) ([The wake](#the-wake)) |
 | `SendMessage` after it ends continues it with its context | `SendMessage` after it ends starts a new turn on the same backend session and returns the new report |
 | `TaskStop` stops it | `TaskStop` stops the relay, and the plugin's hook cancels its job. The message `cancel`, or `companion cancel <job>`, cancels the job and leaves the relay to hand back its state |
 | A bad parameter fails the Agent call at once | A bad header fails the Agent call, or a Workflow script's `agent()`, at once, with the parser's message |
@@ -420,8 +421,16 @@ received message not yet delivered, in order: steered while the job runs, contin
   attachment from the coordinator (a `SendMessage` while the relay works), a `user` entry from the
   coordinator (a message after the hand-back, taken out of the harness's fixed wrapper), either of
   the two from a peer (another agent's `SendMessage`: a subagent's or a Workflow agent's; the text
-  is the origin's `body`, without the harness's envelope), or a plain `user` turn after the prompt
-  that is neither metadata (`isMeta`) nor a tool result.
+  is the origin's `body`, without the harness's envelope), either of the two of origin `human` (a
+  line the person typed into the relay's own view: the queued text as typed, or the resuming entry
+  taken out of its fixed wrapper), or a plain `user` turn after the prompt that is neither metadata
+  (`isMeta`) nor a tool result. A person's text never goes through the harness-marker checks below.
+- An origin the guard does not know is recorded, never dropped in silence: origin
+  `task-notification` (the harness's own notice of a background command, which can reach a Workflow
+  relay) is skipped, and any other kind on a queued command or an `isMeta` entry, an origin with no
+  kind, or a message before the prompt is a `relay-violation:` and is not delivered. A typed text
+  whose wrapper is not the one Claude Code 2.1.308 writes is delivered whole and recorded. Each such
+  record is written once per entry.
 - A message that arrives before the job exists is delivered by `start` once the job exists.
 - Each delivery is recorded in `inbox/relay/<transcript entry uuid>.json` under the relay lock, with
   the inbox message id chosen before posting. A hook cut off half way posts again under the same
@@ -467,6 +476,17 @@ return to nobody. Two waits in one assistant message: the first would take the m
 second would run its whole bound before the boundary. A message queued just as the job ended, before
 a continue restarted it, would find no marker at all. A marker that only an earlier boundary covers
 costs one extra wait call; it cannot cause another, because the next call comes after a new boundary.
+
+A line the person types into the relay's own view (↓ in the footer, Enter, then the prompt
+`Message @<agent>…`) has no wake. No hook names its recipient: at Enter, `session.send`,
+`prompt.submit`, `UserPromptSubmit` and `session.receive` do not fire, and `prompt.change` names
+neither the view nor the agent. Claude Code writes the line into the relay's transcript when the
+relay's current tool call returns, so it reaches the job at the relay's next call: when its `wait`
+returns, at most 540 seconds later, or when the job ends, and then as a continue, not a steer. A
+line typed after the hand-back resumes the relay at once and continues the job while its view is open (from
+Claude Code 2.1.309 a finished agent leaves the footer's list within about 15 s unless its view is
+open; once it has left, a continue goes through `SendMessage` or `C continue`), and one typed right
+after Esc interrupted the relay resumes it at once too: a steer while the job runs.
 
 The module draws nothing, so it runs wherever the plugin loads: the terminal, Desktop, `claude -p`
 and Agent SDK hosts. Where it does not run, on a Claude Code below the 2.1.307 floor, a message
@@ -541,15 +561,24 @@ gives the exact wait command. Otherwise it rewrites the hand-back's `message` to
 pipe. After a failed start the hand-back is allowed at once and carries the start error. Claude
 Code gives a subagent the `SubagentHandback` tool only in auto mode, and a subagent under the
 Workflow tool does not get it. Without it, SubagentStop blocks while the job runs, a message is
-owed, or the relay's final text differs from the result. A message after the hand-back resumes
+owed, or the relay's final text differs from the result; one code fence around the whole result,
+indented by at most three spaces, with no tag or `text`, `txt`, `plaintext`, `plain`, `markdown`, `md`, `yaml`, `yml`, `ini`, `console` or `log`, in any case after its opening
+backticks, is not a difference; a Workflow relay's state block may have the same one fence and no other. A message after the hand-back resumes
 the relay; the hook delivers it at the next tool call, as a continue, and the next hand-back is
-rewritten the same way.
+rewritten the same way. The hand-back records every inbound entry the hook saw, delivered or not.
+SubagentStop lets a relay that handed back stop without a check only while its transcript is
+readable and nothing inbound arrived after that hand-back. A relay a message resumed must end with
+exactly the result or hand back again, so while the hook can check it, the relay cannot answer the
+message in its own words, whether or not the hook could deliver it. Three cases stay open, by
+design: the block budget lets a relay go after eight blocks, with a recorded violation; a hook that
+fails lets the stop through; and a relay whose start failed has no job and no transcript check, so
+its hand-back of the start error stands.
 
 ### Long waits, never trapped
 
 The hook sets every relay `wait` to 540 seconds with a Bash timeout of 600 seconds, the Bash tool's
-maximum. A message does not wait for the bound: the wake ends the wait ([The wake](#the-wake)), so
-the bound only caps one tool call, and a long job costs its relay a model call about every nine
+maximum. A `SendMessage` does not wait for the bound: the wake ends the wait ([The wake](#the-wake)), so
+the bound only caps one tool call for it (a line typed into the relay's view has no wake and can wait the whole bound), and a long job costs its relay a model call about every nine
 minutes. It was 120 seconds before the wake, the time a message then took to arrive. The hook also
 adds `--exit-zero-while-running`, so a wait that times out on a running job prints `still running:
 not an error. Run the same wait again.` first and exits 0. The Bash tool marks every non-zero exit
@@ -634,7 +663,8 @@ None of it is a published interface; [architecture.md](architecture.md) keeps ev
 `lib/harness/`. From hooks: the agent id, type and transcript path, the session's transcript path
 and id, `last_assistant_message`, `stop_hook_active`, `background_tasks`, the `SubagentHandback`
 tool and `updatedInput`. From the transcript: each entry's `type`, `uuid`, `isMeta`, `origin` and
-content, two attachment types and the coordinator's wrapper. From the Workflow harness: the
+content, the origin kinds `coordinator`, `peer`, `human` and `task-notification`, two attachment
+types, and the coordinator's and the typed message's wrappers. From the Workflow harness: the
 transcript path, the marker lines, two system-prompt notes, two trailers, the meta file, the
 journal's `started` lines and the three retry suffixes. From the Mod API's `agent.spawn`: the agent
 type, the prompt, `resume`, and the placeholder a Workflow run that withholds its script puts in
@@ -1075,6 +1105,19 @@ would need `grok agent`.
   skill's `kimi-home.md`.
 - The session record's format is undocumented (`protocol_version` 1.5). Check one job after every
   Kimi update.
+
+**The agent view.** The terminal's agent view has a prompt; the Code tab of Claude for Mac (3.6556.1) draws the
+agent's view with no input, so there a person reaches a relay only through the main thread, and Esc in that view
+does nothing; its Background tasks panel's Stop button stops the relay as `x to stop` does. A line typed into a
+relay's own view has no wake ([The wake](#the-wake)): it
+reaches the job at the relay's next call, up to 540 seconds later, or as a continue once the job
+has ended. Esc in a running relay's view, or `x` on its row in the footer's agent list, stops the
+relay agent and leaves its job running, as any end of a relay other than TaskStop does; Claude Code
+fires no hook for it but the module's `turn.complete`. `/relay:cancel <job>` cancels the job. A
+line typed in the view right after Esc resumes the relay and is delivered at once: a steer while the
+job runs, a continue once it has ended. In the terminal, ↓ and Enter open the view with the cursor
+still in the agent list; ↑ (as many times as ↓) reaches the view's prompt, and the first Esc does
+the same. Esc at the view's prompt stops the relay.
 
 **Not measured.** Sustained rate limits and simultaneous jobs on one plan for Grok, ZCode and Kimi,
 and a crash during a partial answer. Nothing caps how many jobs run at once.

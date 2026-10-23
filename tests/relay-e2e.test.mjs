@@ -291,7 +291,7 @@ test("end to end under the Workflow harness: the computed task is the prompt, th
   const other = await runHookProcess(ctx, stopInput("Report delivered."));
   assert.equal(other.json?.decision, "block");
   assert.ok(other.json.reason.includes(block), other.json.reason);
-  const lead = "Reply with exactly this text and nothing else:\n";
+  const lead = "Reply with exactly this text and nothing else, with no code fence around it:\n";
   const asked = other.json.reason.slice(other.json.reason.indexOf(lead) + lead.length);
   assert.equal(asked, block);
   noReport(asked, "the SubagentStop expected block");
