@@ -18,8 +18,7 @@ Entries are never edited after the fact. A reversed decision gets a new entry th
 
 ## Open for the owner
 
-- **What confirms the release candidate before the owner's manual testing** (D60, part 11). Read for now as the
-  automated checks passing on the release candidate; to confirm with the owner at that step.
+None.
 
 ## Entries
 
@@ -592,6 +591,37 @@ The parts:
 12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
     owner decides.
 
+### D70. Pre-release cuts: version numbers, the cut PR and the tag (release lead)
+
+How D95's cuts are made.
+
+- **The version.** A cut is `3.0.0-pre.N`, set by `scripts/bump-version.mjs` everywhere it sets a version, the
+  marketplace included, and by hand in the README's Development line. The cut PR's merge commit is tagged
+  `v3.0.0-pre.N`. A cut gets no GitHub release and no npm release.
+- **Between cuts,** phase PRs keep raising `3.0.0-dev.N` (D6), set over the cut's version: a phase branch that
+  merges a cut resolves the version conflict to its own `3.0.0-dev.N`, never the cut's. Build numbers only have to
+  be unique. By semver `dev.N` sorts below `pre.N`, which matters nowhere: the cut machines install by tag, the
+  smoke installs use marketplaces of their own, and the live suite runs `--plugin-dir`. Rejected: `3.0.0-pre.N.M`
+  for dev builds, which reads like a cut; renaming the dev series, which would change D6 for no reader.
+- **The cut PR** changes only the version fields, the README's Development line and one CHANGELOG entry. It merges
+  once `npm run check-version` and CI pass. The release lead tells the coordinating thread before it pushes the
+  tag on the merge commit, and the coordinating thread has libar-infra install the cut. The owner ruled, through the
+  coordinating thread, that the loop stays simple: fix, cut, install, test with real use, repeat (D97). With a diff
+  of version strings, the two-family review and the bots follow the merge, and what they find goes into the next
+  cut. The fixes and phase PRs a cut carries have passed their own gates before they merged.
+- **The release candidate** is the last cut, made from `release/3.0` once the reviews' fixes have merged. The
+  release PR then changes only the version (3.0.0), the README line and the CHANGELOG's date, so the owner's
+  machines run the plugin code that merges. A change to the plugin after the last cut needs another cut.
+- **pre.1** (217adc8, from c73e053) was the first cut, made at once on the owner's word that it be installed: no
+  plugin code had changed since 962130b, where the real-API suite's recorded run on Fedora passed or hit its known
+  limits, but for the fenced hand-back the typed-message fix closes. pre.1's companion listed the same 404 jobs as
+  2.2.0 in a copy of a 2.2.0 jobs home, and gave the same report for one ended job. libar-infra installed it on the
+  ThinkPad while a lead's Workflow had two relay jobs running, which finished under that session's 2.2.0.
+- **pre.1's rollback check** ran after the tag and passed. A live pre.1 session wrote three jobs: one completed, one
+  cancelled by the message `cancel`, one cancelled by TaskStop. 2.2.0's companion listed them (`status --all`) and
+  gave the same `result` output as pre.1's. It also listed and read the seven completed jobs pre.1 had written in
+  the ThinkPad's jobs home. Not checked: a running job, `continue` across versions, a `cancel --attempt` record.
+
 ### D71. Setup asks a signed-out Grok home twice (release lead)
 
 The end-to-end suite's first run on 3.0.0-dev.4 read Grok as signed out ("You are not authenticated") while Grok jobs
@@ -664,6 +694,215 @@ text ran. Still unchecked live, for pre.2's install on the M3 and a later Linux 
 permission mode (in auto mode the classifier approved each Bash step), the sandbox's temporary
 directory, `/relay:review`'s estimate and size question, and `--background` delivery. Unscoped
 `Write` stays until a path-scoped rule is verified.
+
+### D74. New skills wait for a package after 3.0; corrections ship now (owner, 23 October 2026)
+
+The four proposed new skills go to a package after 3.0. Corrections to existing instructions that are wrong or
+dangerous ship now, in the cuts. (The four, from GPT-6 Astra's review of the skills, D60 part 7: briefing an
+unattended job, operating and troubleshooting jobs, composing and recovering a Workflow, and choosing a backend and
+route.)
+
+### D75. `/relay-board`'s contract for 3.0 (owner, 23 October 2026)
+
+The board (`/relay-board`, D62; its input, D65; both logged with Phase 4's board PR) takes mouse clicks at any time
+in fullscreen, and keys only while the session is idle. That is the
+contract for 3.0, and the docs say it plainly.
+
+### D76. The release candidate, and "Cloud Contest" (owner, 23 October 2026)
+
+The owner wrote on 22 October that the release candidate is tested "after we have confirmation from Cloud Contest";
+it was read until now as the automated checks passing on the release candidate, and listed as open for the owner.
+"Cloud Contest" was a dictation slip, not a step. The stable release candidate is the last installed cut, with the
+finished stable PR (the release PR, `release/3.0` into `main`) and its reviews, and the owner's go after real use. No
+extra environment.
+
+What it changes: D60, part 11, and D95: the release candidate is confirmed by the finished release PR and its
+reviews, and tested by the owner's real use; D70's last cut is the last one installed. The item open for the owner
+closes.
+
+### D77. Plugin updates need no T3 restart; infra installs (owner, 23 October 2026)
+
+A user-level install reaches new Claude sessions at once, and an existing session picks it up with `/reload-plugins`;
+no T3 restart is needed for a plugin update. Every install and every piece of infrastructure work goes to a new infra
+session on the M1's libar-infra project; leads do none of it (D97).
+
+### D78. CodeRabbit is not a gate (owner, 23 October 2026)
+
+The owner, through the coordinating thread: "CodeRabbit is not a gate, since our internal reviews go much deeper.
+Don't request it or wait for it, and don't write PR notes about it. The gates are CI, Greptile and the two-family
+review. That applies now to #23, #18 and the cut PR."
+
+What it changes: CodeRabbit leaves release-3.0.md's gates for a phase PR, for the other PRs into `release/3.0` and
+for the release PR; their other gates (the tests, validate, the live suite, the smoke kit) stay. For pre.2's cut the
+coordinating thread wrote: "the cut is version strings and the CHANGELOG only, so CI and Greptile." A short
+two-family check of the cut's CHANGELOG entry ran before its merge anyway and found what a heavy user needed to
+know, so a cut's gates are now CI, Greptile and that check, all before the merge and the tag; this replaces D70's
+reviews after the merge. D16's `.coderabbit.yaml` is unchanged.
+
+### D90. One walkthrough, two documents (guide lead)
+
+The guide lead writes one feature walkthrough. It covers every user-facing feature of 3.0 in the order a user meets
+it: what the user does and sees, the backend limits, and the proof. Two documents come from it: the user guide,
+`docs/guide.md`, linked from the README, and the owner's pre-release guide, `docs/mods/pre-release-3.0.md`, beside
+`release-3.0.md`. The walkthrough stays in the lead's working folder. Both documents carry its content, and a third
+copy would drift. Where the guide meets the README or `docs/desktop.md`, it links. Reopen if the walkthrough is
+wanted in the repository as the record behind the manual checks.
+
+### D91. A pre-release cut installs from the marketplace, pinned to its tag (guide lead)
+
+A cut goes on a machine at user scope with `claude plugin marketplace add 'libar-dev/relay-plugin-cc#v3.0.0-pre.N'`
+and `claude plugin install relay@libar-relay`. That is the path users take, so the marketplace's own manifest is
+used too. Going back pins `#v2.2.0`. A pinned marketplace does not move on `claude plugin marketplace update`, so
+each switch is a remove, an add and an install. This was checked on the ThinkPad on 22 October, in a throwaway
+`HOME` with Claude Code 2.1.308: a branch pin and the `v2.2.0` pin both installed, and `marketplace remove` kept the
+old version's cache. Since the owner's ruling of 22 October, libar-infra runs every switch and keeps each machine's
+pin, so the pre-release guide gives the commands for reference only.
+
+### D92. Screenshot places in the docs are HTML comments with stable ids (guide lead)
+
+The user guide marks where each explanatory screenshot goes with a comment such as `<!-- screenshot G7: … -->`,
+numbered G1 to G25, and the guide lead's list pairs each one with the proof it rests on. A comment does not render
+on GitHub, so a guide can merge before the public-assets pass. That pass replaces each comment with its image, taken
+in a clean demo setup. The proofs taken on the M3 show the account and stay local. The same device marks lines that
+wait on later work.
+
+### D93. The pre-release guide is for daily use, not a test matrix (guide lead; amends D60, part 11)
+
+After the owner chose pre-release cuts (D95), the manual test script became the owner's pre-release guide. It holds:
+- each cut and its known issues, with what to do meanwhile;
+- a short check after each install;
+- what should happen while working;
+- a note template a lead can act on;
+- how a machine is switched.
+
+The cuts are tested by the real-API end-to-end suite and libar-infra's thread tests, which find issues; the live
+suite tests the cut's plugin code with `--plugin-dir`. Under D97 none of them gates a cut: a cut PR passes `npm run
+check-version` and CI (D70), and the release PR's gates still run the live and real-API suites on the release head
+(D60, part 9). The guide holds no backend-by-surface matrix of its own. With every cut, the guide lead updates the
+known-issues list in a docs PR of its own, not in the cut PR (D70); the list is part of the go/no-go for heavy
+production (D97, as D99 amended it). The first draft's step-by-step script stays in the guide lead's working folder.
+
+What it changes: D60, part 11, as D95 amended it. There is no step-by-step script; the walkthrough feeds the
+pre-release guide and the user guide, and D95's "built from the manual test script" means that the guide replaced it.
+Edited by the release lead from the guide lead's text, on the coordinating thread's instruction: the gates, the
+known-issues update and the go/no-go are named.
+
+### D95. Pre-release cuts before 3.0.0, on the M3 and the ThinkPad (owner, 22 October 2026; amended by D97)
+
+The owner, in four messages that day:
+
+> I would like to deploy and heavily use the pre-release cut of the 3.0 release on one Mac and on Fedora. Maybe we
+> can do 3.0.0-pre1 or something along those lines. I would like to perfect and polish the release and
+> user-facing documentation and everything.
+
+> [M]y suggestion was just to put the pre-release cut on M3 and replace the current plugin and to do actual work, a
+> ton of work, to battle-test it.
+
+> The infra repo should execute deployments and changes on the M3 machine. Please check our test suite in another
+> context that we use for testing: killing threads, stopping threads, resuming threads. […] Thinkpad should also
+> use the 3.0 pre-release and M3. Run heavy orchestration testing over the weekend on both operating systems. […]
+> We will be feeding back issues and doing pre-releases until we solve all the issues. This will be an iterative
+> process.
+
+> Use exactly the same workflow as we did before. It is very simple. […] We should do exactly the same on the
+> Fedora machine. […] I will deploy production workflows on both M3 and Fedora with the new relay plugin.
+
+So 3.0.0 is preceded by pre-release cuts, `3.0.0-pre.N` (D70). libar-infra installs each at user scope on the M3
+and the ThinkPad, replacing 2.2.0, by the procedure earlier releases used, with the marketplace pinned to the cut's
+tag. The owner runs production work on both machines, and the threads run heavy orchestration testing on both over
+the weekend, with the test suite the owner pointed to (killing, stopping and resuming threads). The issues found go
+into the next cut, until none remain. The M1 stays on 2.2.0 as the fallback.
+
+What it changes:
+
+- **D1.** "Nothing reaches the fleet before the release" gives way for the cuts on the M3 and the ThinkPad. `main`
+  stays on 2.2.0 until the release PR merges, and the M1 until the owner's fleet update.
+- **The ThinkPad's working rule** that no test build is installed at user scope there gives way for the cuts. The
+  live suite and the smoke kit still test their own builds: a `--plugin-dir` build replaces the installed plugin
+  of the same name for its session (measured on 2.1.308 with the cut installed: only the `--plugin-dir` relay
+  loads), and a smoke folder disables `relay@libar-relay` in its local settings.
+- **D60, part 11.** The owner's testing is production use of each cut. What confirms the release candidate stays
+  open for the owner.
+- **release-3.0.md.** Branches and versions, the Sequence, step 10, "Pre-release cuts" and the fleet pin gate
+  follow this entry.
+
+Arranged by the coordinating thread: the install runs in a terminal the owner watches; the owner's checklist is
+the guide lead's pre-release guide, built from the manual test script.
+
+### D96. A user's stop of a relay leaves its job running, with a notice (owner, 22 October 2026)
+
+The coordinating thread recommended option A, and the owner answered: "A is final."
+
+- **A stop from Claude Code's own controls** ends the relay and leaves its job running: "x" in the agent list, Esc
+  in the relay's view (one Esc stops a running relay, D104), the desktop app's Stop button. Relay shows a notice
+  naming the job, with `/relay:cancel` and `/relay:result`.
+- **`TaskStop` on a relay and the message `cancel` still cancel the job** (D2, D44): they are the deliberate ways
+  to stop the work. A cancelled job keeps its backend session, and the companion's `continue` resumes it there; a
+  message to its relay does so only for a relay the Agent tool started (D53).
+- **A resumed Workflow still never adopts a cancelled job.** No change for 3.0 (D42).
+
+Why, from the coordinating thread's reading of relay 2.2.0's survey of about 920 T3 threads and 360 relay jobs
+(PR #5): no relay on record died through a `TaskStop`. The deaths came from T3 restarts, a quit of the T3 app on
+macOS, a usage limit that ended at least 14 relays at once, and a `kill -9` of a lead. Every job either ran on or
+was resumed, by its automatic resume or a Workflow resumed with `resumeFromRunId`, and its work could be recovered;
+the losses on record came from causes a stop rule does not touch, and 2.2.0 fixed the main one. It is not ruled out
+that such deaths fire the same signal as a user's stop; if they do, a rule that cancelled the job on a user's stop
+would have cancelled those jobs, and none of those recoveries could have happened. Rejected: B, a user's stop
+cancels the job.
+
+Still open: on macOS, quitting the T3 app kills relay workers, for a reason not known yet; the cuts' use on the M3
+watches for it. The coordinating thread scheduled the notice after Phase 4's status line and board, which rework
+`hooks/mod/register.js`, as the notice will.
+
+### D97. Test pre.1, then cycle pre-releases for 48 hours before heavy production (owner, 22 October 2026; amended by D99)
+
+The owner, after pre.1 was installed:
+
+> Yes we need to test the pre-release. We already did the smoke test on M3. Issues need to be addressed and then the
+> new pre-release should be cut. For 48 hours until we are confident. To deploy heavy production workloads on m3
+> and fedora.
+
+So pre.1 stays installed on the M3 and the ThinkPad and is tested now. What its smoke runs, the suites and the
+reviews find is fixed, pre.2 is cut, and pre-releases keep coming for 48 hours, until we are confident. Only then do
+heavy production workloads go onto the M3 and the ThinkPad.
+
+Later that night the owner ruled, through the coordinating thread, that the loop stays simple: fix, cut, libar-infra
+installs the cut, the owner tests it with real use, repeat. A cut is the version PR with its checks, then the tag
+(D70). And every plugin install or update on a machine, at any scope, and every infrastructure change, goes through
+libar-infra; the owner, in that thread: "any plugin updates, any infrastructure changes, need to be handled by
+prompting the infra project session."
+
+What it changes:
+
+- **D95.** The cuts are tested and fixed for 48 hours before the owner's production work on them grows to heavy
+  workloads.
+- **D70's cut.** The per-cut gates planned that evening are dropped: the rollback check, the real-API suite on the
+  cut's head and the throwaway-`HOME` check. pre.1's rollback check stays on record.
+- **The smoke kit's installs.** libar-infra runs `scripts/smoke/install-local.sh` and its uninstall for the leads; a
+  `--plugin-dir` run installs nothing and stays with the leads.
+
+Arranged by the coordinating thread: a plan for the 48 hours, from 22 October 23:45 CEST to about 24 October 23:45,
+with what each cut must fix and a go/no-go for heavy production. The owner decides when we are confident.
+
+### D98. A survey of how the pre-releases are used (owner, 22 October 2026)
+
+> We'll do this kind of survey again. https://github.com/libar-dev/relay-plugin-cc/pull/5
+
+So the pre-releases get a survey like relay 2.2.0's (PR #5). Client threads are read for relay's behaviour only, and
+nothing from a client goes into the repository, as [docs/thread-surveys.md](../thread-surveys.md) says.
+
+Arranged by the coordinating thread: the survey reads every T3 thread on the M1, the M3 and the ThinkPad, and the
+jobs homes, for how the pre-releases are used and where relay fails. It runs twice: once partway through D97's 48
+hours, to feed the next cut, and once at the end, before the go for heavy production. Each pass records its cutoff
+in docs/thread-surveys.md, and the next starts there.
+
+### D99. Heavy production starts on pre.2 (owner, 23 October 2026; amends D97)
+
+The owner is ready to start heavy production and waits for the pre.2 tag, which is now the top priority.
+
+What it changes: D97's 48-hour hold on heavy production ends; heavy production starts on pre.2. D98's survey stays,
+and is no longer a step before heavy production; the coordinating thread times its passes. D95's cuts go on after
+pre.2 as issues are found.
 
 ### D100. A line the user types into a relay's own view is delivered (typed-messages lead)
 
