@@ -12,6 +12,14 @@
 // hook sees the message leave the sender and runs `companion wake` for the recipient, so a running
 // job's wait returns within a second and the relay guard delivers the message on its usual path.
 //
+// turn.complete tells the person which job a stop left running. A stop from Claude Code's own
+// controls (x in the agent list, Esc in a relay's view, the desktop app's Stop, ctrl+x ctrl+k)
+// ends the relay's turn as aborted and leaves its job running (D96), and no other event shows it.
+// The hook finds the relay's job through the companion and names it, with /relay:cancel and
+// /relay:result, in the transcript and a toast. A TaskStop ends the relay the same way, but its
+// PostToolUse hook (relay-stop.mjs) cancels the job, so a tool.call hook on TaskStop marks the
+// agents the call names, before the stop, and the notice passes a marked agent by.
+//
 // It also answers /relay:status, /relay:result, /relay:cancel and /relay:transfer itself: each runs
 // the companion and shows what it printed, with no model turn. The markdown commands of those
 // names only say the module did not load.
@@ -330,6 +338,64 @@ async function poll($, poller, tick) {
   } finally {
     poller.isReading = false;
   }
+}
+
+// A TaskStop's relay ends its turn well within a second of the call. A minute leaves room for a
+// slow session, and a mark that its turn never used (a refused TaskStop) still lapses, so a later
+// stop by a person of the same agent, resumed by a message, shows its notice.
+const TASK_STOP_MS = 60000;
+const NOTICE_MS = 20000;
+
+// Marks the agents a TaskStop names until TASK_STOP_MS after it. The model passes an agent's id
+// or its name, and two agents may hold one name, so every match is marked; the text itself is
+// marked first, so an id is marked even when the list cannot be read. relay-stop also reads the
+// older `shell_id`. A clock that cannot be read marks for good: no notice is the old behaviour.
+async function markTaskStop($, e, taskStops) {
+  const named = [e.task_id, e.shell_id].find((one) => typeof one === "string" && one !== "");
+  if (named === undefined) {
+    return;
+  }
+  const at = await now($);
+  const until = at === null ? Infinity : at + TASK_STOP_MS;
+  taskStops.set(named, until);
+  for (const agent of await $.agent.list()) {
+    if (agent.id === named || agent.name === named) {
+      taskStops.set(agent.id, until);
+    }
+  }
+}
+
+// After a relay's aborted turn: the notice when a person stopped it, its job has not ended, and
+// the job is found. A Workflow's agents are never listed, so they get none; their stop is the
+// Workflow's own.
+async function stopNotice($, e, poller, taskStops) {
+  const agent = (await $.agent.list()).find((one) => one.id === e.agentId);
+  if (agent?.type !== "relay:job" || agent.status !== "killed") {
+    return;
+  }
+  poller.fastUntil = poller.ticks + CLEARED_TICKS;
+  if (taskStops.has(agent.id)) {
+    const until = taskStops.get(agent.id);
+    taskStops.delete(agent.id);
+    const at = await now($);
+    if (at === null || at <= until) {
+      return;
+    }
+  }
+  // Every repository's jobs: a job's `cd:` can put it in another one.
+  // --all: a job's `cd:` can put it in another repository; 200, the most a page holds.
+  const ran = await companionJson($, ["status", "--all", "--active", "--limit", "200", "--json"], 10000);
+  if (failureOf(ran) !== null || !Array.isArray(ran.answer.jobs)) {
+    return;
+  }
+  // Only a job that is still at work runs on; a dead one waits for its relay or a resume.
+  const job = ran.answer.jobs.find((one) => one?.relay?.agentId === agent.id && ["starting", "running"].includes(one.state));
+  if (job === undefined) {
+    return;
+  }
+  const text = (agent.name || agent.id) + " was stopped, and its job " + job.id + " keeps running. /relay:cancel " + job.id + " cancels it, /relay:result " + job.id + " shows it.";
+  $.ui.log(text);
+  $.ui.toast(text, { timeoutMs: NOTICE_MS });
 }
 
 const BOARD_PANE = "relay-board";
@@ -954,6 +1020,30 @@ export function register(on) {
       // reaches its bound, so a failed wake only costs time and must not touch the send's result.
     }
     return result;
+  });
+
+  // The agent ids, and the text, the TaskStops of the last minute named, each with its mark's end.
+  // The mark never decides a stop: a hook that failed or ran past its budget passes the call on too.
+  const taskStops = new Map();
+  on("tool.call", { tool: "TaskStop" }, async ($, e, next) => {
+    try {
+      await markTaskStop($, e, taskStops);
+    } catch {
+      // Unmarked, the relay's stop shows the notice even though relay-stop cancels its job.
+    }
+    return next(e);
+  }).catch(($, e, next) => next(e));
+
+  on("turn.complete", async ($, e, next) => {
+    const completed = await next(e);
+    if (e.agentId != null && e.reason === "aborted") {
+      try {
+        await stopNotice($, e, poller, taskStops);
+      } catch {
+        // The stop has happened; a missing notice is the behaviour before it.
+      }
+    }
+    return completed;
   });
 
   // A command marks the event when it ends, after the change it made to a job.

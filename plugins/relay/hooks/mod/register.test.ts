@@ -2213,3 +2213,182 @@ test("where nothing draws, /relay-board says where the board draws, names /relay
   await seen.clock.advance(3000)
   expect(seen.subs()).toEqual(['status', 'status'])
 })
+
+// The stop notice. The engine beneath answers the agent list, the companion's active listing of
+// every repository, the transcript line, the toast, the turn's end and a TaskStop; the clock is
+// mocked, so a TaskStop's mark lapses only when a test moves it.
+
+const STOP_ARGV = ['node', expect.stringMatching(/^\/.*\/scripts\/companion\.mjs$/), 'status', '--all', '--active', '--limit', '200', '--json']
+const KILLED = { id: 'a-relay', name: 'worker', description: 'a job', type: 'relay:job', status: 'killed' }
+const NOTICE = 'worker was stopped, and its job j-1 keeps running. /relay:cancel j-1 cancels it, /relay:result j-1 shows it.'
+const ABORTED = { answer: '', durationMs: 13204, isAborted: true, turnId: 't-1', agentId: 'a-relay', reason: 'aborted' as const }
+const ENGINE_END = { text: 'the engine' }
+const STOPPED = { message: 'Successfully stopped task: a-relay (worker)', task_id: 'a-relay', task_type: 'local_agent', command: 'worker' }
+
+// A slim row of `status --json`, cut to what the notice reads.
+const relayRow = (id: string, agentId: string, state = 'running') => ({ id, state, relay: { agentId, workflowRunId: null } })
+
+type StopOptions = {
+  agents?: () => unknown
+  jobs?: () => object[]
+  run?: () => unknown
+}
+
+function stopEngine(on: any, options: StopOptions = {}) {
+  const runs: any[] = []
+  const logs: any[] = []
+  const toasts: any[] = []
+  const ends: any[] = []
+  const stops: any[] = []
+  on('agent.list', () => (options.agents ? options.agents() : { value: [KILLED] }))
+  on('session.cwd', () => ({ value: CWD }))
+  on('process.run', (_: unknown, e: any) => {
+    runs.push(e)
+    return options.run ? options.run() : { value: listing(options.jobs ? options.jobs() : [relayRow('j-1', 'a-relay')]) }
+  })
+  on('ui.log', (_: unknown, e: any) => {
+    logs.push(e)
+    return { value: undefined }
+  })
+  on('ui.toast', (_: unknown, e: any) => {
+    toasts.push(e)
+    return { value: undefined }
+  })
+  on('turn.complete', (_: unknown, e: any) => {
+    ends.push(e)
+    return ENGINE_END
+  })
+  on('tool.call', { tool: 'TaskStop' }, (_: unknown, e: any) => {
+    stops.push(e)
+    return { result: STOPPED, text: JSON.stringify(STOPPED) }
+  })
+  const clock = mock.clock(on, { now: NOW })
+  return { runs, logs, toasts, ends, stops, clock }
+}
+
+// A relay's turn ends aborted, its end reaches the engine unchanged, and the notice, if any, is drawn.
+async function stopRelay($: any, seen: any, end: object = ABORTED) {
+  expect(await $.turn.complete(end)).toEqual(ENGINE_END)
+  expect(seen.ends).toEqual([end])
+  await seen.clock.settle()
+}
+
+test('a relay a person stopped, whose job runs, names the job in the transcript and a toast', async ($, on) => {
+  const seen = stopEngine(on, { jobs: () => [relayRow('j-2', 'a-other'), relayRow('j-1', 'a-relay')] })
+
+  await stopRelay($, seen)
+
+  expect(seen.runs.map((r) => r.argv)).toEqual([STOP_ARGV])
+  expect(seen.logs.map((e) => e.text)).toEqual([NOTICE])
+  expect(seen.toasts).toEqual([{ text: NOTICE, timeoutMs: 20000 }])
+})
+
+test('a relay a TaskStop named, by its name or by its id, gets no notice', async ($, on) => {
+  const seen = stopEngine(on)
+
+  for (const named of ['worker', 'a-relay']) {
+    const call = { tool: 'TaskStop', task_id: named } as any
+    expect(await $.tool.call(call)).toMatchObject({ result: STOPPED })
+    seen.ends.length = 0
+    await stopRelay($, seen)
+  }
+
+  expect(seen.runs).toEqual([])
+  expect(seen.logs).toEqual([])
+  expect(seen.toasts).toEqual([])
+})
+
+test("a TaskStop's mark lapses after a minute, and a later stop by a person shows the notice", async ($, on) => {
+  const seen = stopEngine(on)
+
+  await $.tool.call({ tool: 'TaskStop', task_id: 'worker' } as any)
+  await seen.clock.advance(60001)
+  await stopRelay($, seen)
+
+  expect(seen.logs.map((e) => e.text)).toEqual([NOTICE])
+})
+
+test('the TaskStop hook passes the call through unchanged and refuses nothing', async ($, on) => {
+  const seen = stopEngine(on, { agents: () => ({ deny: 'the session is not bound yet' }) })
+
+  const result = await $.tool.call({ tool: 'TaskStop', task_id: 'worker' } as any)
+
+  expect(result).toMatchObject({ result: STOPPED })
+  expect(seen.stops).toHaveLength(1)
+  expect(seen.stops[0]).toMatchObject({ tool: 'TaskStop', task_id: 'worker' })
+  expect(Object.keys(seen.stops[0]).filter((key) => !['tool', 'task_id', 'tool_use_id'].includes(key))).toEqual([])
+})
+
+test('no notice for another agent type, an unlisted agent, a turn that answered, a relay still running, or a job that ended or died', async ($, on) => {
+  let agents: object[] = []
+  let jobs: object[] = []
+  const seen = stopEngine(on, { agents: () => ({ value: agents }), jobs: () => jobs })
+  const cases: [object[], object[], object][] = [
+    [[{ ...KILLED, type: 'general-purpose' }], [relayRow('j-1', 'a-relay')], ABORTED],
+    // A Workflow's agents are never in the list.
+    [[], [relayRow('j-1', 'a-relay')], ABORTED],
+    [[KILLED], [relayRow('j-1', 'a-relay')], { ...ABORTED, isAborted: false, reason: 'answer' }],
+    [[{ ...KILLED, status: 'running' }], [relayRow('j-1', 'a-relay')], ABORTED],
+    [[KILLED], [relayRow('j-1', 'a-relay', 'completed'), relayRow('j-2', 'a-relay', 'cancelled'), relayRow('j-3', 'a-relay', 'failed'), relayRow('j-4', 'a-relay', 'dead')], ABORTED],
+    // No job's current relay is the agent.
+    [[KILLED], [relayRow('j-1', 'a-other')], ABORTED],
+  ]
+
+  for (const [listed, rows, end] of cases) {
+    agents = listed
+    jobs = rows
+    seen.ends.length = 0
+    await stopRelay($, seen, end)
+  }
+
+  // Only the job that ended and the job of another relay were looked for.
+  expect(seen.runs.map((r) => r.argv)).toEqual([STOP_ARGV, STOP_ARGV])
+  expect(seen.logs).toEqual([])
+  expect(seen.toasts).toEqual([])
+})
+
+test('a companion or an agent list that fails shows no notice and leaves the turn as it ended', async ($, on) => {
+  let answer: unknown = { deny: 'spawn node ENOENT' }
+  let agents: unknown = { value: [KILLED] }
+  const seen = stopEngine(on, { run: () => answer, agents: () => agents })
+
+  for (const next of [
+    { value: printed('not json') },
+    { value: failed('busy', 4) },
+    { value: { ...listing([relayRow('j-1', 'a-relay')]), isStdoutTruncated: true } },
+    { value: printed(JSON.stringify({ schema: 'relay.result/1', jobs: [relayRow('j-1', 'a-relay')] })) },
+  ]) {
+    seen.ends.length = 0
+    await stopRelay($, seen)
+    answer = next
+  }
+  seen.ends.length = 0
+  await stopRelay($, seen)
+  agents = { deny: 'the session is not bound yet' }
+  seen.ends.length = 0
+  await stopRelay($, seen)
+
+  expect(seen.runs).toHaveLength(5)
+  expect(seen.logs).toEqual([])
+  expect(seen.toasts).toEqual([])
+})
+
+test('a relay a person stopped makes every tick read for thirty seconds while the line is cleared', async ($, on) => {
+  on('agent.list', () => ({ value: [KILLED] }))
+  on('turn.complete', () => ENGINE_END)
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  const seen = await statusEngine($, on, { run: () => ({ value: listing([]) }) })
+  await seen.clock.advance(5000)
+  await seen.clock.advance(5000)
+  expect(listings(seen.runs)).toHaveLength(1)
+
+  // The main loop's own interrupted turn is no relay event.
+  const { agentId: _, ...mainLoop } = ABORTED
+  expect(await $.turn.complete(mainLoop)).toEqual(ENGINE_END)
+  await seen.clock.advance(5000)
+  expect(listings(seen.runs)).toHaveLength(1)
+
+  expect(await $.turn.complete(ABORTED)).toEqual(ENGINE_END)
+  await readsForThirty(seen)
+})

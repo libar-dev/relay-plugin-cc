@@ -1,0 +1,17 @@
+{"type": "user", "timestamp": "2026-10-23T10:00:00.000Z", "message": {"content": "Live suite run synthetic-run.\nRun the stop-notice check."}}
+{"type": "assistant", "timestamp": "2026-10-23T10:00:01.000Z", "message": {"content": [{"type": "tool_use", "name": "Agent", "id": "spawn-x", "input": {"subagent_type": "relay:job", "name": "stop-x", "run_in_background": true, "prompt": "model: gpt-6.1-sol\neffort: low\n---\nRun sleep 240 once."}}]}}
+{"type": "user", "timestamp": "2026-10-23T10:00:02.000Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "spawn-x", "content": "agentId: agent-x"}]}, "toolUseResult": {"agentId": "agent-x"}}
+{"type": "assistant", "timestamp": "2026-10-23T10:00:01.000Z", "message": {"content": [{"type": "tool_use", "name": "Agent", "id": "spawn-esc", "input": {"subagent_type": "relay:job", "name": "stop-esc", "run_in_background": true, "prompt": "model: gpt-6.1-sol\neffort: low\n---\nRun sleep 240 once."}}]}}
+{"type": "user", "timestamp": "2026-10-23T10:00:02.000Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "spawn-esc", "content": "agentId: agent-esc"}]}, "toolUseResult": {"agentId": "agent-esc"}}
+{"type": "assistant", "timestamp": "2026-10-23T10:00:01.000Z", "message": {"content": [{"type": "tool_use", "name": "Agent", "id": "spawn-ts", "input": {"subagent_type": "relay:job", "name": "stop-ts", "run_in_background": true, "prompt": "model: gpt-6.1-sol\neffort: low\n---\nRun sleep 240 once."}}]}}
+{"type": "user", "timestamp": "2026-10-23T10:00:02.000Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "spawn-ts", "content": "agentId: agent-ts"}]}, "toolUseResult": {"agentId": "agent-ts"}}
+{"type": "assistant", "timestamp": "2026-10-23T10:00:20.000Z", "message": {"content": [{"type": "text", "text": "LIVE-STOP-NOTICE-READY"}]}, "stop_reason": "end_turn"}
+{"type": "system", "subtype": "turn_duration", "timestamp": "2026-10-23T10:00:20.100Z"}
+{"type": "system", "subtype": "informational", "timestamp": "2026-10-23T10:00:31.200Z", "content": "relay: stop-x was stopped, and its job job-x keeps running. /relay:cancel job-x cancels it, /relay:result job-x shows it."}
+{"type": "system", "subtype": "informational", "timestamp": "2026-10-23T10:00:35.900Z", "content": "relay: stop-esc was stopped, and its job job-esc keeps running. /relay:cancel job-esc cancels it, /relay:result job-esc shows it."}
+{"type": "user", "timestamp": "2026-10-23T10:00:40.100Z", "message": {"content": "Stop the background agent stop-ts now with the TaskStop tool, then end your turn. Do nothing else."}}
+{"type": "assistant", "timestamp": "2026-10-23T10:00:41.000Z", "message": {"content": [{"type": "tool_use", "name": "TaskStop", "id": "stop-ts", "input": {"task_id": "stop-ts"}}]}}
+{"type": "user", "timestamp": "2026-10-23T10:00:41.200Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "stop-ts", "content": "{\"task_id\": \"agent-ts\"}"}]}, "toolUseResult": {"task_id": "agent-ts"}}
+{"type": "attachment", "timestamp": "2026-10-23T10:00:41.300Z", "attachment": {"type": "hook_additional_context", "hookName": "PostToolUse:TaskStop", "toolUseID": "stop-ts", "content": ["TaskStop stopped the relay:job agent agent-ts, and the relay hook cancelled its job job-ts:\nstate: cancelled\njob: job-ts"]}}
+{"type": "assistant", "timestamp": "2026-10-23T10:00:42.000Z", "message": {"content": [{"type": "text", "text": "Stopped stop-ts."}]}}
+{"type": "system", "subtype": "turn_duration", "timestamp": "2026-10-23T10:00:43.000Z"}

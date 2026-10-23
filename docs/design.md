@@ -693,7 +693,9 @@ tool and `updatedInput`. From the transcript: each entry's `type`, `uuid`, `isMe
 content, the origin kinds `coordinator`, `peer`, `human` and `task-notification`, two attachment
 types, and the coordinator's and the typed message's wrappers. From the Workflow harness: the
 transcript path, the marker lines, two system-prompt notes, two trailers, the meta file, the
-journal's `started` lines and the three retry suffixes. From the Mod API's `agent.spawn`: the agent
+journal's `started` lines and the three retry suffixes. From the Mod API's `turn.complete` (an
+agent's `reason: "aborted"`), `tool.call` on `TaskStop` (its `task_id`), `$.agent.list()` (type and
+status), and `agent.spawn`: the agent
 type, the prompt, `resume`, and the placeholder a Workflow run that withholds its script puts in
 the prompt. From `TaskStop`'s `PostToolUse`: the stopped task's id in its result.
 
@@ -1141,9 +1143,15 @@ agent's view with no input, so there a person reaches a relay only through the m
 does nothing; its Background tasks panel's Stop button stops the relay as `x to stop` does. A line typed into a
 relay's own view has no wake ([The wake](#the-wake)): it
 reaches the job at the relay's next call, up to 540 seconds later, or as a continue once the job
-has ended. Esc in a running relay's view, or `x` on its row in the footer's agent list, stops the
-relay agent and leaves its job running, as any end of a relay other than TaskStop does; Claude Code
-fires no hook for it but the module's `turn.complete`. `/relay:cancel <job>` cancels the job. A
+has ended. Esc in a running relay's view, `x` on its row in the footer's agent list, ctrl+x ctrl+k (stop all
+agents) and Desktop's Stop button stop the relay agent and leave its job running, as any end of a
+relay other than TaskStop does (D96). Claude Code fires no hook for such a stop but the module's
+`turn.complete` (`reason: "aborted"`, the agent then listed `killed`), so the module shows a notice
+there: a line in the main transcript and a toast, naming the job, with `/relay:cancel <job>` and
+`/relay:result <job>`. It finds the job with `companion status --all --active --json` and stays
+silent when the job has ended or no job is found. A TaskStop raises the same `turn.complete`, after
+its `tool.call`; the module remembers the agents a TaskStop named there and shows them no notice, since
+the TaskStop hook cancels their jobs. A Workflow's agents are not listed, so their stops show none. A
 line typed in the view right after Esc resumes the relay and is delivered at once: a steer while the
 job runs, a continue once it has ended. In the terminal, ↓ and Enter open the view with the cursor
 still in the agent list; ↑ (as many times as ↓) reaches the view's prompt, and the first Esc does

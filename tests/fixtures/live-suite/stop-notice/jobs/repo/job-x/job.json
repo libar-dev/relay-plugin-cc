@@ -1,0 +1,30 @@
+{
+  "id": "job-x",
+  "state": "cancelled",
+  "completedAt": "2026-10-23T10:00:56.100Z",
+  "request": {
+    "backend": "codex",
+    "model": "gpt-6.1-sol"
+  },
+  "relay": {
+    "agentId": "agent-x",
+    "transcriptPath": "../transcript/subagents/agent-x.jsonl"
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "state": "cancelled",
+      "startedAt": "2026-10-23T10:00:10.000Z",
+      "endedAt": "2026-10-23T10:00:56.100Z",
+      "relayVersion": "3.0.0-test"
+    }
+  ],
+  "messages": [
+    {
+      "id": "cancel-x",
+      "kind": "cancel",
+      "action": "cancelled",
+      "at": "2026-10-23T10:00:56.000Z"
+    }
+  ]
+}
