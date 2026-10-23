@@ -156,7 +156,8 @@ Phase 4, the board:
   its ended job by its finished relay), and to the job directly otherwise (a Workflow job, another session's job, a
   job with no relay or a silent relay). **Cancel** asks
   again and cancels the attempt it named. The command has no colon: Claude Code refuses one in a command a module
-  registers.
+  registers. Known limit: after a continue sent to the job directly, the job shows `not handed back` although no
+  relay waited for that attempt; its report is in `result`.
 - In the terminal the pane takes keys only between the lead's turns; in the fullscreen layout
   (`CLAUDE_CODE_NO_FLICKER=1`) it takes clicks at any time.
 - The live suite has a `board` check (terminal only): in a wide fullscreen session it steers, continues and cancels

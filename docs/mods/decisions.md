@@ -623,7 +623,10 @@ result comes from the job's `messages` on its next read (the outcome, never the 
 the relay reads as delivered only once a message with the sent text's preview, carried by the relay since the send,
 shows there. The board
 records no hand-back: a continue sent to the job directly runs an attempt nobody hands back, so that attempt stays
-`not handed back`, and the board shows its report. A steer sent directly to a job whose relay still waits comes back in
+`not handed back`, and the board shows its report. That flag is a known limit for 3.0 (design.md): after a direct
+continue it means only that no relay handed that attempt back, not that a caller lost its result; the report is in
+`result`. Telling the two apart needs the worker to record on each attempt whether a relay waits for it, which is
+left for after 3.0, with an expected attempt for `steer` and `continue`. A steer sent directly to a job whose relay still waits comes back in
 that relay's block, to the Workflow script or the other session.
 
 Decided with GPT-6.1 Sol and Opus 5.5 as advisors. They rejected routing by `$.agent.list()` alone (it holds no Workflow

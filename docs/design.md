@@ -557,7 +557,8 @@ about five seconds; a review, a start the model runs in Bash, or another session
 `/relay-board` opens a pane, `Relay jobs`, docked beside the transcript in the fullscreen layout from 110 columns and
 above the prompt otherwise. It lists the repository's jobs from `companion status --json`, newest first, 20 a page
 with a `More` row up to 200, then `Older jobs` and `Newest jobs` to page with the cursor: one row each with its id, backend, state and attempt, and its flags: owed messages,
-`not handed back`, `relay lost` (a running job whose relay has not called for 15 minutes, D59) and violations.
+`not handed back` (after a continue the board sent directly it only means no relay handed that attempt back; see
+Known limits), `relay lost` (a running job whose relay has not called for 15 minutes, D59) and violations.
 Selecting a row shows the job from `result --json`: model and effort, its relay and Workflow run, each message with
 how the backend took it, and the report as Markdown.
 
@@ -1056,6 +1057,10 @@ After a Claude Code update:
 
 **Processes.**
 
+- `not handed back` marks a relay job whose last attempt ended with no hand-back. After a `continue` or `resume` sent
+  to the job directly (`C continue`, `C resume`, the board's direct route), no relay waited for that attempt, so the
+  mark only says no relay handed it back: the report is in `result`. A job's records do not yet say whether a relay
+  waited for an attempt (D61).
 - The board's Steer and Continue read the job, then send: a job that begins another attempt in the moment between
   the two gets the text in that attempt, as a `companion steer` from a shell would. `steer` and `continue` take no
   expected attempt as `cancel --attempt` does (D61).

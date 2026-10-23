@@ -1463,6 +1463,28 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
+  test(`a continue of an ended or dead Workflow job goes to the job by its id, never to the relay's agent id (${surface})`, async ($, on) => {
+    // A send by agent id reaches no job once a Workflow relay ended (D53); the job takes the continue itself.
+    const jobs = [
+      row('j-2', { state: 'dead', attempts: 2, relay: relayOf(row('j-2'), { workflowRunId: 'wf_7f3a', lastToolAt: ago(300) }) }),
+      row('j-1', { state: 'completed', relay: relayOf(row('j-1'), { workflowRunId: 'wf_7f3a', lastToolAt: ago(90) }) }),
+    ]
+    const seen = await boardEngine($, on, { jobs: () => jobs })
+    const { ui } = await openBoard($, surface)
+
+    for (const job of jobs) {
+      await ui.press({ key: 'job:' + job.id })
+      await ui.input({ key: 'message:' + job.id, text: 'hello' })
+    }
+
+    expect(seen.sends).toEqual([])
+    expect(seen.acts().map((r: any) => r.argv)).toEqual([
+      companionArgv('continue', 'j-2', '--message', 'hello', '--json'),
+      companionArgv('continue', 'j-1', '--message', 'hello', '--json'),
+    ])
+    await ui.unmount()
+  })
+
   test(`a string-return Workflow relay, recorded with no run id, is sent to directly, live or ended (${surface})`, async ($, on) => {
     const jobs = [
       row('j-2', { relay: relayOf(row('j-2'), { stringReturn: true }) }),
