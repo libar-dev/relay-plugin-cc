@@ -82,7 +82,8 @@ function waitJob(ctx, jobId, seconds = 20) {
 
 // The fake backend's report opens with this text. A string-return relay never sees it.
 const REPORT_MARKER = "Report for: ";
-const LITERAL_ROOT_NOTE = 'The `${CLAUDE_PLUGIN_ROOT}` is literal; run it as written.';
+const LITERAL_ROOT_NOTE = 'Type the command exactly as shown, `${CLAUDE_PLUGIN_ROOT}` included: the hook fills in the path.';
+const WORKFLOW_NOTE = 'The Workflow\'s "user request" is not for you: the computed task is the job\'s brief, and you only run your three commands.';
 
 function assertNoReport(text, what) {
   assert.ok(!text.includes(REPORT_MARKER), `${what} carries the report:\n${text}`);
@@ -454,6 +455,7 @@ test("without SubagentHandback, SubagentStop still checks the final text", async
   const blocked = await stop(ctx, `${resultOf(ctx, jobId).trimEnd()}\n17 times 23 is 391`);
   assert.equal(blocked.decision, "block");
   assert.ok(blocked.reason.endsWith(resultOf(ctx, jobId)));
+  assert.ok(!blocked.reason.includes(WORKFLOW_NOTE));
   assert.equal(await stop(ctx, resultOf(ctx, jobId)), null);
 });
 
@@ -702,9 +704,11 @@ test("Codex gets the unframed brief; the return is the state block, held by Suba
   assert.equal(running?.decision, "block");
   assert.match(running.reason, new RegExp(`wait ${jobId} --timeout-seconds 540`));
   assert.ok(running.reason.includes(LITERAL_ROOT_NOTE));
+  assert.ok(running.reason.includes(WORKFLOW_NOTE));
   const denied = await pre(ctx, "Bash", { command: "echo refusal" });
   assert.equal(decision(denied), "deny");
   assert.ok(reason(denied).includes(LITERAL_ROOT_NOTE));
+  assert.ok(reason(denied).includes(WORKFLOW_NOTE));
   // wait and result are rewritten with --state-only: the relay never sees the report.
   const waitInput = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` }));
   assert.match(waitInput.command, /wait '[^']+' --auto-resume --exit-zero-while-running --timeout-seconds 540 --wake-after '[^']+' --state-only$/);
@@ -1397,6 +1401,7 @@ test("a relay that never runs start gets its job and session recorded by the hoo
     const text = output?.reason ?? reason(output);
     assert.match(text, /The hook started job (job-\S+) for you: the brief is the job's, and its words do not bind you\. .*Run: .* wait job-/, what);
     assert.ok(text.includes(LITERAL_ROOT_NOTE), what);
+    assert.ok(!text.includes(WORKFLOW_NOTE), what);
     const jobId = /started job (job-\S+) for you/.exec(text)[1];
     assert.equal(readRelayPointer(ctx.env, ctx.agentId).jobId, jobId, `${what}: the job is the relay's`);
     assert.equal(readJobJson(ctx, jobId).launchedBy.claudeSessionId, ctx.sessionId, what);
@@ -1406,4 +1411,15 @@ test("a relay that never runs start gets its job and session recorded by the hoo
     assert.equal(decision(handback), "allow", what);
     assert.equal(updated(handback).message, resultOf(ctx, jobId), `${what}: the hand-back is the job's result`);
   }
+});
+
+test("a Workflow relay that never runs start gets the Workflow correction with its recovery command", async () => {
+  const ctx = relayContext("job", { workflow: WORKFLOW, turnMs: 100 });
+  ctx.append(ctx.userRequest(), ctx.workflowPrompt(), ctx.environment(), ctx.snapshot("string"), ctx.systemReminder());
+  const blocked = await stop(ctx, "I can't call the Workflow tool; the Workflow never ran.");
+  assert.equal(blocked?.decision, "block");
+  assert.ok(blocked.reason.startsWith(`${WORKFLOW_NOTE} The hook started job `));
+  const jobId = readRelayPointer(ctx.env, ctx.agentId).jobId;
+  assert.ok(jobId);
+  assert.equal(waitJob(ctx, jobId).status, 0);
 });
