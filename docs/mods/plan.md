@@ -461,8 +461,8 @@ The later work, in this light:
 
 ## Phase 4: the terminal and Desktop board (separate PRs)
 
-1. **Status line.** `$.ui.status` shows "2 running · 1 owed" for this repository. The module polls only while
-   `$.session.surfaces()` is non-empty, with one read in flight.
+1. **Status line** (done, below). `$.ui.status` shows "2 running · 1 owed" for this repository. The module polls
+   only while `$.session.surfaces()` is non-empty, with one read in flight.
 2. **Board pane** `/relay:board`. It lists the jobs, their backend, state, attempt, owed messages and hand-back
    state, and shows the selected job's report in a `Markdown` element. Its actions are:
    - **Steer** and **Continue** call `$.session.send({ to: { agentId } })` with the agent id the job records,
@@ -557,6 +557,44 @@ The later PRs, in this light:
   the decision, and its live check judges both routes by the job's ledger and attempts.
 - **The release.** The CHANGELOG's JSON lines name the breaking parts (errors on stdout, slim rows, `backend` always).
   The `stop` check now requires the hand-back record; `run all` covers it.
+
+### The status line (done, on `release/3.0`)
+
+What shipped (D63): `2 running · 1 dead · 3 owed` for the session's repository, from `status --json --active
+--limit 200`, cleared when all three are 0, `+` on every count when more pages exist, kept on a busy answer,
+`status unavailable` on any other failure. A five-second timer from `session.start`, one per load of the module; a
+tick reads only while a surface draws, one read at a time; a cleared line reads every thirty seconds, and every five
+for thirty seconds after a relay event the module saw or a busy answer. Two review rounds by GPT-6.1 Sol and Opus 5.5
+and their fixes; the `status-line` live check in the terminal, whose runner now answers the trust dialog in two steps,
+presses Enter again on an unsent paste, and refuses an installed copy's hooks module beside the build.
+
+Live results (the Fedora machine, Claude Code 2.1.309, Sonnet 5.5 lead, all four backends, on f6205e4; records in
+`docs/live/records/`): the line read `4 running` 29.7 s after the check started one job per backend with the
+companion, a start the module does not see, so the cleared line's thirty-second read found them (before D63 it took
+4 s). It cleared 9.5 s after the cancel began, timed from the first capture without it.
+
+### After the status line: what held and what changed
+
+Assumptions that held:
+
+- `surfaces()` keeps the poll out of hosts that draw nothing, and one timer per load survives a reload: the fresh copy
+  gets `session.start` again after the old copy's timers end.
+- The `--active` slim rows carry all the line needs, and read in well under a second.
+
+What changed, and where:
+
+- **Claude Code names the plugin before its status line.** It draws `⚠ relay: <text>`, so the text leaves `relay: `
+  out, and the live check reads the line pinned under the prompt, not any `relay:` text on the screen.
+- **Dead jobs count.** A dead job is one `resume` continues, so the line shows it beside running and owed.
+- **A cleared line reads less often** (D63). A read every five seconds runs `node` twelve times a minute in every
+  session with nothing to show. A `relay:job` spawn in this session is an event the module sees, so it reads at once
+  after one, and every thirty seconds otherwise; a review or a start the model runs in Bash shows within thirty, since a
+  hook on every Bash call would cost every session more than the line saves.
+- **The live runner answers the folder trust dialog again** when a key was lost while the dialog drew, selecting
+  "Yes" by what the screen shows, never by a count of keys.
+
+For the board: it reads the same JSON, and its pane is drawn by the same surfaces, so its live check is terminal only
+too, with the Desktop pass on the M3 (D54).
 
 ## Phase 5: a scripted live suite
 
