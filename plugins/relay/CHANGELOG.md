@@ -125,19 +125,24 @@ Phase 6, an investigation (the plugin does not change):
 
 Fixes from the pre-releases:
 
+- When `/relay:status`, `/relay:result`, `/relay:cancel` or `/relay:transfer` fails, the shell command its answer
+  names single-quotes the plugin's path and what you typed, one shell word each, so it passes the companion the
+  same arguments as the hooks module's own call. A job id or `--source` path with backticks, `$(...)` or quotes now
+  runs nothing when the line is pasted into a shell; with a line break in what you typed, the command is shown in a
+  fenced block, which Markdown leaves as written.
 - Arguments that held backticks, `$(…)` or `$VAR` ran in Claude's shell before the companion started.
   `/relay:review`, `/relay:adversarial-review` and `/relay:setup` use `Write` to put raw arguments in
-  a private temporary file. Only its path enters the shell. Background reviews and setup's rerun
-  use the same route. Output and exit codes are unchanged.
+  a private temporary file. Only its path enters the shell, and a review removes the file as soon as
+  it reads it. Background reviews and setup's rerun use the same route. Output and exit codes are
+  unchanged.
 - Review-size estimation runs in the companion with the review's target and merge-base rules.
   Clean `auto` includes branch changes. The estimate prints the target, file count, untracked count
-  and shortstat. It starts no backend or job. Invalid or option-like bases stay inert.
+  and shortstat. It starts no backend or job. Invalid or option-like bases are refused.
 - Setup uses the review commands' single-string parser. Variables, command substitutions and globs
   are literal. Quotes group whitespace. Backslash escapes even inside quotes; double literal
   backslashes. Empty quoted values are missing-value errors. Use absolute or `~/` paths.
   Commands with `--cwd` also accept `~/` and bare `~`. NUL is rejected. Long input uses the same file.
 - Grok and Kimi sign-in advice quotes home paths for safe copying into a shell.
-  Reviews remove their temporary argument files as soon as they read them.
 
 Docs:
 
