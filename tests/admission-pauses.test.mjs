@@ -94,3 +94,19 @@ test("off skips pauses and Kimi default; user retry value is preserved", t => {
   assert.equal(kimiEnvironment(request, off).KIMI_LOOP_MAX_ATTEMPTS_PER_STEP, undefined);
   assert.equal(recordRefusal(s.root, "codex", { kind: "usage" }, "job-1", { ...s.deps, env: off }), null);
 });
+
+
+test("provider pauses and probe completion survive momentary admission-lock contention", t => {
+  const s = setup(t), file = path.join(s.root, "admission.lock");
+  let retries = 0;
+  const deps = { ...s.deps, lockSleep: () => { retries++; releaseOwnership(file); } };
+  acquireOwnership(file, { pid: process.pid }); t.after(() => releaseOwnership(file));
+  const pause = recordRefusal(s.root, "codex", { kind: "rate" }, "old-job", deps);
+  assert.ok(pause); assert.equal(retries, 1);
+  assert.equal(admit(s.ctx(1), s.deps).waitKind, "pause");
+  s.tick(D.ratePauseMs);
+  const probe = admit(s.ctx(1), s.deps);
+  acquireOwnership(file, { pid: process.pid });
+  assert.equal(probeSucceeded(s.root, "codex", "job-1", deps, probe.slot.probeGeneration), true);
+  assert.equal(retries, 2); assert.equal(listPauses(s.env, s.deps).length, 0);
+});

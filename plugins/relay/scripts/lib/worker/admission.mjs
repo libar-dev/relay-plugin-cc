@@ -24,7 +24,7 @@ export const DEFAULTS = Object.freeze({
   heavyEfforts: ["max", "ultra"], heavyModel: /astra/i, kimiHeavyModel: /(^|[^a-z0-9])k3([^a-z0-9]|$)/i,
   lightEfforts: ["low", "minimal", "none"], lightModel: /luna|flash|highspeed|-fast$/i,
   pollMs: 3000, claimantPolls: 4, probeMs: 120000, sensorCacheMs: 2000, discoveryMs: 60000,
-  processCacheMs: 60000, spawnGraceMs: 10000, stuckLockMs: 60000,
+  sensorStaleMs: 10000, processCacheMs: 60000, spawnGraceMs: 10000, stuckLockMs: 60000,
   pauseExpiryMs: 6 * 3600000, clockSkewMs: 300000,
   usagePauseMs: 30 * 60000, ratePauseMs: 60000, maxRatePauseMs: 15 * 60000,
   concurrencyPauseMs: 10 * 60000, kimiAttempts: "3"
@@ -119,6 +119,7 @@ function dependencies(deps = {}) {
   const env = deps.env ?? process.env;
   const now = deps.now ?? Date.now;
   return { env, now, platform: process.platform, readScopes: cgroupAvailable, random: Math.random, scanUnslotted: null, readAdmissionConfig, readMachine: readMachineDefault,
+    lockSleep: ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
     isAlive: identity => holderAlive(identity, { platform: deps.platform, now: now() }), ...deps };
 }
 function lock(home, deps, fn) {
@@ -127,6 +128,19 @@ function lock(home, deps, fn) {
   if (!acquireOwnership(file, { ...self(deps), since: iso(deps.now()) }, { isAlive: deps.isAlive })) return { locked: false, holder: readOwnership(file, { isAlive: deps.isAlive }) };
   try { return { locked: true, value: fn() }; }
   finally { releaseOwnership(file); }
+}
+// CLI spawns and rare pause updates can tolerate a short bounded wait. Worker
+// admission keeps its cancellable poll instead of blocking here.
+function retryLock(home, deps, fn) {
+  let result = lock(home, deps, fn);
+  for (let retry = 0; !result.locked && retry < 10; retry++) {
+    deps.lockSleep(25 + Math.floor(50 * deps.random()));
+    result = lock(home, deps, fn);
+  }
+  return result;
+}
+export function wasAdmitted(job) {
+  return Boolean(job?.firstAdmittedAt || job?.admission?.admittedAt || job?.attempts?.some(a => a.admission?.admittedAt));
 }
 // The cache key includes the worker's cgroup: one unlimited scope must never
 // lend its reading to a memory-limited sibling. The proc identity is cached locally.
@@ -150,7 +164,9 @@ export function cgroupAvailable(group, readFile = fs.readFileSync) {
   for (let current = group; current; current = current === "/" ? null : path.posix.dirname(current)) {
     try {
       const dir = path.join("/sys/fs/cgroup", current);
-      const limit = readFile(path.join(dir, "memory.max"), "utf8").trim();
+      let limit;
+      try { limit = readFile(path.join(dir, "memory.max"), "utf8").trim(); }
+      catch (e) { if (e.code === "ENOENT") continue; throw e; }
       if (limit === "max") continue;
       const used = readFile(path.join(dir, "memory.current"), "utf8").trim();
       if (!/^\d+$/.test(limit) || !/^\d+$/.test(used) || !Number.isSafeInteger(Number(limit)) || !Number.isSafeInteger(Number(used))) throw new Error("invalid reading");
@@ -239,8 +255,12 @@ export function readMachineDefault({ home = admissionHome(), platform = process.
     const owner = path.join(home, `machine-${cacheKey}.lock`);
     try {
       fs.mkdirSync(home, { recursive: true });
-      owns = Boolean(acquireOwnership(owner, { pid: process.pid, startTime: null }, { isAlive: identity => holderAlive(identity, { platform, now }) }));
-      if (!owns) { memory = { availableBytes: null, pressure: null, scopes: [], group: identity?.group ?? null, source: null, quality: "unavailable" }; notes.push("readings unavailable: memory not read (sensor refresh in progress)"); }
+      owns = Boolean(acquireOwnership(owner, self({ platform, now: () => now }), { isAlive: identity => holderAlive(identity, { platform, now }) }));
+      if (!owns) {
+        if (cacheValid && now >= cached.at && now - cached.at < DEFAULTS.sensorStaleMs) {
+          memory = cached; notes.push(...cached.notes);
+        } else memory = { availableBytes: null, pressure: null, scopes: [], group: identity?.group ?? null, source: null, quality: "refreshing", refreshing: true };
+      }
       else {
         memory = readMemory();
         try { writeJsonAtomic(file, { at: now, ...memory }); }
@@ -271,9 +291,10 @@ function machineReading(home, deps) {
 export function machineState(machine, pendingBytes = 0) {
   const { totalBytes: t, availableBytes: a, load5: l, cores: c } = machine;
   const effective = a === null ? null : a - pendingBytes;
-  if (effective !== null && effective < Math.max(DEFAULTS.criticalGiB * GiB, t * DEFAULTS.criticalFraction)) return { state: "critical", detail: "machine critical: memory low" };
-  if (l !== null && l > DEFAULTS.criticalLoadPerCore * c) return { state: "critical", detail: `machine critical: 5-minute load ${l.toFixed(1)} on ${c} cores` };
-  if (machine.pressure !== null && (machine.pressure & 6)) return { state: "critical", detail: "memory pressure warning/critical: waiting for normal pressure" };
+  if (effective !== null && effective < Math.max(DEFAULTS.criticalGiB * GiB, t * DEFAULTS.criticalFraction)) return { state: "critical", detail: "machine critical: memory low", holdsTurns: true };
+  if (machine.pressure & 4) return { state: "critical", detail: "memory pressure critical: waiting for pressure to recover", holdsTurns: true };
+  if (l !== null && l > DEFAULTS.criticalLoadPerCore * c) return { state: "critical", detail: `machine critical: 5-minute load ${l.toFixed(1)} on ${c} cores`, holdsTurns: false };
+  if (machine.pressure & 2) return { state: "critical", detail: "memory pressure warning: waiting for normal pressure", holdsTurns: false };
   if (a === null && l === null) return { state: "unknown", detail: "machine readings unavailable" };
   const busy = l !== null && l >= DEFAULTS.busyLoadPerCore * c;
   return { state: busy ? "busy" : a === null ? "unknown" : "healthy", detail: null };
@@ -362,7 +383,8 @@ function holds(all, id, now) {
   return all.filter(s => s.jobId !== id && age(now, s.holdAt ?? s.admittedAt ?? s.spawnAt, DEFAULTS.reserveMs))
     .map(s => ({ ...s, holdBytes: Number.isFinite(s.holdBytes) ? s.holdBytes : s.state === "running" ? startupBytes(s.backend) : DEFAULTS.workerBytes }));
 }
-function memoryCheck(machine, settings, pending, bytes) {
+function memoryCheck(machine, settings, pending, bytes, warm = false) {
+  if (machine.refreshing) return { kind: "sensor", reason: "sensor refresh in progress" };
   if (settings.headroomBytes + bytes > machine.totalBytes) return { permanent: true, kind: "memory", reason: "job cannot fit host memory: reduce startup demand or use an executor with more memory; RELAY_ADMISSION=off bypasses" };
   for (const scope of machine.scopes ?? []) {
     const margin = Math.min(DEFAULTS.scopeMarginGiB * GiB, DEFAULTS.scopeMarginFraction * scope.limitBytes);
@@ -370,7 +392,7 @@ function memoryCheck(machine, settings, pending, bytes) {
   }
   const pendingBytes = pending.reduce((n, s) => n + s.holdBytes, 0);
   const state = machineState(machine, pendingBytes);
-  if (state.state === "critical") return { kind: "critical", reason: state.detail };
+  if (state.state === "critical" && (!warm || state.holdsTurns)) return { kind: "critical", reason: state.detail };
   if (machine.availableBytes !== null && machine.availableBytes - pendingBytes - bytes < settings.headroomBytes) return { kind: "memory", reason: `host memory low: ${(machine.availableBytes / GiB).toFixed(1)} GiB available; ${(pendingBytes / GiB).toFixed(2)} GiB pending holds; ${(settings.headroomBytes / GiB).toFixed(1)} GiB reserve required after startup allowance` };
   for (const scope of machine.scopes ?? []) {
     const margin = Math.min(DEFAULTS.scopeMarginGiB * GiB, DEFAULTS.scopeMarginFraction * scope.limitBytes);
@@ -404,6 +426,7 @@ export function admit(ctx, injected = {}) {
     };
     const decision = lock(home, deps, () => {
       const all = slots(home, deps), own = all.find(s => s.jobId === ctx.jobId), existing = own?.state === "running" ? own : null;
+      const warm = Boolean(existing || ctx.admitted || wasAdmitted(readJob(ctx.jobDir)));
       mine.since = own?.since ?? mine.since;
       mine.waitingSince ??= own?.state === "waiting" ? own.waitingSince : null;
       const running = all.filter(s => s.jobId !== ctx.jobId && s.state === "running");
@@ -414,7 +437,7 @@ export function admit(ctx, injected = {}) {
         if (pause && now < Date.parse(pause.until)) return { reason: refusalReason(pause), kind: "pause" };
         if (pause?.probe && (pause.probe.jobId !== candidate.jobId || pause.probe.pid !== candidate.pid || pause.probe.startTime !== candidate.processStart)) return { reason: `${candidate.backend} paused: waiting for probe job ${pause.probe.jobId}`, kind: "probe" };
         if (candidate.quotaHeavy && active.filter(s => s.quotaHeavy).length >= settings.maxVeryHeavy) return { reason: `very-heavy quota: ${settings.maxVeryHeavy} participating jobs already running`, kind: "very-heavy" };
-        const memory = memoryCheck(candidateMachine, guardSettings(config, candidateMachine), pending, startupBytes(candidate.backend));
+        const memory = memoryCheck(candidateMachine, guardSettings(config, candidateMachine), pending, startupBytes(candidate.backend), warm);
         if (memory) return memory;
         const state = machineState(candidateMachine);
         if (!warm && (state.state === "busy" || candidateMachine.availableBytes === null) && active.length >= settings.busySeats) return { reason: `busy-load allowance: ${active.length} of ${settings.busySeats} seats in use`, kind: "seats" };
@@ -422,12 +445,12 @@ export function admit(ctx, injected = {}) {
       };
       // Structural impossibility is permanent even while a provider/quota is paused.
       const fit = memoryCheck(machine, settings, [], startupBytes(mine.backend));
-      const blocked = fit?.permanent ? fit : eligible(mine, machine, holds(all, ctx.jobId, now), Boolean(existing));
+      const blocked = fit?.permanent ? fit : eligible(mine, machine, holds(all, ctx.jobId, now), warm);
       if (blocked?.permanent) return { admit: false, permanent: true, reason: blocked.reason, record: { ...recordFor(mine, notes, blocked.reason, blocked.kind), state: "failed" } };
       if (blocked) return wait(blocked.reason, blocked.kind, existing);
       const timing = readJsonOrNull(path.join(home, "timing.json")) ?? {};
       if (age(now, timing.lastStart, DEFAULTS.spacingMs)) return wait("staggering starts: another job or turn just started", "stagger", existing);
-      if (!existing) {
+      if (!warm) {
         const candidateMachine = s => {
           // Refresh finite sibling scopes on demand; do not use an old wait reason
           // or old headroom sample as proof that a claimant remains eligible.
@@ -505,7 +528,7 @@ export function recordRefusal(home, backend, refusal, jobId, injected = {}) {
   const deps = dependencies(injected);
   try {
     if (!["linux", "darwin"].includes(deps.platform) || !admissionEnabled(deps.env, deps.readAdmissionConfig(deps.env), deps.platform)) return null;
-    return lock(home, deps, () => {
+    const result = retryLock(home, deps, () => {
       const now = deps.now(), old = pauseRead(home, backend, deps, true);
       const same = old?.kind === refusal.kind;
       const strikes = same ? old.strikes + ((now >= Date.parse(old.until) || old.lastJobId !== jobId) ? 1 : 0) : 1;
@@ -514,14 +537,16 @@ export function recordRefusal(home, backend, refusal, jobId, injected = {}) {
       const duration = refusal.kind === "usage" ? DEFAULTS.usagePauseMs : refusal.kind === "concurrency" ? DEFAULTS.concurrencyPauseMs : Math.min(DEFAULTS.ratePauseMs * 2 ** Math.min(strikes - 1, 20), DEFAULTS.maxRatePauseMs);
       const p = { v: 1, backend, ...refusal, since: same ? old.since : iso(now), updatedAt: iso(now), until: iso(provider ? reset : now + Math.min(duration, DEFAULTS.pauseExpiryMs)), strikes, resetSource: provider ? "provider" : "default", lastJobId: jobId, probe: null };
       pauseWrite(home, backend, p); return p;
-    }).value ?? null;
-  } catch { return null; }
+    });
+    if (!result.locked) process.stderr.write(`relay load guard: provider pause for ${backend} not recorded: admission lock busy after bounded retry\n`);
+    return result.value ?? null;
+  } catch (e) { process.stderr.write(`relay load guard: provider pause for ${backend} not recorded (${e.message})\n`); return null; }
 }
 export function probeSucceeded(home, backend, jobId, injected = {}, generation = null) {
   const deps = dependencies(injected);
   try {
     if (!admissionEnabled(deps.env, undefined, deps.platform)) return false;
-    return lock(home, deps, () => {
+    return retryLock(home, deps, () => {
     const p = pauseRead(home, backend, deps, false, true);
     if (!p?.probe || p.probe.jobId !== jobId || !generation || p.probe.generation !== generation) return false;
     fs.rmSync(pauseFile(home, backend), { force: true }); return true;
@@ -552,7 +577,7 @@ export function describeGuard(env = process.env, { readSensors = true } = {}, in
 export function renderGuard(snapshot) {
   if (!snapshot.enabled) return [`load-guard: off (${snapshot.reason})`];
   if (snapshot.error) return [`load-guard: on (state unreadable: ${snapshot.error})`];
-  const state = (snapshot.notes ?? []).some(n => n.includes("readings unavailable")) ? `readings unavailable (${snapshot.state})` : snapshot.state;
+  const state = snapshot.refreshing ? "sensor refresh in progress" : (snapshot.notes ?? []).some(n => n.includes("readings unavailable")) ? `readings unavailable (${snapshot.state})` : snapshot.state;
   const memory = snapshot.availableBytes === null ? "memory not read" : `memory ${(snapshot.availableBytes / GiB).toFixed(1)} of ${(snapshot.totalBytes / GiB).toFixed(1)} GiB available`;
   return [`load-guard: on · ${state} · seats ${snapshot.activeSeats}, no fixed ceiling, busy allowance ${snapshot.busySeats} · very-heavy quota ${snapshot.veryHeavy} of ${snapshot.maxVeryHeavy} · host ${memory} (${snapshot.source ?? "source unknown"}; ${snapshot.quality ?? "unknown quality"}) · pending holds ${((snapshot.pendingBytes ?? 0) / GiB).toFixed(2)} GiB · finite scopes ${(snapshot.scopes ?? []).map(s => `${s.id}: ${(s.remainingBytes / GiB).toFixed(2)} GiB remaining`).join(", ") || "none known"} · 5-minute load ${snapshot.load5 ?? "not read"} on ${snapshot.cores} cores`,
     ...(snapshot.notes ?? []).map(n => `note: load guard: ${n}`), ...(snapshot.pauses ?? []).map(p => `paused: ${refusalReason(p)}; strike ${p.strikes}`)];
@@ -571,11 +596,11 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
     const config = deps.readAdmissionConfig(env);
     if (!admissionEnabled(env, config, platform)) return launch();
     const home = admissionHome(env), machine = machineReading(home, deps), settings = guardSettings(config, machine), job = readJob(jobDir);
-    const decision = lock(home, deps, () => {
+    const decision = retryLock(home, deps, () => {
       const all = slots(home, deps), existing = all.find(s => s.jobId === job.id);
       if (existing && ((existing.state === "spawning" && age(deps.now(), existing.since, DEFAULTS.spawnGraceMs)) || deps.isAlive({ pid: existing.pid, startTime: existing.processStart }))) return null;
       const waiting = all.filter(s => s.state !== "running").length;
-      const check = memoryCheck(machine, settings, holds(all, job.id, deps.now()), DEFAULTS.workerBytes);
+      const check = memoryCheck(machine, settings, holds(all, job.id, deps.now()), DEFAULTS.workerBytes, wasAdmitted(job));
       const reason = check?.reason ?? (waiting >= settings.maxWaitingWorkers ? `waiting worker limit: ${waiting} of ${settings.maxWaitingWorkers}` : null);
       const cls = modelClass(job.request);
       if (reason) {
@@ -585,7 +610,12 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
       }
       const slot = { v: 1, jobId: job.id, jobDir, pid: null, processStart: null, backend: job.request.backend ?? "codex", class: cls, weight: WEIGHTS[cls], state: "spawning", spawnAt: iso(deps.now()), since: iso(deps.now()), holdAt: iso(deps.now()), holdBytes: DEFAULTS.workerBytes, holdGroup: machine.group, scopes: machine.scopes };
       writeSlot(home, slot);
-      try { spawned = launch(); return spawned; }
+      try {
+        spawned = launch();
+        writeJob(jobDir, { ...job, state: "starting", worker: null, launchPendingAt: iso(deps.now()),
+          admission: { ...job.admission, waitKind: "spawned" } });
+        return spawned;
+      }
       catch (e) { fs.rmSync(slotFile(home, job.id), { force: true }); throw e; }
     });
     if (!decision.locked) {

@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULTS as D, WEIGHTS, admissionHome, guardSettings, modelClass, machineState, readMachineDefault, holderAlive, renderGuard, admit, releaseSlot, spawnWithAdmission } from "../plugins/relay/scripts/lib/worker/admission.mjs";
+import { DEFAULTS as D, WEIGHTS, admissionHome, guardSettings, modelClass, machineState, readMachineDefault, holderAlive, renderGuard, describeGuard, admit, releaseSlot, spawnWithAdmission } from "../plugins/relay/scripts/lib/worker/admission.mjs";
 import { acquireOwnership, releaseOwnership } from "../plugins/relay/scripts/lib/util/ownership.mjs";
+import { computeJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
+import { retryQueuedWorker } from "../plugins/relay/scripts/lib/worker/delivery.mjs";
 import { writeJob, readJob, writeJsonAtomic } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 const GiB = 2 ** 30;
 function setup(t, config = {}) {
@@ -255,15 +257,20 @@ test("Linux cgroup headroom uses every ancestor and caches per cgroup, never acr
     ["/proc/self/cgroup", "0::/session/worker\n"],
     ["/sys/fs/cgroup/session/worker/memory.max", "max"],
     ["/sys/fs/cgroup/session/memory.max", String(20 * GiB)],
-    ["/sys/fs/cgroup/session/memory.current", String(16 * GiB)],
-    ["/sys/fs/cgroup/memory.max", String(80 * GiB)],
-    ["/sys/fs/cgroup/memory.current", String(70 * GiB)]
+    ["/sys/fs/cgroup/session/memory.current", String(16 * GiB)]
   ]);
   let reads = 0;
-  const readFile = file => { reads++; assert.ok(limits.has(file), file); return limits.get(file); };
+  const readFile = file => {
+    reads++;
+    if (file === "/proc/meminfo") return `MemAvailable: ${100 * GiB / 1024} kB\n`;
+    if (!limits.has(file)) throw Object.assign(new Error("no file"), { code: "ENOENT" });
+    return limits.get(file);
+  };
   const first = readMachineDefault({ home: s.home, env: {}, platform: "linux", sensor, readFile, now: 1 });
   assert.equal(first.availableBytes, sensor.freemem());
   assert.equal(first.scopes[0].remainingBytes, 4 * GiB);
+  assert.deepEqual(first.notes, []);
+  assert.match(renderGuard(describeGuard(s.env, {}, { ...s.deps, readMachine: () => first })).join("\n"), /load-guard: on · healthy/);
   const count = reads;
   limits.set("/sys/fs/cgroup/session/memory.current", String(19 * GiB));
   assert.equal(readMachineDefault({ home: s.home, env: {}, platform: "linux", sensor, readFile, now: 2 }).scopes[0].remainingBytes, 4 * GiB);
@@ -415,4 +422,86 @@ test("legacy class labels cannot impose quota on ordinary or unknown selections"
   }
   for (let n = 0; n < 2; n++) { assert.equal(admit(s.ctx({ model: "astra" }), s.deps).admit, true); s.tick(); }
   assert.equal(admit(s.ctx({ effort: "max" }), s.deps).waitKind, "very-heavy");
+});
+
+for (const signal of [{ load5: 40.9 }, { pressure: 2 }, { load5: 40.9, pressure: 2 }]) {
+  test(`CPU critical/warning pressure holds only new jobs: ${JSON.stringify(signal)}`, t => {
+    const s = setup(t), warm = s.ctx();
+    s.setMachine({ totalBytes: 64 * GiB, availableBytes: 13.8 * GiB, cores: 10 });
+    assert.equal(admit(warm, s.deps).admit, true); s.tick();
+    s.setMachine(signal);
+    const held = admit(s.ctx(), s.deps);
+    assert.equal(held.waitKind, "critical");
+    assert.match(held.reason, /load|pressure warning/);
+    assert.equal(admit(warm, s.deps).admit, true, "next turn/capacity retry retains its seat"); s.tick();
+    releaseSlot(s.home, warm.jobId, warm.me, s.deps);
+    const replacement = { ...warm, admitted: true };
+    assert.equal(admit(replacement, s.deps).admit, true, "replacement backend stays admitted without a live slot"); s.tick();
+    releaseSlot(s.home, warm.jobId, warm.me, s.deps);
+    writeJob(warm.jobDir, { id: warm.jobId, request: warm.request, state: "starting", firstAdmittedAt: new Date(s.deps.now()).toISOString() });
+    assert.equal(spawnWithAdmission(warm.jobDir, s.env, () => 123, s.deps), 123, "replacement worker also stays eligible");
+  });
+}
+for (const signal of [{ availableBytes: 0 }, { pressure: 4, load5: 40.9 }, { pressure: 6 }]) {
+  test(`critical memory/pressure holds admitted turns with a reason: ${JSON.stringify(signal)}`, t => {
+    const s = setup(t), warm = s.ctx();
+    s.setMachine({ totalBytes: 64 * GiB, availableBytes: 13.8 * GiB, cores: 10 });
+    assert.equal(admit(warm, s.deps).admit, true); s.tick(); s.setMachine(signal);
+    const held = admit(warm, s.deps);
+    assert.equal(held.waitKind, "critical"); assert.match(held.record.reason, /memory low|pressure critical/);
+  });
+}
+
+test("busy sensor refresh keeps recent low-memory samples or waits without unknown-byte admission", t => {
+  const s = setup(t);
+  const sensor = { totalmem: () => 64 * GiB, availableParallelism: () => 10, loadavg: () => [0, 0, 0] };
+  const sysctl = bin => ({ status: 0, stdout: bin.endsWith("vm_stat") ? "page size of 16384 bytes\nPages free: 0.\nPages inactive: 0.\n" : "4" });
+  const first = readMachineDefault({ home: s.home, env: {}, platform: "darwin", sensor, sysctl, now: 1 });
+  assert.equal(first.availableBytes, 0);
+  const owner = path.join(s.home, "machine-darwin.lock");
+  acquireOwnership(owner, { pid: process.pid, startTime: null }); t.after(() => releaseOwnership(owner));
+  const read = now => readMachineDefault({ home: s.home, env: {}, platform: "darwin", sensor, now, sysctl() { throw new Error("must not refresh"); } });
+  for (const now of [D.sensorCacheMs + 2, D.sensorStaleMs - 1, D.sensorStaleMs + 1]) {
+    const machine = read(now);
+    const result = admit(s.ctx(), { ...s.deps, readMachine: () => machine });
+    assert.equal(result.admit, false);
+    assert.equal(result.waitKind, machine.refreshing ? "sensor" : "critical");
+    if (machine.refreshing) assert.equal(result.reason, "sensor refresh in progress");
+    else { assert.equal(machine.availableBytes, 0); assert.equal(machine.pressure, 4); }
+  }
+});
+
+test("a deferred spawn that exits before saving becomes dead after grace without respawning", t => {
+  const s = setup(t), c = s.ctx();
+  const since = new Date(s.deps.now() - 120000).toISOString();
+  writeJob(c.jobDir, { id: c.jobId, request: c.request, state: "queued", createdAt: since, admission: { state: "waiting", waitKind: "worker", since } });
+  let launches = 0;
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => { launches++; return 2147483647; }, s.deps), 2147483647);
+  const job = readJob(c.jobDir);
+  assert.equal(job.state, "starting"); assert.equal(job.admission.waitKind, "spawned"); assert.equal(job.admission.since, since);
+  assert.equal(computeJobView(job, { now: s.deps.now() + 59999 }).state, "starting");
+  assert.equal(computeJobView(job, { now: s.deps.now() + 60001 }).state, "dead");
+  for (let n = 0; n < 3; n++) assert.equal(retryQueuedWorker(c.jobDir, s.env), null);
+  assert.equal(launches, 1);
+});
+
+test("short admission-lock contention retries a healthy start before deferring", t => {
+  const s = setup(t), c = s.ctx();
+  writeJob(c.jobDir, { id: c.jobId, state: "starting", request: c.request });
+  const file = path.join(s.home, "admission.lock"); fs.mkdirSync(s.home, { recursive: true });
+  acquireOwnership(file, { pid: process.pid }); t.after(() => releaseOwnership(file));
+  const sleeps = [];
+  const deps = { ...s.deps, lockSleep: ms => { sleeps.push(ms); releaseOwnership(file); } };
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => 123, deps), 123);
+  assert.equal(readJob(c.jobDir).state, "starting"); assert.deepEqual(sleeps, [25]);
+});
+
+test("persistent admission-lock contention defers after a bounded short retry", t => {
+  const s = setup(t), c = s.ctx();
+  writeJob(c.jobDir, { id: c.jobId, state: "starting", request: c.request });
+  const file = path.join(s.home, "admission.lock"); fs.mkdirSync(s.home, { recursive: true });
+  acquireOwnership(file, { pid: process.pid }); t.after(() => releaseOwnership(file));
+  let total = 0, sleeps = 0;
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => assert.fail("must not launch"), { ...s.deps, lockSleep: ms => { total += ms; sleeps++; } }), null);
+  assert.equal(sleeps, 10); assert.ok(total <= 1000); assert.equal(readJob(c.jobDir).state, "queued");
 });
