@@ -134,12 +134,16 @@ owner's heavy production starts on pre.2 (D99). A survey of how the cuts are use
 
 A cut is a PR into `release/3.0` that changes only the version fields `node scripts/bump-version.mjs 3.0.0-pre.N`
 sets, the README's Development line and one CHANGELOG entry under the 3.0.0 heading (D70). It merges once
-`npm run check-version` and CI pass, and its merge commit is tagged `v3.0.0-pre.N` and pushed: no GitHub release,
-no npm. The two-family review and Greptile follow the merge, and what they find goes into the next cut. The fixes
-and phase PRs it carries have passed their own gates first. The release lead tells the coordinating thread before
+`npm run check-version`, CI and Greptile pass (D78), and its merge commit is tagged `v3.0.0-pre.N` and pushed: no
+GitHub release, no npm. The two-family review follows the merge, and what it finds goes into the next cut. The
+fixes and phase PRs it carries have passed their own gates first. The release lead tells the coordinating thread before
 it pushes each tag, and the coordinating thread has libar-infra install the cut. Every plugin install or update on
 a machine, at any scope, goes through libar-infra; a `--plugin-dir` run installs nothing and stays with the leads
 (D97).
+
+After pre.2's install, the live checks D73 left open run in a new session on the M3: default permission mode, the
+sandbox's temporary directory, `/relay:review`'s estimate and size question, and `--background` delivery. The
+coordinating thread assigns them; they gate nothing, and what they find goes into the next cut.
 
 libar-infra installs each cut with its fleet tool, in a terminal the owner watches:
 

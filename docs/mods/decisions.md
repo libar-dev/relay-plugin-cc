@@ -728,12 +728,14 @@ session on the M1's libar-infra project; leads do none of it (D97).
 
 ### D78. CodeRabbit is not a gate (owner, 23 October 2026)
 
-CodeRabbit is not a gate: the two-family review goes much deeper. Nobody requests a CodeRabbit review or waits for
-one, and no PR carries a note about it. A PR's gates are CI, Greptile and the two-family review. This holds from
-pre.2's PRs on: the security fix (D73), the docs PR (#18) and the pre.2 cut.
+The owner, through the coordinating thread: "CodeRabbit is not a gate, since our internal reviews go much deeper.
+Don't request it or wait for it, and don't write PR notes about it. The gates are CI, Greptile and the two-family
+review. That applies now to #23, #18 and the cut PR."
 
-What it changes: release-3.0.md's gates for a phase PR, for the other PRs into `release/3.0` and for the release PR
-drop CodeRabbit; D70's "the bots" after a cut is Greptile. D16's `.coderabbit.yaml` is unchanged.
+What it changes: CodeRabbit leaves release-3.0.md's gates for a phase PR, for the other PRs into `release/3.0` and
+for the release PR; their other gates (the tests, validate, the live suite, the smoke kit) stay. A cut changes only
+version strings and the CHANGELOG, and the coordinating thread set pre.2's gates as CI and Greptile: Greptile now
+comes before a cut's merge, and the two-family review still follows it (D70). D16's `.coderabbit.yaml` is unchanged.
 
 ### D90. One walkthrough, two documents (guide lead)
 
@@ -830,7 +832,7 @@ the guide lead's pre-release guide, built from the manual test script.
 The coordinating thread recommended option A, and the owner answered: "A is final."
 
 - **A stop from Claude Code's own controls** ends the relay and leaves its job running: "x" in the agent list, Esc
-  twice in the relay's view, the desktop app's Stop button. Relay shows a notice naming the job, with
+  in the relay's view (one Esc stops a running relay, D104), the desktop app's Stop button. Relay shows a notice naming the job, with
   `/relay:cancel` and `/relay:result`.
 - **`TaskStop` on a relay and the message `cancel` still cancel the job** (D2, D44): they are the deliberate ways
   to stop the work. A cancelled job keeps its backend session, and the companion's `continue` resumes it there; a

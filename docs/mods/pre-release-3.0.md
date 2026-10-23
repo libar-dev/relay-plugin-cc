@@ -4,9 +4,8 @@ Before 3.0.0, relay ships as pre-release cuts: 3.0.0-pre.1, then pre.2 and on. l
 user scope on the M3 and on the ThinkPad, and keeps each machine's relay pin. The M1 stays on relay 2.2.0 as the
 fallback.
 
-The cuts run for 48 hours, from Thursday 22 October, 23:45 CEST, to Saturday 24 October, about 23:45. Use them and
-test them, but keep heavy production workloads off the M3 and the ThinkPad until the go/no-go on Saturday, about
-22:00, and your go.
+The cuts started on Thursday 22 October, 23:45 CEST, and go on as issues are found. Heavy production runs on them
+from pre.2 (D99, which ended the 48-hour hold); use them and test them.
 
 This page lists each cut and its known issues, a check to run after each install, what should happen while you
 work, how to note a problem, and how a machine is switched. The [README](../../README.md) explains relay itself; the
@@ -137,7 +136,7 @@ otherwise. The others are relay's documented behaviour.
 - TaskStop on one relay agent, the message `cancel` to it, and `/relay:cancel <job>` each cancel that job within
   seconds.
 - TaskStop on a Workflow ends its relays and leaves its jobs running, for a resume to take over.
-- Stopping an agent yourself (`x` in the agent list or Esc twice in its view in the terminal, or the Stop button in
+- Stopping an agent yourself (`x` in the agent list or Esc in its view in the terminal, or the Stop button in
   the desktop app's Background tasks panel) ends the agent only, and the job runs to its end, `not handed back`.
   That is the owner's decision; a notice naming the job comes in a later cut.
 - In T3, Stop ends the thread's process: its relays end and their jobs run on. Resume a Workflow as above, and read
