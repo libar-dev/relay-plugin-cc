@@ -10,6 +10,23 @@ Pre-release cuts:
 
 - `3.0.0-pre.1` (2026-10-22, tag `v3.0.0-pre.1`): Phases 1, 2, 3 and 5 and Phase 6's report, as below; Phase 4
   has not landed.
+- `3.0.0-pre.2` (2026-10-23, tag `v3.0.0-pre.2`): what it fixes over pre.1, with the entries below:
+  - A line typed into a relay's own agent view in the terminal reaches the job, while it runs or after it ends; in
+    pre.1 it was lost (pre.1's known issue 1). A line typed while the relay waits can take up to nine minutes to
+    arrive; a message sent through Claude still arrives within seconds.
+  - A relay that hands back the job's block inside one code fence is accepted, no longer blocked eight times and let
+    go as `not handed back` (known issue 2). A relay that writes prose instead of the block, as one did once after
+    the message `cancel`, can still be let go that way.
+  - A job cancelled with TaskStop is no longer marked `not handed back` (known issue 3).
+  - `/relay:setup` asks Grok a second time before it says a home is signed out, and shows Kimi as
+    `steer (next turn)` (known issue 4).
+  - Text given to `/relay:review`, `/relay:adversarial-review` or `/relay:setup` no longer runs in Claude's shell
+    when it holds backticks, `$(…)` or `$VAR`: Claude writes it to a temporary file with its Write tool, and relay
+    reads it as written. So `/relay:setup` no longer expands `$HOME`; use `~/` or a full path. The shell commands
+    relay suggests after an error or for a sign-in quote what they carry.
+  - The companion's `--json` names its shape and pages `status`, ready for Phase 4's status line and board, which
+    come in a later cut.
+  - Still open: `/relay:transfer` takes no job id (known issue 5).
 
 Phase 1, steer wake:
 
