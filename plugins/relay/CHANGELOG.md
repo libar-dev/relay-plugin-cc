@@ -64,6 +64,15 @@ Pre-release cuts:
     and jobs waited 76 s at the median. Available memory is now macOS's own free percentage times total memory,
     with free and inactive pages as a labelled fallback. The pressure check is unchanged: a warning holds new
     jobs, critical also holds next turns. Linux is unchanged.
+- `3.0.0-pre.5` (2026-10-23, tag `v3.0.0-pre.5`): what it changes over pre.4. The details are in "Load guard".
+  - **Only Astra and the Kimi K3 family count toward the very-heavy quota,** at any effort. `max` effort on other
+    models (Sol, Luna, Kimi K2.x, GLM, Grok) no longer does.
+  - **The guard holds its lock briefly however many old jobs there are,** and an unreadable job record no longer
+    turns the guard off.
+  - **A probe whose lease times out no longer counts as provider success,** so the pause and its strikes stay.
+  - **A macOS pressure warning reads as a warning,** not "critical", in status and in the waited line.
+  - **An admitted job keeps the reason it waited,** and a job cancelled while queued closes its admission record
+    in `status --json`.
 
 Phase 1, steer wake:
 
