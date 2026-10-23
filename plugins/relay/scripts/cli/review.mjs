@@ -357,7 +357,10 @@ export async function handleReviewCommand(argv, config) {
         writeJob(jobDir, { ...job, state: decision.admit ? "running" : decision.permanent ? "failed" : "queued", admission: decision.record,
           attempts: job.attempts.map(a => ({ ...a, state: decision.admit ? "running" : "queued", admission: decision.record })) });
         if (decision.permanent) throw new Error(decision.reason);
-        if (decision.admit) break;
+        if (decision.admit) {
+          for (const note of decision.record.notes ?? []) if (note !== "load guard off") process.stderr.write(`relay review: ${note}\n`);
+          break;
+        }
         if (shownReason !== decision.reason) { process.stderr.write(`relay review queued: ${decision.reason}\n`); shownReason = decision.reason; }
         const deadline = Date.now() + decision.retryMs;
         while (!cancelled && Date.now() < deadline) await sleep(Math.min(100, deadline - Date.now()));
