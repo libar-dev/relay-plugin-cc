@@ -1,0 +1,1 @@
+{"id": "kimi-job", "state": "cancelled", "request": {"backend": "kimi", "model": "kimi-code/kimi-for-coding"}, "attempts": [{"relayVersion": "3.0.0-test"}]}

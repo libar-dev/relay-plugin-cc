@@ -17,4 +17,6 @@ if (command === 'show-environment') {
   }
   const result = spawnSync(args[separator + 1], args.slice(separator + 2), { env, stdio: 'inherit' });
   process.exit(result.status ?? 1);
-} else if (command !== 'set-option') throw new Error(`Unsupported fake tmux command: ${command}`);
+} else if (command === 'capture-pane') {
+  process.stdout.write(process.env.SMOKE_TMUX_SCREEN ?? '');
+} else if (!['set-option', 'send-keys'].includes(command)) throw new Error(`Unsupported fake tmux command: ${command}`);

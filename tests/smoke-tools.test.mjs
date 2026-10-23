@@ -794,6 +794,23 @@ for (const mode of ['inherited', 'server-only', 'no-server', 'empty']) {
   });
 }
 
+for (const [selected, keys, said] of [['No, exit', ['Down'], 'Selected'], ['Yes, I trust this folder', ['Enter'], 'Accepted'], [null, []]]) {
+  test(`pane trust answers the folder dialog from its selection: ${selected ?? 'no dialog'}`, t => {
+    const { dir, env } = fakeCli(t);
+    fs.writeFileSync(path.join(dir, 'bin/tmux'), `#!${process.execPath}\n` +
+      fs.readFileSync(path.join(root, 'tests/fixtures/smoke-tools/fake-tmux.cjs'), 'utf8'), { mode: 0o755 });
+    // The dialog as Claude Code 2.1.308 draws it, opening on "No, exit".
+    const items = ['No, exit', 'Yes, I trust this folder'].map(item => `${item === selected ? ' ❯ ' : '   '}${item}`);
+    Object.assign(env, { SMOKE_TMUX_LOG: path.join(dir, 'tmux.jsonl'), XDG_RUNTIME_DIR: path.join(dir, 'runtime'),
+      SMOKE_TMUX_SCREEN: selected ? ` Do you trust the files in this folder?\n\n${items.join('\n')}\n\n Enter to confirm · Esc to cancel\n` : ' ❯ \n' });
+    const result = spawnSync('bash', [path.join(root, 'scripts/smoke/pane.sh'), 'trust', 'clean'], { env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const calls = fs.readFileSync(env.SMOKE_TMUX_LOG, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(calls.filter(args => args[2] === 'send-keys').map(args => args.slice(5)), keys.length ? [keys] : []);
+    assert.equal(result.stdout, selected ? `${said} folder trust in clean\n` : '');
+  });
+}
+
 test('archive install receipt identifies the full exported commit and worktree flag', t => {
   const { dir, env } = fakeCli(t);
   const work = workDir(dir);
@@ -831,6 +848,39 @@ test('pane pid prints the pane process id on a private tmux socket', async t => 
   assert.equal(result.stdout.trim(), fs.readFileSync(pidFile, 'utf8'));
   assert.equal(pane('stop', 'pid-test').status, 0);
   assert.notEqual(pane('pid', 'pid-test').status, 0);
+});
+
+test('pane bytes, escaped screen and size use the private socket and exact tmux arguments', t => {
+  const dir = copyFixture(t), bin = path.join(dir, 'bin'), log = path.join(dir, 'tmux-args.json');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!${process.execPath}\n` +
+    `require('node:fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));\n` +
+    'process.stdout.write("\\u001b[7mCancel\\u001b[0m\\n");\n', { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_RUNTIME_DIR: dir };
+  for (const [args, expected] of [
+    [['bytes', 'board', '18', '09', '0d'], ['send-keys', '-H', '-t', '=board:', '18', '09', '0d']],
+    [['screen-escapes', 'board'], ['capture-pane', '-p', '-e', '-t', '=board:']],
+    [['size', 'board', '100', '60'], ['resize-window', '-t', '=board:', '-x', '100', '-y', '60']]
+  ]) {
+    const result = spawnSync('bash', [path.join(root, 'scripts/smoke/pane.sh'), ...args], { env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, '\x1b[7mCancel\x1b[0m\n');
+    assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), ['-S', path.join(dir, 'claude-tmux/tmux.sock'), ...expected]);
+  }
+});
+
+test('pane rejects invalid bytes, escaped captures and dimensions before contacting tmux', t => {
+  const dir = copyFixture(t), bin = path.join(dir, 'bin'), log = path.join(dir, 'called');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\ntouch '${log}'\n`, { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_RUNTIME_DIR: dir };
+  for (const args of [['bytes', 'board'], ['bytes', 'board', '0'], ['bytes', 'board', '000'], ['bytes', 'board', 'gg'],
+    ['bytes', 'board', '-H'], ['screen-escapes', 'board', 'extra'], ['size', 'board'], ['size', 'board', '100'],
+    ['size', 'board', '100', '0'], ['size', 'board', '-1', '60'], ['size', 'board', '100', '60', 'extra']]) {
+    const result = spawnSync('bash', [path.join(root, 'scripts/smoke/pane.sh'), ...args], { env, encoding: 'utf8' });
+    assert.equal(result.status, 2, args.join(' '));
+  }
+  assert.equal(fs.existsSync(log), false);
 });
 
 test('pane start runs in its folder after the folder a tmux server started from is deleted', async t => {

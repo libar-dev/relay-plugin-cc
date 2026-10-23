@@ -1,0 +1,5 @@
+{
+  "agentId": "workflow-kimi",
+  "jobDir": "repo/job-workflow-kimi",
+  "transcriptPath": "../transcript/subagents/workflows/wf-board/agent-workflow-kimi.jsonl"
+}
