@@ -1,3 +1,4 @@
+import { shellCommandMarkdown } from "../../util/shell.mjs";
 /** @typedef {import("../types").Connection} Connection */
 // Kimi's ACP server, isolated from the worker's message and process accounting. ACP carries the
 // controls and the live stream; the session's wire.jsonl decides each turn's outcome and report.
@@ -326,7 +327,7 @@ export class KimiConnection {
   requestError(error) {
     const failure = rpcError(error);
     if (error.data?.code === -32000) {
-      failure.message = `${failure.message}. Kimi needs a sign-in for ${this.request.kimiHome}: run \`${kimiLoginCommand(this.request.kimiHome)}\` (${KIMI_REGION_HINT}).`;
+      failure.message = `${failure.message}. Kimi needs a sign-in for ${this.request.kimiHome}: run ${shellCommandMarkdown(kimiLoginCommand(this.request.kimiHome))} (${KIMI_REGION_HINT}).`;
     }
     return failure;
   }

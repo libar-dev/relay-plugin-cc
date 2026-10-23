@@ -1,3 +1,4 @@
+import { shellAssignment, shellCommandMarkdown } from "../../util/shell.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { runLimited } from "../../util/process.mjs";
@@ -89,7 +90,7 @@ async function checkGrokHome(cwd, home, env, shared, limits) {
   }
   if (!parsed.signedIn) {
     const said = firstLine(listing.stdout) || firstLine(listing.stderr) || failure || "grok models printed nothing";
-    block.signIn = { state: "signed-out", method: null, detail: `${said} (sign in: GROK_HOME=${home.home} grok login; see grok-home.md)` };
+    block.signIn = { state: "signed-out", method: null, detail: `${said} (sign in: ${shellCommandMarkdown(`${shellAssignment("GROK_HOME", home.home)} grok login`)}; see grok-home.md)` };
     block.modelsReason = "signed out";
     if (failure) block.error = failure;
     return block;
@@ -129,7 +130,7 @@ export const setupProbe = {
   signInText(block) { return block.signIn.state === "signed-out" ? `signed out: ${block.signIn.detail}` : null; },
   nextSteps(block) {
     return block.signIn.state === "signed-out"
-      ? [`Sign in to Grok in ${block.home} once: \`GROK_HOME=${block.home} grok login\` (see the jobs skill's grok-home.md).`]
+      ? [`Sign in to Grok in ${block.home} once: ${shellCommandMarkdown(`${shellAssignment("GROK_HOME", block.home)} grok login`)} (see the jobs skill's grok-home.md).`]
       : [];
   }
 };

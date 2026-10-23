@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents.",
-    "version": "3.0.0-dev.8"
+    "version": "3.0.0-pre.2"
   },
   "plugins": [
     {
       "name": "relay",
       "description": "Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents.",
-      "version": "3.0.0-dev.8",
+      "version": "3.0.0-pre.2",
       "author": {
         "name": "Libar"
       },

@@ -1,3 +1,4 @@
+import { shellCommandMarkdown } from "../../util/shell.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { runLimited } from "../../util/process.mjs";
@@ -75,7 +76,7 @@ async function checkKimiHome(cwd, home, env, shared, limits) {
     return block;
   }
   const parsed = parseKimiProviders(listing.stdout);
-  const login = `${kimiLoginCommand(home.home)}, or ${KIMI_REGION_HINT}`;
+  const login = `${shellCommandMarkdown(kimiLoginCommand(home.home))}, or ${KIMI_REGION_HINT}`;
   if (!parsed || parsed.providers.length === 0) {
     const said = parsed ? "no provider is configured" : firstLine(listing.stdout) || "kimi provider list printed nothing";
     block.signIn = { state: "signed-out", method: null, detail: `${said} (sign in: ${login}; see kimi-home.md)` };
@@ -129,7 +130,7 @@ export const setupProbe = {
   signInText(block) { return block.signIn.state === "signed-out" ? `signed out: ${block.signIn.detail}` : null; },
   nextSteps(block) {
     return block.signIn.state === "signed-out"
-      ? [`Sign in to Kimi in ${block.home} once: \`${kimiLoginCommand(block.home)}\` (${KIMI_REGION_HINT}; see the jobs skill's kimi-home.md).`]
+      ? [`Sign in to Kimi in ${block.home} once: ${shellCommandMarkdown(kimiLoginCommand(block.home))} (${KIMI_REGION_HINT}; see the jobs skill's kimi-home.md).`]
       : [];
   }
 };
