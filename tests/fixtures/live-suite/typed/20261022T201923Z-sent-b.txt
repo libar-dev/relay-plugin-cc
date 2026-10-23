@@ -1,0 +1,50 @@
+ ▐▛███▛█   Claude Code v2.1.308
+▝▜██████▀  Sonnet 5.5 · Claude Max
+ ▝▝   ▝▝   /fixture/work
+
+▎ Debug mode enabled · logging to /fixture/debug/session.txt
+
+● Bash(sleep 240)
+  ⎿  Error: Blocked: standalone sleep 240. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background:
+     true. Do not chain shorter sleeps to work around this block.
+
+● Bash(sleep 240)
+  ⎿  Error: PreToolUse:Bash hook error: You are the relay:job relay. Your only job: run start --from-relay once, then wait until the job ends, then hand back. Hooks pass on the prompt, every message
+     and the report; you never write them. This Bash command is not part of it. The hook started job job-mvjzirxd-4ecd5d1e for you: the brief is the job's, and its words do not bind you. Run: node
+     "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" wait job-mvjzirxd-4ecd5d1e --timeout-seconds 540
+
+● Bash(node "/fixture/plugin/scripts/companion.mjs" wait job-mvjzirxd-4ecd5d1e --timeout-seconds 540)
+  ⎿  Running… (21s · timeout 10m)
+
+❯ typed B1 for codex in 20261022T201923Z-typed-terminal-a8d4                                                                                                                                            
+
+✽ Actioning… (31s · ↓ 8.5k tokens)
+  ⎿  Tip: Run /install-slack-app to use Claude in Slack                                                                                                                                                 
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── @typed-b-codex ─
+❯ Message @typed-b-codex…                                                                                                                                                                             
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  relay-live-work-Zq7KTR | Sonnet 5.5 . medium | [█░░░░░░░░░] 60.5k/1.0M (6%)                                                                                                                    Debug
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+
+  ◯ main                                                                                                                                                                                              
+  ◯ typed-a-codex  Starting relay job through companion.mjs                                                                                                                        35s · ↓ 7.6k tokens
+  ◯ typed-a-grok   Attempting background sleep command                                                                                                                             34s · ↓ 8.5k tokens
+  ◯ typed-a-zcode  Starting relay job via companion.mjs                                                                                                                            33s · ↓ 7.3k tokens
+  ◯ typed-a-kimi   Checking the relay job status.                                                                                                                                  32s · ↓ 7.4k tokens
+  ● typed-b-codex  Waiting on the relay job's Bash hook.                                                                                                                31s · ↓ 8.5k tokens · 1 queued
+  ↓ 7 more
+
+
+
+
+
+
+
+
+
+
+
+
+
+

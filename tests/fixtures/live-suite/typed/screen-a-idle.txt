@@ -1,0 +1,8 @@
+Claude Code v2.1.308
+● Acknowledged.
+
+❯ Message @typed-a-codex…
+──────────────────────────
+  ◯ main
+  ◯ unrelated  background work  1m · ↓ 100 tokens
+  ● typed-a-codex  typed-a-codex  idle
