@@ -35,6 +35,35 @@ Pre-release cuts:
     50 a page, newest first (follow `nextCursor` with `--cursor`; `status <job> --json` has the full record), and a
     `--json` error is JSON on stdout, not text on stderr.
   - Still open: `/relay:transfer` takes no job id (known issue 5).
+- `3.0.0-pre.3` (2026-10-23, tag `v3.0.0-pre.3`): what it adds and fixes over pre.2. The details are in "Phase 4",
+  "Load guard" and "Fixes from the pre-releases" below.
+  - **Load guard.** Before a job starts, and before each later turn, relay checks the machine:
+    - A job starts only while enough memory stays free after it starts. The jobs that started in the last 30 s
+      count toward that.
+    - Starts are spaced 5 s apart across all sessions.
+    - At most 2 very heavy models run at once. That is a quota limit.
+    - A backend pauses after its provider refuses work for a usage limit, rate limit or concurrency limit.
+
+    A job that has to wait shows `queued` with the reason. Running turns are never stopped.
+    `RELAY_ADMISSION=off` or `/relay:setup --admission off` turns the guard off. Only while the guard is on,
+    Kimi defaults to 3 total attempts per step unless you set `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP`; this default
+    does not apply with the guard off or on native Windows. Restart Claude sessions after upgrading: a session
+    still on pre.2 doesn't know the `queued` state.
+  - **The status line and the board** (Phase 4). One line under the prompt counts the repository's running and
+    dead jobs and owed messages, and the board lists jobs with their actions.
+  - **A person's stop names the job.** When a person stops a relay from Claude Code's controls, relay now says
+    that the relay's job keeps running, and which job it is. `TaskStop` and the message `cancel` still cancel it.
+  - **A Workflow relay keeps to its job.** Claude Code 2.1.309 shows a Workflow agent the lead's request as "user
+    request". The relay is told that this request is not its task, so it runs its three commands. In pre.2, 2 of
+    40 relays in a soak refused their job; pre.3's soak had 0 refusals in 80 relays.
+  - Still open: after a continue sent to a job directly, the job shows `not handed back` although no relay waited
+    for it, and `/relay:transfer` takes no job id.
+- `3.0.0-pre.4` (2026-10-23, tag `v3.0.0-pre.4`): one fix over pre.3.
+  - **The load guard reads macOS memory the way macOS does.** pre.3 counted only free and inactive pages, so on a
+    healthy Mac it held light jobs back: in a soak on an 18 GiB Mac, about half as many ran at once as on pre.2,
+    and jobs waited 76 s at the median. Available memory is now macOS's own free percentage times total memory,
+    with free and inactive pages as a labelled fallback. The pressure check is unchanged: a warning holds new
+    jobs, critical also holds next turns. Linux is unchanged.
 
 Phase 1, steer wake:
 
@@ -158,7 +187,8 @@ Phase 4, the board:
   its ended job by its finished relay), and to the job directly otherwise (a Workflow job, another session's job, a
   job with no relay or a silent relay). **Cancel** asks
   again and cancels the attempt it named. The command has no colon: Claude Code refuses one in a command a module
-  registers.
+  registers. Known limit: after a continue sent to the job directly, the job shows `not handed back` although no
+  relay waited for that attempt; its report is in `result`.
 - In the terminal the pane takes keys only between the lead's turns; in the fullscreen layout
   (`CLAUDE_CODE_NO_FLICKER=1`) it takes clicks at any time.
 - The live suite has a `board` check (terminal only): in a wide fullscreen session it steers, continues and cancels
@@ -181,8 +211,43 @@ Phase 6, an investigation (the plugin does not change):
   Kimi allow for a job that sends a message to the agent that started it, or to a peer, and how such a message
   and its reply would travel. Messages from a job are not part of 3.0.
 
+Load guard:
+
+- `3.0.0-dev.16`: on macOS, available bytes now use the `kern.memorystatus_level` percentage of total memory,
+  so reclaimable memory counts toward admission. `vm_stat` free plus inactive pages remains a labelled fallback
+  when that reading fails. The separate pressure veto, reserve, holds, pacing and quota are unchanged.
+- Before a job starts, and before each later turn, relay checks the machine it runs on. It covers every session
+  and jobs home of the user. The README's "Load guard" section has the rules and their defaults.
+  - Memory: a job starts only while enough memory stays free after it starts. The test is
+    `available − recent starts' holds − this job's hold ≥ max(2 GiB, 15% of RAM)`, where a hold is 0.5 GiB for
+    Codex or Grok and 1 GiB for Kimi, ZCode or an unknown backend, for 30 s. Finite Linux cgroup limits are tested
+    separately. On macOS, available memory is the `kern.memorystatus_level` percentage of total memory, with
+    `vm_stat` free plus inactive pages as a fallback, and a pressure warning holds new jobs.
+  - Pacing: one start or turn every 5 s across all sessions. There is no fixed job ceiling on a healthy machine.
+    When the 5-minute load is high or memory can't be read, new jobs stop at `min(16, max(2, CPUs − 2))`.
+  - Quota: at most 2 very heavy models (Astra, Kimi K3, or any `max`/`ultra` effort) run at once. This is a quota
+    limit, not a memory one.
+  - Provider refusals: a usage limit, rate limit or concurrency refusal pauses that backend. After the pause, one
+    probe job goes first. Only while the guard is on, Kimi defaults to 3 total attempts per step unless
+    `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP` is set; this default does not apply with the guard off or on native Windows.
+- A job that waits shows `queued` with its reason in status, `--json`, the status line and the board, and can be
+  cancelled. High load and a macOS pressure warning hold only new jobs. Critical memory and critical macOS
+  pressure also hold next turns. A turn that is running is never stopped. Foreground reviews pass the same check.
+- When too many workers already wait, a new job is recorded `queued` without a worker. The submitter's `wait` (a
+  relay agent's or yours) starts it later; `status` only reads.
+- `RELAY_ADMISSION=off`, or `/relay:setup --admission off`, turns the guard off. On native Windows the guard does
+  nothing and says so.
+- Not covered: memory used later by commands a job runs (tests, builds), native Claude agents, other harness
+  sessions and other users. The research behind the defaults is in
+  [docs/research/resource-budgets-and-load-guard.md](../../docs/research/resource-budgets-and-load-guard.md).
+
 Fixes from the pre-releases:
 
+- A Workflow relay is told that the harness's "user request" is the lead's request to the whole Workflow, not its
+  task, and that the "computed task" is the job's brief: it runs its three commands whatever the request says. The
+  agent and hook instructions and its block reasons say `${CLAUDE_PLUGIN_ROOT}` in those commands is typed as written
+  and the hook fills in the path. The guard's commands, matching, hand-back checks and eight-block budget are unchanged.
+  Not yet checked live: a Workflow soak with these instructions (pre.2's soak had 2 refusals in 40).
 - When `/relay:status`, `/relay:result`, `/relay:cancel` or `/relay:transfer` fails, the shell command its answer
   names single-quotes the plugin's path and what you typed, one shell word each, so it passes the companion the
   same arguments as the hooks module's own call. A job id or `--source` path with backticks, `$(...)` or quotes now
@@ -272,6 +337,14 @@ Fixes from the pre-releases:
   choices: add the jobs home to `sandbox.filesystem.allowWrite` in the user settings, or run without the sandbox.
 - `/relay:adversarial-review`'s argument hint says that quotes and apostrophes in the focus text group words and
   are removed, as before the argument file.
+- When a person stops a relay from Claude Code's own controls (`x to stop` in the agent list, Esc at the relay's
+  view prompt, ctrl+x ctrl+k, the desktop app's Stop button), its job keeps running, as before, and relay now
+  says so: a line in the transcript and a toast name the job, with `/relay:cancel <job>` to cancel it and
+  `/relay:result <job>` to read it (D96). Until now the job ran on with no word. `TaskStop` and the message
+  `cancel` still cancel the job, and show no notice. Checked live with `x to stop` and Esc; ctrl+x ctrl+k and
+  the desktop app's Stop button are expected to behave the same but are not checked live yet. A Workflow's
+  relays, which Claude Code does not list, get no notice, and none is shown where nothing draws the session
+  (T3 Code, `claude -p`).
 
 Docs:
 

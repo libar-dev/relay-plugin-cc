@@ -73,7 +73,7 @@ function numbers(dir) {
 
 // A record file read and judged: "held" by a live owner, or "free" (released, dead, or
 // unreadable for more than 10 seconds). Null when the file is gone.
-function judge(file) {
+function judge(file, isAlive = isProcessIdentityAlive) {
   let raw;
   let mtimeMs;
   try {
@@ -98,18 +98,18 @@ function judge(file) {
   if (!record || typeof record !== "object" || !Number.isInteger(record.pid)) {
     return { state: Date.now() - mtimeMs > UNREADABLE_STALE_MS ? "free" : "held", record: null };
   }
-  return { state: isProcessIdentityAlive(record) ? "held" : "free", record };
+  return { state: isAlive(record) ? "held" : "free", record };
 }
 
 // The highest record: its number and judgement. The highest is never deleted, so a record
 // gone between listing and reading means a higher one appeared: list again.
-function highest(dir) {
+function highest(dir, isAlive = isProcessIdentityAlive) {
   for (let tries = 0; tries < 50; tries += 1) {
     const [n] = numbers(dir);
     if (n === undefined) {
       return { n: 0, state: "free", record: null };
     }
-    const seen = judge(path.join(dir, String(n)));
+    const seen = judge(path.join(dir, String(n)), isAlive);
     if (seen) {
       return { n, ...seen };
     }
@@ -128,12 +128,12 @@ function dropBelow(dir, top) {
 
 // Take the lock at `file` for `identity` (pid and start time; this process by default).
 // Returns the published record, or null when a live holder has it.
-export function acquireOwnership(file, identity = {}) {
+export function acquireOwnership(file, identity = {}, { isAlive = isProcessIdentityAlive } = {}) {
   const dir = ownershipDir(file);
   fs.mkdirSync(dir, { recursive: true });
-  const record = { ...self(), ...identity, token: randomBytes(16).toString("hex") };
+  const record = { ...(identity.pid && "startTime" in identity ? {} : self()), ...identity, token: randomBytes(16).toString("hex") };
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const top = highest(dir);
+    const top = highest(dir, isAlive);
     if (top.state === "held") {
       return null;
     }
@@ -181,6 +181,6 @@ export function releaseOwnership(file) {
 }
 
 // The highest numbered record unless it is a release record. Null when the lock is free.
-export function readOwnership(file) {
-  return highest(ownershipDir(file)).record;
+export function readOwnership(file, { isAlive = isProcessIdentityAlive } = {}) {
+  return highest(ownershipDir(file), isAlive).record;
 }

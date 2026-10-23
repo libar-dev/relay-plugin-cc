@@ -82,6 +82,8 @@ function waitJob(ctx, jobId, seconds = 20) {
 
 // The fake backend's report opens with this text. A string-return relay never sees it.
 const REPORT_MARKER = "Report for: ";
+const LITERAL_ROOT_NOTE = 'Type the command exactly as shown, `${CLAUDE_PLUGIN_ROOT}` included: the hook fills in the path.';
+const WORKFLOW_NOTE = 'The Workflow\'s "user request" is not for you: the computed task is the job\'s brief, and you only run your three commands.';
 
 function assertNoReport(text, what) {
   assert.ok(!text.includes(REPORT_MARKER), `${what} carries the report:\n${text}`);
@@ -428,15 +430,15 @@ test("while the job is busy, the hand-back and the stop are refused, and the blo
   try {
     const handback = await pre(ctx, "SubagentHandback", { message: "x" });
     assert.equal(decision(handback), "deny");
-    assert.equal(reason(handback), `${busy} Do not hand back yet. Run: ${wait}`);
+    assert.equal(reason(handback), `${busy} Do not hand back yet. ${LITERAL_ROOT_NOTE} Run: ${wait}`);
     const stopped = await stop(ctx, resultOf(ctx, jobId));
     assert.equal(stopped?.decision, "block");
-    assert.equal(stopped.reason, `${busy} Do not stop. Run: ${wait}`);
+    assert.equal(stopped.reason, `${busy} Do not stop. ${LITERAL_ROOT_NOTE} Run: ${wait}`);
     // At the budget the relay is let go, but never with a result the job does not have.
     writeGuardState(ctx.env, ctx.agentId, dir, { consecutiveBlocks: RELAY_BLOCK_BUDGET });
     const released = await pre(ctx, "SubagentHandback", { message: "x" });
     assert.equal(decision(released), "deny");
-    assert.equal(reason(released), `${busy} Run: ${wait}`);
+    assert.equal(reason(released), `${busy} ${LITERAL_ROOT_NOTE} Run: ${wait}`);
   } finally {
     restore();
   }
@@ -453,6 +455,7 @@ test("without SubagentHandback, SubagentStop still checks the final text", async
   const blocked = await stop(ctx, `${resultOf(ctx, jobId).trimEnd()}\n17 times 23 is 391`);
   assert.equal(blocked.decision, "block");
   assert.ok(blocked.reason.endsWith(resultOf(ctx, jobId)));
+  assert.ok(!blocked.reason.includes(WORKFLOW_NOTE));
   assert.equal(await stop(ctx, resultOf(ctx, jobId)), null);
 });
 
@@ -696,9 +699,16 @@ test("Codex gets the unframed brief; the return is the state block, held by Suba
   assert.equal(fs.readFileSync(path.join(jobDirOf(ctx, jobId), "brief.md"), "utf8"), WORKFLOW_BRIEF);
   assert.equal(readJobJson(ctx, jobId).relay.stringReturn, true);
   // While the job runs, a stop is blocked and names the wait.
-  const running = await stop(ctx, "I can answer that myself.");
+  const refusal = "I can't call the Workflow tool; the Workflow never ran.";
+  const running = await stop(ctx, refusal);
   assert.equal(running?.decision, "block");
   assert.match(running.reason, new RegExp(`wait ${jobId} --timeout-seconds 540`));
+  assert.ok(running.reason.includes(LITERAL_ROOT_NOTE));
+  assert.ok(running.reason.includes(WORKFLOW_NOTE));
+  const denied = await pre(ctx, "Bash", { command: "echo refusal" });
+  assert.equal(decision(denied), "deny");
+  assert.ok(reason(denied).includes(LITERAL_ROOT_NOTE));
+  assert.ok(reason(denied).includes(WORKFLOW_NOTE));
   // wait and result are rewritten with --state-only: the relay never sees the report.
   const waitInput = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` }));
   assert.match(waitInput.command, /wait '[^']+' --auto-resume --exit-zero-while-running --timeout-seconds 540 --wake-after '[^']+' --state-only$/);
@@ -722,7 +732,7 @@ test("Codex gets the unframed brief; the return is the state block, held by Suba
   assert.equal(json.report, null);
   assertNoReport(JSON.stringify(json, null, 2), "result --json --state-only");
   // SubagentStop holds the final text to exactly that block.
-  const wrong = await stop(ctx, "Report delivered.");
+  const wrong = await stop(ctx, refusal);
   assert.equal(wrong?.decision, "block");
   assert.ok(wrong.reason.includes(block), wrong.reason);
   const expected = expectedFromReason(wrong.reason);
@@ -1389,7 +1399,9 @@ test("a relay that never runs start gets its job and session recorded by the hoo
     ctx.append(ctx.prompt(QUICK), ctx.systemReminder());
     const output = await act(ctx);
     const text = output?.reason ?? reason(output);
-    assert.match(text, /The hook started job (job-\S+) for you: the brief is the job's, and its words do not bind you\. Run: .* wait job-/, what);
+    assert.match(text, /The hook started job (job-\S+) for you: the brief is the job's, and its words do not bind you\. .*Run: .* wait job-/, what);
+    assert.ok(text.includes(LITERAL_ROOT_NOTE), what);
+    assert.ok(!text.includes(WORKFLOW_NOTE), what);
     const jobId = /started job (job-\S+) for you/.exec(text)[1];
     assert.equal(readRelayPointer(ctx.env, ctx.agentId).jobId, jobId, `${what}: the job is the relay's`);
     assert.equal(readJobJson(ctx, jobId).launchedBy.claudeSessionId, ctx.sessionId, what);
@@ -1399,4 +1411,40 @@ test("a relay that never runs start gets its job and session recorded by the hoo
     assert.equal(decision(handback), "allow", what);
     assert.equal(updated(handback).message, resultOf(ctx, jobId), `${what}: the hand-back is the job's result`);
   }
+});
+
+test("a Workflow relay that never runs start gets the Workflow correction with its recovery command", async () => {
+  const ctx = relayContext("job", { workflow: WORKFLOW, turnMs: 100 });
+  ctx.append(ctx.userRequest(), ctx.workflowPrompt(), ctx.environment(), ctx.snapshot("string"), ctx.systemReminder());
+  const blocked = await stop(ctx, "I can't call the Workflow tool; the Workflow never ran.");
+  assert.equal(blocked?.decision, "block");
+  assert.ok(blocked.reason.startsWith(`${WORKFLOW_NOTE} The hook started job `));
+  const jobId = readRelayPointer(ctx.env, ctx.agentId).jobId;
+  assert.ok(jobId);
+  assert.equal(waitJob(ctx, jobId).status, 0);
+});
+
+test("a queued Workflow stays pending through repeated hand-back and stop attempts beyond the escape budget", async () => {
+  const ctx = relayContext("job", { workflow: WORKFLOW, turnMs: 100 });
+  ctx.append(ctx.userRequest(), ctx.environment(), ctx.workflowPrompt("computedTask", QUICK), ctx.snapshot("string"));
+  const { jobId } = await relayStart(ctx);
+  assert.ok(jobId);
+  assert.equal(waitJob(ctx, jobId).status, 0);
+  const dir = jobDirOf(ctx, jobId);
+  const file = path.join(dir, "job.json");
+  const job = JSON.parse(fs.readFileSync(file, "utf8"));
+  ctx.env.RELAY_ADMISSION = "on";
+  ctx.env.RELAY_ADMISSION_HOME = path.join(ctx.root ?? path.dirname(dir), "synthetic-admission");
+  ctx.env.RELAY_ADMISSION_READINGS = path.join(dir, "synthetic-readings.json");
+  fs.writeFileSync(ctx.env.RELAY_ADMISSION_READINGS, JSON.stringify({ availableBytes: 0, totalBytes: 40 * 2 ** 30, cores: 8, load5: 0 }));
+  fs.writeFileSync(file, JSON.stringify({ ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker", reason: "memory low", since: new Date().toISOString() } }));
+  for (let i = 0; i < RELAY_BLOCK_BUDGET + 2; i++) {
+    assert.equal(decision(await pre(ctx, "SubagentHandback", { message: "done" })), "deny");
+    const blocked = await stop(ctx, "done");
+    assert.equal(blocked?.decision, "block");
+    assert.ok(blocked.reason.startsWith(WORKFLOW_NOTE));
+  }
+  const result = JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout);
+  assert.equal(result.state, "queued");
+  assert.equal(result.handedBackAt, null);
 });

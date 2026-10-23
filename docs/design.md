@@ -571,7 +571,8 @@ about five seconds; a review, a start the model runs in Bash, or another session
 `/relay-board` opens a pane, `Relay jobs`, docked beside the transcript in the fullscreen layout from 110 columns and
 above the prompt otherwise. It lists the repository's jobs from `companion status --json`, newest first, 20 a page
 with a `More` row up to 200, then `Older jobs` and `Newest jobs` to page with the cursor: one row each with its id, backend, state and attempt, and its flags: owed messages,
-`not handed back`, `relay lost` (a running job whose relay has not called for 15 minutes, D59) and violations.
+`not handed back` (after a continue the board sent directly it only means no relay handed that attempt back; see
+Known limits), `relay lost` (a running job whose relay has not called for 15 minutes, D59) and violations.
 Selecting a row shows the job from `result --json`: model and effort, its relay and Workflow run, each message with
 how the backend took it, and the report as Markdown.
 
@@ -739,7 +740,9 @@ tool and `updatedInput`. From the transcript: each entry's `type`, `uuid`, `isMe
 content, the origin kinds `coordinator`, `peer`, `human` and `task-notification`, two attachment
 types, and the coordinator's and the typed message's wrappers. From the Workflow harness: the
 transcript path, the marker lines, two system-prompt notes, two trailers, the meta file, the
-journal's `started` lines and the three retry suffixes. From the Mod API's `agent.spawn`: the agent
+journal's `started` lines and the three retry suffixes. From the Mod API's `turn.complete` (an
+agent's `reason: "aborted"`), `tool.call` on `TaskStop` (its `task_id`, and its answer's `task_id`), `$.agent.list()` (id, name, type
+and status), and `agent.spawn`: the agent
 type, the prompt, `resume`, and the placeholder a Workflow run that withholds its script puts in
 the prompt. From `TaskStop`'s `PostToolUse`: the stopped task's id in its result.
 
@@ -1100,6 +1103,10 @@ After a Claude Code update:
 
 **Processes.**
 
+- `not handed back` marks a relay job whose last attempt ended with no hand-back. After a `continue` or `resume` sent
+  to the job directly (`C continue`, `C resume`, the board's direct route), no relay waited for that attempt, so the
+  mark only says no relay handed it back: the report is in `result`. A job's records do not yet say whether a relay
+  waited for an attempt (D61).
 - The board's Steer and Continue read the job, then send: a job that begins another attempt in the moment between
   the two gets the text in that attempt, as a `companion steer` from a shell would. `steer` and `continue` take no
   expected attempt as `cancel --attempt` does (D61).
@@ -1187,9 +1194,18 @@ agent's view with no input, so there a person reaches a relay only through the m
 does nothing; its Background tasks panel's Stop button stops the relay as `x to stop` does. A line typed into a
 relay's own view has no wake ([The wake](#the-wake)): it
 reaches the job at the relay's next call, up to 540 seconds later, or as a continue once the job
-has ended. Esc in a running relay's view, or `x` on its row in the footer's agent list, stops the
-relay agent and leaves its job running, as any end of a relay other than TaskStop does; Claude Code
-fires no hook for it but the module's `turn.complete`. `/relay:cancel <job>` cancels the job. A
+has ended. Esc in a running relay's view, `x` on its row in the footer's agent list, ctrl+x ctrl+k (stop all
+agents) and Desktop's Stop button stop the relay agent and leave its job running, as any end of a
+relay other than TaskStop does (D96). Claude Code fires no hook for such a stop but the module's
+`turn.complete` (`reason: "aborted"`, the agent then listed `killed`), so the module shows a notice
+there: a line in the main transcript and a toast, naming the job, with `/relay:cancel <job>` and
+`/relay:result <job>`. It finds the job with `companion status --all --active --limit 200 --json`,
+following the listing's pages, and stays silent when the job is not `starting` or `running` (ended or
+dead), when no job is found, and where nothing draws (T3, `claude -p`); it shows the notice after the
+turn has completed, never holding it. Measured with `x to stop` and Esc; ctrl+x ctrl+k and Desktop's
+Stop button raise, as far as known, the same signal, but neither is checked live with the notice yet. A TaskStop raises the same `turn.complete`, after
+its `tool.call`; the module remembers the agents a TaskStop named there, narrows that to the agent the
+call's answer names, and shows it no notice, since the TaskStop hook cancels its job. A Workflow's agents are not listed, so their stops show none. A
 line typed in the view right after Esc resumes the relay and is delivered at once: a steer while the
 job runs, a continue once it has ended. In the terminal, ↓ and Enter open the view with the cursor
 still in the agent list; ↑ (as many times as ↓) reaches the view's prompt, and the first Esc does

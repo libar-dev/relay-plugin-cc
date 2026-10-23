@@ -62,7 +62,7 @@ export const reviewSupport = {
     ensureAvailable(request.cwd);
     const result = await runAppServerReview(request.cwd, {
       target: target.mode === "working-tree" ? { type: "uncommittedChanges" } : { type: "baseBranch", branch: target.baseRef },
-      model: request.model, notificationTap: hooks.tap, ...codexServerArgs(request)
+      model: request.model, notificationTap: hooks.tap, env: hooks.env, onSpawn: hooks.onSpawn, onEnd: hooks.onEnd, ...codexServerArgs(request)
     });
     return {
       status: result.status, sessionId: result.threadId, sourceSessionId: result.sourceThreadId,

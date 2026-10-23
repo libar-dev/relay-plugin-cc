@@ -534,6 +534,7 @@ export async function withAppServer(cwd, fn, options = {}) {
 export function connectOptions(options) {
   return {
     notificationTap: options.notificationTap,
+    env: options.env, onSpawn: options.onSpawn, onEnd: options.onEnd,
     ...(options.args ? { args: options.args } : {})
   };
 }

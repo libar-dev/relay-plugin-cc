@@ -12,7 +12,7 @@ jobs:
   ci:
     name: Node ${{ matrix.node }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     strategy:
       matrix:

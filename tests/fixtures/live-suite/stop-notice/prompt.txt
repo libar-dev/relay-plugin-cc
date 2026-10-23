@@ -1,0 +1,14 @@
+Live suite run synthetic-run.
+Run this relay acceptance check now. Use the tools yourself. Do not write a script to replace these calls.
+Keep your turn until the end of the check; never end it to wait. To wait, run one Bash call whose command is an until-loop on the clock, for example: t=$(( $(date +%s) + 30 )); until [ $(date +%s) -ge $t ]; do sleep 1; done
+Spawn exactly three background relay:job agents with these exact calls, in parallel if possible:
+Agent({"subagent_type":"relay:job","name":"stop-x","description":"stop-x","run_in_background":true,"prompt":"model: gpt-6.1-sol\neffort: low\n---\nRun the shell command `sleep 240` exactly once and wait for it. Then reply done."})
+Agent({"subagent_type":"relay:job","name":"stop-esc","description":"stop-esc","run_in_background":true,"prompt":"model: gpt-6.1-sol\neffort: low\n---\nRun the shell command `sleep 240` exactly once and wait for it. Then reply done."})
+Agent({"subagent_type":"relay:job","name":"stop-ts","description":"stop-ts","run_in_background":true,"prompt":"model: gpt-6.1-sol\neffort: low\n---\nRun the shell command `sleep 240` exactly once and wait for it. Then reply done."})
+
+Save the agentId from each Agent result and its name. Do not send any message yet. Do not read the agents' output transcripts.
+Wait until ALL 3 jobs are actually running, not merely async_launched. Use Bash to read each ${RELAY_JOBS_HOME:-$HOME/.relay-jobs}/relays/<agentId>.json pointer and its jobDir/job.json. Poll with sleep 2 inside one Bash loop until every job has state "running" and an attempt. If any job fails to start, report the failure and stop without the completion marker. Do not spawn replacements.
+
+Print exactly this line by itself and end your turn:
+LIVE-STOP-NOTICE-READY
+Later you will be asked to stop one agent with TaskStop. Do exactly that and nothing else, then end your turn. Until then do not stop, cancel, message or respawn any agent. Acknowledge completion notices in one line only.

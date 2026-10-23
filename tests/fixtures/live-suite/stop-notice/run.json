@@ -1,0 +1,44 @@
+{
+  "runId": "synthetic-run",
+  "check": "stop-notice",
+  "surface": "terminal",
+  "backends": [
+    "codex"
+  ],
+  "relayVersion": "3.0.0-test",
+  "completed": true,
+  "stopNotice": {
+    "codex": {
+      "x": {
+        "agentId": "agent-x",
+        "jobId": "job-x",
+        "keyAt": "2026-10-23T10:00:30.000Z",
+        "after": {
+          "at": "2026-10-23T10:00:55.000Z",
+          "state": "running"
+        },
+        "cleanupAt": "2026-10-23T10:00:56.000Z",
+        "toast": {
+          "found": true,
+          "at": "2026-10-23T10:00:31.200Z",
+          "screen": "screen-toast.txt"
+        }
+      },
+      "esc": {
+        "agentId": "agent-esc",
+        "jobId": "job-esc",
+        "keyAt": "2026-10-23T10:00:35.000Z",
+        "after": {
+          "at": "2026-10-23T10:00:55.000Z",
+          "state": "running"
+        },
+        "cleanupAt": "2026-10-23T10:00:56.000Z"
+      },
+      "taskStop": {
+        "text": "Stop the background agent stop-ts now with the TaskStop tool, then end your turn. Do nothing else.",
+        "sentAt": "2026-10-23T10:00:40.000Z",
+        "endedAt": "2026-10-23T10:00:43.100Z"
+      }
+    }
+  }
+}

@@ -4,11 +4,12 @@
 
 export type RelayBoardJob = {
   id: string;
-  state: "starting" | "running" | "completed" | "failed" | "cancelled" | "dead";
+  state: "queued" | "starting" | "running" | "completed" | "failed" | "cancelled" | "dead";
   backend: string;
   model: string | null;
   effort: string | null;
   attempts: number;
+  admission?: { reason: string | null; since: string | null; admittedAt: string | null } | null;
   completedAt: string | null;
   reportPath: string | null;
   relay: {
@@ -67,6 +68,7 @@ export type RelayBoardRetry = {
   text: string;
   kind: "steer" | "continue";
   attempts: number;
+  admission?: { reason: string | null; since: string | null; admittedAt: string | null } | null;
 };
 
 declare module "claude-code" {
@@ -87,6 +89,9 @@ declare module "claude-code" {
         delivered: { since: number; preview: string; line: string } | null;
       } | null;
       boardConfirm: { id: string; attempt: number } | null;
+      // Not the board's: the stop notice's TaskStop marks, an agent id or the text a TaskStop named,
+      // each with the time its mark ends, or null for a mark made when the clock could not be read.
+      stopMarks: Record<string, number | null>;
     };
   }
 }

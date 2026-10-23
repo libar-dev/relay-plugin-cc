@@ -623,7 +623,10 @@ result comes from the job's `messages` on its next read (the outcome, never the 
 the relay reads as delivered only once a message with the sent text's preview, carried by the relay since the send,
 shows there. The board
 records no hand-back: a continue sent to the job directly runs an attempt nobody hands back, so that attempt stays
-`not handed back`, and the board shows its report. A steer sent directly to a job whose relay still waits comes back in
+`not handed back`, and the board shows its report. That flag is a known limit for 3.0 (design.md): after a direct
+continue it means only that no relay handed that attempt back, not that a caller lost its result; the report is in
+`result`. Telling the two apart needs the worker to record on each attempt whether a relay waits for it, which is
+left for after 3.0, with an expected attempt for `steer` and `continue`. A steer sent directly to a job whose relay still waits comes back in
 that relay's block, to the Workflow script or the other session.
 
 Decided with GPT-6.1 Sol and Opus 5.5 as advisors. They rejected routing by `$.agent.list()` alone (it holds no Workflow
@@ -822,43 +825,98 @@ two-family check of the cut's CHANGELOG entry ran before its merge anyway and fo
 know, so a cut's gates are now CI, Greptile and that check, all before the merge and the tag; this replaces D70's
 reviews after the merge. D16's `.coderabbit.yaml` is unchanged.
 
-### D79. Relay never leaves Claude Code's sandbox unasked (owner, 23 October 2026)
+### D80. The real-API suite stays in the smoke kit; no `scripts/live` check runs it (e2e lead)
 
-The M3 lead ran the live checks D73 left open on pre.2's install, on 23 October with Claude Code 2.1.309. In default
-permission mode no step asked anything, because the commands' `allowed-tools` grant `Write` and `Bash(node:*)`.
-`/relay:review`'s estimate and size question ran on a dirty working tree and on a clean branch, and an option-like
-base was refused. `--background` ran for both review commands. No marker file was created, and no `relay-args-*`
-directory was left. Under Claude Code's sandbox, Write put the argument file in the sandbox's temporary directory,
-and the companion read it. The companion then failed with `EPERM` writing the jobs home (`~/.relay-jobs`), which the
-sandbox does not let a Bash command write. Claude ran the companion again with `dangerouslyDisableSandbox`, and the
-user was not asked. Claude Code's sandbox docs say why ("The unsandboxed retry escape hatch"): an allow rule that
-matches a command also approves its unsandboxed retry, and the review and setup commands' `allowed-tools` grant
-`Bash(node:*)`. The same docs say the denied write reads "Operation not permitted" on macOS and "Read-only file
-system" on Linux.
+The owner asked to consider an opt-in `scripts/live` check that runs the suite. Declined for 3.0: relay-plugin-cc is
+public and the kit is private, so a public check would run a suite nobody else can read; the live suite runs with
+`--plugin-dir` and a fresh jobs home, while the real-API suite's point is the install path a user takes (D12); Phase 4
+is changing the runner; and one suite in two homes doubles its upkeep. The suite reuses what the live suite learned
+(steer proved from the ledger and the outcomes, hooks proved from transcript attachments, D25's 30 s, D27's clean
+session, D30's trust rule, D37's build line), not its code. Reopen after 3.0 if the kit goes public or the runner
+gains a way to load checks from outside the repository.
 
-The owner, through the coordinating thread: never bypass the sandbox unasked. On a sandbox `EPERM` (or "operation
-not permitted"), stop and tell the user the two choices:
-- add the jobs home (`~/.relay-jobs`, or `$RELAY_JOBS_HOME`) to the sandbox's write paths, with
-  `{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}` in their user settings;
-- run without the sandbox.
+### D81. One run is one conversation, in its own folder, with a private jobs home (e2e lead)
 
-What it changes: `commands/review.md`, `adversarial-review.md` and `setup.md`, `agents/job.md`, the jobs skill and
-result-handling say it, for `EPERM` and for Linux's `EROFS`; the review commands allow the two choices after their
-verbatim output. The README has a section, "Relay and Claude Code's sandbox", which also names
-`sandbox.allowUnsandboxedCommands: false`, Claude Code's strict sandbox mode, as the user's way to forbid every
-unsandboxed retry, and an ask rule for `Bash(dangerouslyDisableSandbox:true)` to be asked each time. The README also
-says why the review and setup commands raise no permission prompt. A test pins the texts.
+A run drives one Claude Code conversation in the suite's own work folder (`~/dev-libar/relay-smoke-e2e`, a small git
+repository the suite creates once, so it answers only that folder's trust, D30) with a Sonnet 5.5 lead. The resume
+steps end that conversation's process and continue it with `claude --resume`, because `resumeFromRunId` is
+same-session only. `RELAY_JOBS_HOME` points at the run's own folder, seeded with the user's `mcpOff` list only (so the
+review gate is off, its default): `/relay:status` then lists this run's jobs only, and nothing can match another
+thread's job on a machine that runs relays. By default the suite installs nothing: it runs the cut infra installed at
+user scope. Installing a candidate build into the work folder takes `--install-local`, and that is infra's to run, not
+a lead's. Rejected: the default jobs home (other runs' jobs mix in, and an interrupted run leaves jobs there), a
+session per step (it would not test the features together).
 
-Rejected:
-- Documenting that relay leaves the sandbox. It would make a silent bypass the plugin's documented behaviour.
-- Removing `Bash(node:*)` from the commands. The retry would then prompt, but so would every companion call that
-  runs without the sandbox, the usual case.
+### D82. Verdicts come from files; the checker imports nothing from relay (e2e lead)
 
-Open, for after 3.0:
-- Whether the relay agent (`relay:job`) bypasses the sandbox on its own `companion` calls is not measured. Its
-  instructions now forbid it.
-- Whether a job runs inside the sandbox with only the jobs home allowed is not measured. A backend that writes its
-  own home or needs the network may still fail there.
+Each cell is judged from the transcript, the Workflow's files, the jobs home and the files the jobs wrote; a model's
+words count only for a nonce, compared as words. The checker reads the files itself rather than importing
+`scripts/live/lib/evidence.mjs`, which is internal to relay and changes with Phase 4's `--json` work.
+
+### D83. A tool call is proved by the file it wrote, inside the job's attempt (e2e lead)
+
+Each job writes its Apify and Firecrawl output, and each command's exit status, to `out/<run>/<job>-*`. A cell passes
+on the content (Apify's one item with HTTP 200 and the title "Example Domain"; Firecrawl's markdown, which holds the
+page body "This domain is for use in documentation examples" and no title), `exit=0`, a last write inside the job's
+attempt, and the run's shim log naming that file as the call's stdout (D88), so a file from another run or job cannot
+pass. Rejected: the backends' event streams, whose formats differ and which do not carry tool calls on every backend
+(Kimi's lists only message chunks).
+
+### D84. A backend's limit is a cell, and a limit that stops holding fails (e2e lead)
+
+Kimi Code's steer as the next turn is "limit"; transfer on Grok Build, ZCode and Kimi Code is "n/a"; a cancelled job
+not adopted on resume is "limit" (D87); after the hand-back Claude Code 2.1.309 offers no agent view to type into,
+"limit". A Kimi steer that lands in the running turn fails, so the documentation is fixed. Whether a build's TaskStop
+hook records the stopped job's hand-back (D58) is read from the build itself (`scripts/hooks/relay-stop.mjs`), not
+from its version: 3.0.0-pre.1 is dev.4's code. Without it the TaskStop cell is a limit; with it, the hand-back is
+required.
+
+### D85. A run is bounded in time and credits, by the run's own shims (e2e lead)
+
+Each phase has a timeout; a full run stops at 90 minutes (the M3's full run took 33), a soak at 180 (24 items took 7
+minutes: the Workflow runs 16 agents at once, so the item count sets a soak's length, not its memory). The briefs call
+the run's `firecrawl` and `apify` shims by path; each logs its call and refuses calls past the run's budget (nine
+scrapes and five Apify runs for a full run, one scrape per soak item, plus a margin of three scrapes and two Apify
+runs), so a looping job cannot spend unbounded credits. The runner refuses to start below 100 Firecrawl credits; the
+account's credit difference is reported, not judged, since other threads share it.
+
+### D86. The suite runs against every pre-release cut, on Fedora and on the M3 (owner's rulings, e2e lead)
+
+The owner cuts pre-releases (3.0.0-pre.1, .2, …) that infra installs at user scope on the M3 and on Fedora, and uses
+them before 3.0.0. The real-API suite runs against each installed cut (`--installed`) on both machines, as testing
+that finds issues, not as a gate before a cut; its findings feed the fixes. Leads install nothing: every plugin
+install or update goes through infra.
+
+### D87. Salvage and resume prove what relay does today for the owner's long Workflows (e2e lead)
+
+Two steps cover the owner's workload. `salvage`: a job cancelled mid-turn, then asked for its work, must run a new
+attempt on the same backend session whose report names the work done before the cancel. `resume-stop` and
+`resume-end`: a Workflow of short, long and kill jobs on every backend, one cancel job and a native agent, interrupted
+by TaskStop on the Workflow or by ending the session, then resumed with `resumeFromRunId` in a new session process:
+finished jobs come back from the cache and are not run again, running jobs are adopted, a killed worker is restarted.
+The runner interrupts only once every finished call's result is in the Workflow's journal (a relay takes 4 to 7 s to
+hand back), so a finished call that starts again on resume fails the cell: in the first runs, before this wait, 4 of
+15 finished calls ran again and adopted their own completed jobs. A cancelled job is not adopted and its work runs
+again (`findAdoptableRelayJob`): a documented limit, not a fail; the cell turns to `pass: adopted` if relay changes.
+(The owner's stop decision, D96, leaves a user's stop running and keeps TaskStop and `cancel` cancelling, so this
+limit stands.)
+
+### D88. Tool calls go through the run's shims by absolute path (e2e lead)
+
+Codex runs commands in a login shell (`/bin/bash -lc`), which resets PATH, so a shim found by name missed Codex's and
+Grok's calls. The briefs call `<run>/bin/firecrawl` and `<run>/bin/apify`, which log each call and refuse calls past
+the run's budget; each tool job first records `command -v` of each CLI from its own shell, so finding the CLIs by name
+inside every harness is still proved. The session also sets `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS=16` (the
+default cap is min(16, CPUs − 2), six on the ThinkPad).
+
+### D89. A run that fails on the machine is not a relay finding (e2e lead)
+
+On a machine other leads share, a saturated load or an out-of-memory kill makes the runner's own calls time out
+(`spawnSync … ETIMEDOUT`), and the Claude usage limit stops a session; such a run measures the machine. Each run takes
+the shared `/tmp/relay-heavy.lock`, then waits inside it until the one-minute load is under a limit (16 on the
+ThinkPad) and enough memory is available (6 GB on the ThinkPad: `MemAvailable`; on macOS `vm_stat`'s free, inactive,
+speculative and purgeable pages); the loop spaces runs (one per three hours on the ThinkPad) and the soak, 16 agents
+wide, runs on the M3; findings are reported only from runs whose failures are relay's, each with its run id.
 
 ### D90. One walkthrough, two documents (guide lead)
 

@@ -191,11 +191,23 @@
               "server": null,
               "undelivered": [],
               "dropped": [],
-              "handedBackAt": null
+              "handedBackAt": null,
+              "admission": {
+                "state": "bypassed",
+                "notes": [
+                  "load guard off"
+                ]
+              },
+              "refusal": null
             }
-          ]
+          ],
+          "loadGuard": {
+            "enabled": false,
+            "reason": "RELAY_ADMISSION=off",
+            "pauses": []
+          }
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\nload-guard: off (RELAY_ADMISSION=off)\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       },
       {
         "phase": "continue",
@@ -286,11 +298,23 @@
               "server": null,
               "undelivered": [],
               "dropped": [],
-              "handedBackAt": null
+              "handedBackAt": null,
+              "admission": {
+                "state": "bypassed",
+                "notes": [
+                  "load guard off"
+                ]
+              },
+              "refusal": null
             }
-          ]
+          ],
+          "loadGuard": {
+            "enabled": false,
+            "reason": "RELAY_ADMISSION=off",
+            "pauses": []
+          }
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\nload-guard: off (RELAY_ADMISSION=off)\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       },
       {
         "phase": "resume",
@@ -406,11 +430,23 @@
               "server": null,
               "undelivered": [],
               "dropped": [],
-              "handedBackAt": null
+              "handedBackAt": null,
+              "admission": {
+                "state": "bypassed",
+                "notes": [
+                  "load guard off"
+                ]
+              },
+              "refusal": null
             }
-          ]
+          ],
+          "loadGuard": {
+            "enabled": false,
+            "reason": "RELAY_ADMISSION=off",
+            "pauses": []
+          }
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\nload-guard: off (RELAY_ADMISSION=off)\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       }
     ]
   },
@@ -606,11 +642,23 @@
               "server": null,
               "undelivered": [],
               "dropped": [],
-              "handedBackAt": null
+              "handedBackAt": null,
+              "admission": {
+                "state": "bypassed",
+                "notes": [
+                  "load guard off"
+                ]
+              },
+              "refusal": null
             }
-          ]
+          ],
+          "loadGuard": {
+            "enabled": false,
+            "reason": "RELAY_ADMISSION=off",
+            "pauses": []
+          }
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\nload-guard: off (RELAY_ADMISSION=off)\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       },
       {
         "phase": "continue",
@@ -701,11 +749,23 @@
               "server": null,
               "undelivered": [],
               "dropped": [],
-              "handedBackAt": null
+              "handedBackAt": null,
+              "admission": {
+                "state": "bypassed",
+                "notes": [
+                  "load guard off"
+                ]
+              },
+              "refusal": null
             }
-          ]
+          ],
+          "loadGuard": {
+            "enabled": false,
+            "reason": "RELAY_ADMISSION=off",
+            "pauses": []
+          }
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\nload-guard: off (RELAY_ADMISSION=off)\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       },
       {
         "phase": "resume",
@@ -821,11 +881,23 @@
               "server": null,
               "undelivered": [],
               "dropped": [],
-              "handedBackAt": null
+              "handedBackAt": null,
+              "admission": {
+                "state": "bypassed",
+                "notes": [
+                  "load guard off"
+                ]
+              },
+              "refusal": null
             }
-          ]
+          ],
+          "loadGuard": {
+            "enabled": false,
+            "reason": "RELAY_ADMISSION=off",
+            "pauses": []
+          }
         },
-        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
+        "row": "jobs-home: <tmp>/jobs\nrepo: <repo>\nreview-gate: disabled\nfast-tier: allowed\nload-guard: off (RELAY_ADMISSION=off)\njobs: 1\n\n| job                   | state     | kind | backend | model/effort | duration | summary     | relay |\n|-----------------------|-----------|------|---------|--------------|----------|-------------|-------|\n| <job> | completed | task | codex   | gpt-test/low | <duration> | First turn. |       |\n"
       }
     ]
   }
