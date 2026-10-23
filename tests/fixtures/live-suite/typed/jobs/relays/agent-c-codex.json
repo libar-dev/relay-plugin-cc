@@ -1,0 +1,4 @@
+{
+  "jobDir": "repo/job-c-codex",
+  "transcriptPath": "../transcript/subagents/agent-c-codex.jsonl"
+}

@@ -1,0 +1,18 @@
+{
+  "main": [
+    "Claude Code v2.1.309\n⏺ Jobs started.\n\n❯ \n──────────────────────────\n  ⏺ main\n  ◯ unrelated  background work  1m · ↓ 100 tokens\n"
+  ],
+  "closed": [
+    "Claude Code v2.1.309\nAgent \"typed-a-codex\" finished\n\n❯ \n⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\n"
+  ],
+  "return": [
+    "Claude Code v2.1.309\n⏺ Jobs started.\n\n❯ \n──────────────────────────\n  ◯ main\n  ◯ unrelated  background work  1m · ↓ 100 tokens\n  ⏺ typed-a-codex  background work  1m · ↓ 100 tokens\n",
+    "Claude Code v2.1.309\n⏺ Jobs started.\n\n❯ Message @typed-a-codex…\n──────────────────────────\n❯ ◯ main\n  ◯ unrelated  background work  1m · ↓ 100 tokens\n  ⏺ typed-a-codex  background work  1m · ↓ 100 tokens\n",
+    "Claude Code v2.1.309\n⏺ Jobs started.\n\n❯ \n──────────────────────────\n❯ ⏺ main\n  ◯ unrelated  background work  1m · ↓ 100 tokens\n  ◯ typed-a-codex  background work  1m · ↓ 100 tokens\n",
+    "Claude Code v2.1.309\n⏺ Jobs started.\n\n❯ \n──────────────────────────\n  ⏺ main\n  ◯ unrelated  background work  1m · ↓ 100 tokens\n  ◯ typed-a-codex  background work  1m · ↓ 100 tokens\n"
+  ],
+  "bad-return": [
+    "Claude Code v2.1.309\n⏺ Jobs started.\n\n❯ \n──────────────────────────\n  ◯ main\n  ◯ unrelated  background work  1m · ↓ 100 tokens\n  ⏺ typed-a-codex  background work  1m · ↓ 100 tokens\n",
+    "unexpected screen"
+  ]
+}

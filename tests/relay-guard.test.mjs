@@ -90,7 +90,7 @@ function assertNoReport(text, what) {
 
 // The text a SubagentStop block asks for: everything after the reason's fixed lead-in.
 function expectedFromReason(reasonText) {
-  const lead = "Reply with exactly this text and nothing else:\n";
+  const lead = "Reply with exactly this text and nothing else, with no code fence around it:\n";
   assert.ok(reasonText.includes(lead), reasonText);
   return reasonText.slice(reasonText.indexOf(lead) + lead.length);
 }
@@ -747,7 +747,7 @@ test("only the block itself passes; trailing whitespace is ignored; eight blocks
   const without = (key) => block.split("\n").filter((line) => !line.startsWith(`${key}: `)).join("\n");
   assert.match(block, /^relay: /m);
   assert.equal(await stop(ctx, without("relay")), null, "the relay's own line left out");
-  assert.equal(await stop(ctx, `\`\`\`\n${without("mode")}\n\`\`\``), null, "fenced, a mode line left out");
+  assert.equal(await stop(ctx, `   \`\`\`YAML\n${without("mode")}\n   \`\`\``), null, "fenced with indentation and an uppercase tag, a mode line left out");
   assert.equal((await stop(ctx, without("state")))?.decision, "block", "the state line left out");
   assert.equal((await stop(ctx, without("report")))?.decision, "block", "the report line left out");
   assert.equal((await stop(ctx, block.replace("state: completed", "state: failed")))?.decision, "block", "a changed line");

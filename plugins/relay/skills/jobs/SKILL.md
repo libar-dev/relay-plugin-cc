@@ -184,7 +184,7 @@ A failed cancel stays pending while the job runs and tries remain. A terminal jo
 | `SendMessage` with exactly `cancel` | interrupts the turn; if the job has not ended 10 s later, kills the worker | nothing |
 | `TaskStop` on the agent | stops the agent and cancels the job, as `cancel` does; the TaskStop result comes with the cancelled job's block | nothing |
 
-A message reaches the job within seconds: the plugin's hooks module ends the relay's current wait when the message is sent, and the relay's hook delivers it. Stop a job with `TaskStop` when you no longer need the agent; send `cancel` when you want the agent to hand back the cancelled job's result. A job survives its agent ending any other way, and the end of the Claude session. A dead or failed job continues on a message or `C resume <job>`.
+A message reaches the job within seconds: the plugin's hooks module ends the relay's current wait when the message is sent, and the relay's hook delivers it. A line the user types into the agent's own view has no such wake: it reaches the job at the relay's next step, at most nine minutes later, or as a new turn once the job has ended. Stop a job with `TaskStop` when you no longer need the agent; send `cancel` when you want the agent to hand back the cancelled job's result. A job survives its agent ending any other way, and the end of the Claude session. A dead or failed job continues on a message or `C resume <job>`.
 
 ## Inside a workflow script
 

@@ -1,0 +1,23 @@
+{
+  "id": "job-c-codex",
+  "state": "completed",
+  "request": {
+    "backend": "codex",
+    "model": "gpt-6.1-sol"
+  },
+  "relay": {
+    "agentId": "agent-c-codex",
+    "transcriptPath": "../transcript/subagents/agent-c-codex.jsonl"
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "startedAt": "2026-10-22T10:00:10.000Z",
+      "endedAt": "2026-10-22T10:04:10.000Z",
+      "state": "completed",
+      "relayVersion": "3.0.0-test",
+      "turnId": "turn-c-codex-1"
+    }
+  ],
+  "messages": []
+}
