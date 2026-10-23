@@ -89,8 +89,9 @@ procedure (see "Pre-release cuts").
 
 ## What the release PR must pass
 
-D60 added the real-API suite, the screenshots, the walkthrough with the pre-release guide and the user guide
-(D93), and the reviews, and dropped the demo recording: feature screenshots and the user guide replace it.
+D60 added the real-API suite, the screenshots, the walkthrough with its test script (now the pre-release guide,
+D93) and the user guide, and the reviews, and dropped the demo recording: feature screenshots and the user guide
+replace it.
 
 - `npm test`, `npm run check`, `claude plugin validate plugins/relay`, `claude plugin test plugins/relay`, CI,
   CodeRabbit and Greptile.
@@ -102,8 +103,9 @@ D60 added the real-API suite, the screenshots, the walkthrough with the pre-rele
 - The screenshots of every user-facing feature, in the CLI and in Desktop, the status line and the board included.
 - The feature walkthrough done, the user guide in the release, and the owner's pre-release guide current, which
   took the manual test script's place (D93).
-- The reviews of step 7 done, and their fixes merged: the skills review with Opus 5.5's skill updates, the
-  coverage review, the review of the whole branch, and the UX and UI review.
+- The reviews of step 7 done, and their fixes merged: the skills review with Opus 5.5's skill updates (its
+  corrections; the new skills it proposed wait for a package after 3.0, D74), the coverage review, the review of the
+  whole branch, and the UX and UI review.
 - The texts that promise for every relay what holds only for a relay started with the Agent tool, fixed:
   design.md's interface table and "Under the Workflow tool", the jobs skill's message rules, `agents/job.md` on
   continue and cancel, and the CHANGELOG's Phase 1 line on messages from other agents. The docs say what a
@@ -124,11 +126,11 @@ when the owner decides.
 
 ## Pre-release cuts
 
-D95, D97, D98 and D70. Each cut goes on the M3 and the ThinkPad. The owner tests it with real use, with the guide
-lead's pre-release guide as a checklist, and the threads' testing runs against it: the real-API suite, infra's
-thread tests and heavy orchestration runs. Fixes go into the next cut, and cuts keep coming for 48 hours; the owner's
-heavy production workloads wait until the owner is confident. A survey of how the cuts are used runs partway through
-and at the end (D98). The M1 stays on 2.2.0 as the fallback.
+D95, D97, D98, D99 and D70. Each cut goes on the M3 and the ThinkPad. The owner tests it with real use, with the
+guide lead's pre-release guide as a checklist, and the threads' testing runs against it: the real-API suite, infra's
+thread tests and heavy orchestration runs. Fixes go into the next cut, and cuts keep coming as issues are found; the
+owner's heavy production starts on pre.2 (D99). A survey of how the cuts are used runs twice (D98). The M1 stays on
+2.2.0 as the fallback.
 
 A cut is a PR into `release/3.0` that changes only the version fields `node scripts/bump-version.mjs 3.0.0-pre.N`
 sets, the README's Development line and one CHANGELOG entry under the 3.0.0 heading (D70). It merges once

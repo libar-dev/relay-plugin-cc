@@ -624,25 +624,33 @@ How D95's cuts are made.
 
 ### D74. New skills wait for a package after 3.0; corrections ship now (owner, 23 October 2026)
 
-GPT-6 Astra's review of the skills (D60, part 7) proposed four skills relay lacks: briefing an unattended job,
-operating and troubleshooting jobs, composing and recovering a Workflow, and choosing a backend and route. They go to
-a package after 3.0. Corrections to existing instructions that are wrong or dangerous ship now, in the cuts.
+The four proposed new skills go to a package after 3.0. Corrections to existing instructions that are wrong or
+dangerous ship now, in the cuts. (The four, from GPT-6 Astra's review of the skills, D60 part 7: briefing an
+unattended job, operating and troubleshooting jobs, composing and recovering a Workflow, and choosing a backend and
+route.)
 
 ### D75. `/relay-board`'s contract for 3.0 (owner, 23 October 2026)
 
-The board (D62) takes mouse clicks at any time in fullscreen, and keys only while the session is idle. That is the
+The board (`/relay-board`, D62; its input, D65; both logged with Phase 4's board PR) takes mouse clicks at any time
+in fullscreen, and keys only while the session is idle. That is the
 contract for 3.0, and the docs say it plainly.
 
 ### D76. The release candidate, and "Cloud Contest" (owner, 23 October 2026)
 
-"Cloud Contest" (D60, part 11) was a dictation slip, not a step. The stable release candidate is the last installed
-cut, with the finished stable PR and its reviews, and the owner's go after real use. No extra environment. This
-closes the item that was open for the owner.
+The owner wrote on 22 October that the release candidate is tested "after we have confirmation from Cloud Contest";
+it was read until now as the automated checks passing on the release candidate, and listed as open for the owner.
+"Cloud Contest" was a dictation slip, not a step. The stable release candidate is the last installed cut, with the
+finished stable PR (the release PR, `release/3.0` into `main`) and its reviews, and the owner's go after real use. No
+extra environment.
+
+What it changes: D60, part 11, and D95: the release candidate is confirmed by the finished release PR and its
+reviews, and tested by the owner's real use; D70's last cut is the last one installed. The item open for the owner
+closes.
 
 ### D77. Plugin updates need no T3 restart; infra installs (owner, 23 October 2026)
 
 A user-level install reaches new Claude sessions at once, and an existing session picks it up with `/reload-plugins`;
-no T3 restart is needed for a plugin update. Every install and every piece of infrastructure work goes to an infra
+no T3 restart is needed for a plugin update. Every install and every piece of infrastructure work goes to a new infra
 session on the M1's libar-infra project; leads do none of it (D97).
 
 ### D90. One walkthrough, two documents (guide lead)
@@ -686,7 +694,7 @@ suite tests the cut's plugin code with `--plugin-dir`. Under D97 none of them ga
 check-version` and CI (D70), and the release PR's gates still run the live and real-API suites on the release head
 (D60, part 9). The guide holds no backend-by-surface matrix of its own. With every cut, the guide lead updates the
 known-issues list in a docs PR of its own, not in the cut PR (D70); the list is part of the go/no-go for heavy
-production (D97). The first draft's step-by-step script stays in the guide lead's working folder.
+production (D97, as D99 amended it). The first draft's step-by-step script stays in the guide lead's working folder.
 
 What it changes: D60, part 11, as D95 amended it. There is no step-by-step script; the walkthrough feeds the
 pre-release guide and the user guide, and D95's "built from the manual test script" means that the guide replaced it.
@@ -804,5 +812,8 @@ in docs/thread-surveys.md, and the next starts there.
 
 ### D99. Heavy production starts on pre.2 (owner, 23 October 2026; amends D97)
 
-The owner is ready to start heavy production and waits for the pre.2 tag, which is now the top priority. D97 held
-heavy production back for 48 hours of cuts; it starts on pre.2. Cuts keep coming after it as issues are found.
+The owner is ready to start heavy production and waits for the pre.2 tag, which is now the top priority.
+
+What it changes: D97's 48-hour hold on heavy production ends; heavy production starts on pre.2. D98's survey stays,
+and is no longer a step before heavy production; the coordinating thread times its passes. D95's cuts go on after
+pre.2 as issues are found.
