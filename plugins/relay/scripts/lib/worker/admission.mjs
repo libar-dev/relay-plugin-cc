@@ -81,6 +81,10 @@ export function modelClass({ backend = "codex", model, effort } = {}, overrides 
   return DEFAULTS.lightEfforts.includes(e) || DEFAULTS.lightModel.test(m) ? "light" : "medium";
 }
 
+// A persisted scheduling class is descriptive. Quota eligibility always comes
+// from an identified effective selection, including older jobs and slot records.
+const isVeryHeavy = request => modelClass(request) === "very-heavy";
+
 // Admission alone uses this bounded batch cache, including ownership and legacy reads.
 const processCaches = new Map();
 export function holderAlive(identity, { platform = process.platform, now = Date.now(), ps = spawnSync } = {}) {
@@ -297,8 +301,10 @@ function slots(home, deps, clean = true) {
       if (clean && deps.now() - fs.statSync(file).mtimeMs > 10000) fs.rmSync(file, { force: true }); continue;
     }
     const live = (s.state === "spawning" && age(deps.now(), s.since, DEFAULTS.spawnGraceMs)) || deps.isAlive({ pid: s.pid, startTime: s.processStart });
+    const job = readJob(s.jobDir);
+    s.quotaHeavy = isVeryHeavy({ backend: s.backend, model: s.model, effort: s.effort }) || isVeryHeavy(job?.request);
     s.weight = WEIGHTS[s.class];
-    const backendLive = serversAlive(readJob(s.jobDir), deps);
+    const backendLive = serversAlive(job, deps);
     if (live || backendLive) result.push(!live && backendLive ? { ...s, state: "running" } : s);
     else if (clean) fs.rmSync(file, { force: true });
   }
@@ -384,7 +390,7 @@ export function admit(ctx, injected = {}) {
     if (!deps.scanUnslotted) directories(deps.env, now);
     const cls = modelClass(ctx.request), w = WEIGHTS[cls];
     const mine = { v: 1, jobId: ctx.jobId, jobDir: ctx.jobDir, pid: ctx.me.pid, processStart: ctx.me.startTime,
-      backend: ctx.request.backend ?? "codex", model: ctx.request.model, effort: ctx.request.effort, class: cls, weight: w,
+      backend: ctx.request.backend ?? "codex", model: ctx.request.model, effort: ctx.request.effort, class: cls, weight: w, quotaHeavy: cls === "very-heavy",
       since: iso(now), waitingSince: ctx.waitingSince ?? null, checkedAt: iso(now), probe: false, probeGeneration: null,
       holdGroup: machine.group, scopes: machine.scopes, hostTotalBytes: machine.totalBytes };
     const notes = [...machine.notes, ...(config.notes ?? [])];
@@ -402,12 +408,12 @@ export function admit(ctx, injected = {}) {
       mine.waitingSince ??= own?.state === "waiting" ? own.waitingSince : null;
       const running = all.filter(s => s.jobId !== ctx.jobId && s.state === "running");
       const legacy = legacyJobs(home, ctx.jobId, all, deps);
-      const active = [...running, ...legacy.map(j => ({ backend: j.request?.backend ?? "codex", class: modelClass(j.request) }))];
+      const active = [...running, ...legacy.map(j => ({ backend: j.request?.backend ?? "codex", quotaHeavy: isVeryHeavy(j.request) }))];
       const eligible = (candidate, candidateMachine, pending, warm = false) => {
         const pause = pauseRead(home, candidate.backend, deps, true);
         if (pause && now < Date.parse(pause.until)) return { reason: refusalReason(pause), kind: "pause" };
         if (pause?.probe && (pause.probe.jobId !== candidate.jobId || pause.probe.pid !== candidate.pid || pause.probe.startTime !== candidate.processStart)) return { reason: `${candidate.backend} paused: waiting for probe job ${pause.probe.jobId}`, kind: "probe" };
-        if (candidate.class === "very-heavy" && active.filter(s => s.class === "very-heavy").length >= settings.maxVeryHeavy) return { reason: `very-heavy quota: ${settings.maxVeryHeavy} participating jobs already running`, kind: "very-heavy" };
+        if (candidate.quotaHeavy && active.filter(s => s.quotaHeavy).length >= settings.maxVeryHeavy) return { reason: `very-heavy quota: ${settings.maxVeryHeavy} participating jobs already running`, kind: "very-heavy" };
         const memory = memoryCheck(candidateMachine, guardSettings(config, candidateMachine), pending, startupBytes(candidate.backend));
         if (memory) return memory;
         const state = machineState(candidateMachine);
@@ -540,7 +546,7 @@ export function describeGuard(env = process.env, { readSensors = true } = {}, in
     const running = all.filter(s => s.state === "running");
     const legacy = legacyJobs(home, null, all, deps);
     return { enabled, ...machine, notes: [...machine.notes, ...(deps.readAdmissionConfig(env).notes ?? [])], state: machineState(machine).state, ...guardSettings(deps.readAdmissionConfig(env), machine), activeSeats: running.length + legacy.length, pendingBytes: holds(all, null, deps.now()).reduce((n, s) => n + s.holdBytes, 0),
-      veryHeavy: running.filter(s => s.class === "very-heavy").length + legacy.filter(j => modelClass(j.request) === "very-heavy").length, waiting: all.filter(s => s.state !== "running").length, pauses };
+      veryHeavy: running.filter(s => s.quotaHeavy).length + legacy.filter(j => isVeryHeavy(j.request)).length, waiting: all.filter(s => s.state !== "running").length, pauses };
   } catch (e) { return { enabled: true, error: e.message, pauses: [] }; }
 }
 export function renderGuard(snapshot) {

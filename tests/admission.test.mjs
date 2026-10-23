@@ -389,3 +389,30 @@ test("impossible fits fail permanently even behind an active provider pause", t 
   s.setMachine({ totalBytes: GiB });
   assert.equal(admit(s.ctx(), s.deps).permanent, true);
 });
+
+test("legacy descriptive classes cannot demote mandatory quota selections", t => {
+  const s = setup(t);
+  const requests = [{ backend: "codex", model: "astra", effort: "high" }, { backend: "grok", model: "ordinary", effort: "max" }];
+  for (const request of requests) {
+    const c = s.ctx(request);
+    assert.equal(admit(c, s.deps).admit, true); s.tick();
+    const file = path.join(s.home, "slots", `${c.jobId}.json`);
+    const slot = JSON.parse(fs.readFileSync(file));
+    writeJob(c.jobDir, { id: c.jobId, state: "running", request: c.request });
+    delete slot.effort; // Earlier slots did not retain effort; the job does.
+    writeJsonAtomic(file, { ...slot, class: "light", weight: 1, quotaHeavy: false });
+  }
+  assert.equal(admit(s.ctx({ model: "astra" }), s.deps).waitKind, "very-heavy");
+  assert.equal(admit(s.ctx({ model: "ordinary", effort: "high" }), s.deps).admit, true);
+});
+
+test("legacy class labels cannot impose quota on ordinary or unknown selections", t => {
+  const s = setup(t);
+  for (const request of [{ model: "ordinary", effort: "high" }, { model: "default", effort: "default" }]) {
+    const c = s.ctx(request); assert.equal(admit(c, s.deps).admit, true); s.tick();
+    const file = path.join(s.home, "slots", `${c.jobId}.json`), slot = JSON.parse(fs.readFileSync(file));
+    writeJsonAtomic(file, { ...slot, class: "very-heavy", weight: 3, quotaHeavy: true });
+  }
+  for (let n = 0; n < 2; n++) { assert.equal(admit(s.ctx({ model: "astra" }), s.deps).admit, true); s.tick(); }
+  assert.equal(admit(s.ctx({ effort: "max" }), s.deps).waitKind, "very-heavy");
+});
