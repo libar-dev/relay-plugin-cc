@@ -1,5 +1,3 @@
-import { validModelClasses } from "../worker/admission.mjs";
-import { UsageError } from "../util/errors.mjs";
 import { resolveJobsHome, repoSlugFor, readJsonOrNull, writeJsonAtomic } from "./store.mjs";
 import { default as fs } from "node:fs";
 import { default as path } from "node:path";
@@ -66,11 +64,8 @@ export function readUserConfig(env = process.env) {
   config.mcpOff = Array.isArray(config.mcpOff)
     ? [...new Set(config.mcpOff.filter((name) => typeof name === "string" && MCP_OFF_NAME_PATTERN.test(name)))]
     : [];
-  config.admission = config.admission === "off" ? "off" : "on";
-  for (const [key, max] of [["minWeight", 1000], ["maxWeight", 10000], ["maxVeryHeavy", 100]]) {
-    if (!Number.isInteger(config[key]) || config[key] < 1 || config[key] > max) config[key] = null;
-  }
-  config.modelClasses = validModelClasses(config.modelClasses);
+  // Provisional guard settings in jobs homes are deliberately ignored.
+  for (const key of ["admission", "minWeight", "maxWeight", "maxVeryHeavy", "modelClasses"]) delete config[key];
   return config;
 }
 
@@ -82,16 +77,4 @@ export function setUserConfig(key, value, env = process.env) {
   const next = { ...(stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {}), [key]: value };
   writeJsonAtomic(file, next);
   return readUserConfig(env);
-}
-
-export function parseModelClassSetting(value) {
-  if (String(value).trim().toLowerCase() === "none") return [];
-  const entries = String(value).split(",").map(part => {
-    const [pattern, cls, extra] = part.trim().split("=");
-    return extra === undefined ? { pattern, class: cls } : null;
-  });
-  if (!entries.length || validModelClasses(entries).length !== entries.length) {
-    throw new UsageError('--model-class needs pattern=class entries (light, medium, very-heavy), or "none".');
-  }
-  return entries;
 }

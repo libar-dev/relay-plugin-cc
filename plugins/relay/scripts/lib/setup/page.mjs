@@ -1,4 +1,4 @@
-import { guardSettings, describeGuard, renderGuard } from "../worker/admission.mjs";
+import { guardSettings, describeGuard, renderGuard, readAdmissionConfig, admissionConfigPath } from "../worker/admission.mjs";
 // The setup page: every backend home the relay can run, in one shape, with no model call.
 //
 // Each backend supplies checks for its version, sign-in, settings and models without
@@ -87,7 +87,7 @@ function nextStepsFor(blocks, settings, cwd, env) {
 
 function readSettings(cwd, env = process.env) {
   const user = readUserConfig(env);
-  return { loadGuard: { admission: user.admission, ...guardSettings(user) }, fastTier: user.fastTier, mcpOff: user.mcpOff, reviewGate: Boolean(readRepoConfig(cwd, env).stopReviewGate) };
+  return { loadGuard: { ...readAdmissionConfig(env), configPath: admissionConfigPath(env), ...guardSettings(readAdmissionConfig(env)) }, fastTier: user.fastTier, mcpOff: user.mcpOff, reviewGate: Boolean(readRepoConfig(cwd, env).stopReviewGate) };
 }
 
 export async function buildSetupPage(cwd, { env = process.env, only = null, actionsTaken = [] } = {}) {
@@ -165,7 +165,7 @@ export function renderSetupPage(page, env = process.env) {
     `settings: fast tier ${settings.fastTier} · job MCP servers off: ${settings.mcpOff.join(", ") || "none"} · review gate ${settings.reviewGate ? "on" : "off"} (this repository)`
   ];
   const g = settings.loadGuard;
-  if (g) lines.push(`load guard: ${g.admission} · minimum weight ${g.minWeight} · ceiling ${g.maxWeight} · very heavy ${g.maxVeryHeavy} · model classes: ${g.modelClasses.map(e => `${e.pattern}=${e.class}`).join(", ") || "none"}`);
+  if (g) lines.push(`load guard: ${g.admission} · no fixed active ceiling · busy allowance ${g.busySeats} seats · very-heavy quota ${g.maxVeryHeavy} · waiting worker limit ${g.maxWaitingWorkers} · domain settings: ${g.configPath}`, "note: old weight/class settings in jobs-home configs are ignored; use setup --admission and --max-very-heavy for the admission domain.");
   if (page.loadGuard) lines.push(...renderGuard(page.loadGuard));
   for (const block of page.backends) lines.push("", ...renderBlock(block, env));
   lines.push("");
