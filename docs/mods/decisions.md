@@ -634,8 +634,9 @@ against a return to interpolation. Current recipes pass fixed argv and get their
 Tests cover exact file content, parser parity, selector errors, home shorthand, target selection,
 cleanup and outer estimation. Signed-out fake backends exercise sign-in advice pasted into Bash.
 
-`hooks/mod/register.js` remains a release dependency. Its normal argv execution is safe, but
-`companionShell` still reconstructs unsafe rerun advice. This file belongs to the hooks module PR.
-Do not change it here: Phase 4 PR #21 quotes its rerun hint. A live Mac/Linux Claude Code check of
-Write permissions, sandbox behavior and background delivery remains outstanding. Unscoped `Write`
-remains until a path-scoped rule is verified in that environment.
+The hooks module's rerun advice (`companionShell` in `hooks/mod/register.js`) was the other place user
+text reached a shell command; Phase 4's PR #21 quotes it, and it merged before this change. A live
+check on Linux (Claude Code 2.1.309, auto mode, `--plugin-dir`) ran `/relay:setup` and
+`/relay:adversarial-review` with focus text holding backticks, `$(…)` and both quote kinds: Write
+took the file with no prompt, the review ran on Codex, and nothing in the text ran. The Mac is
+checked by pre.2's install on the M3. Unscoped `Write` stays until a path-scoped rule is verified.
