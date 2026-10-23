@@ -1,6 +1,6 @@
 ---
 description: List the relay jobs of this repository (or of every repository with --all), or show one job's state block
-argument-hint: '[job-id] [--all]'
+argument-hint: '[job-id] [--all] [--workflow <run>]'
 disable-model-invocation: true
 ---
 

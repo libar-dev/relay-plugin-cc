@@ -591,3 +591,21 @@ The parts:
     that explain the features.
 12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
     owner decides.
+
+### D71. Setup asks a signed-out Grok home twice (release lead)
+
+The end-to-end suite's first run on 3.0.0-dev.4 read Grok as signed out ("You are not authenticated") while Grok jobs
+in the same run worked, and a later setup read it signed in. `/relay:setup` now runs `grok models` once more, a
+second later, before it reports a home signed out; a home that answers signed in either time is signed in. A truly
+signed-out home costs one more listing and a second. Rejected: a line in grok-home.md, which would leave every
+reader of setup's output, Claude included, to second-guess a "signed out" that is usually right.
+
+### D72. Setup shows Kimi as `steer (next turn)` (release lead)
+
+Setup listed `steer` only for a backend that steers its running turn, so Kimi's line had no steering at all, and
+Claude rendered it as "no steering" (the M3's CLI pass, screenshot C3). A message to a running Kimi job is taken as
+its next turn. `/relay:setup` runs `companion setup --json`, and Claude renders the JSON, so `commands/setup.md`
+now tells Claude that `can.steer` is steering the running turn and that a backend without it is written
+`steer (next turn)`; `companion setup`'s text page says the same in Kimi's `can:` line, from a capability note. The
+JSON's `can.steer` keeps its meaning, so a script reading it is unchanged. Rejected: a new JSON field, which would
+change the block's shape for one word of rendering.
