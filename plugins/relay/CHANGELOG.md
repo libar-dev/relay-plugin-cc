@@ -126,9 +126,10 @@ Phase 6, an investigation (the plugin does not change):
 Fixes from the pre-releases:
 
 - When `/relay:status`, `/relay:result`, `/relay:cancel` or `/relay:transfer` fails, the shell command its answer
-  names single-quotes the plugin's path and what you typed, one shell word each, as the hooks module passed them.
-  A job id or `--source` path with backticks, `$(...)` or quotes now runs nothing when the line is pasted into a
-  shell, and splits as the module's own call did.
+  names single-quotes the plugin's path and what you typed, one shell word each, so it passes the companion the
+  same arguments as the hooks module's own call. A job id or `--source` path with backticks, `$(...)` or quotes now
+  runs nothing when the line is pasted into a shell; with a line break in what you typed, the command is shown in a
+  fenced block, which Markdown leaves as written.
 
 Docs:
 

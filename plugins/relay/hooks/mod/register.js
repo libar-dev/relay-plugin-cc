@@ -96,14 +96,20 @@ function shellWord(text) {
   return "'" + text.replace(/'/g, "'\\''") + "'";
 }
 
-// How a person runs the same command by hand, named in every error text. The typed text is one
-// word, as the module passes it, so the companion splits it as it splits "$ARGUMENTS", and a
-// quote, `$(…)` or backtick in it runs nothing.
-function companionShell($, sub, args) {
+// How a person runs the same command by hand, named in every error text: the sentence that names
+// it, then `after`. The typed text is one word, as the module passes it, so the companion splits it
+// as it splits "$ARGUMENTS", and a quote, `$(…)` or backtick in it runs nothing. A line break would
+// end an inline code span and let Markdown read the rest, decoding an entity such as `&#39;` into a
+// quote; such a line goes in a fenced block, where nothing is read as Markdown and line breaks stay.
+function rerunHint($, sub, args, purpose, after = "") {
   const typed = typeof args === "string" && /\S/.test(args) ? " " + shellWord(args) : "";
   const shell = "node " + shellWord($.plugin.root + "/scripts/companion.mjs") + " " + sub + typed;
-  const fence = fenceFor(shell, 1);
-  return fence + shell + fence;
+  if (!/[\r\n]/.test(shell)) {
+    const fence = fenceFor(shell, 1);
+    return "Run " + fence + shell + fence + " in a shell " + purpose + "." + after;
+  }
+  const fence = fenceFor(shell, 3);
+  return "Run this in a shell " + purpose + "." + after + "\n\n" + fence + "sh\n" + shell + "\n" + fence;
 }
 
 // An error text: the command line, then a paragraph of the module's own words.
@@ -147,7 +153,7 @@ async function answerCommand($, e, sub, timeoutMs, withSessionId = false) {
     // One element, as typed: the companion splits it as it split the markdown command's "$ARGUMENTS".
     argv.push(e.args);
   }
-  const shell = companionShell($, sub, e.args);
+  const rerun = (purpose, after) => rerunHint($, sub, e.args, purpose, after);
   let timedOut = false;
   let result;
   try {
@@ -170,18 +176,18 @@ async function answerCommand($, e, sub, timeoutMs, withSessionId = false) {
   } catch (error) {
     const message = error?.message ?? String(error);
     const cancelNote = timedOut ? " The cancel may have gone through anyway; /relay:status shows the job's state." : "";
-    return errorText(e, "Did not finish: " + message + ". Run " + shell + " in a shell to see its output." + cancelNote);
+    return errorText(e, "Did not finish: " + message + ". " + rerun("to see its output", cancelNote));
   }
   const { exitCode, stdout, stderr, isStdoutTruncated, isStderrTruncated } = result;
   if (isStdoutTruncated || isStderrTruncated) {
     const streams = isStdoutTruncated && isStderrTruncated ? "stdout and stderr" : isStdoutTruncated ? "stdout" : "stderr";
-    return errorText(e, "Printed more than 4 MiB on " + streams + ", more than Claude Code passes to a plugin, so none of it is shown. Run " + shell + " in a shell to read it.");
+    return errorText(e, "Printed more than 4 MiB on " + streams + ", more than Claude Code passes to a plugin, so none of it is shown. " + rerun("to read it"));
   }
   if (typeof exitCode !== "number" || Number.isNaN(exitCode)) {
-    return errorText(e, "Ended without an exit code. Run " + shell + " in a shell to see its output.");
+    return errorText(e, "Ended without an exit code. " + rerun("to see its output"));
   }
   if (stdout === "" && stderr === "") {
-    return errorText(e, "Printed nothing (exit " + exitCode + "). Run " + shell + " in a shell to see its output.");
+    return errorText(e, "Printed nothing (exit " + exitCode + "). " + rerun("to see its output"));
   }
   const answer = { text: companionText(e, result) };
   // A headless `claude -p "/relay:result <job>"` then exits as the companion did; the engine
@@ -196,7 +202,7 @@ async function answerCommand($, e, sub, timeoutMs, withSessionId = false) {
 // would run in its place. The handler has a one-second grace, so it makes no call on `$`.
 function moduleFailed($, e, next, sub) {
   const why = next.error.kind === "timeout" ? "it ran past its time budget" : next.error.message ?? "it failed";
-  return errorText(e, "The relay module failed while answering it: " + why + ". Run " + companionShell($, sub, e.args) + " in a shell to see its output.");
+  return errorText(e, "The relay module failed while answering it: " + why + ". " + rerunHint($, sub, e.args, "to see its output"));
 }
 
 export function register(on) {
