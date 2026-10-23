@@ -37,7 +37,7 @@ export function spawnWorker(jobDir, cwd, env = process.env) {
     if (job?.state === "queued" && job.admission?.waitKind === "worker" && Date.now() >= retryAt && Date.now() - retryAt < poll) return null;
     const result = spawnWithAdmission(jobDir, env, () => spawnWorkerProcess(jobDir, cwd, env));
     const deferred = readJob(jobDir);
-    if (deferred?.state === "queued" && deferred.admission?.waitKind === "worker") writeJob(jobDir, { ...deferred, admission: { ...deferred.admission, workerRetryAt: new Date(Date.now()).toISOString() } });
+    if (deferred?.state === "queued" && deferred.admission?.waitKind === "worker") writeJob(jobDir, { ...deferred, launchPendingAt: new Date(Date.now()).toISOString(), admission: { ...deferred.admission, workerRetryAt: new Date(Date.now()).toISOString() } });
     return result;
   }
   finally { releaseOwnership(lease); }

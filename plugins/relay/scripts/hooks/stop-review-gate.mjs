@@ -62,14 +62,21 @@ function logNote(message) {
 }
 
 // Jobs belong to no session: report any job of this repository that is still active.
-function findActiveJob(cwd) {
+export function findActiveJob(cwd, now = Date.now()) {
   const active = [];
   for (const dir of listJobDirs({ slug: repoSlugFor(cwd) })) {
     const job = readJob(dir);
     if (!job) {
       continue;
     }
-    const view = computeJobView(job);
+    const view = computeJobView(job, { now });
+    if (view.state === "queued" && !job.worker?.pid && job.admission?.waitKind === "worker") {
+      const retryAt = Date.parse(job.admission.workerRetryAt ?? job.admission.since ?? job.createdAt);
+      if (!Number.isFinite(retryAt) || now - retryAt > 15 * 60 * 1000) {
+        logNote(`Job ${job.id} is dormant; run wait to adopt it. It does not defer the review gate.`);
+        continue;
+      }
+    }
     if (["starting", "running", "queued"].includes(view.state)) {
       active.push(job);
     }

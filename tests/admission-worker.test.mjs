@@ -23,7 +23,7 @@ function seed(t, brief = "[quick] First turn.") {
   let now = Date.now(), blocked = true;
   const options = { env: ctx.env, admission: { now: () => now, scanUnslotted: () => [], readMachine: () => ({ totalBytes: 128 * GiB, availableBytes: blocked ? 0 : 100 * GiB, cores: 64, load5: 0, notes: [] }) },
     admissionSleep: async () => { now += D.spacingMs; await new Promise(r => setTimeout(r, 10)); } };
-  return { ctx, dir, options, unblock: () => blocked = false, block: () => blocked = true };
+  return { ctx, dir, options, unblock: () => blocked = false, block: () => blocked = true, tick: ms => now += ms };
 }
 
 test("queued worker stays live, acknowledges next turns and resets attempt state on admission", async t => {
@@ -187,10 +187,51 @@ test("deferred worker retries are throttled across callers at the admission poll
   let now = Date.now(); t.mock.method(Date, "now", () => now);
   retryQueuedWorker(s.dir, s.ctx.env);
   const first = readJob(s.dir).admission.workerRetryAt;
+  assert.equal(readJob(s.dir).launchPendingAt, first, "old readers retain their start grace while a waiter retries");
   now += D.pollMs - 1;
   retryQueuedWorker(s.dir, s.ctx.env);
   assert.equal(readJob(s.dir).admission.workerRetryAt, first);
   now++;
   retryQueuedWorker(s.dir, s.ctx.env);
   assert.notEqual(readJob(s.dir).admission.workerRetryAt, first);
+});
+
+test("first dispatch consumes its start grant once and preserves the actual queue wait", async t => {
+  const s = seed(t);
+  const rename = fs.renameSync;
+  let grants = 0, queuedAfterGrant = 0, atConnect;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === path.join(s.ctx.env.RELAY_ADMISSION_HOME, "timing.json")) grants++;
+    if (to === path.join(s.dir, "job.json") && grants && JSON.parse(fs.readFileSync(from, "utf8")).state === "queued") queuedAfterGrant++;
+    return rename(from, to);
+  });
+  s.options.admissionSleep = async () => {
+    assert.equal(grants, 0, "first turn must not sleep on its own grant (clock deliberately stays fixed)");
+    await new Promise(r => setTimeout(r, 10));
+  };
+  const backend = backendNamed("codex"), connect = backend.connect;
+  t.mock.method(backend, "connect", async (...args) => { atConnect = readJob(s.dir).admission; return connect(...args); });
+  const running = runWorker(s.dir, s.options);
+  await waitFor(() => readJob(s.dir).state === "queued");
+  const since = readJob(s.dir).admission.since;
+  s.tick(120000); s.unblock(); await running;
+  const job = readJob(s.dir);
+  assert.equal(job.state, "completed"); assert.equal(grants, 1); assert.equal(queuedAfterGrant, 0);
+  assert.equal(job.admission.since, since); assert.equal(job.admission.admittedAt, atConnect.admittedAt);
+  assert.equal(Date.parse(job.admission.admittedAt) - Date.parse(since), 120000);
+});
+
+
+test("dormant workerless jobs stop deferring the repository review gate after fifteen minutes", async t => {
+  const { findActiveJob } = await import("../plugins/relay/scripts/hooks/stop-review-gate.mjs");
+  const s = seed(t), oldHome = process.env.RELAY_JOBS_HOME;
+  process.env.RELAY_JOBS_HOME = s.ctx.env.RELAY_JOBS_HOME;
+  t.after(() => { if (oldHome === undefined) delete process.env.RELAY_JOBS_HOME; else process.env.RELAY_JOBS_HOME = oldHome; });
+  const now = Date.now(), at = new Date(now).toISOString();
+  writeJob(s.dir, { ...readJob(s.dir), state: "queued", worker: null, admission: { waitKind: "worker", since: at, workerRetryAt: at } });
+  assert.equal(findActiveJob(s.ctx.work, now + 15 * 60000).id, readJob(s.dir).id);
+  assert.equal(findActiveJob(s.ctx.work, now + 15 * 60000 + 1), null);
+  const job = readJob(s.dir);
+  writeJob(s.dir, { ...job, admission: { ...job.admission, workerRetryAt: new Date(now + 15 * 60000 + 1).toISOString() } });
+  assert.equal(findActiveJob(s.ctx.work, now + 15 * 60000 + 1).id, job.id, "an adopter makes it active again");
 });

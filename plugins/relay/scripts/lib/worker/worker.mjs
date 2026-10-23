@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { admit, admissionHome, releaseSlot, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded } from "./admission.mjs";
+import { admit, admissionHome, releaseSlot, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded, wasAdmitted } from "./admission.mjs";
 import { backendFor } from "../backends/index.mjs";
 import { truncateCodePoints } from "../util/text.mjs";
 import { acquireWorkerLease, releaseWorkerLease, readLease } from "../jobs/lease.mjs";
@@ -539,19 +539,23 @@ async function runWorkerRound(jobDir, options, held) {
     });
   };
 
+  let granted = false;
+  let admitted = wasAdmitted(job);
   const waitForAdmission = async () => {
     for (;;) {
       if (cancelRequested) return false;
       const decision = admit({ home, jobId: job.id, jobDir, me, request: { ...job.request, backend: backend.name },
-        admission: job.admission, waitingSince: job.admission?.state === "waiting" ? job.admission.since : null }, admissionDeps);
+        admitted, admission: job.admission, waitingSince: job.admission?.state === "waiting" ? job.admission.since : null }, admissionDeps);
       if (decision.slot) slot = decision.slot;
       if (decision.permanent) {
         save({ admission: decision.record });
         throw Object.assign(new Error(decision.reason), { admissionPermanent: true });
       }
       if (decision.admit) {
+        granted = true;
+        admitted = true;
         touchEvents();
-        save({ state: "starting", admission: decision.record });
+        save({ state: "starting", firstAdmittedAt: job.firstAdmittedAt ?? decision.record.admittedAt, admission: decision.record });
         updateAttempt({ state: "starting", admission: decision.record });
         return true;
       }
@@ -646,10 +650,11 @@ async function runWorkerRound(jobDir, options, held) {
                 result = { ...result, turnStatus: "interrupted" };
                 break;
               }
-              if (!(await waitForAdmission())) {
+              if (!granted && !(await waitForAdmission())) {
                 result = { ...result, turnStatus: "interrupted" };
                 break;
               }
+              granted = false;
               try {
                 result = await connection.run({
                   prompt: dispatch.prompt,
@@ -774,6 +779,7 @@ async function runWorkerRound(jobDir, options, held) {
 
         break;
       } catch (error) {
+        granted = false;
         if (error.admissionPermanent) throw error;
         accept(claimInboxMessages(jobDir));
         // The process exited and the connection is still draining its pipes: wait for the end
