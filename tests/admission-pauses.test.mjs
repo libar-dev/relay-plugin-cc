@@ -32,7 +32,7 @@ function setup(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-pause-")); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { RELAY_ADMISSION: "on", RELAY_ADMISSION_HOME: root };
   let now = Date.parse("2025-01-01T00:00:00Z");
-  const deps = { env, now: () => now, isAlive: p => Boolean(p?.pid), readUserConfig: () => ({}), scanUnslotted: () => [],
+  const deps = { env, now: () => now, isAlive: p => Boolean(p?.pid), readAdmissionConfig: () => ({}), scanUnslotted: () => [],
     readMachine: () => ({ availableBytes: 100 * GiB, totalBytes: 128 * GiB, cores: 64, load5: 0, notes: [] }) };
   const ctx = n => ({ home: root, jobId: `job-${n}`, jobDir: root, request: { backend: "codex", effort: D.lightEfforts[0] }, me: { pid: n, startTime: "synthetic" } });
   return { root, env, deps, ctx, tick: ms => now += ms };
