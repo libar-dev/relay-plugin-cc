@@ -14,8 +14,8 @@ one job and *hands back* its result; the *job* runs on Codex, Grok Build, ZCode 
 
 ## pre.2
 
-Version `3.0.0-pre.2`, tag `v3.0.0-pre.2`: `release/3.0` at aab8fc3, cut on 23 October 2026. Heavy production runs on
-it. The status line and the board come in a later cut.
+Version `3.0.0-pre.2`, tag `v3.0.0-pre.2` (aab8fc3), cut on 23 October 2026. Heavy production runs on it. The status
+line and the board come in a later cut.
 
 It fixes pre.1's known issues 1 to 4:
 
