@@ -286,8 +286,11 @@ Defaults use `T = total bytes / 2^30` (GiB) and `C = os.availableParallelism()`:
   loop retries from that session's environment. A bare `start` with no later `wait` can stay
   queued until someone waits; there is no background queue service.
 
-Linux uses available memory; macOS reads `sysctl -n kern.memorystatus_level` with a one-second
-timeout and shared two-second cache. An unreadable sensor is skipped with a note. An unexpected
+Linux uses the minimum of available system memory and `memory.max − memory.current` for every
+ancestor of the worker's cgroup, ignoring unlimited ancestors. Memory readings are cached for
+two seconds per cgroup so a limited session cannot reuse an unlimited scope's reading. macOS reads `sysctl -n kern.memorystatus_level` with a one-second
+timeout and shared two-second cache. A blocked or unreadable sensor shows `readings unavailable`; the guard uses the readings it can
+still obtain. An unexpected
 guard error admits with a note. A live admission lock is never broken: a stuck-lock reason names
 the holder and the off switch.
 

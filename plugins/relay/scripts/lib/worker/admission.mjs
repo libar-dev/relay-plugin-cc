@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readUserConfig } from "../jobs/config.mjs";
 import { listJobDirs, readJob, readJsonOrNull, writeJsonAtomic, writeJob, TERMINAL_STATES } from "../jobs/store.mjs";
@@ -110,7 +110,44 @@ function lock(home, deps, fn) {
   try { return { locked: true, value: fn() }; }
   finally { releaseOwnership(file); }
 }
-export function readMachineDefault({ home = admissionHome(), platform = process.platform, now = Date.now(), env = process.env, sensor = os, sysctl = spawnSync } = {}) {
+// The cache key includes the worker's cgroup: one unlimited scope must never
+// lend its reading to a memory-limited sibling. The proc identity is cached locally.
+const cgroupIdentities = new WeakMap();
+function cgroupIdentity(home, now, readFile) {
+  let cache = cgroupIdentities.get(readFile);
+  if (!cache) { cache = new Map(); cgroupIdentities.set(readFile, cache); }
+  const old = cache.get(home);
+  if (old && now >= old.at && now - old.at < DEFAULTS.sensorCacheMs) return old;
+  let group = null, note = null;
+  try {
+    const text = readFile("/proc/self/cgroup", "utf8");
+    group = /^0::(\/.*)$/m.exec(text)?.[1]?.trim();
+    if (!group || group.split("/").includes("..")) throw new Error("unified cgroup unavailable");
+    group = path.posix.normalize(group);
+  } catch (e) { group = null; note = `readings unavailable: cgroup identity not read (${e.code ?? e.message})`; }
+  const value = { at: now, group, note }; cache.set(home, value); return value;
+}
+export function cgroupAvailable(group, readFile = fs.readFileSync) {
+  let availableBytes = null;
+  const notes = [];
+  for (let current = group; current; current = current === "/" ? null : path.posix.dirname(current)) {
+    try {
+      const dir = path.join("/sys/fs/cgroup", current);
+      const limit = readFile(path.join(dir, "memory.max"), "utf8").trim();
+      if (limit === "max") continue;
+      const used = readFile(path.join(dir, "memory.current"), "utf8").trim();
+      if (!/^\d+$/.test(limit) || !/^\d+$/.test(used)) throw new Error("invalid reading");
+      const remaining = Math.max(0, Number(limit) - Number(used));
+      if (!Number.isFinite(remaining)) throw new Error("invalid reading");
+      availableBytes = availableBytes === null ? remaining : Math.min(availableBytes, remaining);
+    } catch (e) {
+      const note = `readings unavailable: cgroup memory not read (${e.code ?? e.message})`;
+      if (!notes.includes(note)) notes.push(note);
+    }
+  }
+  return { availableBytes, notes };
+}
+export function readMachineDefault({ home = admissionHome(), platform = process.platform, now = Date.now(), env = process.env, sensor = os, sysctl = spawnSync, readFile = fs.readFileSync } = {}) {
   // Test hook: subprocess fixtures supply synthetic readings; never used implicitly.
   if (env.RELAY_ADMISSION_READINGS) {
     const fixture = readJsonOrNull(env.RELAY_ADMISSION_READINGS);
@@ -120,34 +157,59 @@ export function readMachineDefault({ home = admissionHome(), platform = process.
   const notes = platform === "win32" ? ["process identity not read (not available on this system); slots retained"] : [];
   const read = (name, fn, positiveOnly = false) => {
     try { const n = fn(); if (!Number.isFinite(n) || n < 0 || (positiveOnly && n === 0)) throw new Error("invalid reading"); return n; }
-    catch (e) { notes.push(`${name} not read (${e.message})`); return null; }
+    catch (e) { notes.push(`readings unavailable: ${name} not read (${e.message})`); return null; }
   };
   const totalBytes = read("total memory", () => sensor.totalmem(), true);
   const cores = read("cores", () => sensor.availableParallelism(), true) ?? 1;
   const load5 = read("load", () => { if (platform === "win32") throw new Error("not available on this system"); return sensor.loadavg()[1]; });
+  const identity = platform === "linux" ? cgroupIdentity(home, now, readFile) : null;
+  if (identity?.note) notes.push(identity.note);
+  const cacheKey = platform === "linux" ? `linux-${createHash("sha256").update(identity.group ?? "unavailable").digest("hex").slice(0, 16)}` : platform;
+  const readMemory = () => {
+    if (platform === "darwin") return read("memory", () => {
+      const r = sysctl("sysctl", ["-n", "kern.memorystatus_level"], { timeout: 1000, encoding: "utf8" });
+      const value = String(r.stdout ?? "").trim();
+      if (r.error || r.status !== 0 || !/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 100 || !totalBytes) throw new Error("sysctl kern.memorystatus_level failed");
+      return Number(value) / 100 * totalBytes;
+    });
+    let available = read("memory", () => sensor.freemem());
+    if (identity?.group) {
+      const constrained = cgroupAvailable(identity.group, readFile);
+      notes.push(...constrained.notes);
+      if (constrained.availableBytes !== null) available = available === null ? constrained.availableBytes : Math.min(available, constrained.availableBytes);
+    }
+    return available;
+  };
   let availableBytes;
-  if (platform !== "darwin") availableBytes = read("memory", () => sensor.freemem());
+  if (!["linux", "darwin"].includes(platform)) availableBytes = readMemory();
   else {
-    const file = path.join(home, ".machine.json");
+    const file = path.join(home, `.machine-${cacheKey}.json`);
     const cached = readJsonOrNull(file);
-    const cacheValid = cached && Array.isArray(cached.notes) && (cached.availableBytes === null || (Number.isFinite(cached.availableBytes) && cached.availableBytes >= 0 && cached.availableBytes <= totalBytes));
+    const cacheValid = cached && Array.isArray(cached.notes) && cached.notes.every(n => typeof n === "string") && (cached.availableBytes === null || (Number.isFinite(cached.availableBytes) && cached.availableBytes >= 0 && cached.availableBytes <= totalBytes));
     if (cacheValid && now >= cached.at && now - cached.at < DEFAULTS.sensorCacheMs) {
-      availableBytes = cached.availableBytes; notes.push(...(cached.notes ?? []));
+      availableBytes = cached.availableBytes; notes.push(...cached.notes);
     } else {
-      fs.mkdirSync(home, { recursive: true });
-      const owner = path.join(home, "machine.lock");
-      const alive = identity => holderAlive(identity, { platform, now });
-      if (!acquireOwnership(owner, { pid: process.pid, startTime: null }, { isAlive: alive })) {
-        availableBytes = null; notes.push("memory not read (sensor refresh in progress)");
-      } else try {
-        availableBytes = read("memory", () => {
-          const r = sysctl("sysctl", ["-n", "kern.memorystatus_level"], { timeout: 1000, encoding: "utf8" });
-          const value = String(r.stdout ?? "").trim();
-          if (r.error || r.status !== 0 || !/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 100 || !totalBytes) throw new Error("sysctl kern.memorystatus_level failed");
-          return Number(value) / 100 * totalBytes;
-        });
-        writeJsonAtomic(file, { at: now, availableBytes, notes: notes.filter(n => n.startsWith("memory")) });
-      } finally { releaseOwnership(owner); }
+      let owns = false;
+      const owner = path.join(home, `machine-${cacheKey}.lock`);
+      try {
+        fs.mkdirSync(home, { recursive: true });
+        owns = Boolean(acquireOwnership(owner, { pid: process.pid, startTime: null }, { isAlive: identity => holderAlive(identity, { platform, now }) }));
+        if (!owns) {
+          availableBytes = null; notes.push("readings unavailable: memory not read (sensor refresh in progress)");
+        } else {
+          const before = notes.length;
+          availableBytes = readMemory();
+          try { writeJsonAtomic(file, { at: now, availableBytes, notes: notes.slice(before) }); }
+          catch (e) { notes.push(`readings unavailable: memory cache not written (${e.code ?? e.message})`); }
+        }
+      } catch (e) {
+        // A denied cache directory must not hide readable memory/load sensors.
+        notes.push(`readings unavailable: memory cache not accessible (${e.code ?? e.message})`);
+        availableBytes = readMemory();
+      } finally {
+        if (owns) try { releaseOwnership(owner); }
+        catch (e) { notes.push(`readings unavailable: memory cache release failed (${e.code ?? e.message})`); }
+      }
     }
   }
   return { totalBytes, cores, availableBytes, load5, notes };
@@ -156,13 +218,13 @@ function machineReading(home, deps) {
   try {
     const m = deps.readMachine({ home, env: deps.env, now: deps.now(), platform: deps.platform });
     const valid = n => typeof n === "number" && Number.isFinite(n) && n >= 0;
-    const notes = [...(Array.isArray(m.notes) ? m.notes : [])];
+    const notes = (Array.isArray(m.notes) ? m.notes : []).filter(n => typeof n === "string");
     for (const [key, label] of [["availableBytes", "memory"], ["load5", "load"]]) {
-      if (m[key] !== null && !valid(m[key])) notes.push(`${label} not read (invalid reading)`);
+      if (m[key] !== null && !valid(m[key])) notes.push(`readings unavailable: ${label} not read (invalid reading)`);
     }
     return { ...m, availableBytes: valid(m.availableBytes) ? m.availableBytes : null, load5: valid(m.load5) ? m.load5 : null,
       totalBytes: valid(m.totalBytes) && m.totalBytes > 0 ? m.totalBytes : os.totalmem(), cores: valid(m.cores) && m.cores > 0 ? m.cores : os.availableParallelism(), notes };
-  } catch (e) { return { totalBytes: os.totalmem(), cores: os.availableParallelism(), availableBytes: null, load5: null, notes: [`sensors not read (${e.message})`] }; }
+  } catch (e) { return { totalBytes: os.totalmem(), cores: os.availableParallelism(), availableBytes: null, load5: null, notes: [`readings unavailable: sensors not read (${e.message})`] }; }
 }
 export function machineState(machine, pendingBytes = 0) {
   const { totalBytes: t, availableBytes: a, load5: l, cores: c } = machine;
@@ -396,8 +458,9 @@ export function describeGuard(env = process.env, { readSensors = true } = {}, in
 export function renderGuard(snapshot) {
   if (!snapshot.enabled) return [`load-guard: off (${snapshot.reason})`];
   if (snapshot.error) return [`load-guard: on (state unreadable: ${snapshot.error})`];
+  const state = (snapshot.notes ?? []).some(n => n.includes("readings unavailable")) ? `readings unavailable (${snapshot.state})` : snapshot.state;
   const memory = snapshot.availableBytes === null ? "memory not read" : `memory ${(snapshot.availableBytes / GiB).toFixed(1)} of ${(snapshot.totalBytes / GiB).toFixed(1)} GiB available`;
-  return [`load-guard: on · ${snapshot.state} · weight ${snapshot.usedWeight} of ${snapshot.minWeight} minimum, ceiling ${snapshot.maxWeight} · very heavy ${snapshot.veryHeavy} of ${snapshot.maxVeryHeavy} · ${memory} · load ${snapshot.load5 ?? "not read"} on ${snapshot.cores} cores`,
+  return [`load-guard: on · ${state} · weight ${snapshot.usedWeight} of ${snapshot.minWeight} minimum, ceiling ${snapshot.maxWeight} · very heavy ${snapshot.veryHeavy} of ${snapshot.maxVeryHeavy} · ${memory} · load ${snapshot.load5 ?? "not read"} on ${snapshot.cores} cores`,
     ...(snapshot.notes ?? []).map(n => `note: load guard: ${n}`), ...(snapshot.pauses ?? []).map(p => `paused: ${refusalReason(p)}; strike ${p.strikes}`)];
 }
 

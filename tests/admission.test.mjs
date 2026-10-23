@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULTS as D, WEIGHTS, admissionHome, guardSettings, modelClass, machineState, readMachineDefault, holderAlive, admit, releaseSlot, spawnWithAdmission } from "../plugins/relay/scripts/lib/worker/admission.mjs";
+import { DEFAULTS as D, WEIGHTS, admissionHome, guardSettings, modelClass, machineState, readMachineDefault, holderAlive, renderGuard, admit, releaseSlot, spawnWithAdmission } from "../plugins/relay/scripts/lib/worker/admission.mjs";
 import { acquireOwnership, releaseOwnership } from "../plugins/relay/scripts/lib/util/ownership.mjs";
 import { writeJob, readJob, writeJsonAtomic } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 const GiB = 2 ** 30;
@@ -228,4 +228,56 @@ test("win32 skips unavailable load and process identities, uses free memory and 
   assert.equal(fs.existsSync(path.join(s.home, "slots", `${first.jobId}.json`)), true);
   assert.equal(alive({ pid: 2147483647, startTime: "unreadable" }), true);
   assert.equal(psCalls, 0);
+});
+
+test("Linux cgroup headroom uses every ancestor and caches per cgroup, never across siblings", t => {
+  const s = setup(t);
+  const sensor = { totalmem: () => 128 * GiB, availableParallelism: () => 64, loadavg: () => [0, 0, 0], freemem: () => 100 * GiB };
+  const limits = new Map([
+    ["/proc/self/cgroup", "0::/session/worker\n"],
+    ["/sys/fs/cgroup/session/worker/memory.max", "max"],
+    ["/sys/fs/cgroup/session/memory.max", String(20 * GiB)],
+    ["/sys/fs/cgroup/session/memory.current", String(16 * GiB)],
+    ["/sys/fs/cgroup/memory.max", String(80 * GiB)],
+    ["/sys/fs/cgroup/memory.current", String(70 * GiB)]
+  ]);
+  let reads = 0;
+  const readFile = file => { reads++; assert.ok(limits.has(file), file); return limits.get(file); };
+  const first = readMachineDefault({ home: s.home, env: {}, platform: "linux", sensor, readFile, now: 1 });
+  assert.equal(first.availableBytes, 4 * GiB);
+  const count = reads;
+  limits.set("/sys/fs/cgroup/session/memory.current", String(19 * GiB));
+  assert.equal(readMachineDefault({ home: s.home, env: {}, platform: "linux", sensor, readFile, now: 2 }).availableBytes, 4 * GiB);
+  assert.equal(reads, count);
+  assert.equal(readMachineDefault({ home: s.home, env: {}, platform: "linux", sensor, readFile, now: D.sensorCacheMs + 2 }).availableBytes, GiB);
+  const otherFile = file => file === "/proc/self/cgroup" ? "0::/other\n" : "max";
+  assert.equal(readMachineDefault({ home: s.home, env: {}, platform: "linux", sensor, readFile: otherFile, now: D.sensorCacheMs + 2 }).availableBytes, sensor.freemem());
+});
+
+test("blocked Linux proc/sys readings degrade visibly and preserve readable memory/load", t => {
+  const s = setup(t), sensor = { totalmem: () => 128 * GiB, availableParallelism: () => 64, loadavg: () => [0, 0, 0], freemem: () => 100 * GiB };
+  for (const blocked of ["proc", "sys"]) {
+    const readFile = file => {
+      if (file === "/proc/self/cgroup" && blocked !== "proc") return "0::/session\n";
+      throw Object.assign(new Error("synthetic permission denied"), { code: "EACCES" });
+    };
+    const machine = readMachineDefault({ home: path.join(s.home, blocked), env: {}, platform: "linux", sensor, readFile });
+    assert.equal(machine.availableBytes, sensor.freemem());
+    assert.equal(machine.load5, 0);
+    assert.match(machine.notes.join(" "), /readings unavailable: cgroup/);
+    assert.equal(machineState(machine).state, "healthy");
+    assert.match(renderGuard({ enabled: true, ...machine, ...guardSettings({}, machine), state: "healthy", usedWeight: 0, veryHeavy: 0, pauses: [] }).join("\n"), /load-guard: on · readings unavailable/);
+  }
+});
+
+test("a failed cgroup ancestor is skipped while readable constraints still apply", t => {
+  const s = setup(t), sensor = { totalmem: () => 128 * GiB, availableParallelism: () => 64, loadavg: () => [0, 0, 0], freemem: () => 100 * GiB };
+  const readFile = file => {
+    if (file === "/proc/self/cgroup") return "0::/session/worker\n";
+    if (file.startsWith("/sys/fs/cgroup/session/worker/")) return file.endsWith("memory.max") ? String(12 * GiB) : String(9 * GiB);
+    throw Object.assign(new Error("synthetic denied ancestor"), { code: "EACCES" });
+  };
+  const machine = readMachineDefault({ home: s.home, env: {}, platform: "linux", sensor, readFile });
+  assert.equal(machine.availableBytes, 3 * GiB);
+  assert.match(machine.notes.join(" "), /readings unavailable/);
 });
