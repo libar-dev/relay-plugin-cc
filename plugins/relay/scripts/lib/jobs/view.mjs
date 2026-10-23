@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { isWorkerAlive } from "./lease.mjs";
 import { isWorkerLease, readLease } from "./lease.mjs";
-import { jobPaths, readJob, readJsonOrNull, TERMINAL_STATES } from "./store.mjs";
+import { jobPaths, readJob, readJsonOrNull, TERMINAL_STATES, settledAdmission } from "./store.mjs";
 import { messageAccount, readJobMessages, readRelayHandbacks, readRelayViolations } from "./messages.mjs";
 
 export const EXIT = {
@@ -258,7 +258,7 @@ export function renderJobBlock(view) {
     lines.push(`queued: ${job.admission.reason} (since ${job.admission.since ?? "unknown"})`);
   }
   if (job.admission?.state === "admitted" && job.admission.since && job.admission.admittedAt) {
-    lines.push(`waited ${Math.max(0, (Date.parse(job.admission.admittedAt) - Date.parse(job.admission.since)) / 1000).toFixed(1)}s before admission`);
+    lines.push(`waited ${Math.max(0, (Date.parse(job.admission.admittedAt) - Date.parse(job.admission.since)) / 1000).toFixed(1)}s before admission${job.admission.reason ? ` (${job.admission.waitKind ?? "unknown"}: ${job.admission.reason})` : ""}`);
   }
   for (const note of job.admission?.notes ?? []) {
     if (note !== "load guard off") lines.push(`note: load guard: ${note}`);
@@ -377,7 +377,7 @@ export function jobViewJson(view, { messages = true } = {}) {
     kind: view.job.kind ?? "task",
     state: view.state,
     storedState: view.storedState,
-    admission: view.job.admission ?? null,
+    admission: settledAdmission(view.job.admission, view.state) ?? null,
     refusal: view.job.refusal ?? null,
     stalled: view.stalled,
     deadReason: view.deadReason,

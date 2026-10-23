@@ -211,6 +211,22 @@ Phase 6, an investigation (the plugin does not change):
 
 Load guard:
 
+- `3.0.0-dev.17`: macOS pressure warning reads as `warning`; critical stays `critical`. Warning and load above
+  `3C` still hold only new jobs, and shared pacing stays 5 seconds.
+- Only Astra and the Kimi K3 family count toward the very-heavy quota; max effort on other models no longer does.
+- Admission history keeps its last queue cause and shows it beside the completed wait duration. Cancellation
+  closes waiting records; JSON views also close stale waiting records for ended jobs without changing stored history.
+- Historical job records are parsed outside the admission lock and cached until their file changes. Potentially
+  live jobs and unended servers are rechecked under the lock, preserving seats and quota accounting.
+- Probe startup timeouts release only the fenced claim, retaining the provider pause and strike history. An
+  active turn still uses the existing probe window; a completed turn can clear its matching pause.
+- Deferred spawn failures leave work queued and report a retry note instead of aborting wait or relay hooks.
+  Short-lived spawn callers now report a persisted stuck admission lock with its holder and off switch.
+- Background tasks report their actual queued state. Setup sizes its busy allowance and worker cap from the
+  same machine reading as the guard. Recovered settings omit transient diagnostics from saved config.
+- Synthetic readings require a test process and the explicitly named test override; admission fixtures isolate
+  inherited guard settings and skip unsupported-platform foreground queue cases. The README documents small-host
+  impossible fits and the off switch; the jobs skill clarifies the state list.
 - `3.0.0-dev.16`: on macOS, available bytes now use the `kern.memorystatus_level` percentage of total memory,
   so reclaimable memory counts toward admission. `vm_stat` free plus inactive pages remains a labelled fallback
   when that reading fails. The separate pressure veto, reserve, holds, pacing and quota are unchanged.
@@ -223,7 +239,7 @@ Load guard:
     `vm_stat` free plus inactive pages as a fallback, and a pressure warning holds new jobs.
   - Pacing: one start or turn every 5 s across all sessions. There is no fixed job ceiling on a healthy machine.
     When the 5-minute load is high or memory can't be read, new jobs stop at `min(16, max(2, CPUs − 2))`.
-  - Quota: at most 2 very heavy models (Astra, Kimi K3, or any `max`/`ultra` effort) run at once. This is a quota
+  - Quota: at most 2 very heavy models (Astra and the Kimi K3 family, at any effort) run at once. This is a quota
     limit, not a memory one.
   - Provider refusals: a usage limit, rate limit or concurrency refusal pauses that backend. After the pause, one
     probe job goes first. Only while the guard is on, Kimi defaults to 3 total attempts per step unless

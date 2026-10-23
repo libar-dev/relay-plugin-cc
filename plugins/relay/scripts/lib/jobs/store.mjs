@@ -157,8 +157,15 @@ export function readJob(jobDir) {
 }
 
 
+// Preserve queue history while closing a wait that can no longer be active.
+export function settledAdmission(admission, state) {
+  return admission?.state === "waiting" && (TERMINAL_STATES.has(state) || state === "dead")
+    ? { ...admission, state: state === "cancelled" ? "cancelled" : "ended" } : admission;
+}
+
 export function writeJob(jobDir, job) {
-  writeJsonAtomic(jobPaths(jobDir).job, { ...job, updatedAt: nowIso() });
+  writeJsonAtomic(jobPaths(jobDir).job, { ...job,
+    ...(job.admission ? { admission: settledAdmission(job.admission, job.state) } : {}), updatedAt: nowIso() });
 }
 
 

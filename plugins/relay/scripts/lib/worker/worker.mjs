@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { admit, admissionHome, releaseSlot, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded, wasAdmitted } from "./admission.mjs";
+import { admit, admissionHome, releaseSlot, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded, releaseProbe, wasAdmitted } from "./admission.mjs";
 import { backendFor } from "../backends/index.mjs";
 import { truncateCodePoints } from "../util/text.mjs";
 import { acquireWorkerLease, releaseWorkerLease, readLease } from "../jobs/lease.mjs";
@@ -493,7 +493,11 @@ async function runWorkerRound(jobDir, options, held) {
   };
   const heartbeat = setInterval(() => {
     save({});
-    if (slot?.probeAt && (admissionDeps.now ?? Date.now)() - Date.parse(slot.probeAt) >= DEFAULTS.probeMs) completeProbe();
+    if (slot?.probeAt && (admissionDeps.now ?? Date.now)() - Date.parse(slot.probeAt) >= DEFAULTS.probeMs) {
+      if (activeTurnId) completeProbe();
+      else if (releaseProbe(home, backend.name, job.id, admissionDeps, slot.probeGeneration))
+        slot = { ...slot, probe: false, probeGeneration: null, probeAt: null };
+    }
   }, config.heartbeatMs);
   heartbeat.unref?.();
   const poller = setInterval(() => {
