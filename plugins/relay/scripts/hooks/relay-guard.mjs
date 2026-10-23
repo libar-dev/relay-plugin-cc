@@ -20,8 +20,9 @@
 //     sentence;
 //   - anything else is denied with a reason that restates the relay's job.
 // SubagentStop:
-//   - deliver as above; when the relay handed back through SubagentHandback, nothing else;
-//   - otherwise (modes without SubagentHandback) block while the job runs, a message is
+//   - deliver as above; a hand-back exempts the stop only while the readable transcript
+//     shows no new inbound message and the relay has not acted since;
+//   - otherwise block while the job runs, a message is
 //     owed, even on a completed job, or the final message differs from `result <job>`.
 //     Owed means received but not delivered, or delivered but not run. For a string-return
 //     relay (under the Workflow tool) that is `result <job> --state-only`: the state block,
@@ -72,14 +73,21 @@ function trimEnd(text) {
   return String(text ?? "").replace(/\s+$/, "");
 }
 
+function withoutOuterFence(text, expected) {
+  // A relay may fence the result; only its outer envelope may differ.
+  if (/^(?:[ \t]*\r?\n)* {0,3}`{3,}/.test(String(expected ?? ""))) return text;
+  const fenced = /^(?:[ \t]*\r?\n)* {0,3}(`{3,})(?:text|txt|plaintext|plain|markdown|md|yaml|yml|ini|console|log)?[ \t]*\r?\n([\s\S]*?)\r?\n {0,3}\1$/i.exec(trimEnd(text));
+  return fenced ? fenced[2] : text;
+}
+
 // A string-return relay retypes the state block, and a small model drops a line that only restates
 // the request, most often its own `relay:` line. Its text passes when every line it holds is a line
 // of the block and no outcome line is missing. A line added or changed still fails, and so does a
-// missing state, error or undelivered line. Blank lines and code fences are not counted.
+// missing state, error or undelivered line. Blank lines and one outer code fence are not counted.
 export function matchesStateBlock(text, expected) {
-  const lines = (value) => String(value ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("```"));
+  const lines = (value) => String(value ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const remaining = lines(expected);
-  for (const line of lines(text)) {
+  for (const line of lines(withoutOuterFence(text, expected))) {
     const index = remaining.indexOf(line);
     if (index === -1) return false;
     remaining.splice(index, 1);
@@ -301,8 +309,8 @@ function handleHandback(input, env, jobDir, pointer, sync) {
   const agentId = input.agent_id;
   const rewrite = (text, reason) => {
     writeGuardState(env, agentId, jobDir, {
-      consecutiveBlocks: 0,
-      handback: { at: new Date().toISOString(), messageUuids: (sync?.messages ?? []).map((message) => message.uuid) }
+      ...(sync?.readable !== false ? { consecutiveBlocks: 0 } : {}),
+      handback: { at: new Date().toISOString(), messageUuids: (sync?.messages ?? []).map((message) => message.uuid), receivedUuids: sync?.received ?? [] }
     });
     return allow(reason, { ...toolInput, message: text });
   };
@@ -388,11 +396,14 @@ async function handleSubagentStop(input, env = process.env) {
   const lastToolAt = guard.raw.lastToolAt ?? "";
   const current = jobDir ? jobViewOrBusy(jobDir) : null;
   if (guard.handback && lastToolAt <= guard.handback.at &&
+      (!jobDir || (sync.readable && (guard.handback.receivedUuids
+        ? sync.received.every((uuid) => guard.handback.receivedUuids.includes(uuid))
+        : sync.messages.every((message) => guard.handback.messageUuids.includes(message.uuid))))) &&
       !sync?.busy && !sync?.undelivered?.length &&
       (!current || (isTerminalView(current) && current.undelivered.length === 0))) {
     // The report already went out through SubagentHandback, rewritten by the hook, and the
-    // relay has not acted since. A message that came after it was delivered above; it
-    // resumes the relay, whose next hand-back is rewritten the same way.
+    // relay has neither acted nor received a message since. A resumed relay must
+    // return the current result or hand back again for the hook to rewrite it.
     return null;
   }
   const problems = [];
@@ -423,11 +434,11 @@ async function handleSubagentStop(input, env = process.env) {
       else expected = renderResultText(done);
     }
   }
-  const matches = stateBlock ? matchesStateBlock(input.last_assistant_message, expected) : trimEnd(input.last_assistant_message) === trimEnd(expected);
+  const matches = stateBlock ? matchesStateBlock(input.last_assistant_message, expected) : trimEnd(withoutOuterFence(input.last_assistant_message, expected)) === trimEnd(expected);
   if (expected != null && !matches) {
     problems.push({
       kind: "final-message",
-      reason: `Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else:\n${expected}`
+      reason: `Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n${expected}`
     });
   }
   if (problems.length === 0) {

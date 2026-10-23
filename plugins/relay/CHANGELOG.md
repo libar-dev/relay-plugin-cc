@@ -136,6 +136,32 @@ Fixes from the pre-releases:
   taken as its next turn. The command tells Claude so, and `companion setup`'s text says it in Kimi's `can:` line.
   The JSON's `can.steer` is unchanged, and still means steering the running turn.
 - `/relay:status`'s argument hint names `--workflow <run>`.
+- **A line the user types into a `relay:job` agent's view reaches the job.** Claude Code in the terminal lets
+  a person open a running agent's view (↓ in the footer, then Enter) and type at `Message @<agent>…`; the
+  Desktop app's agent view has no input. Claude Code
+  marks such a line as origin `human`, and the guard took only the main thread's and other agents'
+  messages, so it dropped the line without a record. After the hand-back the line resumed the relay, the
+  job got no turn, and the relay could say it had passed the message on. Now the line is delivered like
+  any message: steered while the job runs, a new turn once it has ended, and `cancel` cancels the job.
+  No hook names a typed line's recipient, so there is no wake: a line typed while the relay waits
+  reaches the job at the relay's next step, at most nine minutes later, or as a new turn when the job
+  ends first. A line typed after the hand-back arrives at once in a view that is still open (from Claude Code 2.1.309 a finished agent leaves the footer's list within
+  about 15 s unless its view is open; once it has left, a continue goes through Claude's `SendMessage` or
+  `C continue`). A relay that lives through the update
+  delivers the lines it received before, since none of them has a delivery record.
+- A line typed right after Esc interrupted the relay in its view resumes the relay and reaches the job
+  at once, steering it while it runs.
+- A relay that a message resumed after its hand-back must hand back the job's result again; while the
+  hook can check it, the relay can no longer end with words of its own. (The block budget, a failing
+  hook and a relay whose start failed stay as they were.)
+- A relay without `SubagentHandback` whose final message is the exact result inside one code fence is
+  no longer blocked: the fence, with no tag or a plain one such as `text`, `markdown` or `yaml`, is ignored. A Haiku
+  relay had sent the result fenced nine times and been let go after eight blocks, with no recorded hand-back.
+  A Workflow relay's state block may carry the same one fence, and no fence line anywhere else.
+- A message of an origin the guard does not know is recorded as a `relay-violation:` line instead of
+  being dropped in silence (the harness's own `task-notification` notices are skipped), and the same
+  transcript problem is recorded once, not again at every hook call.
+- The live suite has a check `typed` (terminal only: T3 Code draws no agent view).
 - Arguments that held backticks, `$(…)` or `$VAR` ran in Claude's shell before the companion started.
   `/relay:review`, `/relay:adversarial-review` and `/relay:setup` use `Write` to put raw arguments in
   a private temporary file. Only its path enters the shell, and a review removes the file as soon as
