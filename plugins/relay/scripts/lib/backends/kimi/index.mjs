@@ -11,7 +11,7 @@ export const kimiBackend = {
     modes: ["yolo", "read-only"], webSearch: ["live"], priorityTier: false,
     steer: false, resume: true, review: true, adversarialReview: true, stopGate: false, transfer: false
   },
-  capabilityNotes: { modes: "write refused", lacking: "Codex only" },
+  capabilityNotes: { modes: "write refused", steer: "next turn", lacking: "Codex only" },
   request: requestRules,
   view: {
     lines(request) { return !request.kimiHomeDefault ? [`kimi-home: ${request.kimiHome}`] : []; },

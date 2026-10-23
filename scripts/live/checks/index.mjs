@@ -8,8 +8,9 @@ import headless from './headless.mjs';
 import stop from './stop.mjs';
 import sessionEnd from './session-end.mjs';
 import spawnCheck from './spawn-check.mjs';
+import typed from './typed.mjs';
 
-export const checks = [steerMain, steerWorkflow, steerPlugin, continueCheck, commands, transfer, headless, stop, sessionEnd, spawnCheck];
+export const checks = [steerMain, steerWorkflow, steerPlugin, continueCheck, commands, transfer, headless, stop, sessionEnd, spawnCheck, typed];
 
 export function getCheck(id) {
   return checks.find(check => check.id === id);

@@ -97,11 +97,17 @@ for (const ended of [false, true]) {
     assert.deepEqual(JSON.parse(fs.readFileSync(markerFile, "utf8")), marker);
     assert.ok(![...codexReceived(ctx).turns, ...codexReceived(ctx).steers].includes(pending.attachment.origin.body));
 
+    // B's continue is acknowledged (accepted-next-turn) before its turn starts, and a steer that arrives in between
+    // is queued behind B's whole turn: C is sent once the worker records B's turn as started.
+    if (ended) await waitFor(() => (readJobJson(ctx, jobId).messages ?? []).some(m => m.kind === "continue" && m.action === "turn-started"));
     ctx.append(pending, { type: "api-request", timestamp: new Date().toISOString() }, ctx.toolUse(command));
     const delivered = await runHookProcess(ctx, hookInput(ctx, "PreToolUse", { tool_name: "Bash", tool_input: { command } }));
     assert.equal(delivered.json.hookSpecificOutput.permissionDecision, "allow");
+    // C's hook returns on C's outcome; the turns it reached are awaited all the same.
+    const carried = received => [...received.turns, ...received.steers].filter(text => text === "C: sent after the boundary.").length;
+    await waitFor(() => carried(codexReceived(ctx)) >= 1 && (!ended || codexReceived(ctx).turns.includes("B: continue the job.")));
     const received = codexReceived(ctx);
-    assert.equal([...received.turns, ...received.steers].filter(text => text === "C: sent after the boundary.").length, 1);
+    assert.equal(carried(received), 1);
     if (ended) assert.ok(received.turns.includes("B: continue the job."));
   });
 }
@@ -285,7 +291,7 @@ test("end to end under the Workflow harness: the computed task is the prompt, th
   const other = await runHookProcess(ctx, stopInput("Report delivered."));
   assert.equal(other.json?.decision, "block");
   assert.ok(other.json.reason.includes(block), other.json.reason);
-  const lead = "Reply with exactly this text and nothing else:\n";
+  const lead = "Reply with exactly this text and nothing else, with no code fence around it:\n";
   const asked = other.json.reason.slice(other.json.reason.indexOf(lead) + lead.length);
   assert.equal(asked, block);
   noReport(asked, "the SubagentStop expected block");

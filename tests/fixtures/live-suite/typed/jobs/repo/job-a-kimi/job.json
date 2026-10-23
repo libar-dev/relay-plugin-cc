@@ -1,0 +1,41 @@
+{
+  "id": "job-a-kimi",
+  "state": "completed",
+  "request": {
+    "backend": "kimi",
+    "model": "kimi-code/kimi-for-coding"
+  },
+  "relay": {
+    "agentId": "agent-a-kimi",
+    "transcriptPath": "../transcript/subagents/agent-a-kimi.jsonl"
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "startedAt": "2026-10-22T10:00:10.000Z",
+      "endedAt": "2026-10-22T10:01:30.000Z",
+      "state": "completed",
+      "relayVersion": "3.0.0-test",
+      "turnId": "turn-a-kimi-1"
+    },
+    {
+      "attempt": 2,
+      "startedAt": "2026-10-22T10:01:35.000Z",
+      "endedAt": "2026-10-22T10:01:38.000Z",
+      "state": "completed",
+      "relayVersion": "3.0.0-test",
+      "turnId": "turn-a-kimi-2",
+      "messageId": "msg-A1-kimi"
+    },
+    {
+      "attempt": 3,
+      "startedAt": "2026-10-22T10:01:53.000Z",
+      "endedAt": "2026-10-22T10:01:55.000Z",
+      "state": "completed",
+      "relayVersion": "3.0.0-test",
+      "turnId": "turn-a-kimi-3",
+      "messageId": "msg-A2-kimi"
+    }
+  ],
+  "messages": []
+}

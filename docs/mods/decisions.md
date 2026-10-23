@@ -18,8 +18,7 @@ Entries are never edited after the fact. A reversed decision gets a new entry th
 
 ## Open for the owner
 
-- **What confirms the release candidate before the owner's manual testing** (D60, part 11). Read for now as the
-  automated checks passing on the release candidate; to confirm with the owner at that step.
+None.
 
 ## Entries
 
@@ -591,3 +590,404 @@ The parts:
     that explain the features.
 12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
     owner decides.
+
+### D70. Pre-release cuts: version numbers, the cut PR and the tag (release lead)
+
+How D95's cuts are made.
+
+- **The version.** A cut is `3.0.0-pre.N`, set by `scripts/bump-version.mjs` everywhere it sets a version, the
+  marketplace included, and by hand in the README's Development line. The cut PR's merge commit is tagged
+  `v3.0.0-pre.N`. A cut gets no GitHub release and no npm release.
+- **Between cuts,** phase PRs keep raising `3.0.0-dev.N` (D6), set over the cut's version: a phase branch that
+  merges a cut resolves the version conflict to its own `3.0.0-dev.N`, never the cut's. Build numbers only have to
+  be unique. By semver `dev.N` sorts below `pre.N`, which matters nowhere: the cut machines install by tag, the
+  smoke installs use marketplaces of their own, and the live suite runs `--plugin-dir`. Rejected: `3.0.0-pre.N.M`
+  for dev builds, which reads like a cut; renaming the dev series, which would change D6 for no reader.
+- **The cut PR** changes only the version fields, the README's Development line and one CHANGELOG entry. It merges
+  once `npm run check-version` and CI pass. The release lead tells the coordinating thread before it pushes the
+  tag on the merge commit, and the coordinating thread has libar-infra install the cut. The owner ruled, through the
+  coordinating thread, that the loop stays simple: fix, cut, install, test with real use, repeat (D97). With a diff
+  of version strings, the two-family review and the bots follow the merge, and what they find goes into the next
+  cut. The fixes and phase PRs a cut carries have passed their own gates before they merged.
+- **The release candidate** is the last cut, made from `release/3.0` once the reviews' fixes have merged. The
+  release PR then changes only the version (3.0.0), the README line and the CHANGELOG's date, so the owner's
+  machines run the plugin code that merges. A change to the plugin after the last cut needs another cut.
+- **pre.1** (217adc8, from c73e053) was the first cut, made at once on the owner's word that it be installed: no
+  plugin code had changed since 962130b, where the real-API suite's recorded run on Fedora passed or hit its known
+  limits, but for the fenced hand-back the typed-message fix closes. pre.1's companion listed the same 404 jobs as
+  2.2.0 in a copy of a 2.2.0 jobs home, and gave the same report for one ended job. libar-infra installed it on the
+  ThinkPad while a lead's Workflow had two relay jobs running, which finished under that session's 2.2.0.
+- **pre.1's rollback check** ran after the tag and passed. A live pre.1 session wrote three jobs: one completed, one
+  cancelled by the message `cancel`, one cancelled by TaskStop. 2.2.0's companion listed them (`status --all`) and
+  gave the same `result` output as pre.1's. It also listed and read the seven completed jobs pre.1 had written in
+  the ThinkPad's jobs home. Not checked: a running job, `continue` across versions, a `cancel --attempt` record.
+
+### D71. Setup asks a signed-out Grok home twice (release lead)
+
+The end-to-end suite's first run on 3.0.0-dev.4 read Grok as signed out ("You are not authenticated") while Grok jobs
+in the same run worked, and a later setup read it signed in. `/relay:setup` now runs `grok models` once more, a
+second later, before it reports a home signed out; a home that answers signed in either time is signed in. A truly
+signed-out home costs one more listing and a second. Rejected: a line in grok-home.md, which would leave every
+reader of setup's output, Claude included, to second-guess a "signed out" that is usually right.
+
+### D72. Setup shows Kimi as `steer (next turn)` (release lead)
+
+Setup listed `steer` only for a backend that steers its running turn, so Kimi's line had no steering at all, and
+Claude rendered it as "no steering" (the M3's CLI pass, screenshot C3). A message to a running Kimi job is taken as
+its next turn. `/relay:setup` runs `companion setup --json`, and Claude renders the JSON, so `commands/setup.md`
+now tells Claude that `can.steer` is steering the running turn and that a backend without it is written
+`steer (next turn)`; `companion setup`'s text page says the same in Kimi's `can:` line, from a capability note. The
+JSON's `can.steer` keeps its meaning, so a script reading it is unchanged. Rejected: a new JSON field, which would
+change the block's shape for one word of rendering.
+
+### D73. Model-run commands carry arguments in a Write-created file (release lead)
+
+`review`, `adversarial-review` and `setup` allocate a private directory under `os.tmpdir()`.
+Claude's `Write` tool writes the raw arguments into `args.txt`. All three commands allow `Write`.
+The companion's `--args-file <path>` reads the exact text with the existing single-string parser.
+There is no framing newline. Only the generated path enters Bash. The same file serves the estimate
+and the review, or setup's post-install rerun. Review runs remove it immediately after reading.
+Estimates and setup retain it for reuse. Explicit cleanup handles stops and setup's completion.
+It accepts missing files and directories. It checks the generated path shape and never removes a
+directory recursively. Background reviews need no cleanup turn. Output and exit codes are preserved.
+`rescue` passes its brief as Agent prose.
+
+`review --estimate` and `adversarial-review --estimate` accept file transport. The fixed outer argv
+flag selects estimation; a payload cannot select or disable it. The estimate uses the review's
+`resolveReviewTarget` and merge-base comparison. It prints the target label, unique file count,
+untracked count and shortstat. It starts no backend or job. An explicit base selects branch scope.
+`auto` selects a dirty working tree or, when clean, the branch. Invalid and option-like revisions
+are rejected. Git receives argv with `shell: false` and option parsing terminated before revisions.
+Claude reads the estimate rather than building a Git command from `--base`.
+
+Setup adopts the review commands' single-string grammar. Variables, command substitutions and
+globs are literal. Quotes group whitespace. Backslash escapes even inside quotes; double literal
+backslashes. Empty quoted words are dropped, so empty values are missing-value errors. Every command
+using `--cwd` expands leading `~/` and bare `~`. Home options already support `~/`. Use absolute
+paths or `~/` rather than `$HOME`. A separate parser preserving setup's shell grammar was rejected.
+The tokenizer for reviews is unchanged; their `--cwd` gains that home expansion too.
+
+Rejected designs: quoted heredocs depend on the model checking delimiter collisions. Double quotes
+still evaluate substitutions. Model-generated shell escaping and JavaScript strings add another
+interpretation boundary. The unreleased stdin transport added a second framing rule with no caller,
+so it was removed. One file transport has one rule: preserve every character. NUL is rejected.
+Long input uses the same file route and has no shell argument-size limit. There is no shell fallback.
+
+Grok and Kimi sign-in advice uses one shared shell-assignment helper. It quotes the home value,
+including embedded single quotes. Markdown turns a carriage return into a line feed, so the helper
+writes one as printf's `\r` outside the quotes, as the hooks module does. The login command, in a
+block's `detail` and in Next steps, is inline code, or a fenced Markdown block when it holds
+backticks or newlines. This change touches only how the advice is rendered; D71's retry changes the
+probe, and every signed-out reading renders through the same helper.
+
+Tests extract every companion recipe and audit inline shell instructions. Hostile samples guard
+against a return to interpolation. Current recipes pass fixed argv and get their payload from Write.
+Tests cover exact file content, parser parity, selector errors, home shorthand, target selection,
+cleanup and outer estimation. Signed-out fake backends exercise sign-in advice pasted into Bash.
+
+The hooks module's rerun advice (`companionShell` in `hooks/mod/register.js`, now `rerunHint` and
+`shellWord`) was the other place user text reached a shell command; Phase 4's PR #21 quotes it, and
+it merged before this change. A live check on Linux (Claude Code 2.1.309, auto mode, `--plugin-dir`)
+ran `/relay:setup` and `/relay:adversarial-review` with focus text holding backticks, `$(…)` and
+both quote kinds: Write took the file with no prompt, the review ran on Codex, and nothing in the
+text ran. Still unchecked live, for pre.2's install on the M3 and a later Linux run: default
+permission mode (in auto mode the classifier approved each Bash step), the sandbox's temporary
+directory, `/relay:review`'s estimate and size question, and `--background` delivery. Unscoped
+`Write` stays until a path-scoped rule is verified.
+
+### D74. New skills wait for a package after 3.0; corrections ship now (owner, 23 October 2026)
+
+The four proposed new skills go to a package after 3.0. Corrections to existing instructions that are wrong or
+dangerous ship now, in the cuts. (The four, from GPT-6 Astra's review of the skills, D60 part 7: briefing an
+unattended job, operating and troubleshooting jobs, composing and recovering a Workflow, and choosing a backend and
+route.)
+
+### D75. `/relay-board`'s contract for 3.0 (owner, 23 October 2026)
+
+The board (`/relay-board`, D62; its input, D65; both logged with Phase 4's board PR) takes mouse clicks at any time
+in fullscreen, and keys only while the session is idle. That is the
+contract for 3.0, and the docs say it plainly.
+
+### D76. The release candidate, and "Cloud Contest" (owner, 23 October 2026)
+
+The owner wrote on 22 October that the release candidate is tested "after we have confirmation from Cloud Contest";
+it was read until now as the automated checks passing on the release candidate, and listed as open for the owner.
+"Cloud Contest" was a dictation slip, not a step. The stable release candidate is the last installed cut, with the
+finished stable PR (the release PR, `release/3.0` into `main`) and its reviews, and the owner's go after real use. No
+extra environment.
+
+What it changes: D60, part 11, and D95: the release candidate is confirmed by the finished release PR and its
+reviews, and tested by the owner's real use; D70's last cut is the last one installed. The item open for the owner
+closes.
+
+### D77. Plugin updates need no T3 restart; infra installs (owner, 23 October 2026)
+
+A user-level install reaches new Claude sessions at once, and an existing session picks it up with `/reload-plugins`;
+no T3 restart is needed for a plugin update. Every install and every piece of infrastructure work goes to a new infra
+session on the M1's libar-infra project; leads do none of it (D97).
+
+### D78. CodeRabbit is not a gate (owner, 23 October 2026)
+
+The owner, through the coordinating thread: "CodeRabbit is not a gate, since our internal reviews go much deeper.
+Don't request it or wait for it, and don't write PR notes about it. The gates are CI, Greptile and the two-family
+review. That applies now to #23, #18 and the cut PR."
+
+What it changes: CodeRabbit leaves release-3.0.md's gates for a phase PR, for the other PRs into `release/3.0` and
+for the release PR; their other gates (the tests, validate, the live suite, the smoke kit) stay. For pre.2's cut the
+coordinating thread wrote: "the cut is version strings and the CHANGELOG only, so CI and Greptile." A short
+two-family check of the cut's CHANGELOG entry ran before its merge anyway and found what a heavy user needed to
+know, so a cut's gates are now CI, Greptile and that check, all before the merge and the tag; this replaces D70's
+reviews after the merge. D16's `.coderabbit.yaml` is unchanged.
+
+### D90. One walkthrough, two documents (guide lead)
+
+The guide lead writes one feature walkthrough. It covers every user-facing feature of 3.0 in the order a user meets
+it: what the user does and sees, the backend limits, and the proof. Two documents come from it: the user guide,
+`docs/guide.md`, linked from the README, and the owner's pre-release guide, `docs/mods/pre-release-3.0.md`, beside
+`release-3.0.md`. The walkthrough stays in the lead's working folder. Both documents carry its content, and a third
+copy would drift. Where the guide meets the README or `docs/desktop.md`, it links. Reopen if the walkthrough is
+wanted in the repository as the record behind the manual checks.
+
+### D91. A pre-release cut installs from the marketplace, pinned to its tag (guide lead)
+
+A cut goes on a machine at user scope with `claude plugin marketplace add 'libar-dev/relay-plugin-cc#v3.0.0-pre.N'`
+and `claude plugin install relay@libar-relay`. That is the path users take, so the marketplace's own manifest is
+used too. Going back pins `#v2.2.0`. A pinned marketplace does not move on `claude plugin marketplace update`, so
+each switch is a remove, an add and an install. This was checked on the ThinkPad on 22 October, in a throwaway
+`HOME` with Claude Code 2.1.308: a branch pin and the `v2.2.0` pin both installed, and `marketplace remove` kept the
+old version's cache. Since the owner's ruling of 22 October, libar-infra runs every switch and keeps each machine's
+pin, so the pre-release guide gives the commands for reference only.
+
+### D92. Screenshot places in the docs are HTML comments with stable ids (guide lead)
+
+The user guide marks where each explanatory screenshot goes with a comment such as `<!-- screenshot G7: … -->`,
+numbered G1 to G25, and the guide lead's list pairs each one with the proof it rests on. A comment does not render
+on GitHub, so a guide can merge before the public-assets pass. That pass replaces each comment with its image, taken
+in a clean demo setup. The proofs taken on the M3 show the account and stay local. The same device marks lines that
+wait on later work.
+
+### D93. The pre-release guide is for daily use, not a test matrix (guide lead; amends D60, part 11)
+
+After the owner chose pre-release cuts (D95), the manual test script became the owner's pre-release guide. It holds:
+- each cut and its known issues, with what to do meanwhile;
+- a short check after each install;
+- what should happen while working;
+- a note template a lead can act on;
+- how a machine is switched.
+
+The cuts are tested by the real-API end-to-end suite and libar-infra's thread tests, which find issues; the live
+suite tests the cut's plugin code with `--plugin-dir`. Under D97 none of them gates a cut: a cut PR passes `npm run
+check-version` and CI (D70), and the release PR's gates still run the live and real-API suites on the release head
+(D60, part 9). The guide holds no backend-by-surface matrix of its own. With every cut, the guide lead updates the
+known-issues list in a docs PR of its own, not in the cut PR (D70); the list is part of the go/no-go for heavy
+production (D97, as D99 amended it). The first draft's step-by-step script stays in the guide lead's working folder.
+
+What it changes: D60, part 11, as D95 amended it. There is no step-by-step script; the walkthrough feeds the
+pre-release guide and the user guide, and D95's "built from the manual test script" means that the guide replaced it.
+Edited by the release lead from the guide lead's text, on the coordinating thread's instruction: the gates, the
+known-issues update and the go/no-go are named.
+
+### D95. Pre-release cuts before 3.0.0, on the M3 and the ThinkPad (owner, 22 October 2026; amended by D97)
+
+The owner, in four messages that day:
+
+> I would like to deploy and heavily use the pre-release cut of the 3.0 release on one Mac and on Fedora. Maybe we
+> can do 3.0.0-pre1 or something along those lines. I would like to perfect and polish the release and
+> user-facing documentation and everything.
+
+> [M]y suggestion was just to put the pre-release cut on M3 and replace the current plugin and to do actual work, a
+> ton of work, to battle-test it.
+
+> The infra repo should execute deployments and changes on the M3 machine. Please check our test suite in another
+> context that we use for testing: killing threads, stopping threads, resuming threads. […] Thinkpad should also
+> use the 3.0 pre-release and M3. Run heavy orchestration testing over the weekend on both operating systems. […]
+> We will be feeding back issues and doing pre-releases until we solve all the issues. This will be an iterative
+> process.
+
+> Use exactly the same workflow as we did before. It is very simple. […] We should do exactly the same on the
+> Fedora machine. […] I will deploy production workflows on both M3 and Fedora with the new relay plugin.
+
+So 3.0.0 is preceded by pre-release cuts, `3.0.0-pre.N` (D70). libar-infra installs each at user scope on the M3
+and the ThinkPad, replacing 2.2.0, by the procedure earlier releases used, with the marketplace pinned to the cut's
+tag. The owner runs production work on both machines, and the threads run heavy orchestration testing on both over
+the weekend, with the test suite the owner pointed to (killing, stopping and resuming threads). The issues found go
+into the next cut, until none remain. The M1 stays on 2.2.0 as the fallback.
+
+What it changes:
+
+- **D1.** "Nothing reaches the fleet before the release" gives way for the cuts on the M3 and the ThinkPad. `main`
+  stays on 2.2.0 until the release PR merges, and the M1 until the owner's fleet update.
+- **The ThinkPad's working rule** that no test build is installed at user scope there gives way for the cuts. The
+  live suite and the smoke kit still test their own builds: a `--plugin-dir` build replaces the installed plugin
+  of the same name for its session (measured on 2.1.308 with the cut installed: only the `--plugin-dir` relay
+  loads), and a smoke folder disables `relay@libar-relay` in its local settings.
+- **D60, part 11.** The owner's testing is production use of each cut. What confirms the release candidate stays
+  open for the owner.
+- **release-3.0.md.** Branches and versions, the Sequence, step 10, "Pre-release cuts" and the fleet pin gate
+  follow this entry.
+
+Arranged by the coordinating thread: the install runs in a terminal the owner watches; the owner's checklist is
+the guide lead's pre-release guide, built from the manual test script.
+
+### D96. A user's stop of a relay leaves its job running, with a notice (owner, 22 October 2026)
+
+The coordinating thread recommended option A, and the owner answered: "A is final."
+
+- **A stop from Claude Code's own controls** ends the relay and leaves its job running: "x" in the agent list, Esc
+  in the relay's view (one Esc stops a running relay, D104), the desktop app's Stop button. Relay shows a notice
+  naming the job, with `/relay:cancel` and `/relay:result`.
+- **`TaskStop` on a relay and the message `cancel` still cancel the job** (D2, D44): they are the deliberate ways
+  to stop the work. A cancelled job keeps its backend session, and the companion's `continue` resumes it there; a
+  message to its relay does so only for a relay the Agent tool started (D53).
+- **A resumed Workflow still never adopts a cancelled job.** No change for 3.0 (D42).
+
+Why, from the coordinating thread's reading of relay 2.2.0's survey of about 920 T3 threads and 360 relay jobs
+(PR #5): no relay on record died through a `TaskStop`. The deaths came from T3 restarts, a quit of the T3 app on
+macOS, a usage limit that ended at least 14 relays at once, and a `kill -9` of a lead. Every job either ran on or
+was resumed, by its automatic resume or a Workflow resumed with `resumeFromRunId`, and its work could be recovered;
+the losses on record came from causes a stop rule does not touch, and 2.2.0 fixed the main one. It is not ruled out
+that such deaths fire the same signal as a user's stop; if they do, a rule that cancelled the job on a user's stop
+would have cancelled those jobs, and none of those recoveries could have happened. Rejected: B, a user's stop
+cancels the job.
+
+Still open: on macOS, quitting the T3 app kills relay workers, for a reason not known yet; the cuts' use on the M3
+watches for it. The coordinating thread scheduled the notice after Phase 4's status line and board, which rework
+`hooks/mod/register.js`, as the notice will.
+
+### D97. Test pre.1, then cycle pre-releases for 48 hours before heavy production (owner, 22 October 2026; amended by D99)
+
+The owner, after pre.1 was installed:
+
+> Yes we need to test the pre-release. We already did the smoke test on M3. Issues need to be addressed and then the
+> new pre-release should be cut. For 48 hours until we are confident. To deploy heavy production workloads on m3
+> and fedora.
+
+So pre.1 stays installed on the M3 and the ThinkPad and is tested now. What its smoke runs, the suites and the
+reviews find is fixed, pre.2 is cut, and pre-releases keep coming for 48 hours, until we are confident. Only then do
+heavy production workloads go onto the M3 and the ThinkPad.
+
+Later that night the owner ruled, through the coordinating thread, that the loop stays simple: fix, cut, libar-infra
+installs the cut, the owner tests it with real use, repeat. A cut is the version PR with its checks, then the tag
+(D70). And every plugin install or update on a machine, at any scope, and every infrastructure change, goes through
+libar-infra; the owner, in that thread: "any plugin updates, any infrastructure changes, need to be handled by
+prompting the infra project session."
+
+What it changes:
+
+- **D95.** The cuts are tested and fixed for 48 hours before the owner's production work on them grows to heavy
+  workloads.
+- **D70's cut.** The per-cut gates planned that evening are dropped: the rollback check, the real-API suite on the
+  cut's head and the throwaway-`HOME` check. pre.1's rollback check stays on record.
+- **The smoke kit's installs.** libar-infra runs `scripts/smoke/install-local.sh` and its uninstall for the leads; a
+  `--plugin-dir` run installs nothing and stays with the leads.
+
+Arranged by the coordinating thread: a plan for the 48 hours, from 22 October 23:45 CEST to about 24 October 23:45,
+with what each cut must fix and a go/no-go for heavy production. The owner decides when we are confident.
+
+### D98. A survey of how the pre-releases are used (owner, 22 October 2026)
+
+> We'll do this kind of survey again. https://github.com/libar-dev/relay-plugin-cc/pull/5
+
+So the pre-releases get a survey like relay 2.2.0's (PR #5). Client threads are read for relay's behaviour only, and
+nothing from a client goes into the repository, as [docs/thread-surveys.md](../thread-surveys.md) says.
+
+Arranged by the coordinating thread: the survey reads every T3 thread on the M1, the M3 and the ThinkPad, and the
+jobs homes, for how the pre-releases are used and where relay fails. It runs twice: once partway through D97's 48
+hours, to feed the next cut, and once at the end, before the go for heavy production. Each pass records its cutoff
+in docs/thread-surveys.md, and the next starts there.
+
+### D99. Heavy production starts on pre.2 (owner, 23 October 2026; amends D97)
+
+The owner is ready to start heavy production and waits for the pre.2 tag, which is now the top priority.
+
+What it changes: D97's 48-hour hold on heavy production ends; heavy production starts on pre.2. D98's survey stays,
+and is no longer a step before heavy production; the coordinating thread times its passes. D95's cuts go on after
+pre.2 as issues are found.
+
+### D100. A line the user types into a relay's own view is delivered (typed-messages lead)
+
+Claude Code lets a person open a running agent's view (↓ in the footer, Enter, ↑ to its prompt) and type at
+`Message @<agent>…`. The M3 pass found that for a `relay:job` agent the line never reached the job, nothing recorded
+it, and a relay the line resumed after its hand-back said it had passed it on. Measured on 2.1.308: while the relay
+waits, the line is written into its transcript only when its tool call returns, as a `queued_command` attachment of
+origin kind `human`, `isMeta: true`, the text as typed in `prompt`; after the hand-back, or right after Esc
+interrupted the relay in its view, the line resumes the relay at once as a `user` entry of origin `human`,
+`isMeta: true`, the text inside a fixed wrapper ("The user sent a new message while you were working: …"), with no
+field holding the raw text. The guard took only `coordinator` and `peer`, so it dropped the first at relay.mjs:226
+and the second as metadata.
+
+The guard now delivers origin `human` in both shapes, through the ledger like any message: a steer while the job
+runs, a continue once it has ended, and the text `cancel` cancels the job. So a person can interrupt a relay with Esc
+and redirect its job with the next line (measured: a steer 4.3 s after Enter). The resuming entry's text is
+unwrapped, prefix and suffix exactly, as the coordinator's is; a text not in that wrapper is delivered whole and
+recorded, since a wording change in Claude Code must not drop the person's words. A typed text with blocks that are
+not text (a pasted image) delivers its text and records the rest. A person's text never goes through the
+harness-marker checks, so typing the Workflow marker line or an interrupt note is heard. A relay that lives through
+the update delivers the lines it received before, as D11 did for peers. GPT-6.1 Sol and Opus 5.5 advised; both chose
+to deliver a text whose wrapper changed and record it. Reopen if Claude Code gives the raw text a field of its own.
+
+### D101. Origins the guard does not know are recorded, never dropped in silence (typed-messages lead)
+
+D100's defect is the second of its kind: D8 fixed the same silent drop for `peer`. Relay transcripts on the
+ThinkPad also hold origin `task-notification` (a lead's background command notice that reached Workflow relays),
+which is not a message for the job. Now `task-notification` is skipped, and any other origin kind on a queued command
+or on an `isMeta` user entry, an origin with no kind, or a message before the prompt is recorded as a relay violation
+and not delivered, so the next new kind shows on the job instead of vanishing. Delivering unknown kinds was rejected
+by both advisors: a delivery to a running job is a steer, and a harness notice must not steer a job (D48's lesson).
+A problem is found again at every hook call, and the violation log skipped only a record equal to the last one, so
+two problems alternated and grew every result; a `transcript` record now goes in once per entry and reason. Other
+kinds keep the old rule, since an operational failure may recur.
+
+### D102. What a relay's final message must be (typed-messages lead)
+
+Two defects, one rule: the relay's final message is the job's result, nothing of its own.
+
+- **A relay resumed after its hand-back hands back again.** At SubagentStop the guard let a relay that had handed
+  back through `SubagentHandback`, and made no tool call since, stop with any final text when nothing was owed. A
+  message the guard did not deliver, one whose continue had already finished, or a `cancel` on an ended job could
+  resume the relay and leave nothing owed, and the relay's words then reached the main thread as the agent's result:
+  how the M3 relay claimed a delivery the guard never made. Now the parser reports every inbound entry it saw,
+  delivered or not; the hand-back records them; and the exemption holds only while the transcript is readable and no
+  inbound entry arrived after the recorded hand-back. Otherwise the relay must end with exactly the result or hand
+  back again. A hand-back recorded by 3.0.0-dev.4 is compared on the messages it knew. Both advisors found D100
+  alone left this open.
+- **One code fence around the result is not a difference.** The e2e suite's first full run on dev.4 had a Haiku
+  relay without `SubagentHandback` end with the exact result inside a ```` ``` ```` fence nine times; the exact
+  compare blocked each, and the relay was let go after eight blocks with no hand-back recorded. The compare now
+  removes one fence wrapping the whole message, indented by at most three spaces, with no tag or one of
+  `text`, `txt`, `plaintext`, `plain`, `markdown`, `md`, `yaml`, `yml`, `ini`, `console` or `log`, in any case, after the opening backticks, so the
+  relay cannot hide words there; anything else still fails, and the block's text says "with no code fence around
+  it" on both paths. The Workflow path, which ignored every fence line, now takes the same one outer fence and no
+  other; its tag list is wide enough for the `yaml` or `Text` fence a small model puts around a state block.
+
+What still lets a relay go, as before and recorded or by design: the block budget (eight blocks), a hook that fails,
+and a relay whose start failed, which has no job and keeps its hand-back exemption.
+
+### D103. No wake for a typed line in 3.0's guard fix; the wake is a follow-up (typed-messages lead)
+
+No hook carries a typed line's recipient: at Enter, `session.send`, `prompt.submit`, `UserPromptSubmit` and
+`session.receive` do not fire; `prompt.change {clear}` does, naming neither the view nor the agent. So a line typed
+while the relay waits reaches the job at the relay's next tool call: when its wait returns, at most 540 s, or when
+the job ends, and then as a continue. One typed after the hand-back or after an interrupt arrives at once. The docs
+say so. Claude Code 2.1.309 (23 October) drops a finished agent from the footer's list within about 15 s unless its
+view is open; a line typed in a view held open through the hand-back still continues the job (measured on
+2.1.309), and once the agent has left the list a continue goes through `SendMessage` or `C continue`. A prototype measured the follow-up once: a pass-through `ui.render` hook on the `AbovePrompt` band reads the
+view in force (`e.props.view.agentId`) and re-runs on every switch, and a `prompt.change {clear}` hook that woke the
+viewed relay ended its wait 0.19 s after Enter, with the typed entry in the transcript before the relay's next call.
+It changes `register.js`, so it comes after Phase 4's PR 2, with measurements of stale views, rapid switches and
+several surfaces first. Waking every relay on every clear was rejected: each main-thread prompt would cost every
+running relay a model call. Both advisors agreed.
+
+### D104. The live check `typed` drives the agent view in the terminal (typed-messages lead)
+
+T3 draws no agent view, and the Desktop app's Code tab draws one with no input (the M3 lead's check on Claude for
+Mac 3.6556.1), so typing to a relay is a terminal route and the check runs in the terminal only. It overrides `runTerminal`, as `session-end` does,
+and leaves the runner alone. Per backend it types into three relays' views: B, then the check runs `companion wake`
+itself, labelled as such, to prove the real `human` entry reaches the steer path; C, interrupted with one Esc at the
+view's prompt and redirected by the next line; A last, typed while its job runs and again after its hand-back, in a
+view held open throughout, since Claude Code drops a finished agent from the footer's list unless its view is open.
+Each A's job is sized by its backend's place, so it still runs when the check reaches it. Where Claude Code
+offers no route after the hand-back, A2 is recorded as a limit with the version, not judged; on 2.1.309 the
+held view still took A2. The check judges by the
+ledger, the inbox and the job's attempts, never by the report's wording, counts each task notification once, and
+uses no Esc but C's: Esc at a running relay's prompt stops it, and Esc in the main view interrupts the lead.

@@ -8,10 +8,11 @@ it: where the work goes, what each step must pass, and how the work was done in 
 
 - `release/3.0` starts at `main` @ e961d9a. Each phase is a branch `mods/phase-<n>-<slug>` from the tip of
   `release/3.0`, and a PR into it, merged with a merge commit once its gates pass.
-- `main` and every fleet machine stay on 2.2.0 until the release PR merges `release/3.0` into `main`, except for
-  the release candidate the owner tests by hand before the merge (step 10).
-- The branch carries `3.0.0-dev.N`, and each phase PR raises N with `node scripts/bump-version.mjs` (D6). The
-  release PR sets 3.0.0 and dates the CHANGELOG.
+- `main` stays on 2.2.0 until the release PR merges `release/3.0` into `main`, and the M1 until the owner's fleet
+  update. The M3 and the ThinkPad run the pre-release cuts (D95).
+- The branch carries `3.0.0-dev.N`, and each phase PR raises N with `node scripts/bump-version.mjs` (D6). A
+  pre-release cut sets `3.0.0-pre.N` and is tagged `v3.0.0-pre.N`; the next phase PR sets the next `3.0.0-dev.N`
+  over it (D70). The release PR sets 3.0.0 and dates the CHANGELOG.
 - Each phase adds its entries under the CHANGELOG's 3.0.0 heading, and records its forks in decisions.md.
 - Threads that work in parallel take decision numbers from the blocks the coordinating thread assigns them, so
   their entries never collide; a PR that merges after another puts its entries in numeric order.
@@ -31,7 +32,9 @@ it: where the work goes, what each step must pass, and how the work was done in 
 5. **Phase 6**, the investigation report, at any point. No code (PR #9). Reported in
    [messages-from-a-job.md](messages-from-a-job.md).
 
-Steps 6 to 8 start while Phase 4 is open; each part starts once what it needs has merged.
+Steps 6 to 8 start while Phase 4 is open; each part starts once what it needs has merged. Pre-release cuts run
+beside them, and the owner uses each one (see "Pre-release cuts" below): pre.1 from the tip after #14, pre.2 once
+Phase 4's `--json` and the typed-message fix merge, and more as Phase 4 lands and the owner's issues are fixed.
 
 6. **The real-API suite**, in the private smoke kit repository `libar-dev/relay-plugin-cc-smoke`, run by hand and
    locally only; the kit keeps its Apify and Firecrawl CLIs. It runs the real backends where the unit tests mock
@@ -52,14 +55,15 @@ Steps 6 to 8 start while Phase 4 is open; each part starts once what it needs ha
 8. **The screenshots, the walkthrough and the guide.** Screenshots of every user-facing feature, in the CLI and
    in Desktop, taken on the M3 (D54, D60), with the status line and the board once built (the CLI in a narrow and
    a wide terminal, and Desktop); they stay local. T3 screenshots for the post to the T3 community. One feature
-   walkthrough, which feeds the owner's manual test script (each step with its expected result) and the user
+   walkthrough, which feeds the owner's pre-release guide (D93; it took the manual test script's place) and the user
    guide (with screenshots that explain the features). A screenshot that is published, in the T3 post or the
    user guide, shows no account or session names.
 9. **The release PR**, `release/3.0` into `main`.
-10. **The owner's manual testing.** Once the release candidate is confirmed (decisions.md, "Open for the owner"),
-    the owner tests it by hand with the manual test script, on one Mac and on Fedora at the same time; the M1
-    stays on 2.2.0 as a fallback. Then, on the owner's word, the release PR merges with a merge commit, and
-    `v3.0.0` is tagged and published as a GitHub release.
+10. **The release candidate** is the last installed cut, made once the reviews' fixes have merged (D70), with the
+    finished release PR and its reviews (D76). The owner uses it on the M3 and the ThinkPad as every cut before it.
+    Then, on the owner's go after that real use, the release PR merges with a merge commit, and `v3.0.0` is
+    tagged and published as a GitHub release. The release PR changes only the version, the README line and the
+    CHANGELOG's date over the last cut; a change to the plugin needs another cut.
 11. **The fleet update, then the publication**, when the owner decides. The merge already makes 3.0.0 what the
     marketplace serves; the publication is the T3 post and, later, public screenshots for users, taken in a
     clean demo setup.
@@ -67,37 +71,41 @@ Steps 6 to 8 start while Phase 4 is open; each part starts once what it needs ha
 ## What a phase PR must pass
 
 - `npm test`, `npm run check`, `claude plugin validate plugins/relay`, `claude plugin test plugins/relay`, and CI.
-- A review by two model families before the bots: GPT-6.1 Sol through relay, and Opus 5.5. Each gets the brief
+- A review by two model families before Greptile: GPT-6.1 Sol through relay, and Opus 5.5. Each gets the brief
   and the code, not the author's conclusions.
-- CodeRabbit and Greptile, followed with T3's `watch_pull_request`. A finding is answered on its thread when it
-  is fixed or declined, then the thread is resolved.
+- Greptile, followed with T3's `watch_pull_request`; CodeRabbit is not a gate (D78). A finding is answered on its
+  thread when it is fixed or declined, then the thread is resolved.
 - When the phase changes plugin code: its own checks in the live suite, in the terminal and in T3, on the Fedora
   ThinkPad, with their records committed and `docs/live/capabilities.md` regenerated
-  (`node scripts/live/suite.mjs table`); and the smoke kit (`relay-plugin-cc-smoke`) on the PR's head, installed
-  with `scripts/smoke/install-local.sh`. A phase that changes no plugin code, such as Phase 6's report, raises no
-  version and runs neither (D51).
+  (`node scripts/live/suite.mjs table`); and the smoke kit (`relay-plugin-cc-smoke`) on the PR's head, which
+  libar-infra installs on the lead's request (`scripts/smoke/install-local.sh`; D97). A phase that changes no
+  plugin code, such as Phase 6's report, raises no version and runs neither (D51).
 - Its last commit updates plan.md: a review of every later phase in light of what the PR learned (the plan's
   rule 7), and the CHANGELOG and decisions.md entries.
 
 Other PRs into `release/3.0`, such as the reviews' fixes, pass the same gates, except the review of every later
-phase; their last commit updates the CHANGELOG and decisions.md.
+phase; their last commit updates the CHANGELOG and decisions.md. A pre-release cut follows its own, shorter
+procedure (see "Pre-release cuts").
 
 ## What the release PR must pass
 
-D60 added the real-API suite, the screenshots, the walkthrough with its test script and guide, and the reviews,
-and dropped the demo recording: feature screenshots and the user guide replace it.
+D60 added the real-API suite, the screenshots, the walkthrough with its test script (now the pre-release guide,
+D93) and the user guide, and the reviews, and dropped the demo recording: feature screenshots and the user guide
+replace it.
 
 - `npm test`, `npm run check`, `claude plugin validate plugins/relay`, `claude plugin test plugins/relay`, CI,
-  CodeRabbit and Greptile.
+  and Greptile.
 - The full live suite on all four backends, in the terminal and in T3, on the release head.
 - The real-API suite, which replaces the smoke kit's release run, on the release head, on Fedora and on a Mac
   through cmux.
 - D3's checks of the board: its Mod tests on the test kit's `desktop` mount, which `claude plugin test` runs on
   Fedora, and the manual Desktop pass on the M3 (D54).
 - The screenshots of every user-facing feature, in the CLI and in Desktop, the status line and the board included.
-- The feature walkthrough done, the user guide in the release, and the owner's manual test script ready.
-- The reviews of step 7 done, and their fixes merged: the skills review with Opus 5.5's skill updates, the
-  coverage review, the review of the whole branch, and the UX and UI review.
+- The feature walkthrough done, the user guide in the release, and the owner's pre-release guide current, which
+  took the manual test script's place (D93).
+- The reviews of step 7 done, and their fixes merged: the skills review with Opus 5.5's skill updates (its
+  corrections; the new skills it proposed wait for a package after 3.0, D74), the coverage review, the review of the
+  whole branch, and the UX and UI review.
 - The texts that promise for every relay what holds only for a relay started with the Agent tool, fixed:
   design.md's interface table and "Under the Workflow tool", the jobs skill's message rules, `agents/job.md` on
   continue and cancel, and the CHANGELOG's Phase 1 line on messages from other agents. The docs say what a
@@ -105,13 +113,62 @@ and dropped the demo recording: feature screenshots and the user guide replace i
   is marked unmeasured ([plan.md](plan.md#after-phase-6-what-held-and-what-changed)).
 - The capability table, generated from the suite's records, in the README.
 - The smoke kit's `SMOKE-TEST.md` current for 3.0.
-- 3.0.0 everywhere `scripts/bump-version.mjs` sets it, the marketplace included, and the consolidated CHANGELOG,
-  dated.
+- 3.0.0 everywhere `scripts/bump-version.mjs` sets it, the marketplace included, and in the README's Development
+  line, and the consolidated CHANGELOG, dated.
+- Every fleet machine's marketplace pinned to a tag: the M1 to `#v2.2.0`, the cut machines to their cut. A
+  marketplace with no ref follows `main`, and an update round would move it to 3.0.0 before the owner's fleet
+  update.
 
-The PR merges only on the owner's word, after the owner's manual testing, with a merge commit; then the tag
+The PR merges only on the owner's word, after the owner's testing, with a merge commit; then the tag
 `v3.0.0` and a GitHub release. There is no npm release: users install relay from this repository's marketplace,
 which serves `main`, so the merge is what makes 3.0.0 available. Then the fleet update, then the publication, each
 when the owner decides.
+
+## Pre-release cuts
+
+D95, D97, D98, D99 and D70. Each cut goes on the M3 and the ThinkPad. The owner tests it with real use, with the
+guide lead's pre-release guide as a checklist, and the threads' testing runs against it: the real-API suite, infra's
+thread tests and heavy orchestration runs. Fixes go into the next cut, and cuts keep coming as issues are found; the
+owner's heavy production starts on pre.2 (D99). A survey of how the cuts are used runs twice (D98). The M1 stays on
+2.2.0 as the fallback.
+
+A cut is a PR into `release/3.0` that changes only the version fields `node scripts/bump-version.mjs 3.0.0-pre.N`
+sets, the README's Development line and one CHANGELOG entry under the 3.0.0 heading (D70). It merges once
+`npm run check-version`, CI, Greptile and a short two-family check of its CHANGELOG entry pass (D78), and its merge
+commit is tagged `v3.0.0-pre.N` and pushed: no GitHub release, no npm. The fixes and phase PRs it carries have passed
+their own gates first. The release lead tells the coordinating thread before
+it pushes each tag, and the coordinating thread has libar-infra install the cut. Every plugin install or update on
+a machine, at any scope, goes through libar-infra; a `--plugin-dir` run installs nothing and stays with the leads
+(D97).
+
+After pre.2's install, the live checks D73 left open run in a new session on the M3: default permission mode, the
+sandbox's temporary directory, `/relay:review`'s estimate and size question, and `--background` delivery. The
+coordinating thread assigns them; they gate nothing, and what they find goes into the next cut.
+
+libar-infra installs each cut with its fleet tool, in a terminal the owner watches:
+
+1. **A quiet moment.** No relay job starting or running (`node
+   ~/.claude/plugins/cache/libar-relay/relay/<installed version>/scripts/companion.mjs status --all`). On the
+   ThinkPad, the coordinator has the leads finish their Workflows of relays, or leave them between jobs, first.
+   Copy `~/.claude/settings.json`.
+2. **Switch,** from `$HOME`: `claude plugin marketplace remove libar-relay`, `claude plugin marketplace add
+   'libar-dev/relay-plugin-cc#v3.0.0-pre.N'`, `claude plugin install relay@libar-relay`. The remove uninstalls
+   every plugin of that marketplace and drops their `enabledPlugins` entries from the settings it sees: the user's,
+   and those of the folder it runs in.
+3. **Check.** `claude plugin list` shows `3.0.0-pre.N`; a new session's `/relay:status` says `relay-version:
+   3.0.0-pre.N`; `~/.claude/settings.json` differs from the copy only in plugin and marketplace entries.
+4. **Sessions.** New Claude sessions run the cut at once, with no T3 restart (D77). A session that started before the
+   switch keeps the build it loaded until it runs `/reload-plugins` or its process is replaced; it reloads only when
+   it holds no Workflow of relays.
+5. **The way back** is the same with `#v2.2.0`. pre.1's rollback check showed that 2.2.0's companion reads ended
+   jobs pre.1 wrote (D70); a running job, `continue` across versions and a `cancel --attempt` record were not
+   checked. Roll back only once every job the cut started has ended and been read, and check afterwards that
+   2.2.0's `status --all` lists the jobs home.
+
+No mixed versions across a resume. A Workflow started under one version finishes, or is abandoned and its jobs
+cancelled, under that version; adoption across versions is untested. A session that held an old version's Workflow
+and restarts after the switch does not resume it: its jobs are read and continued with the old version's companion,
+which stays in `~/.claude/plugins/cache/libar-relay/relay/<old version>/`, and new work starts under the cut.
 
 ## How the work is done
 
@@ -129,13 +186,15 @@ What worked in Phase 1:
   per-session bypass setting and a Sonnet lead, and fails the run when `~/.claude/settings.json` changed. A check
   that needs another plugin names a probe Mod from `scripts/live/probes/`, loaded with a second `--plugin-dir`;
   such a check runs in the terminal only.
-- In T3, the lead installs the build into the smoke folder (`scripts/smoke/install-local.sh
-  ~/dev-libar/relay-plugin-cc-smoke`), runs `node scripts/live/suite.mjs prepare <check> --surface t3 --work-dir
-  ~/dev-libar/relay-plugin-cc-smoke`, and sends the printed prompt as the first message of a new thread of the T3
-  project `relay-plugin-cc-smoke` (`t3_thread_launch`, Sonnet). It follows the thread with `t3_thread_wait`,
-  sends a message if the thread stops before the check's marker, and then runs `node scripts/live/suite.mjs analyze
-  <run id>`, which finds the thread's transcript by the prompt's first line.
-- The smoke kit run, a phase PR's gate: `scripts/smoke/install-local.sh ~/dev-libar/relay-plugin-cc-smoke`, then
+- In T3, libar-infra installs the build into the smoke folder on the lead's request
+  (`scripts/smoke/install-local.sh ~/dev-libar/relay-plugin-cc-smoke`; D97). The lead runs `node
+  scripts/live/suite.mjs prepare <check> --surface t3 --work-dir ~/dev-libar/relay-plugin-cc-smoke`, and sends the
+  printed prompt as the first message of a new thread of the T3 project `relay-plugin-cc-smoke`
+  (`t3_thread_launch`, Sonnet). It follows the thread with `t3_thread_wait`, sends a message if the thread stops
+  before the check's marker, and then runs `node scripts/live/suite.mjs analyze <run id>`, which finds the thread's
+  transcript by the prompt's first line.
+- The smoke kit run, a phase PR's gate, with libar-infra running the install and the uninstall on the lead's request
+  (D97): `scripts/smoke/install-local.sh ~/dev-libar/relay-plugin-cc-smoke`, then
   `scripts/smoke/pane.sh start relay-smoke ~/dev-libar/relay-plugin-cc-smoke -- claude
   --dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}'`, then the kit's workflow
   with `args {"dir": "/home/darkomijic/dev-libar/relay-plugin-cc-smoke"}` and its plain fan-out, then
@@ -195,3 +254,29 @@ What worked in Phase 1:
 - A module's `$.session.send` always sends as the main conversation, from any loop.
 - The guard reads the transcript a job recorded at start. After a Workflow agent forks, Claude Code can write
   later entries to `subagents/agent-<id>.jsonl` instead.
+
+## What the typed-message fix learned about the tools
+
+- A line typed into an agent's own view (↓ in the footer, Enter, the prompt `Message @<agent>…`) raises no
+  `session.send`, `prompt.submit`, `UserPromptSubmit` or `session.receive`. Only `prompt.edit` (a paste) and
+  `prompt.change {kind: "clear"}` fire, and they name neither the view nor the agent. The line reaches the agent's
+  transcript when its tool call returns, as origin `human`; typed after the agent ended, it resumes the agent at
+  once (`SubagentStart`; the main thread's queue gets "Agent X was resumed by the user").
+- The view in force reaches a module through a drawn site. The 2.1.308 declarations give `e.props.view.agentId` to
+  the `AbovePrompt` band and to a `Pane`, and none to `$.ui.status`. Measured for the band: opening an agent's view
+  and going back re-run its hook with the agent's id and with none, and a hook that passes draws nothing.
+- The footer's agent list shows five agent rows under `main`, then `↓ N more`; the list scrolls as the cursor moves.
+  A finished agent leaves the list unless its view is open, where it stays as `idle` (2.1.308); on 2.1.309 it leaves
+  within about 15 s unless its view is open, and a view held open through the hand-back still takes a line. Under load (several sessions
+  and their jobs) a key's effect can take more than 250 ms to draw: a script polls the screen for it and never
+  sends a key twice.
+- Keys in the terminal: from the main prompt, `Down` moves into the agent list and `Up` from `main` gives the prompt
+  back; `Enter` on a row opens that agent's view, and `Up` as many times as `Down` reaches its prompt. Esc in a
+  running agent's view stops the agent, and `x` on its row in the list stops it too; both end its turn with
+  `turn.complete {reason: "aborted"}`, list it as `killed`, and fire no `SubagentStop`. Esc in the main view
+  interrupts the main turn. Drive the view without Esc.
+- The Desktop app's Code tab (Claude for Mac 3.6556.1, checked on the M3) shows an agent's view with no input: Back,
+  Move, Expand and Close only, and `@` in the main prompt offers files, not agents. Esc in that view does nothing; the
+  Background tasks panel's Stop button ends the relay as `x to stop` does, and the job runs on.
+- `$.ui.log` writes a line into the main transcript (kept as `system`/`informational`, not sent to the model);
+  `$.ui.toast` is drawn on the notification bar, also over an agent's view; `$.ui.notify` had no channel on Fedora.

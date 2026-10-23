@@ -46,6 +46,8 @@ function printUsage() {
       `  companion.mjs review [--wait|--background] [--backend ${names}] [--model <m>] [--effort <e>]`,
       `                            ${homeFlags} [--base <ref>] [--scope <auto|working-tree|branch>] [--json]`,
       "  companion.mjs adversarial-review [the same options as review] [focus text] [--json]",
+      "  setup, review and adversarial-review accept --args-file <path> [--json]: parse the exact file text as raw arguments.",
+      "    No other argv options except --json and, for reviews, --estimate: print target label and size without starting a job.",
       "  companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "",
       "Exit codes of wait and result: 0 completed with a report, 3 ended without a report (dead or failed) or with messages not yet run,",

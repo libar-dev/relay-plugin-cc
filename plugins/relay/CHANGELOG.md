@@ -10,6 +10,31 @@ Pre-release cuts:
 
 - `3.0.0-pre.1` (2026-10-22, tag `v3.0.0-pre.1`): Phases 1, 2, 3 and 5 and Phase 6's report, as below; Phase 4
   has not landed.
+- `3.0.0-pre.2` (2026-10-23, tag `v3.0.0-pre.2`): what it fixes and changes over pre.1. The details are in
+  "Phase 4" and "Fixes from the pre-releases" below.
+  - A line typed into a relay's own agent view in the terminal reaches the job; in pre.1 it was lost (pre.1's known
+    issue 1). While the relay waits, the line can take up to nine minutes to arrive; a message sent through Claude
+    still arrives within seconds. After the hand-back, type only while the agent's view stays open: from Claude Code
+    2.1.309 a finished agent leaves the list within about 15 s, and then a continue goes through Claude.
+  - A relay that hands back the job's block inside one plain code fence is accepted, no longer blocked eight times
+    and let go as `not handed back` (known issue 2). A relay that keeps writing prose instead of the block, as one
+    did once after the message `cancel`, is still let go after eight blocks. A relay that a message resumes after its
+    hand-back must hand back the result again, where pre.1 let its own words through as the result.
+  - A job cancelled with TaskStop is no longer marked `not handed back` (known issue 3).
+  - `/relay:setup` asks Grok a second time before it says a home is signed out, and shows Kimi as
+    `steer (next turn)` (known issue 4).
+  - Text given to `/relay:review`, `/relay:adversarial-review` or `/relay:setup` no longer runs in Claude's shell
+    when it holds backticks, `$(…)` or `$VAR`: Claude writes it to a temporary file with its Write tool, and relay
+    reads it as written. So none of the three expands `$HOME` or another variable any more: use `~/` or a full path.
+    Setup no longer expands globs either; its quotes group spaces, and a backslash escapes the next character even
+    inside quotes, so a literal backslash is written twice. Not yet checked live: these commands in default permission mode (Claude may
+    ask before its Write), under the sandbox, and with `--background`. The shell commands relay suggests after an
+    error or for a sign-in quote what they carry.
+  - The companion's `--json` changed in place, for Phase 4's status line and board, which come in a later cut. A
+    script that reads it must change: `status --json`, with or without `--all` or `--workflow`, returns slim rows,
+    50 a page, newest first (follow `nextCursor` with `--cursor`; `status <job> --json` has the full record), and a
+    `--json` error is JSON on stdout, not text on stderr.
+  - Still open: `/relay:transfer` takes no job id (known issue 5).
 
 Phase 1, steer wake:
 
@@ -122,6 +147,59 @@ Phase 6, an investigation (the plugin does not change):
 - [docs/mods/messages-from-a-job.md](../../docs/mods/messages-from-a-job.md) reports what Codex, Grok, ZCode and
   Kimi allow for a job that sends a message to the agent that started it, or to a peer, and how such a message
   and its reply would travel. Messages from a job are not part of 3.0.
+
+Fixes from the pre-releases:
+
+- When `/relay:status`, `/relay:result`, `/relay:cancel` or `/relay:transfer` fails, the shell command its answer
+  names single-quotes the plugin's path and what you typed, one shell word each, so it passes the companion the
+  same arguments as the hooks module's own call. A job id or `--source` path with backticks, `$(...)` or quotes now
+  runs nothing when the line is pasted into a shell; with a line break in what you typed, the command is shown in a
+  fenced block, which Markdown leaves as written.
+- `/relay:setup` asks Grok's `grok models` a second time, a second apart, before it says a home is signed out: a
+  signed-in home once answered "You are not authenticated" and then signed in.
+- `/relay:setup` shows Kimi as `steer (next turn)`, not as having no steering: a message to a running Kimi job is
+  taken as its next turn. The command tells Claude so, and `companion setup`'s text says it in Kimi's `can:` line.
+  The JSON's `can.steer` is unchanged, and still means steering the running turn.
+- `/relay:status`'s argument hint names `--workflow <run>`.
+- **A line the user types into a `relay:job` agent's view reaches the job.** Claude Code in the terminal lets
+  a person open a running agent's view (↓ in the footer, then Enter) and type at `Message @<agent>…`; the
+  Desktop app's agent view has no input. Claude Code
+  marks such a line as origin `human`, and the guard took only the main thread's and other agents'
+  messages, so it dropped the line without a record. After the hand-back the line resumed the relay, the
+  job got no turn, and the relay could say it had passed the message on. Now the line is delivered like
+  any message: steered while the job runs, a new turn once it has ended, and `cancel` cancels the job.
+  No hook names a typed line's recipient, so there is no wake: a line typed while the relay waits
+  reaches the job at the relay's next step, at most nine minutes later, or as a new turn when the job
+  ends first. A line typed after the hand-back arrives at once in a view that is still open (from Claude Code 2.1.309 a finished agent leaves the footer's list within
+  about 15 s unless its view is open; once it has left, a continue goes through Claude's `SendMessage` or
+  `C continue`). A relay that lives through the update
+  delivers the lines it received before, since none of them has a delivery record.
+- A line typed right after Esc interrupted the relay in its view resumes the relay and reaches the job
+  at once, steering it while it runs.
+- A relay that a message resumed after its hand-back must hand back the job's result again; while the
+  hook can check it, the relay can no longer end with words of its own. (The block budget, a failing
+  hook and a relay whose start failed stay as they were.)
+- A relay without `SubagentHandback` whose final message is the exact result inside one code fence is
+  no longer blocked: the fence, with no tag or a plain one such as `text`, `markdown` or `yaml`, is ignored. A Haiku
+  relay had sent the result fenced nine times and been let go after eight blocks, with no recorded hand-back.
+  A Workflow relay's state block may carry the same one fence, and no fence line anywhere else.
+- A message of an origin the guard does not know is recorded as a `relay-violation:` line instead of
+  being dropped in silence (the harness's own `task-notification` notices are skipped), and the same
+  transcript problem is recorded once, not again at every hook call.
+- The live suite has a check `typed` (terminal only: T3 Code draws no agent view).
+- Arguments that held backticks, `$(…)` or `$VAR` ran in Claude's shell before the companion started.
+  `/relay:review`, `/relay:adversarial-review` and `/relay:setup` use `Write` to put raw arguments in
+  a private temporary file. Only its path enters the shell, and a review removes the file as soon as
+  it reads it. Background reviews and setup's rerun use the same route. Output and exit codes are
+  unchanged.
+- Review-size estimation runs in the companion with the review's target and merge-base rules.
+  Clean `auto` includes branch changes. The estimate prints the target, file count, untracked count
+  and shortstat. It starts no backend or job. Invalid or option-like bases are refused.
+- Setup uses the review commands' single-string parser. Variables, command substitutions and globs
+  are literal. Quotes group whitespace. Backslash escapes even inside quotes; double literal
+  backslashes. Empty quoted values are missing-value errors. Use absolute or `~/` paths.
+  Commands with `--cwd` also accept `~/` and bare `~`. NUL is rejected. Long input uses the same file.
+- Grok and Kimi sign-in advice quotes home paths for safe copying into a shell.
 
 Docs:
 
