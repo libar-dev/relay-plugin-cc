@@ -87,7 +87,8 @@ message, or leave auto mode for that step.
 
 Relay keeps its jobs in `~/.relay-jobs`, or in `$RELAY_JOBS_HOME` when you set it. Claude Code's
 sandbox lets a Bash command write, by default, only the working directory, a temporary directory and
-directories you added, so under it the companion fails with `EPERM` ("operation not permitted") when
+directories you added, so under it the companion fails with `EPERM` ("operation not permitted") on
+macOS, or `EROFS` ("read-only file system") on Linux, when
 it writes the jobs home, as a review does. In a check on 23 October 2026, on Claude Code 2.1.309,
 Claude then ran the review's companion call again with `dangerouslyDisableSandbox`, outside the
 sandbox, and did not ask: an allow rule that matches a command also approves its unsandboxed retry,
@@ -177,8 +178,8 @@ relay and reaches the job at once, steering it while it runs. `/relay:cancel <jo
 gets the state block back as a string. A message to a Workflow relay's agent id is not a sure way to
 its job: while it runs, it starts a second loop of the relay; after it ends, it reaches no job.
 Steer, continue or cancel a Workflow job by its job id with the companion (`steer`, `continue`,
-`cancel`), as the board does: its live check did so on all four backends, each message reaching the
-job within 0.3 s ([docs/live/capabilities.md](docs/live/capabilities.md)). The `relay:jobs` skill
+`cancel`), as the board does: its live check did so on all four backends, each steer and continue
+reaching the job within 0.3 s ([docs/live/capabilities.md](docs/live/capabilities.md)). The `relay:jobs` skill
 has the rules, and the section
 [What the relay depends on in Claude Code](#what-the-relay-depends-on-in-claude-code) says what a
 Claude Code update can break.

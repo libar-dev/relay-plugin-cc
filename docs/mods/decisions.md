@@ -829,11 +829,12 @@ permission mode no step asked anything, because the commands' `allowed-tools` gr
 `/relay:review`'s estimate and size question ran on a dirty working tree and on a clean branch, and an option-like
 base was refused. `--background` ran for both review commands. No marker file was created, and no `relay-args-*`
 directory was left. Under Claude Code's sandbox, Write put the argument file in the sandbox's temporary directory,
-and the companion read it. The
-companion then failed with `EPERM` writing the jobs home (`~/.relay-jobs`), which the sandbox does not let a Bash
-command write. Claude ran the companion again with `dangerouslyDisableSandbox`, and the user was not asked. Claude
-Code's sandbox docs say why ("The unsandboxed retry escape hatch"): an allow rule that matches a command also
-approves its unsandboxed retry, and the review and setup commands' `allowed-tools` grant `Bash(node:*)`.
+and the companion read it. The companion then failed with `EPERM` writing the jobs home (`~/.relay-jobs`), which the
+sandbox does not let a Bash command write. Claude ran the companion again with `dangerouslyDisableSandbox`, and the
+user was not asked. Claude Code's sandbox docs say why ("The unsandboxed retry escape hatch"): an allow rule that
+matches a command also approves its unsandboxed retry, and the review and setup commands' `allowed-tools` grant
+`Bash(node:*)`. The same docs say the denied write reads "Operation not permitted" on macOS and "Read-only file
+system" on Linux.
 
 The owner, through the coordinating thread: never bypass the sandbox unasked. On a sandbox `EPERM` (or "operation
 not permitted"), stop and tell the user the two choices:
@@ -841,10 +842,12 @@ not permitted"), stop and tell the user the two choices:
   `{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}` in their user settings;
 - run without the sandbox.
 
-What it changes: `commands/review.md`, `adversarial-review.md` and `setup.md`, `agents/job.md` and the jobs skill
-say it. The README has a section, "Relay and Claude Code's sandbox", which also names
+What it changes: `commands/review.md`, `adversarial-review.md` and `setup.md`, `agents/job.md`, the jobs skill and
+result-handling say it, for `EPERM` and for Linux's `EROFS`; the review commands allow the two choices after their
+verbatim output. The README has a section, "Relay and Claude Code's sandbox", which also names
 `sandbox.allowUnsandboxedCommands: false`, Claude Code's strict sandbox mode, as the user's way to forbid every
-unsandboxed retry. A test pins the texts.
+unsandboxed retry, and an ask rule for `Bash(dangerouslyDisableSandbox:true)` to be asked each time. The README also
+says why the review and setup commands raise no permission prompt. A test pins the texts.
 
 Rejected:
 - Documenting that relay leaves the sandbox. It would make a silent bypass the plugin's documented behaviour.

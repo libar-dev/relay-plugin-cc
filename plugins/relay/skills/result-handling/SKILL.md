@@ -10,7 +10,7 @@ A result is a state block, then a line `---` and the report when there is one. R
 - `completed` with a `report:` path: the job finished its answer. That does not prove its commands passed or its edits are right; the report and the files say that.
 - `failed` (with `error:`), `dead`, `cancelled`, or `report: none`: there is no finished answer. Say so, with the `error:` line; do not present a partial report as the answer.
 - `undelivered:`, `not-delivered:` and `relay-violation:` are warnings about messages and the relay. Name them, and decide what each means for the work.
-- `state: not started` with `error:`: no job ran. Fix what the error names, usually the header, and start again; there is no report. An `EPERM` or "operation not permitted" there comes from Claude Code's sandbox: never retry without the sandbox unasked; give the user the two choices in the `relay:jobs` skill's Direct use.
+- `state: not started` with `error:`: no job ran. Fix what the error names, usually the header, and start again; there is no report. An `EPERM` or "operation not permitted" (macOS), or `EROFS` or "read-only file system" (Linux) there most likely comes from Claude Code's sandbox: never retry without the sandbox unasked; give the user the two choices in the `relay:jobs` skill's Direct use.
 
 Two kinds of output, with different rules:
 - A command's verbatim output. `/relay:review`, `/relay:adversarial-review` and `/relay:rescue` say what their answer is: the companion's or the agent's output, verbatim. Follow the command. Do not reorder it or summarize it, and add no line of your own before or after it, a question included, beyond what the command itself allows.

@@ -330,19 +330,27 @@ test("the commands, the relay, the jobs skill and the README never leave the san
   for (const name of ["review", "adversarial-review", "setup"]) {
     const source = flat(read(`commands/${name}.md`));
     for (const fact of ["`dangerouslyDisableSandbox` unless the user asked for that", "`EPERM`", "operation not permitted",
-      allowWrite, "`$RELAY_JOBS_HOME`", "without the sandbox"]) {
+      "`EROFS`", "read-only file system", allowWrite, "`$RELAY_JOBS_HOME`", "without the sandbox"]) {
       assert.ok(source.includes(fact), `${name}: ${fact}`);
     }
+    // No text may tell Claude to retry outside the sandbox on its own.
+    assert.doesNotMatch(source, /(?<!never |Never )(retry|run it again|run the companion again) with `dangerouslyDisableSandbox`/, name);
   }
-  assert.ok(read("agents/job.md").includes("Never set `dangerouslyDisableSandbox`"));
+  for (const name of ["review", "adversarial-review"]) {
+    assert.ok(flat(read(`commands/${name}.md`)).includes("after a sandbox error, the two choices above"), `${name}: the choices may follow the output`);
+  }
+  const job = read("agents/job.md");
+  for (const fact of ["Never set `dangerouslyDisableSandbox`", "`EPERM`", "`EROFS`"]) assert.ok(job.includes(fact), `job.md: ${fact}`);
+  const handling = flat(read("skills/result-handling/SKILL.md"));
+  for (const fact of ["`EROFS`", "never retry without the sandbox unasked"]) assert.ok(handling.includes(fact), `result-handling: ${fact}`);
   const skill = flat(read("skills/jobs/SKILL.md"));
-  for (const fact of ["`dangerouslyDisableSandbox` unless the user asked for that", "`EPERM`", allowWrite, "without the sandbox"]) {
+  for (const fact of ["`dangerouslyDisableSandbox` unless the user asked for that", "`EPERM`", "`EROFS`", allowWrite, "without the sandbox"]) {
     assert.ok(skill.includes(fact), fact);
   }
   const readme = README();
   const sandbox = section(readme, "### Relay and Claude Code's sandbox", "## The first hour");
   for (const fact of ['"allowWrite": ["~/.relay-jobs"]', "`sandbox.allowUnsandboxedCommands` to `false`", "strict sandbox mode",
-    "not measured", "`dangerouslyDisableSandbox`"]) {
+    "not measured", "`dangerouslyDisableSandbox`", "`EROFS`"]) {
     assert.ok(sandbox.includes(fact), fact);
   }
   assert.ok(readme.includes("shows no permission prompt for its own steps"));
@@ -541,8 +549,8 @@ test("review and adversarial-review are model-invocable; status, result, cancel 
     const source = read(`commands/${name}.md`);
     assert.match(source, /If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground/, name);
     // The fixed first line, and that it is the one text the verbatim rule allows.
-    assert.ok(source.includes("begin your reply with exactly this line before the output: `Ran in the foreground: the default when Claude starts a review without --wait or --background.` That line is the only text allowed before the companion's verbatim output, and nothing follows the output."), name);
-    assert.ok(source.includes("- Do not paraphrase, summarize, or add commentary before or after it. The one exception is the foreground line above, first, when you invoked the command yourself."), name);
+    assert.ok(source.includes("begin your reply with exactly this line before the output: `Ran in the foreground: the default when Claude starts a review without --wait or --background.` That line is the only text allowed before the companion's verbatim output, and nothing follows the output except, after a sandbox error, the two choices above."), name);
+    assert.ok(source.includes("- Do not paraphrase, summarize, or add commentary before or after it. The exceptions are the foreground line above, first, when you invoked the command yourself, and, after a sandbox error, the two choices above."), name);
     assert.ok(source.includes("relay refuses the file writes and terminal commands Kimi sends through the client. That is not an OS sandbox"), name);
     assert.match(frontmatter(name), /Codex, Grok, ZCode or Kimi|Grok, ZCode or Kimi/, name);
   }
