@@ -297,8 +297,9 @@ Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
   spawn retry for 15 minutes stops deferring the stop-time review gate; it remains adoptable.
   The limit bounds workers, not all submissions, native transcripts or waiting clients.
 
-Linux reads `MemAvailable` (with a labelled Node >=22 fallback). macOS estimates bytes from
-`vm_stat` free+inactive pages using its reported page size, and separately checks
+Linux reads `MemAvailable` (with a labelled Node >=22 fallback). macOS uses the
+`kern.memorystatus_level` percentage of total memory, with a labelled `vm_stat` free+inactive
+fallback using its reported page size, and separately checks
 `kern.memorystatus_vm_pressure_level`. Samples are cached for two seconds per cgroup, with
 bounded probes. A busy refresh reuses a sample less than ten seconds old or waits for the
 refresh to finish. Missing sensors show a degraded note while other gates remain effective;
@@ -367,7 +368,7 @@ and its status line counts the repository's running and dead jobs and owed messa
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-pre.3. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.16. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
