@@ -459,6 +459,20 @@ The later work, in this light:
   `SendMessage`, and give the typed line's latency.
 - **The owner's decision on the stop** (Esc or `x to stop` in the agent view) is open; D2 covers TaskStop only.
 
+## The stop notice (D96, done, on `release/3.0`)
+
+The owner chose that a person's stop of a relay from Claude Code's own controls (`x to stop`, Esc at the relay's
+view prompt, ctrl+x ctrl+k, Desktop's Stop button) leaves its job running, with a notice. The module's
+`turn.complete` hook sees such a stop (`reason: "aborted"`, the agent then listed `killed`), finds the job with
+`companion status --all --active --json`, and shows a line in the transcript and a toast naming the job, with
+`/relay:cancel` and `/relay:result`. A TaskStop raises the same signal; a `tool.call` hook on `TaskStop` marks the
+agents it names first, and they get no notice, since the TaskStop hook cancels their jobs. The live check
+`stop-notice` drives the three stops on Codex in the terminal.
+
+What held: the measured signals were the same on Claude Code 2.1.309 as on 2.1.308, and the notice needed no
+companion change: Phase 4's slim `status --json` rows carry the relay's agent id. What is left: a Workflow's
+agents are never listed, so a stop of one shows no notice; the M3 lead can check Desktop's Stop button with the notice when it next runs the Desktop pass.
+
 ## Phase 4: the terminal and Desktop board (separate PRs)
 
 1. **Status line** (done, below). `$.ui.status` shows "2 running · 1 owed" for this repository. The module polls
