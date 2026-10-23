@@ -344,6 +344,7 @@ function handleHandback(input, env, jobDir, pointer, sync) {
   if (view.undelivered.length > 0) {
     problems.push(`${view.undelivered.length} message(s) are owed to the job: acknowledged but not run yet.`);
   }
+  if (view.state === "queued") return deny(`Job ${jobId} is still queued. Do not hand back yet. Run: ${waitCommandShown(jobId)}`);
   if (problems.length > 0) {
     const reason = `${problems.join(" ")} Do not hand back yet. ${LITERAL_ROOT_NOTE} Run: ${waitCommandShown(jobId)}`;
     if (!countBlock(env, agentId, jobDir, "handback-blocked", reason).release) {
@@ -353,6 +354,7 @@ function handleHandback(input, env, jobDir, pointer, sync) {
   // Read again: a release above recorded its relay-violation, which the result shows. A busy job
   // is never released with a result it does not have.
   const result = jobViewOrBusy(jobDir);
+  if (result.state === "queued") return deny(`Job ${jobId} is still queued. Run: ${waitCommandShown(jobId)}`);
   if (result.busy) return deny(`${result.busy} ${LITERAL_ROOT_NOTE} Run: ${waitCommandShown(jobId)}`);
   recordHandback(jobDir, agentId, result);
   return rewrite(renderResultText(result), "relay:job relay hand-back, rewritten to the job's result.");
@@ -449,6 +451,8 @@ async function handleSubagentStop(input, env = process.env) {
     return null;
   }
   const reason = [...(isStringReturn(jobDir) ? [WORKFLOW_NOTE] : []), ...problems.map((problem) => problem.reason)].join("\n\n");
+  // Queued work remains pending and adoptable even after the normal escape budget.
+  if (current?.state === "queued") return { decision: "block", reason };
   if (countBlock(env, agentId, jobDir, problems.map((problem) => problem.kind).join(", "), reason).release) {
     return null;
   }

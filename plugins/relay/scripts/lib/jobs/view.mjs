@@ -74,7 +74,7 @@ export function loadJobView(jobDir, options = {}) {
     // Owed work is running under a live worker, or undelivered without one.
     const workerLive = isWorkerLease(lease);
     if (workerLive && account.undelivered.length > 0) {
-      view = { ...view, state: "running", deadReason: null };
+      view = { ...view, state: view.state === "queued" ? "queued" : "running", deadReason: null };
     }
     const undelivered = workerLive ? [] : account.undelivered;
     return {
@@ -254,6 +254,16 @@ export function renderJobBlock(view) {
   } else if (job.errorMessage && view.state !== "completed") {
     lines.push(`error: ${String(job.errorMessage).replace(/\s+/g, " ").trim()}`);
   }
+  if (view.state === "queued" && job.admission?.reason) {
+    lines.push(`queued: ${job.admission.reason} (since ${job.admission.since ?? "unknown"})`);
+  }
+  for (const note of job.admission?.notes ?? []) {
+    if (note !== "load guard off") lines.push(`note: load guard: ${note}`);
+  }
+  if (job.refusal && view.state === "failed") {
+    const r = job.refusal;
+    lines.push(`refusal: ${r.backend} ${r.kind} limit${r.code ? ` (${r.code})` : ""}; new ${r.backend} jobs wait until ${r.pausedUntil ?? "the next probe"}, then one probe job runs. This job is not resumed automatically; resume it after that time.`);
+  }
   if (view.stalled) {
     lines.push(`stalled: no event since ${job.lastEventAt ?? job.startedAt ?? job.createdAt}`);
   }
@@ -364,6 +374,8 @@ export function jobViewJson(view, { messages = true } = {}) {
     kind: view.job.kind ?? "task",
     state: view.state,
     storedState: view.storedState,
+    admission: view.job.admission ?? null,
+    refusal: view.job.refusal ?? null,
     stalled: view.stalled,
     deadReason: view.deadReason,
     sessionId: view.job.sessionId ?? null,
@@ -461,7 +473,7 @@ export function computeJobView(job, options = {}) {
         state = "dead";
         deadReason = `worker ${job.worker.pid} is gone`;
       }
-    } else {
+    } else if (!(stored === "queued" && job?.admission?.waitKind === "worker")) {
       const created = Date.parse(job?.launchPendingAt ?? job?.createdAt ?? "");
       if (Number.isFinite(created) && now - created > (options.workerStartGraceMs ?? WORKER_START_GRACE_MS)) {
         state = "dead";

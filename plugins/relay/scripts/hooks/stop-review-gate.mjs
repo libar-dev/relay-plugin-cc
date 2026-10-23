@@ -70,7 +70,7 @@ function findActiveJob(cwd) {
       continue;
     }
     const view = computeJobView(job);
-    if (view.state === "starting" || view.state === "running") {
+    if (["starting", "running", "queued"].includes(view.state)) {
       active.push(job);
     }
   }
@@ -187,6 +187,7 @@ export function runStopReview(cwd, input = {}, { limits = stopGateLimits(), runC
     if (view?.state === "dead") {
       return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review stopped: ${view.deadReason ?? "its worker is gone"}. ${MANUAL_REVIEW}` };
     }
+    if (view?.state === "queued") return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review was still queued by the load guard (${view.admission?.reason ?? "waiting"}) after ${describeLimit(limits.reviewMs)}. ${MANUAL_REVIEW}` };
     return { ok: true, failure: `the stop-time ${REVIEW_BACKEND.label} review timed out after ${describeLimit(limits.reviewMs)}. ${MANUAL_REVIEW}` };
   }
   if (view.state !== "completed") {

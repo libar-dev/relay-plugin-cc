@@ -465,7 +465,7 @@ async function liveJobOf($, agentId) {
       return undefined;
     }
     // Only a job that is still at work runs on; a dead one waits for its relay or a resume.
-    const job = ran.answer.jobs.find((one) => one?.relay?.agentId === agentId && ["starting", "running"].includes(one.state));
+    const job = ran.answer.jobs.find((one) => one?.relay?.agentId === agentId && ["starting", "running", "queued"].includes(one.state));
     if (job !== undefined) {
       return job;
     }
@@ -569,7 +569,7 @@ function unread(ran) {
 }
 
 function isLive(job) {
-  return job.state === "starting" || job.state === "running";
+  return ["starting", "running", "queued"].includes(job.state);
 }
 
 // A starting job's first attempt counts as 1, as `cancel --attempt` counts it.
@@ -590,7 +590,7 @@ function sendLabel(job) {
   if (!isLive(job)) {
     return "Continue";
   }
-  return job.backend === "kimi" && job.state === "running" ? "Queue next turn" : "Steer";
+  return job.state === "queued" || (job.backend === "kimi" && job.state === "running") ? "Queue next turn" : "Steer";
 }
 
 // A listing's row cut to what the board draws and what marks its view stale, so a read that

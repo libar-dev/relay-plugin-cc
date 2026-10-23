@@ -30,7 +30,7 @@ function candidate(dir, slug, cutoff, now, checkLease = true) {
   if (!fs.lstatSync(path.join(dir, "job.json"), { throwIfNoEntry: false })?.isFile()) return null;
   const job = readJob(dir);
   if (!job || job.id !== path.basename(dir) || job.repoSlug !== slug ||
-      !["starting", "running", ...TERMINAL_STATES].includes(job.state) ||
+      !["starting", "running", "queued", ...TERMINAL_STATES].includes(job.state) ||
       !Number.isFinite(Date.parse(job.createdAt))) return null;
   const view = computeJobView(job, { now });
   if (!(TERMINAL_STATES.has(view.state) || view.state === "dead")) return null;

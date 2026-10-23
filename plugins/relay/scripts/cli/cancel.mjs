@@ -216,7 +216,7 @@ export async function handleCancel(argv) {
       // Nothing to interrupt. The request is still recorded as handled: a no-op receipt.
       recordReceipt(jobDir, { kind: "cancel", text: "" }, { action: "no-op", reason: `the job had already ${view.state === "completed" ? "completed" : `ended (${view.state})`}` });
       actions.push(`already ${view.state}`);
-    } else if (view.state === "dead") {
+    } else if (view.state === "dead" || (view.state === "queued" && !view.job.worker?.pid && view.job.admission?.waitKind === "worker")) {
       checkAttempt(readJob(jobDir), attempt);
       if (view.job.worker?.pid) {
         // The worker is gone; stop anything left in its process group.

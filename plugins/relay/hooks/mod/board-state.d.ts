@@ -4,7 +4,7 @@
 
 export type RelayBoardJob = {
   id: string;
-  state: "starting" | "running" | "completed" | "failed" | "cancelled" | "dead";
+  state: "queued" | "starting" | "running" | "completed" | "failed" | "cancelled" | "dead";
   backend: string;
   model: string | null;
   effort: string | null;

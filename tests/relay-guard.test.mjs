@@ -1423,3 +1423,20 @@ test("a Workflow relay that never runs start gets the Workflow correction with i
   assert.ok(jobId);
   assert.equal(waitJob(ctx, jobId).status, 0);
 });
+
+test("a queued Workflow stays pending through repeated hand-back and stop attempts beyond the escape budget", async () => {
+  const ctx = relayContext("job", { turnMs: 100 });
+  const jobId = await startedRelay(ctx, QUICK);
+  assert.equal(waitJob(ctx, jobId).status, 0);
+  const dir = jobDirOf(ctx, jobId);
+  const file = path.join(dir, "job.json");
+  const job = JSON.parse(fs.readFileSync(file, "utf8"));
+  fs.writeFileSync(file, JSON.stringify({ ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker", reason: "memory low", since: new Date().toISOString() } }));
+  for (let i = 0; i < RELAY_BLOCK_BUDGET + 2; i++) {
+    assert.equal(decision(await pre(ctx, "SubagentHandback", { message: "done" })), "deny");
+    assert.equal((await stop(ctx, "done"))?.decision, "block");
+  }
+  const result = JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout);
+  assert.equal(result.state, "queued");
+  assert.equal(result.handedBackAt, null);
+});
