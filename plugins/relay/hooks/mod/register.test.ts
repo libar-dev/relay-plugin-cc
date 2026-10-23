@@ -684,8 +684,6 @@ test('a run that does not finish answers an error text; only a cancel cut off by
   expect(unstarted.text).toMatch(/^\/relay:cancel j-2\n\nDid not finish: .*spawn node ENOENT.*\. Run `node '[^']*' cancel 'j-2'` in a shell to see its output\.$/)
 })
 
-// The module passes the typed text as one argv element, so the shell line passes it as one word:
-// in single quotes, where nothing runs, each quote in it closed, escaped and reopened.
 test('the shell line quotes the plugin path and the typed text as one word each, so nothing typed runs', async ($, on) => {
   const seen = companion(on, { run: () => ({ value: printed('', '', 0) }) })
   const typed = `j-1 $(touch x) --source "/tmp/it's here.jsonl"`

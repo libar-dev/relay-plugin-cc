@@ -134,8 +134,6 @@ Phase 4, the board:
   registers.
 - In the terminal the pane takes keys only between the lead's turns; in the fullscreen layout
   (`CLAUDE_CODE_NO_FLICKER=1`) it takes clicks at any time.
-- When a command the module answers fails, the shell command it names quotes the plugin's path and what you typed,
-  so a job id or path with backticks, `$(…)` or quotes runs nothing when pasted.
 - The live suite has a `board` check (terminal only): in a wide fullscreen session it steers, continues and cancels
   Agent-tool and Workflow jobs on every backend by clicks, and in a narrow one it selects a job by keys; every action
   is judged by the job's files.
@@ -155,6 +153,14 @@ Phase 6, an investigation (the plugin does not change):
 - [docs/mods/messages-from-a-job.md](../../docs/mods/messages-from-a-job.md) reports what Codex, Grok, ZCode and
   Kimi allow for a job that sends a message to the agent that started it, or to a peer, and how such a message
   and its reply would travel. Messages from a job are not part of 3.0.
+
+Fixes from the pre-releases:
+
+- When `/relay:status`, `/relay:result`, `/relay:cancel` or `/relay:transfer` fails, the shell command its answer
+  names single-quotes the plugin's path and what you typed, one shell word each, so it passes the companion the
+  same arguments as the hooks module's own call. A job id or `--source` path with backticks, `$(...)` or quotes now
+  runs nothing when the line is pasted into a shell; with a line break in what you typed, the command is shown in a
+  fenced block, which Markdown leaves as written.
 
 Docs:
 

@@ -498,9 +498,14 @@ for `result`), except under `--output-format stream-json`, where Claude Code exi
 Each call has a timeout above its command's own deadline: 30 seconds for `status` and `result`, which read in under
 a second, twice `RELAY_JOBS_CANCEL_GRACE_MS` (10 s by default) and 40 seconds more for `cancel`, which can wait the
 grace once for its own worker and once for a worker that took the job over, up to the ten minutes `$.process.run`
-allows (a grace above 280 s outlasts it), and 180 for `transfer`, which gives Codex's import two minutes. A call that timed out or could not start, and output that `$.process.run` cut at 4 MiB,
-answer an error text that names the shell command to run instead, never a partial list; the plugin's path and the
-typed arguments are single-quoted in it, one shell word each, as the module passed them. The markdown files keep
+allows (a grace above 280 s outlasts it), and 180 for `transfer`, which gives Codex's import two minutes. A call that timed out or could not start, one that ended with no exit code or printed nothing, output that
+`$.process.run` cut at 4 MiB, and a failure of the module itself answer an error text that names the shell command
+to run instead, never a partial list. That command passes the companion the module's own arguments: the plugin's path
+and the typed text are single-quoted, one shell word each, and the typed text goes whole, for the companion to split
+as it splits `$ARGUMENTS`. When the typed text holds a line break, the command is shown in a fenced block, since a line
+break would end an inline code span and let Markdown read the rest; a carriage return, which Markdown turns into a
+line feed, is written as `printf`'s `\r` outside the quotes. Run it from the session's directory; `transfer` also needs the session's id in `RELAY_COMPANION_SESSION_ID`,
+which Claude's own Bash has. The markdown files keep
 the names, descriptions and argument hints for the command picker, and their body only says that the module
 answers the command: Claude Code runs it when the module did not load. Claude does not call these four itself. A
 model's Skill call expands a command's markdown body and never reaches `command.run`, so Claude reads jobs with
