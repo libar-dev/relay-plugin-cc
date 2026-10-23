@@ -134,9 +134,9 @@ owner's heavy production starts on pre.2 (D99). A survey of how the cuts are use
 
 A cut is a PR into `release/3.0` that changes only the version fields `node scripts/bump-version.mjs 3.0.0-pre.N`
 sets, the README's Development line and one CHANGELOG entry under the 3.0.0 heading (D70). It merges once
-`npm run check-version`, CI and Greptile pass (D78), and its merge commit is tagged `v3.0.0-pre.N` and pushed: no
-GitHub release, no npm. The two-family review follows the merge, and what it finds goes into the next cut. The
-fixes and phase PRs it carries have passed their own gates first. The release lead tells the coordinating thread before
+`npm run check-version`, CI, Greptile and a short two-family check of its CHANGELOG entry pass (D78), and its merge
+commit is tagged `v3.0.0-pre.N` and pushed: no GitHub release, no npm. The fixes and phase PRs it carries have passed
+their own gates first. The release lead tells the coordinating thread before
 it pushes each tag, and the coordinating thread has libar-infra install the cut. Every plugin install or update on
 a machine, at any scope, goes through libar-infra; a `--plugin-dir` run installs nothing and stays with the leads
 (D97).

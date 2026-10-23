@@ -5,7 +5,7 @@ user scope on the M3 and on the ThinkPad, and keeps each machine's relay pin. Th
 fallback.
 
 The cuts started on Thursday 22 October, 23:45 CEST, and go on as issues are found. Heavy production runs on them
-from pre.2 (D99, which ended the 48-hour hold); use them and test them.
+from pre.2, by your call of 23 October, which ended the 48-hour hold; use them and test them.
 
 This page lists each cut and its known issues, a check to run after each install, what should happen while you
 work, how to note a problem, and how a machine is switched. The [README](../../README.md) explains relay itself; the

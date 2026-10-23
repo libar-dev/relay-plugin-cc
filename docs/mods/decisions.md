@@ -733,9 +733,11 @@ Don't request it or wait for it, and don't write PR notes about it. The gates ar
 review. That applies now to #23, #18 and the cut PR."
 
 What it changes: CodeRabbit leaves release-3.0.md's gates for a phase PR, for the other PRs into `release/3.0` and
-for the release PR; their other gates (the tests, validate, the live suite, the smoke kit) stay. A cut changes only
-version strings and the CHANGELOG, and the coordinating thread set pre.2's gates as CI and Greptile: Greptile now
-comes before a cut's merge, and the two-family review still follows it (D70). D16's `.coderabbit.yaml` is unchanged.
+for the release PR; their other gates (the tests, validate, the live suite, the smoke kit) stay. For pre.2's cut the
+coordinating thread wrote: "the cut is version strings and the CHANGELOG only, so CI and Greptile." A short
+two-family check of the cut's CHANGELOG entry ran before its merge anyway and found what a heavy user needed to
+know, so a cut's gates are now CI, Greptile and that check, all before the merge and the tag; this replaces D70's
+reviews after the merge. D16's `.coderabbit.yaml` is unchanged.
 
 ### D90. One walkthrough, two documents (guide lead)
 
@@ -832,8 +834,8 @@ the guide lead's pre-release guide, built from the manual test script.
 The coordinating thread recommended option A, and the owner answered: "A is final."
 
 - **A stop from Claude Code's own controls** ends the relay and leaves its job running: "x" in the agent list, Esc
-  in the relay's view (one Esc stops a running relay, D104), the desktop app's Stop button. Relay shows a notice naming the job, with
-  `/relay:cancel` and `/relay:result`.
+  in the relay's view (one Esc stops a running relay, D104), the desktop app's Stop button. Relay shows a notice
+  naming the job, with `/relay:cancel` and `/relay:result`.
 - **`TaskStop` on a relay and the message `cancel` still cancel the job** (D2, D44): they are the deliberate ways
   to stop the work. A cancelled job keeps its backend session, and the companion's `continue` resumes it there; a
   message to its relay does so only for a relay the Agent tool started (D53).
