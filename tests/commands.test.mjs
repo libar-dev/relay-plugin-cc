@@ -431,8 +431,11 @@ test("setup command can offer Codex install and still points users to codex logi
   const setup = read("commands/setup.md");
   const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 
-  assert.match(setup, /argument-hint:\s*'\[--backend codex\|grok\|zcode\|kimi\] \[--grok-home H\|--kimi-home H\] \[--enable-review-gate\|--disable-review-gate\] \[--fast-tier allowed\|off\] \[--job-mcp-off names\|none\]'/);
-  assert.match(setup, /^description: Check every backend the relay can run \(Codex, Grok, ZCode, Kimi\): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier or job MCP servers$/m);
+  const hint = /^argument-hint: (.*)$/m.exec(setup)[1];
+  for (const flag of ["--backend codex|grok|zcode|kimi", "--grok-home H|--kimi-home H",
+    "--enable-review-gate|--disable-review-gate", "--fast-tier allowed|off", "--job-mcp-off names|none",
+    "--admission on|off", "--max-very-heavy 1|2|default"]) assert.ok(hint.includes(flag), flag);
+  assert.match(setup, /^description: Check every backend.*load guard$/m);
   assert.match(setup, /AskUserQuestion/);
   assert.match(setup, /npm install -g @openai\/codex/);
   assert.match(setup, /companion\.mjs" setup --json --args-file "<args-file>"/);
