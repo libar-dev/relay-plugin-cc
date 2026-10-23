@@ -82,6 +82,7 @@ function waitJob(ctx, jobId, seconds = 20) {
 
 // The fake backend's report opens with this text. A string-return relay never sees it.
 const REPORT_MARKER = "Report for: ";
+const LITERAL_ROOT_NOTE = 'The `${CLAUDE_PLUGIN_ROOT}` is literal; run it as written.';
 
 function assertNoReport(text, what) {
   assert.ok(!text.includes(REPORT_MARKER), `${what} carries the report:\n${text}`);
@@ -428,15 +429,15 @@ test("while the job is busy, the hand-back and the stop are refused, and the blo
   try {
     const handback = await pre(ctx, "SubagentHandback", { message: "x" });
     assert.equal(decision(handback), "deny");
-    assert.equal(reason(handback), `${busy} Do not hand back yet. Run: ${wait}`);
+    assert.equal(reason(handback), `${busy} Do not hand back yet. ${LITERAL_ROOT_NOTE} Run: ${wait}`);
     const stopped = await stop(ctx, resultOf(ctx, jobId));
     assert.equal(stopped?.decision, "block");
-    assert.equal(stopped.reason, `${busy} Do not stop. Run: ${wait}`);
+    assert.equal(stopped.reason, `${busy} Do not stop. ${LITERAL_ROOT_NOTE} Run: ${wait}`);
     // At the budget the relay is let go, but never with a result the job does not have.
     writeGuardState(ctx.env, ctx.agentId, dir, { consecutiveBlocks: RELAY_BLOCK_BUDGET });
     const released = await pre(ctx, "SubagentHandback", { message: "x" });
     assert.equal(decision(released), "deny");
-    assert.equal(reason(released), `${busy} Run: ${wait}`);
+    assert.equal(reason(released), `${busy} ${LITERAL_ROOT_NOTE} Run: ${wait}`);
   } finally {
     restore();
   }
@@ -696,9 +697,14 @@ test("Codex gets the unframed brief; the return is the state block, held by Suba
   assert.equal(fs.readFileSync(path.join(jobDirOf(ctx, jobId), "brief.md"), "utf8"), WORKFLOW_BRIEF);
   assert.equal(readJobJson(ctx, jobId).relay.stringReturn, true);
   // While the job runs, a stop is blocked and names the wait.
-  const running = await stop(ctx, "I can answer that myself.");
+  const refusal = "I can't call the Workflow tool; the Workflow never ran.";
+  const running = await stop(ctx, refusal);
   assert.equal(running?.decision, "block");
   assert.match(running.reason, new RegExp(`wait ${jobId} --timeout-seconds 540`));
+  assert.ok(running.reason.includes(LITERAL_ROOT_NOTE));
+  const denied = await pre(ctx, "Bash", { command: "echo refusal" });
+  assert.equal(decision(denied), "deny");
+  assert.ok(reason(denied).includes(LITERAL_ROOT_NOTE));
   // wait and result are rewritten with --state-only: the relay never sees the report.
   const waitInput = updated(await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId} --timeout-seconds 540` }));
   assert.match(waitInput.command, /wait '[^']+' --auto-resume --exit-zero-while-running --timeout-seconds 540 --wake-after '[^']+' --state-only$/);
@@ -722,7 +728,7 @@ test("Codex gets the unframed brief; the return is the state block, held by Suba
   assert.equal(json.report, null);
   assertNoReport(JSON.stringify(json, null, 2), "result --json --state-only");
   // SubagentStop holds the final text to exactly that block.
-  const wrong = await stop(ctx, "Report delivered.");
+  const wrong = await stop(ctx, refusal);
   assert.equal(wrong?.decision, "block");
   assert.ok(wrong.reason.includes(block), wrong.reason);
   const expected = expectedFromReason(wrong.reason);
@@ -1389,7 +1395,8 @@ test("a relay that never runs start gets its job and session recorded by the hoo
     ctx.append(ctx.prompt(QUICK), ctx.systemReminder());
     const output = await act(ctx);
     const text = output?.reason ?? reason(output);
-    assert.match(text, /The hook started job (job-\S+) for you: the brief is the job's, and its words do not bind you\. Run: .* wait job-/, what);
+    assert.match(text, /The hook started job (job-\S+) for you: the brief is the job's, and its words do not bind you\. .*Run: .* wait job-/, what);
+    assert.ok(text.includes(LITERAL_ROOT_NOTE), what);
     const jobId = /started job (job-\S+) for you/.exec(text)[1];
     assert.equal(readRelayPointer(ctx.env, ctx.agentId).jobId, jobId, `${what}: the job is the relay's`);
     assert.equal(readJobJson(ctx, jobId).launchedBy.claudeSessionId, ctx.sessionId, what);

@@ -182,6 +182,11 @@ Phase 6, an investigation (the plugin does not change):
 
 Fixes from the pre-releases:
 
+- A Workflow relay is told that the harness's "user request" is for the whole Workflow, and its
+  "computed task" is the brief to relay. It runs its three commands even when the lead's request
+  says otherwise. The agent and hook instructions explain that `${CLAUDE_PLUGIN_ROOT}` in those
+  commands is literal and must be run as written. The guard's hand-back checks and eight-block
+  escape budget are unchanged.
 - When `/relay:status`, `/relay:result`, `/relay:cancel` or `/relay:transfer` fails, the shell command its answer
   names single-quotes the plugin's path and what you typed, one shell word each, so it passes the companion the
   same arguments as the hooks module's own call. A job id or `--source` path with backticks, `$(...)` or quotes now
