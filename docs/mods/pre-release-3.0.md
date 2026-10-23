@@ -12,6 +12,37 @@ work, how to note a problem, and how a machine is switched. The [README](../../R
 user guide comes with a later docs PR. Two words used below: a *relay* is the small Claude agent (Haiku) that runs
 one job and *hands back* its result; the *job* runs on Codex, Grok Build, ZCode or Kimi Code.
 
+## pre.2
+
+Version `3.0.0-pre.2`, tag `v3.0.0-pre.2`: `release/3.0` at aab8fc3, cut on 23 October 2026. Heavy production runs on
+it. The status line and the board come in a later cut.
+
+It fixes pre.1's known issues 1 to 4:
+
+- A line typed into a relay's own view in the terminal reaches the job (see "Typing to a running relay" below).
+- A relay that hands back the job's block inside one code fence is accepted.
+- A job cancelled with TaskStop is no longer marked `not handed back`.
+- `/relay:setup` asks Grok a second time before it says a home is signed out, and shows Kimi as `steer (next turn)`.
+
+What changes for you:
+
+- `/relay:review`, `/relay:adversarial-review` and `/relay:setup` no longer expand `$HOME` or other variables in the
+  text you give them: use `~/` or a full path.
+- A script that reads the companion's `status --json` gets slim rows, 50 a page; it follows `nextCursor`, and
+  `status <job> --json` has a job's full record.
+
+Its known issues, with what to do meanwhile:
+
+1. **A relay that writes prose instead of the job's block is still let go,** after eight blocks. It happened once,
+   after the message `cancel`. The job is fine; `/relay:status` marks it `not handed back`, its block carries a
+   `relay-violation:` line, and `/relay:result <job>` has the block and the report.
+2. **A line typed to a relay while it waits takes up to about nine minutes to arrive:** nothing wakes the relay for
+   it yet. For a steer within seconds, send the message through Claude, or stop the relay's wait with one Esc first
+   (below).
+3. **`/relay:transfer` takes no job id** (pre.1's issue 5).
+4. **Not yet checked live:** the new handling of text given to the review and setup commands, in default permission
+   mode (Claude may ask before it writes the text to a file), under the sandbox, and with `--background`.
+
 ## pre.1
 
 Version `3.0.0-pre.1`, tag `v3.0.0-pre.1` (217adc8): `release/3.0` at c73e053, with the plugin code of
@@ -24,8 +55,7 @@ end-to-end suite on Fedora (on the same code) and, since the install, on the M3,
 reads the jobs pre.1 writes). -->
 
 It passed the test suite and CI before its install, and the smoke test, libar-infra's thread tests and the rollback
-check after it. Its known issues, with what to do meanwhile; the first four are planned for pre.2 (Friday, about
-20:00):
+check after it. Its known issues, with what to do meanwhile; pre.2 fixes the first four:
 
 1. **A message typed into an agent's own view is lost.** In the terminal's agent view (`↓`, `Enter`, then type), the
    message never reaches the job, while it runs or after it ends. Send messages through Claude.
@@ -92,15 +122,25 @@ them until then: type them in another thread on the same repository.
 
 **Jobs started with the Agent tool**
 - A message to a running job's agent reaches the job within seconds, and the report shows it. Kimi runs it as its
-  next turn.
+  next turn. A message that reaches a job after a continue was accepted, but before the continued turn has started,
+  does not steer that turn: it waits until the whole turn ends, then runs as the next turn.
 - A message after the hand-back continues the same job: the same `job:` and `session:`, and `attempts:` one higher.
+- **Typing to a running relay, in the terminal** (from pre.2; keys as of Claude Code 2.1.309): press `↓` until the
+  agent is selected in the list under the prompt, `Enter` to open its view, and `↑` to its prompt
+  (`Message @<agent name>…`). A line you type and send there reaches the job at the relay's next step, up to about
+  nine minutes later, or as a new turn when the job ends. To redirect the job at once, press `Esc` once at the prompt:
+  that stops the relay's wait, and the next line you send resumes the relay and steers the job within seconds. If you
+  send nothing after the Esc, the relay stays stopped and its job runs on (see "Stopping"). After the hand-back, type
+  only while the agent's view is still open: a finished agent leaves the list within about 15 seconds, and then you
+  continue the job through Claude.
 - A bad header fails the launch at once with the reason, and no job starts.
 
 **Long Workflows**
 
 <!-- The end-to-end suite on the pre.1 plugin code (3.0.0-dev.4, 962130b): run 20261022T212434Z-730a (resume-stop,
 resume-end, resume-cancelled) and run 20261022T210110Z-9dd6 (salvage); on the installed pre.1, run
-20261022T222258Z-ba8d (resume-stop; its resume-end was not resumed). Calls on resume, from the journals of the three
+20261022T222258Z-ba8d (resume-stop, and resume-collect: the typed /relay:status --workflow and /relay:result after the
+resume; its resume-end was not resumed). Calls on resume, from the journals of the three
 resumed Workflows (730a's resume-stop and resume-end, ba8d's resume-stop): of 15 calls that had completed, 11 came
 back from the cache (8 relay, 3 native) and 4 (three ZCode, one Kimi, whose jobs run longest) ran again and took over
 their completed job, one job and one attempt each. -->
@@ -125,7 +165,8 @@ otherwise. The others are relay's documented behaviour.
   `continue`, as the jobs skill says: its agent has ended, so a message to it does not reach the job.
 - **To cancel one job of a running Workflow,** use `/relay:cancel <job>`, from another thread if the lead holds its
   turn. TaskStop cannot target one agent of a Workflow.
-- `/relay:status --workflow <run>` lists every job of a run, in any repository.
+- `/relay:status --workflow <run>` lists every job of a run, in any repository, cancelled ones included (shown typed
+  after a resume, on the installed pre.1).
 - **Do not resume a Workflow under a different cut** from the one that started it: that has not been tested. Let it
   finish, or read its jobs with `/relay:result`.
 - **`not handed back`** means no relay handed back the job's result: its agent was stopped by hand, died or was let
