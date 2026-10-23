@@ -15,8 +15,9 @@ Pre-release cuts:
     pre.1 it was lost (pre.1's known issue 1). A line typed while the relay waits can take up to nine minutes to
     arrive; a message sent through Claude still arrives within seconds.
   - A relay that hands back the job's block inside one code fence is accepted, no longer blocked eight times and let
-    go as `not handed back` (known issue 2). A relay that writes prose instead of the block, as one did once after
-    the message `cancel`, can still be let go that way.
+    go as `not handed back` (known issue 2). A relay that keeps writing prose instead of the block, as one did once
+    after the message `cancel`, is still let go after eight blocks. A relay that a message resumes after its
+    hand-back must hand back the result again, where pre.1 let its own words through as the result.
   - A job cancelled with TaskStop is no longer marked `not handed back` (known issue 3).
   - `/relay:setup` asks Grok a second time before it says a home is signed out, and shows Kimi as
     `steer (next turn)` (known issue 4).
