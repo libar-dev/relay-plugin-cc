@@ -175,7 +175,7 @@ async function runWorkerRound(jobDir, options, held) {
   }
 
   const backend = backendFor(job.request);
-  const admissionDeps = { env: options.env ?? process.env, ...options.admission };
+  const admissionDeps = { env: { ...process.env, ...options.env }, ...options.admission };
   const home = admissionHome(admissionDeps.env);
   let slot = null;
   const guardOn = admissionEnabled(admissionDeps.env, readUserConfig(admissionDeps.env));

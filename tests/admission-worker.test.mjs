@@ -137,9 +137,10 @@ test("capacity retries check critical pressure before sending another turn", asy
   assert.equal(readJob(s.dir).state, "cancelled");
 });
 
-test("guard off creates no admission files during worker execution or cleanup", async t => {
+test("inherited guard off survives a partial worker environment and creates no admission files", async t => {
   const s = seed(t);
-  s.options.env.RELAY_ADMISSION = "off";
+  delete s.options.env.RELAY_ADMISSION;
+  assert.equal(process.env.RELAY_ADMISSION, "off");
   await runWorker(s.dir, s.options);
   assert.equal(readJob(s.dir).state, "completed");
   assert.equal(fs.existsSync(s.ctx.env.RELAY_ADMISSION_HOME), false);
