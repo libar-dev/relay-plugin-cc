@@ -1,5 +1,5 @@
 ---
-description: Check every backend the relay can run (Codex, Grok, ZCode, Kimi): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier job MCP servers or the load guard
+description: Check every backend the relay can run (Codex, Grok, ZCode, Kimi): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier, job MCP servers or the load guard
 argument-hint: '[--backend codex|grok|zcode|kimi] [--grok-home H|--kimi-home H] [--enable-review-gate|--disable-review-gate] [--fast-tier allowed|off] [--job-mcp-off names|none] [--admission on|off] [--max-very-heavy 1|2|default]'
 allowed-tools: Write, Bash(node:*), Bash(npm:*), AskUserQuestion
 ---
