@@ -7,12 +7,13 @@ import { initGitRepo, run } from "./support/helpers.mjs";
 import { jobPaths, repoSlugFor, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { appendRelayViolation, postInboxMessage, writeOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { PLUGIN_BUILD, PLUGIN_VERSION } from "../plugins/relay/scripts/lib/util/plugin.mjs";
+import { installFakeGrok } from "./fakes/grok.mjs";
+import { installFakeKimi } from "./fakes/kimi.mjs";
+import { installFakeZcode } from "./fakes/zcode.mjs";
 
 // Goldens transcribed from the writers, deliberately not imported from jobViewJson.
 // cli/ + companion's JSON_COMMANDS also include review, adversarial-review and transfer.
-// Phase 4 describes these headers, rows and typed-message fields. Code differences:
-// - printListing always writes nextCursor: null on the last page.
-// - rows also omit messages; --estimate uses relay.review-estimate/1 for BOTH reviews.
+// Rows omit messages; --estimate uses relay.review-estimate/1 for BOTH reviews.
 const HEAD = ["schema", "relayVersion", "relayBuild"];
 const JOB = [
   "id", "kind", "state", "storedState", "stalled", "deadReason", "sessionId", "turnId",
@@ -23,14 +24,9 @@ const JOB = [
   "automaticResumeCount", "attemptRecords", "server", "undelivered", "undeliveredCount",
   "dropped", "droppedCount"
 ];
-const ROW = [
-  "id", "kind", "state", "storedState", "stalled", "deadReason", "sessionId", "turnId",
-  "claudeSessionId", "model", "effort", "backend", "fast", "serviceTier", "mode", "webSearch",
-  "cwd", "attempts", "errorMessage", "createdAt", "updatedAt", "completedAt", "jobDir",
-  "reportPath", "hasReport", "summary", "relay", "relayViolations", "relayViolationCount",
-  "handedBackAt", "notHandedBack", "openMessages", "automaticResumes", "automaticResumeCount",
-  "undelivered", "undeliveredCount", "dropped", "droppedCount"
-];
+const ROW = JOB.filter(key => !["attemptRecords", "server", "messages"].includes(key));
+const LAUNCH = ["jobId", "state", "jobDir", "notes", "backend"];
+const backendKeys = (common, backend) => common.flatMap(key => key === "backend" ? [key, `${backend}Home`] : [key]);
 const PAGE = ["jobsHome", "scope", "repoSlug", "workflowRunId", "active", "limit", "jobs", "nextCursor"];
 const MESSAGE = ["id", "kind", "createdAt", "stage", "preview", "relay", "outcome"];
 const OUTCOME = ["action", "at", "reason", "attempt", "turnId"];
@@ -39,14 +35,14 @@ const SERVER = ["pid", "startTime", "startedAt"];
 const ENDED_SERVER = [...SERVER, "code", "signal", "endedAt", "stdoutClosedBeforeExit", "partialStdoutBytes", "stderrTail"];
 const AT = "2026-01-01T00:00:00.000Z";
 
-function keys(value, expected, at) {
+function keys(value, expected, at, ordered = false) {
   assert.ok(value && typeof value === "object" && !Array.isArray(value), `${at}: expected an object`);
   const actual = Object.keys(value);
   const missing = expected.filter(key => !Object.hasOwn(value, key));
   const added = actual.filter(key => !expected.includes(key));
   assert.deepEqual({ missing, added }, { missing: [], added: [] },
     `${at}: missing keys [${missing.join(", ")}]; unexpected keys [${added.join(", ")}]`);
-  assert.deepEqual(actual, expected, `${at}: key order changed (actual: ${actual.join(", ")})`);
+  if (ordered) assert.deepEqual(actual, expected, `${at}: key order changed (actual: ${actual.join(", ")})`);
 }
 
 function json(ctx, args, expectedKeys, { status = 0, extra = {}, schema = args[0] } = {}) {
@@ -54,11 +50,16 @@ function json(ctx, args, expectedKeys, { status = 0, extra = {}, schema = args[0
   assert.equal(result.status, status, result.stderr || result.stdout);
   assert.equal(result.stderr, "", `${args[0]} --json stderr`);
   const value = JSON.parse(result.stdout);
-  keys(value, [...HEAD, ...expectedKeys], `${args[0]} stdout`);
+  // Order belongs to the header and view/page literals, not persisted nested records
+  // or other command envelopes. Rows opt in separately below.
+  keys(value, [...HEAD, ...expectedKeys], `${args[0]} stdout`, expectedKeys[0] === "id" || expectedKeys === PAGE);
+  assert.deepEqual(Object.keys(value).slice(0, HEAD.length), HEAD, `${args[0]} header order`);
   assert.equal(value.schema, `relay.${schema}/1`, `${args[0]} schema`);
   assert.equal(value.relayVersion, PLUGIN_VERSION);
   assert.equal(value.relayBuild, PLUGIN_BUILD);
-  assert.equal(result.stdout, JSON.stringify(value, null, 2) + "\n");
+  // JSON.parse rejects extra documents; require exactly one trailing newline while
+  // allowing the writer to choose its indentation (including compact JSON).
+  assert.match(result.stdout, /[^\s]\n$/);
   return value;
 }
 
@@ -72,6 +73,14 @@ async function completed(t) {
   const { id } = startJob(ctx);
   await finishJob(ctx, id);
   return { ctx, id, dir: jobDir(ctx, id) };
+}
+
+function backendFixture(t, backend) {
+  const ctx = setup(t, { behavior: "review-ok" });
+  const install = { grok: installFakeGrok, kimi: installFakeKimi, zcode: installFakeZcode }[backend];
+  if (install) ctx.env[`${backend.toUpperCase()}_BINARY`] = install(ctx.bin).binary;
+  ctx.env.RELAY_JOBS_KIMI_POLL_MS = "20";
+  return ctx;
 }
 
 function messagesShape(value, at) {
@@ -98,13 +107,12 @@ function completedShape(value, at) {
 
 test("start --json golden shape (ordinary and relay launch)", async t => {
   const ctx = setup(t);
-  const launchKeys = ["jobId", "state", "jobDir", "notes", "backend"];
-  const ordinary = json(ctx, ["start", "--prompt-file", promptFile(ctx)], launchKeys);
+  const ordinary = json(ctx, ["start", "--prompt-file", promptFile(ctx)], LAUNCH);
   assert.equal(ordinary.backend, "codex");
   await finishJob(ctx, ordinary.jobId);
   const transcript = path.join(ctx.root, "agent.jsonl");
   put(transcript, { type: "user", uuid: "brief", message: { role: "user", content: `${HEADER}\n---\n[quick] Relay.` } });
-  const relay = json(ctx, ["start", "--from-relay", "--relay-agent", "agent-shape", "--relay-transcript", transcript], launchKeys);
+  const relay = json(ctx, ["start", "--from-relay", "--relay-agent", "agent-shape", "--relay-transcript", transcript], LAUNCH);
   await finishJob(ctx, relay.jobId);
   const view = json(ctx, ["status", relay.jobId], JOB);
   keys(view.relay, ["agentId", "transcriptPath", "promptUuid", "promptSha256", "workflowRunId", "label", "phase", "stringReturn", "lastToolAt"], "status.relay");
@@ -112,8 +120,33 @@ test("start --json golden shape (ordinary and relay launch)", async t => {
   completedShape(view, "status");
 });
 
+for (const backend of ["grok", "kimi"]) {
+  test(`${backend} --json golden launch, full views and listing row include its home`, async t => {
+    const ctx = backendFixture(t, backend);
+    const header = backend === "grok" ? "backend: grok\nmodel: grok-custom\neffort: ultra\ngrok-home: jobs"
+      : "backend: kimi\nmodel: kimi-code/k3\neffort: low\nkimi-home: jobs";
+    const homeKey = `${backend}Home`;
+    const home = path.join(ctx.user, backend === "grok" ? ".grok-jobs" : ".kimi-code-jobs");
+    const launch = json(ctx, ["start", "--prompt-file", promptFile(ctx, header)], backendKeys(LAUNCH, backend));
+    assert.equal(launch.backend, backend);
+    assert.equal(launch[homeKey], home);
+    await finishJob(ctx, launch.jobId);
+    for (const command of ["status", "result", "wait"]) {
+      const value = json(ctx, [command, launch.jobId], [...backendKeys(JOB, backend), ...(command === "status" ? [] : ["report"])]);
+      assert.equal(value.backend, backend);
+      assert.equal(value[homeKey], home);
+      messagesShape(value, command);
+    }
+    const page = json(ctx, ["status"], PAGE);
+    assert.equal(page.jobs.length, 1);
+    keys(page.jobs[0], backendKeys(ROW, backend), `${backend} status.jobs[0]`, true);
+    assert.equal(page.jobs[0].backend, backend);
+    assert.equal(page.jobs[0][homeKey], home);
+  });
+}
+
 for (const command of ["status", "result", "wait"]) {
-  test(`${command} one-job --json golden shape and typed messages`, async t => {
+  test(`${command} one-job --json golden shape and message records`, async t => {
     const { ctx, id, dir } = await completed(t);
     // Exercise nullable and populated entries, including the #15/#20 additions. The job
     // itself and its completed attempt/report came from the real worker + fake Codex.
@@ -136,10 +169,12 @@ for (const command of ["status", "result", "wait"]) {
     const expected = command === "status" ? JOB : [...JOB, "report"];
     const value = json(ctx, [command, id], expected, { status: command === "status" ? 0 : 3 });
     completedShape(value, command);
-    keys(value.relay, ["agentId", "workflowRunId", "label", "phase", "lastToolAt"], `${command}.relay`);
+    // Reader round-trip of the binding and automatic resume seeded above; the real
+    // relay-binding writer is pinned by the start --from-relay test.
+    keys(value.relay, ["agentId", "workflowRunId", "label", "phase", "lastToolAt"], `${command}.relay (reader round-trip)`);
     assert.equal(value.messages.length, 3);
     keys(value.relayViolations[0], ["at", "kind", "reason", "agentId"], `${command}.relayViolations[0]`);
-    keys(value.automaticResumes[0], ["id", "epoch", "at", "fromAttempt", "reason", "state"], `${command}.automaticResumes[0]`);
+    keys(value.automaticResumes[0], ["id", "epoch", "at", "fromAttempt", "reason", "state"], `${command}.automaticResumes[0] (reader round-trip)`);
     keys(value.dropped[0], ["id", "reason"], `${command}.dropped[0]`);
     const entries = Object.fromEntries(value.messages.map(entry => [entry.id, entry]));
     assert.equal(entries[delivered.id].outcome.action, "steered");
@@ -176,7 +211,8 @@ for (const command of ["steer", "continue", "resume"]) {
     assert.equal(value.message.kind, command);
     assert.equal(value.job, id);
     assert.equal(typeof value.spawned, "number");
-    // A next-turn receipt can precede turn/start. Both are deliberate writer shapes.
+    // Pin the receipt branch this invocation observes; this does not exercise both
+    // accepted-next-turn and turn-started deterministically.
     if (command === "steer") {
       assert.equal(value.outcome.action, "steered");
       keys(value.outcome, ["messageId", "at", "action", "turnId"], "steer.outcome");
@@ -268,24 +304,36 @@ function dirtyRepo(ctx) {
   fs.writeFileSync(path.join(ctx.work, "app.js"), "new\n");
 }
 
-for (const command of ["review", "adversarial-review"]) {
-  test(`${command} --json golden success and estimate shapes`, t => {
-    const ctx = setup(t, { behavior: "review-ok" });
-    dirtyRepo(ctx);
-    const value = json(ctx, [command], command === "review"
-      ? ["review", "backend", "target", "sessionId", "codex", "notes"]
-      : ["review", "backend", "target", "sessionId", "context", "codex", "result", "rawOutput", "parseError", "validationError", "turnError", "reasoningSummary", "notes"]);
-    keys(value.target, ["mode", "label", "explicit"], `${command}.target`);
-    keys(value.codex, command === "review" ? ["status", "stderr", "stdout", "reasoning", "sourceThreadId"] : ["status", "stderr", "stdout", "reasoning"], `${command}.codex`);
-    if (command === "adversarial-review") {
-      keys(value.context, ["repoRoot", "branch", "summary"], "adversarial-review.context");
-      keys(value.result, ["verdict", "summary", "findings", "next_steps"], "adversarial-review.result");
-      assert.ok(value.result.findings.length > 0);
-      for (const finding of value.result.findings) keys(finding, ["severity", "title", "body", "file", "line_start", "line_end", "confidence", "recommendation"], "adversarial-review.result.findings[]");
-    }
-    const estimate = json(ctx, [command, "--estimate"], ["target", "fileCount", "shortstat", "untrackedCount"], { schema: "review-estimate" });
-    keys(estimate.target, ["mode", "label", "explicit"], `${command} --estimate.target`);
-  });
+for (const backend of ["codex", "grok", "kimi", "zcode"]) {
+  for (const command of ["review", "adversarial-review"]) {
+    test(`${backend} ${command} --json golden success and estimate shapes`, t => {
+      const ctx = backendFixture(t, backend);
+      dirtyRepo(ctx);
+      // Supply a schema-valid answer to the non-native fake reviewers. The envelope
+      // and its backend-named key still come from the real CLI writers.
+      const extra = backend === "codex" ? {} : { FAKE_REVIEW_ANSWER: JSON.stringify({
+        verdict: "needs-attention", summary: "One finding.", next_steps: ["Fix it."],
+        findings: [{ severity: "high", title: "Guard input", body: "Check empty input.", file: "app.js",
+          line_start: 1, line_end: 1, confidence: 0.8, recommendation: "Return early." }]
+      }) };
+      const value = json(ctx, [command, "--backend", backend], command === "review"
+        ? ["review", "backend", "target", "sessionId", backend, "notes"]
+        : ["review", "backend", "target", "sessionId", "context", backend, "result", "rawOutput", "parseError", "validationError", "turnError", "reasoningSummary", "notes"], { extra });
+      assert.equal(value.backend, backend);
+      keys(value.target, ["mode", "label", "explicit"], `${command}.target`);
+      keys(value[backend], command === "review"
+        ? ["status", "stderr", "stdout", ...(backend === "codex" ? ["reasoning", "sourceThreadId"] : [])]
+        : ["status", "stderr", "stdout", "reasoning"], `${command}.${backend}`);
+      if (command === "adversarial-review") {
+        keys(value.context, ["repoRoot", "branch", "summary"], "adversarial-review.context");
+        keys(value.result, ["verdict", "summary", "findings", "next_steps"], "adversarial-review.result");
+        assert.ok(value.result.findings.length > 0);
+        for (const finding of value.result.findings) keys(finding, ["severity", "title", "body", "file", "line_start", "line_end", "confidence", "recommendation"], "adversarial-review.result.findings[]");
+      }
+      const estimate = json(ctx, [command, "--backend", backend, "--estimate"], ["target", "fileCount", "shortstat", "untrackedCount"], { schema: "review-estimate" });
+      keys(estimate.target, ["mode", "label", "explicit"], `${command} --estimate.target`);
+    });
+  }
 }
 
 test("transfer --json golden imported-session shape", t => {
@@ -326,9 +374,10 @@ for (const kind of ["busy", "not-found", "usage", "attempt-changed", "error"]) {
 }
 
 function rowShape(row, at) {
-  keys(row, ROW, at);
+  keys(row, ROW, at, true);
   keys(row.relay, ["agentId", "workflowRunId", "label", "phase", "adopted", "lastToolAt"], `${at}.relay`);
-  for (const entry of row.automaticResumes) keys(entry, ["id", "epoch", "at", "fromAttempt", "reason", "state"], `${at}.automaticResumes[]`);
+  // Reader round-trips of seeded recovery records, not assertions on their writer.
+  for (const entry of row.automaticResumes) keys(entry, ["id", "epoch", "at", "fromAttempt", "reason", "state"], `${at}.automaticResumes[] (reader round-trip)`);
   for (const entry of row.relayViolations) keys(entry, ["at", "kind", "reason"], `${at}.relayViolations[]`);
   for (const entry of row.dropped) keys(entry, ["id", "reason"], `${at}.dropped[]`);
 }
@@ -369,7 +418,7 @@ for (const scope of ["repository", "all", "workflow", "active"]) {
       assert.equal(typeof first.nextCursor, "string");
       const second = json(ctx, ["status", ...flags, "--cursor", first.nextCursor], PAGE);
       assert.equal(second.jobs.length, 1);
-      // Pin what printListing writes; the requested omission is tracked below.
+      // The last page writes nextCursor: null; readers test it with != null.
       assert.equal(second.nextCursor, null);
       const rows = [...first.jobs, ...second.jobs];
       assert.deepEqual(rows.map(row => row.id), Array.from({ length: 51 }, (_, i) => `shape-${String(50 - i).padStart(2, "0")}`));

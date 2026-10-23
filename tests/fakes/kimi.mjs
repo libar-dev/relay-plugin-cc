@@ -247,7 +247,9 @@ process.on('SIGTERM', () => {
   flushAtClose();
   if (inputEnded) process.exit(0);
   terminating = true;
-  setTimeout(() => { process.removeAllListeners('SIGTERM'); process.kill(process.pid, 'SIGTERM'); }, 1000).unref();
+  // Direct close-order tests opt out of the watchdog so the parent can observe the
+  // first flush before sending EOF, regardless of how long it is descheduled.
+  if (!options.waitForStdinEndOnSigterm) setTimeout(() => { process.removeAllListeners('SIGTERM'); process.kill(process.pid, 'SIGTERM'); }, 1000).unref();
 });
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line); state.requests.push(m); save();

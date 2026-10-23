@@ -894,7 +894,7 @@ test("a final answer arriving after the settle grace stays in the record and eve
 
 for (const first of ["stdin end", "SIGTERM"]) {
   test(`late-order fake flushes once when ${first} arrives first`, async t => {
-    const ctx = fixture(t, { lateMessages: { afterClose: true }, answer: "Close-time final." });
+    const ctx = fixture(t, { lateMessages: { afterClose: true }, answer: "Close-time final.", waitForStdinEndOnSigterm: true });
     const child = spawn(process.execPath, [ctx.env.KIMI_BINARY, "acp"], {
       cwd: ctx.work, env: { ...ctx.env, KIMI_CODE_HOME: path.join(ctx.user, ".kimi-code") },
       stdio: ["pipe", "pipe", "pipe"]
@@ -930,8 +930,8 @@ for (const first of ["stdin end", "SIGTERM"]) {
     assert.deepEqual(records().map(record => record.type), lateRecordOrder.slice(0, 5));
     if (first === "stdin end") child.stdin.end();
     else child.kill("SIGTERM");
-    // Observe the flush before allowing the other close event: no scheduling delay
-    // can hide a missing first-event handler or make the two handlers look ordered.
+    // Observe the flush before allowing the other close event. This direct fake has
+    // no SIGTERM watchdog; bounded waits and the SIGKILL cleanup belong to the parent.
     await waitFor(() => records().length === lateRecordOrder.length);
     await waitFor(() => stdout.trim().split("\n").map(line => JSON.parse(line))
       .filter(message => message.params?.update?.sessionUpdate === "agent_message_chunk")

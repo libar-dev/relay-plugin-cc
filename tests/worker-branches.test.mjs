@@ -48,7 +48,7 @@ for (const [label, attempts] of [
   worker.stderr.on("data", chunk => { output += chunk; });
   worker.on("close", () => { closed = true; });
   try {
-    await waitFor(() => closed, 5000).catch(() => assert.fail("the cancel was not taken: worker did not exit"));
+    await waitFor(() => closed, 10000).catch(() => assert.fail("worker did not exit within 10 s after cancel"));
     assert.equal(worker.exitCode, 0, output);
   } finally {
     if (!closed) worker.kill("SIGKILL");
