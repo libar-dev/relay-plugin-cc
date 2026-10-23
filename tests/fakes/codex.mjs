@@ -127,7 +127,7 @@ function finishJobTurn(turnId, status) {
   clearTimeout(turn.timer);
   if (status === "completed") {
     const text = "Report for: " + firstLine(turn.prompt) + (turn.steers.length ? "\\nSteered with: " + turn.steers.join(" | ") : "");
-    send({ method: "item/completed", params: { threadId: turn.threadId, turnId, item: { type: "agentMessage", id: "msg_" + turnId, text, phase: "final_answer" } } });
+    send({ method: "item/completed", params: { threadId: turn.threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg_" + turnId, text, phase: "final_answer" } } });
   }
   send({ method: "turn/completed", params: { threadId: turn.threadId, turn: buildTurn(turnId, status) } });
 }
@@ -481,8 +481,15 @@ rl.on("line", (line) => {
           break;
         }
         const status = BEHAVIOR.slice("turn-order-collab-".length);
+        // Deliberately malformed peer for the unknown-status rejection test. All other
+        // replies follow the pinned app-server schema in fixtures/codex-app-server-schema.
         const turn = buildTurn(state.lastTurnStart.turnId, status === "unknown-status" ? "waiting" : ["failed", "interrupted", "inProgress"].includes(status) ? status : "completed", status === "failed" ? { message: "read found failure" } : null);
-        const response = { id: message.id, result: { thread: { ...buildThread(ensureThread(state, message.params.threadId)), turns: [buildTurn("unrelated", "completed"), ...(status === "missing" ? [] : [turn])] } } };
+        const response = { id: message.id, result: { thread: {
+          ...buildThread(ensureThread(state, message.params.threadId)),
+          projectId: null,
+          sessionId: message.params.threadId,
+          turns: message.params.includeTurns ? [buildTurn("unrelated", "completed"), ...(status === "missing" ? [] : [turn])] : []
+        } } };
         // read-race: the reply goes once the steer is answered, so it is in flight while the steer
         // lands, however slowly the steer comes.
         if (status === "read-race" && !steerArrived) repliesAwaitingSteer.push(response);
@@ -700,7 +707,7 @@ rl.on("line", (line) => {
 
         if (BEHAVIOR.startsWith("turn-order-terminal-start-")) {
           const status = BEHAVIOR.slice("turn-order-terminal-start-".length);
-          send({ method: "item/completed", params: { threadId: thread.id, turnId, item: { type: "agentMessage", id: "terminal-answer", phase: "final_answer", text: "Terminal response report" } } });
+          send({ method: "item/completed", params: { threadId: thread.id, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "terminal-answer", phase: "final_answer", text: "Terminal response report" } } });
           send({ id: message.id, result: { turn: buildTurn(turnId, status) } });
           break;
         }
@@ -710,16 +717,16 @@ rl.on("line", (line) => {
           const collab = BEHAVIOR.startsWith("turn-order-collab-") || BEHAVIOR.includes("steer") || BEHAVIOR.includes("activity") || BEHAVIOR === "turn-order-collab-exit";
           if (collab) {
             const childId = "turn-order-child";
-            const item = { type: "collabAgentToolCall", id: "collab_" + turnId, receiverThreadIds: [childId], tool: "spawnAgent", status: "inProgress" };
-            send({ method: "item/started", params: { threadId: thread.id, turnId, item } });
+            const item = { type: "collabAgentToolCall", id: "collab_" + turnId, senderThreadId: thread.id, receiverThreadIds: [childId], agentsStates: {}, tool: "spawnAgent", status: "inProgress" };
+            send({ method: "item/started", params: { threadId: thread.id, turnId, startedAtMs: Date.now(), item } });
             send({ method: "turn/started", params: { threadId: childId, turn: buildTurn("child-turn") } });
             send({ method: "turn/completed", params: { threadId: childId, turn: buildTurn("child-turn", "completed") } });
-            send({ method: "item/completed", params: { threadId: thread.id, turnId, item: { ...item, status: "completed" } } });
+            send({ method: "item/completed", params: { threadId: thread.id, turnId, completedAtMs: Date.now(), item: { ...item, status: "completed" } } });
           }
           const entry = { threadId: thread.id, prompt, steers: [], timer: null };
           activeTurns.set(turnId, entry);
           setTimeout(() => {
-            send({ method: "item/completed", params: { threadId: thread.id, turnId, item: { type: "agentMessage", id: "candidate", phase: "final_answer", text: "Candidate report" } } });
+            send({ method: "item/completed", params: { threadId: thread.id, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "candidate", phase: "final_answer", text: "Candidate report" } } });
           }, 100);
           if (BEHAVIOR === "turn-order-wrong-turn") {
             setTimeout(() => send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn("unrelated", "failed") } }), 200);
@@ -731,7 +738,7 @@ rl.on("line", (line) => {
           }
           if (BEHAVIOR.startsWith("turn-order-activity-")) {
             setTimeout(() => send(BEHAVIOR.endsWith("item")
-              ? { method: "item/started", params: { threadId: thread.id, turnId: BEHAVIOR.includes("other") ? "new-turn" : turnId, item: { type: "agentMessage", id: "more-work", phase: "commentary", text: "More work" } } }
+              ? { method: "item/started", params: { threadId: thread.id, startedAtMs: Date.now(), turnId: BEHAVIOR.includes("other") ? "new-turn" : turnId, item: { type: "agentMessage", id: "more-work", phase: "commentary", text: "More work" } } }
               : { method: "turn/started", params: { threadId: thread.id, turn: buildTurn(BEHAVIOR.includes("other") ? "new-turn" : turnId) } }), 200);
           }
           if (BEHAVIOR === "turn-order-final-exit" || BEHAVIOR === "turn-order-collab-exit") {

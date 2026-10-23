@@ -14,6 +14,7 @@ import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/
 import { computeJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { createJobDir, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
+import { readLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = path.join(ROOT, "plugins", "relay", "scripts", "companion.mjs");
@@ -24,8 +25,10 @@ function setup(behavior = "job", options = {}) {
   installFakeCodex(binDir, behavior, options);
   const home = makeTempDir("relay-jobs-");
   const work = makeTempDir("relay-work-");
+  const user = makeTempDir("relay-user-");
   const env = {
     ...buildEnv(binDir),
+    HOME: user, USERPROFILE: user, CODEX_HOME: undefined,
     RELAY_JOBS_HOME: home,
     RELAY_JOBS_POLL_MS: "50",
     RELAY_JOBS_WAIT_POLL_MS: "50",
@@ -970,4 +973,202 @@ test("a model of another backend's family with no backend: is refused before lau
   }
   assert.equal(buildLaunchRequest({ model: "glm-5.3", effort: "high", backend: "zcode" }).backend, "zcode");
   assert.equal(buildLaunchRequest({ model: "gpt-6-sol", effort: "high" }).backend, "codex");
+});
+
+// Small CLI refusal and reader branches from the D60 coverage review. These records
+// mostly need no backend process; the resume and relay-message cases use fake Codex.
+function branchJob(ctx, id, patch = {}) {
+  const { jobDir } = createJobDir(ctx.work, id, ctx.env);
+  writeJob(jobDir, {
+    id, kind: "task", state: "completed", createdAt: "2026-01-01T00:00:00.000Z",
+    request: { model: "gpt-test", effort: "low", backend: "codex", cwd: ctx.work },
+    attempts: [], ...patch
+  });
+  return jobDir;
+}
+
+test("CLI refuses an empty message before posting anything", () => {
+  const ctx = setup();
+  const dir = branchJob(ctx, "job-empty-message");
+  const message = path.join(ctx.work, "empty.txt");
+  fs.writeFileSync(message, " \n\t ");
+  const result = companion(ctx, ["steer", "job-empty-message", "--message-file", message]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "The message is empty.\n");
+  assert.deepEqual(fs.readdirSync(path.join(dir, "inbox")).sort(), ["claimed", "outcomes"]);
+});
+
+test("CLI resume refuses a job with a live worker and sends no message", async (t) => {
+  const ctx = setup();
+  ctx.env.FAKE_CODEX_RELEASE_FILE = path.join(ctx.work, "release");
+  const id = startJob(ctx, HEADER, "[held] Resume must refuse.");
+  t.after(() => companion(ctx, ["cancel", id]));
+  await waitFor(() => readJobJson(ctx, id).state === "running" && ctx.fakeState().turnStarts?.length === 1);
+  const before = readJobJson(ctx, id);
+  const result = companion(ctx, ["resume", id]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, `Job ${id} is running with a live worker. Use steer or continue.\n`);
+  assert.deepEqual(readJobJson(ctx, id).attempts, before.attempts);
+  assert.deepEqual(fs.readdirSync(path.join(jobDirOf(ctx, id), "inbox")).sort(), ["claimed", "outcomes"]);
+});
+
+test("CLI steer refuses a job of another kind than task", () => {
+  const ctx = setup();
+  const id = "job-other-kind";
+  const dir = branchJob(ctx, id, { kind: "legacy" });
+  const result = companion(ctx, ["steer", id, "--message", "Do not deliver this."]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, `Job ${id} is a legacy job. Only task jobs take messages.\n`);
+  assert.deepEqual(fs.readdirSync(path.join(dir, "inbox")).sort(), ["claimed", "outcomes"]);
+});
+
+test("CLI relay-bound task accepts steer --json while running and continue --json after ending", async t => {
+  const ctx = setup();
+  const release = path.join(ctx.work, "release");
+  ctx.env.FAKE_CODEX_RELEASE_FILE = release;
+  const transcript = path.join(ctx.work, "relay.jsonl");
+  fs.writeFileSync(transcript, JSON.stringify({ type: "user", uuid: "relay-brief", message: {
+    role: "user", content: `${HEADER}\n---\n[held] Relay brief.`
+  } }) + "\n");
+  const started = companion(ctx, ["start", "--from-relay", "--relay-agent", "agent-cli", "--relay-transcript", transcript]);
+  assert.equal(started.status, 0, started.stderr || started.stdout);
+  const id = /^job: (\S+)$/m.exec(started.stdout)?.[1];
+  assert.ok(id, started.stdout);
+  t.after(() => companion(ctx, ["cancel", id]));
+  await waitFor(() => readJobJson(ctx, id).turnId && ctx.fakeState().turnStarts?.length === 1);
+  assert.equal(readJobJson(ctx, id).kind, "task");
+  assert.equal(readJobJson(ctx, id).relay.agentId, "agent-cli");
+  // Captured from relay's actual initialize request, including the notification opt-outs.
+  assert.deepEqual(ctx.fakeState().capabilities, {
+    experimentalApi: false, requestAttestation: false,
+    optOutNotificationMethods: ["item/agentMessage/delta", "item/reasoning/summaryTextDelta",
+      "item/reasoning/summaryPartAdded", "item/reasoning/textDelta"]
+  });
+  const steered = companion(ctx, ["steer", id, "--message", "Running steer.", "--json"]);
+  assert.equal(steered.status, 0, steered.stderr || steered.stdout);
+  assert.equal(steered.stderr, "");
+  assert.equal(JSON.parse(steered.stdout).outcome.action, "steered");
+  assert.equal(readJobJson(ctx, id).state, "running");
+  assert.equal(ctx.fakeState().steers[0].text, "Running steer.");
+  fs.writeFileSync(release, "release");
+  assert.equal(waitJob(ctx, id).status, 0);
+  await waitFor(() => !readLease(jobDirOf(ctx, id)));
+  const continued = companion(ctx, ["continue", id, "--message", "[quick] Ended continue.", "--json"]);
+  assert.equal(continued.status, 0, continued.stderr || continued.stdout);
+  assert.equal(continued.stderr, "");
+  const receipt = JSON.parse(continued.stdout);
+  assert.equal(receipt.message.kind, "continue");
+  // Check whichever receipt this invocation observes; this is not two-branch coverage.
+  assert.ok(["accepted-next-turn", "turn-started"].includes(receipt.outcome.action));
+  assert.equal(waitJob(ctx, id).status, 0);
+  await waitFor(() => !readLease(jobDirOf(ctx, id)));
+  assert.deepEqual(ctx.fakeState().turnStarts.map(turn => turn.prompt), ["[held] Relay brief.", "[quick] Ended continue."]);
+  assert.equal(readJobJson(ctx, id).attempts.length, 2);
+});
+
+test("CLI start --from-relay requires both hook-added arguments", () => {
+  const ctx = setup();
+  for (const flags of [[], ["--relay-agent", "agent-missing-transcript"], ["--relay-transcript", "/missing/transcript.jsonl"]]) {
+    const result = companion(ctx, ["start", "--from-relay", ...flags]);
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdout, "state: not started\nerror: start --from-relay needs --relay-transcript and --relay-agent, which the relay hook adds. The hook did not run, so the prompt is unknown.\n");
+  }
+  assert.deepEqual(fs.readdirSync(ctx.home).filter(name => name !== "relays"), []);
+});
+
+test("CLI findJobDir resolves a unique job prefix", () => {
+  const ctx = setup();
+  branchJob(ctx, "job-prefix-one");
+  branchJob(ctx, "job-other-two");
+  const result = companion(ctx, ["status", "job-prefix"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^job: job-prefix-one$/m);
+  assert.equal(result.stderr, "");
+});
+
+test("CLI findJobDir refuses an ambiguous job prefix", () => {
+  const ctx = setup();
+  branchJob(ctx, "job-prefix-one");
+  branchJob(ctx, "job-prefix-two");
+  const result = companion(ctx, ["status", "job-prefix"]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, 'Job reference "job-prefix" is ambiguous. Use the full job id.\n');
+});
+
+test("CLI status prints the stalled job's last event time", () => {
+  const ctx = setup();
+  const at = "2026-01-02T03:04:05.000Z";
+  branchJob(ctx, "job-stalled-line", { state: "running", worker: { pid: process.pid }, lastEventAt: at });
+  const result = companion(ctx, ["status", "job-stalled-line"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /^state: running$/m);
+  assert.deepEqual(result.stdout.split("\n").filter(line => line.startsWith("stalled:")), [`stalled: no event since ${at}`]);
+});
+
+for (const command of ["status", "result", "wait", "cancel"]) {
+  test(`CLI ${command} reports No job.json for a corrupt job record`, () => {
+    const ctx = setup();
+    const id = `job-corrupt-${command}`;
+    const dir = branchJob(ctx, id);
+    fs.writeFileSync(path.join(dir, "job.json"), '{"state":');
+    const result = companion(ctx, [command, id]);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, `No job.json in ${dir}.\n`);
+    assert.equal(fs.readFileSync(path.join(dir, "job.json"), "utf8"), '{"state":');
+    if (command === "cancel") assert.deepEqual(fs.readdirSync(path.join(dir, "cancelling")), []);
+  });
+}
+
+test("CLI status and status --json --active list a good job beside a corrupt record", () => {
+  const ctx = setup();
+  branchJob(ctx, "job-good-listing", { state: "running", worker: { pid: process.pid } });
+  const corrupt = branchJob(ctx, "job-corrupt-listing");
+  const broken = '{"state":';
+  fs.writeFileSync(path.join(corrupt, "job.json"), broken);
+  const plain = companion(ctx, ["status"]);
+  assert.equal(plain.status, 0, plain.stderr || plain.stdout);
+  assert.equal(plain.stderr, "");
+  assert.match(plain.stdout, /^jobs: 1$/m);
+  assert.match(plain.stdout, /job-good-listing/);
+  assert.doesNotMatch(plain.stdout, /job-corrupt-listing/);
+  const active = companion(ctx, ["status", "--json", "--active"]);
+  assert.equal(active.status, 0, active.stderr || active.stdout);
+  assert.equal(active.stderr, "");
+  const page = JSON.parse(active.stdout);
+  assert.equal(page.active, true);
+  assert.deepEqual(page.jobs.map(job => job.id), ["job-good-listing"]);
+  assert.equal(page.nextCursor, null);
+  assert.equal(fs.readFileSync(path.join(corrupt, "job.json"), "utf8"), broken);
+});
+
+test("SessionStart without CLAUDE_ENV_FILE succeeds without output", () => {
+  const env = { ...process.env };
+  delete env.CLAUDE_ENV_FILE;
+  const result = run("node", [SESSION_HOOK, "SessionStart"], { env, input: JSON.stringify({ session_id: "sess-no-env-file" }) });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+});
+
+test("SessionStart appends the export when its env file cannot be read", { skip: process.getuid?.() === 0 }, (t) => {
+  const envFile = path.join(makeTempDir(), "write-only-env.sh");
+  fs.writeFileSync(envFile, "export OTHER=1\n");
+  fs.chmodSync(envFile, 0o200);
+  t.after(() => fs.chmodSync(envFile, 0o600));
+  assert.throws(() => fs.readFileSync(envFile, "utf8"), { code: "EACCES" });
+  const result = run("node", [SESSION_HOOK, "SessionStart"], {
+    env: { ...process.env, CLAUDE_ENV_FILE: envFile }, input: JSON.stringify({ session_id: "sess-write-only" })
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  fs.chmodSync(envFile, 0o600);
+  assert.equal(fs.readFileSync(envFile, "utf8"), "export OTHER=1\nexport RELAY_COMPANION_SESSION_ID='sess-write-only'\n");
 });

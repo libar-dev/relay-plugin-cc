@@ -49,6 +49,8 @@ state.starts.push({ args, env: kimiEnv(), cwd: process.cwd(), pid: process.pid }
 const send = message => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\\n');
 const home = process.env.KIMI_CODE_HOME;
 let sessionId, active = null, own = null, mode = 'default', model = 'kimi-code/k3', clientCaps = {}, reverseId = 0;
+let atClose = null;
+const flushAtClose = () => { const flush = atClose; atClose = null; flush?.(); };
 const pendingReverse = new Map();
 const queued = [];
 const update = value => send({ method: 'session/update', params: { sessionId, update: value } });
@@ -175,16 +177,30 @@ function finish(reason) {
   // The client is descheduled while the turn ends: when it runs again, the record's end and the
   // updates sent ahead of it are both waiting.
   if (options.pauseClientAtEnd) { process.kill(process.ppid, 'SIGSTOP'); setTimeout(() => process.kill(process.ppid, 'SIGCONT'), options.pauseClientAtEnd); }
-  if (reason === 'completed') {
+  const finalMessage = () => {
     const answer = process.env.FAKE_REVIEW_ANSWER ?? options.answer ?? 'Report for: ' + turn.text;
     if (turn.rpcId !== null) for (const text of [answer.slice(0, 3), answer.slice(3)]) if (text) update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
     record({ type: 'agent.message.appended', kind: 'event', message: { message: { role: 'assistant', content: [{ type: 'think', think: 'x' }, { type: 'text', text: answer }], toolCalls: [] } } });
-  }
+  };
+  const late = reason === 'completed' && options.lateMessages;
+  if (reason === 'completed' && !late) finalMessage();
   if (reason === 'cancelled') record({ type: 'turn.cancel', agentId: 'main', turnId: turn.turnId, target: 'active', reason: 'user_cancelled' });
   const error = reason === 'failed' ? options.failError ?? { code: 'provider.connection_error', message: 'Connection error.', name: 'APIConnectionError', retryable: true } : undefined;
-  record({ type: 'agent.turn.ended', kind: 'event', turnId: turn.turnId, outcome: reason === 'completed' ? 'done' : reason });
+  const engineEnd = () => record({ type: 'agent.turn.ended', kind: 'event', turnId: turn.turnId, outcome: reason === 'completed' ? 'done' : reason });
+  if (!late) engineEnd();
   record({ type: 'turn.ended', agentId: 'main', turnId: turn.turnId, reason, ...(error ? { error } : {}) });
   if (reason !== 'cancelled') record({ type: 'prompt.completed', agentId: 'main', promptId: turn.promptId, reason });
+  // Opt in to the live 2.2.0 ordering: the prompt ends before the engine's final batch.
+  // A releaseFile gate holds that batch while relay observes the end; afterClose releases it
+  // on stdin end or SIGTERM, whichever arrives first, after the settle grace.
+  if (late) {
+    const flush = () => { finalMessage(); engineEnd(); };
+    if (late.afterClose) atClose = flush;
+    else if (late.releaseFile) {
+      const release = () => { if (fs.existsSync(path.resolve(late.releaseFile))) flush(); else setTimeout(release, 10); };
+      release();
+    } else flush();
+  }
   // Kimi starts a turn of its own as it goes idle, before ACP's answer reaches the client.
   if (options.ownTurnAfterMs && !state.ownTurnRan) { state.ownTurnRan = true; save(); if (options.ownTurnAfterMs <= 1) ownTurn(); else setTimeout(ownTurn, options.ownTurnAfterMs); }
   // Kimi's ACP layer answers end_turn for a failed turn.
@@ -226,11 +242,14 @@ function ownTurn() {
 // sent before it goes, so on SIGTERM the fake reads stdin to its end, recording every message,
 // then exits. Stdin that has not ended a second later: SIGTERM kills it, as it did before.
 let inputEnded = false, terminating = false;
-process.stdin.on('end', () => { inputEnded = true; if (terminating) process.exit(0); });
+process.stdin.on('end', () => { flushAtClose(); inputEnded = true; if (terminating) process.exit(0); });
 process.on('SIGTERM', () => {
+  flushAtClose();
   if (inputEnded) process.exit(0);
   terminating = true;
-  setTimeout(() => { process.removeAllListeners('SIGTERM'); process.kill(process.pid, 'SIGTERM'); }, 1000).unref();
+  // Direct close-order tests opt out of the watchdog so the parent can observe the
+  // first flush before sending EOF, regardless of how long it is descheduled.
+  if (!options.waitForStdinEndOnSigterm) setTimeout(() => { process.removeAllListeners('SIGTERM'); process.kill(process.pid, 'SIGTERM'); }, 1000).unref();
 });
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line); state.requests.push(m); save();

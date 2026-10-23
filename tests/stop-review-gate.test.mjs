@@ -395,3 +395,27 @@ for (const scenario of ["another wait error", "busy wait error without exit 4", 
     assert.deepEqual(fake.calls, scenario === "another task schema" ? ["task"] : ["task", "wait", "cancel"]);
   });
 }
+
+test("stop gate fails open when a completed review returned no answer", async () => {
+  const { runStopReview } = await import(STOP_HOOK);
+  const fake = reviewWith({ value: taskJson }, { value: { ...waitJson, report: " \n\t " } });
+  assert.deepEqual(runStopReview(process.cwd(), {}, fake), {
+    ok: true,
+    failure: "the stop-time Codex review returned no answer. Run /relay:review --wait to review by hand."
+  });
+  assert.deepEqual(fake.calls, ["task", "wait"]);
+});
+
+test("stop gate fails open when the review task failed to start", async () => {
+  const { runStopReview } = await import(STOP_HOOK);
+  const calls = [];
+  const runCompanion = args => {
+    calls.push(args[0]);
+    return { status: null, stdout: "", stderr: "", error: new Error("spawn failed: EACCES") };
+  };
+  assert.deepEqual(runStopReview(process.cwd(), {}, { runCompanion }), {
+    ok: true,
+    failure: "the stop-time Codex review did not start: spawn failed: EACCES. Run /relay:review --wait to review by hand."
+  });
+  assert.deepEqual(calls, ["task"]);
+});

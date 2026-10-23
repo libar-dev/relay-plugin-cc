@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 import { makeTempDir } from "./support/helpers.mjs";
 import { codexReceived, COMPANION, companion, decision, hookInput, HOOK, jobDirOf, pre,
-  readJobJson, relayContext, relayStart, RELAY_CMD, stop, waitFor } from "./support/relay-fixture.mjs";
+  readJobJson, reason, relayContext, relayStart, RELAY_CMD, stop, waitFor } from "./support/relay-fixture.mjs";
 import { acquireWorkerLease, isWorkerAlive, readLease, releaseWorkerLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 import { claimInboxMessages, postInboxMessage, readRelayViolations, writeOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { jobPaths, writeJsonAtomic } from "../plugins/relay/scripts/lib/jobs/store.mjs";
@@ -20,6 +20,7 @@ import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 import { readProcessStartTime } from "../plugins/relay/scripts/lib/util/process.mjs";
 import { deliverRelayMessages, readLedger, RELAY_BLOCK_BUDGET } from "../plugins/relay/scripts/lib/harness/relay.mjs";
 import { busyViews } from "./support/busy-view.mjs";
+import { acquireOwnership, readOwnership, releaseOwnership } from "../plugins/relay/scripts/lib/util/ownership.mjs";
 
 const QUICK = "model: gpt-test\neffort: low\n---\n[quick] Initial task.";
 
@@ -644,4 +645,73 @@ test("wait false starts a consumer for claimed but unrun work", async () => {
   assert.equal(got.consumer, true);
   assert.equal(got.spawned, 1);
   await assertRunOnce(ctx, jobId, text);
+});
+
+test("relay inbox lock timeout returns busy without receipts or violations; release delivers in order", async () => {
+  const ctx = relayContext("job", { turnMs: 50, env: { RELAY_LOCK_WAIT_MS: "200" } });
+  const { jobId, dir } = await completed(ctx);
+  const messages = ["[quick] First after lock release", "[quick] Second after lock release"]
+    .map(text => ({ uuid: ctx.queued(text).uuid, text }));
+  const lock = path.join(jobPaths(dir).inbox, "relay.lock");
+  const owner = acquireOwnership(lock);
+  assert.ok(owner);
+  const ledgerDir = path.join(jobPaths(dir).inbox, "relay");
+  const ledgerFiles = () => fs.existsSync(ledgerDir) ? fs.readdirSync(ledgerDir) : [];
+  const before = ledgerFiles();
+  try {
+    const result = await deliverRelayMessages(dir, messages, { env: ctx.env });
+    assert.deepEqual(result, { busy: true, delivered: [], undelivered: messages });
+    assert.deepEqual(readOwnership(lock), owner, "contention leaves the live owner intact");
+    assert.deepEqual(ledgerFiles(), before, "a busy delivery writes no ledger entry");
+    for (const message of messages) {
+      assert.equal(readLedger(dir, message.uuid), null);
+      assert.equal(runs(ctx, message.text), 0);
+    }
+    assert.deepEqual(readRelayViolations(dir), []);
+    assert.deepEqual(fs.readdirSync(jobPaths(dir).inbox).filter(name => name.endsWith(".json")), []);
+  } finally {
+    assert.equal(releaseOwnership(lock), true);
+  }
+  const result = await deliverRelayMessages(dir, messages, { env: ctx.env });
+  assert.equal(result.busy, false);
+  assert.deepEqual(result.undelivered, []);
+  assert.deepEqual(result.delivered.map(message => message.uuid), messages.map(message => message.uuid));
+  await waitFor(() => messages.every(message => runs(ctx, message.text) === 1));
+  await assertRunOnce(ctx, jobId, messages[0].text);
+  const received = codexReceived(ctx);
+  assert.deepEqual([...received.turns, ...received.steers].filter(text => messages.some(message => message.text === text)), messages.map(message => message.text));
+  for (const message of messages) assert.equal(readLedger(dir, message.uuid).status, "done");
+  assert.deepEqual(readRelayViolations(dir), []);
+});
+
+test("relay inbox lock contention holds hand-back with the busy text, then permits it after delivery", async () => {
+  const ctx = relayContext("job", { turnMs: 50, env: { RELAY_LOCK_WAIT_MS: "200" } });
+  const { jobId, dir } = await completed(ctx);
+  const text = "[quick] Owed while hand-back contends for the lock";
+  const entry = ctx.queued(text);
+  ctx.append(entry);
+  const lock = path.join(jobPaths(dir).inbox, "relay.lock");
+  const owner = acquireOwnership(lock);
+  assert.ok(owner);
+  try {
+    const held = await pre(ctx, "SubagentHandback", { message: "done" });
+    assert.equal(decision(held), "deny");
+    assert.ok(reason(held).includes("Messages for the job are being delivered right now."), reason(held));
+    assert.equal(readLedger(dir, entry.uuid), null);
+    assert.equal(runs(ctx, text), 0);
+    assert.deepEqual(readOwnership(lock), owner);
+    assert.deepEqual(readRelayViolations(dir), []);
+  } finally {
+    assert.equal(releaseOwnership(lock), true);
+  }
+  // A later guard invocation retries the transcript itself. An acknowledgement can
+  // precede turn/start, so wait for execution and completion before handing back.
+  await pre(ctx, "Bash", { command: `${RELAY_CMD} wait ${jobId}` });
+  await waitFor(() => runs(ctx, text) === 1);
+  await assertRunOnce(ctx, jobId, text);
+  const handedBack = await pre(ctx, "SubagentHandback", { message: "done" });
+  assert.equal(decision(handedBack), "allow");
+  assert.doesNotMatch(reason(handedBack), /Messages for the job are being delivered right now\./);
+  assert.equal(readLedger(dir, entry.uuid).status, "done");
+  assert.deepEqual(readRelayViolations(dir), []);
 });
