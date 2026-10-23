@@ -838,7 +838,7 @@ async function runWorkerRound(jobDir, options, held) {
       }
       eventRecorder?.flush();
     } finally {
-      releaseSlot(home, job.id, me, admissionDeps);
+      if (slot) releaseSlot(home, job.id, me, admissionDeps);
       slot = null;
     }
   }

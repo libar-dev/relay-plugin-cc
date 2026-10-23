@@ -127,7 +127,8 @@ export function readMachineDefault({ home = admissionHome(), platform = process.
   else {
     const file = path.join(home, ".machine.json");
     const cached = readJsonOrNull(file);
-    if (cached && now >= cached.at && now - cached.at < DEFAULTS.sensorCacheMs) {
+    const cacheValid = cached && Array.isArray(cached.notes) && (cached.availableBytes === null || (Number.isFinite(cached.availableBytes) && cached.availableBytes >= 0 && cached.availableBytes <= totalBytes));
+    if (cacheValid && now >= cached.at && now - cached.at < DEFAULTS.sensorCacheMs) {
       availableBytes = cached.availableBytes; notes.push(...(cached.notes ?? []));
     } else {
       fs.mkdirSync(home, { recursive: true });
@@ -152,8 +153,12 @@ function machineReading(home, deps) {
   try {
     const m = deps.readMachine({ home, env: deps.env, now: deps.now(), platform: deps.platform });
     const valid = n => typeof n === "number" && Number.isFinite(n) && n >= 0;
+    const notes = [...(Array.isArray(m.notes) ? m.notes : [])];
+    for (const [key, label] of [["availableBytes", "memory"], ["load5", "load"]]) {
+      if (m[key] !== null && !valid(m[key])) notes.push(`${label} not read (invalid reading)`);
+    }
     return { ...m, availableBytes: valid(m.availableBytes) ? m.availableBytes : null, load5: valid(m.load5) ? m.load5 : null,
-      totalBytes: valid(m.totalBytes) && m.totalBytes > 0 ? m.totalBytes : os.totalmem(), cores: valid(m.cores) && m.cores > 0 ? m.cores : os.availableParallelism(), notes: m.notes ?? [] };
+      totalBytes: valid(m.totalBytes) && m.totalBytes > 0 ? m.totalBytes : os.totalmem(), cores: valid(m.cores) && m.cores > 0 ? m.cores : os.availableParallelism(), notes };
   } catch (e) { return { totalBytes: os.totalmem(), cores: os.availableParallelism(), availableBytes: null, load5: null, notes: [`sensors not read (${e.message})`] }; }
 }
 export function machineState(machine, pendingBytes = 0) {
@@ -172,6 +177,12 @@ function serversAlive(job, deps) {
   return [job?.server, ...(job?.attempts ?? []).flatMap(a => a.servers ?? [])].some(s => s?.pid && !s.endedAt && deps.isAlive(s));
 }
 function slots(home, deps, clean = true) {
+  if (clean) for (const name of files(path.join(home, "pauses"))) {
+    if (!name.endsWith(".tmp")) continue;
+    const file = path.join(home, "pauses", name);
+    const stat = fs.statSync(file, { throwIfNoEntry: false });
+    if (stat && deps.now() - stat.mtimeMs > 60000) fs.rmSync(file, { force: true });
+  }
   const result = [];
   for (const name of files(path.join(home, "slots"))) {
     const file = path.join(home, "slots", name);
@@ -226,6 +237,13 @@ function bypass(ctx, error = null) {
   return { admit: true, slot: null, record: { state: "bypassed", notes } };
 }
 const lockWaits = new Map();
+function lockReason(home, jobId, holder, deps) {
+  const key = `${home}:${jobId}`, now = deps.now();
+  if (!lockWaits.has(key)) lockWaits.set(key, now);
+  return now - lockWaits.get(key) >= DEFAULTS.stuckLockMs
+    ? `admission lock stuck (held by pid ${holder?.pid ?? "unknown"} since ${holder?.since ?? "unknown"}); RELAY_ADMISSION=off bypasses`
+    : "admission lock busy";
+}
 export function admit(ctx, injected = {}) {
   const deps = dependencies(injected), home = ctx.home ?? admissionHome(deps.env), now = deps.now();
   try {
@@ -282,9 +300,7 @@ export function admit(ctx, injected = {}) {
     });
     const key = `${home}:${ctx.jobId}`;
     if (decision.locked) { lockWaits.delete(key); return decision.value; }
-    if (!lockWaits.has(key)) lockWaits.set(key, now);
-    const stuck = now - lockWaits.get(key) >= DEFAULTS.stuckLockMs;
-    const reason = stuck ? `admission lock stuck (held by pid ${decision.holder?.pid ?? "unknown"} since ${decision.holder?.since ?? "unknown"}); RELAY_ADMISSION=off bypasses` : "admission lock busy";
+    const reason = lockReason(home, ctx.jobId, decision.holder, deps);
     return { admit: false, reason, waitKind: "lock", retryMs: DEFAULTS.pollMs, slot: null, record: recordFor(mine, machine.notes, reason, "lock") };
   } catch (e) { return bypass(ctx, e); }
 }
@@ -313,7 +329,7 @@ export function classifyRefusal(backend, error) {
     const text = [error?.message, error?.data?.message, error?.data?.data?.message].filter(s => typeof s === "string").join("\n").slice(0, 4000);
     let kind, code;
     if (backend === "codex") {
-      const info = error?.codexErrorInfo ?? error?.data?.codexErrorInfo;
+      const info = error?.codexErrorInfo ?? error?.data?.codexErrorInfo ?? error?.data?.data?.codexErrorInfo;
       code = typeof info === "string" ? info : info && Object.keys(info)[0];
       kind = ({ usageLimitExceeded: "usage", rateLimitExceeded: "rate" })[code];
     } else if (backend === "kimi") {
@@ -387,9 +403,11 @@ export function renderGuard(snapshot) {
 export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
   const deps = dependencies({ ...injected, env });
   let spawned = null;
+  let spawnAttempted = false;
+  const launch = () => { spawnAttempted = true; return spawn(); };
   try {
     const config = deps.readUserConfig(env);
-    if (!admissionEnabled(env, config)) return spawn();
+    if (!admissionEnabled(env, config)) return launch();
     const home = admissionHome(env), machine = machineReading(home, deps), settings = guardSettings(config, machine), job = readJob(jobDir);
     const decision = lock(home, deps, () => {
       const all = slots(home, deps), existing = all.find(s => s.jobId === job.id);
@@ -408,16 +426,17 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
       }
       const slot = { v: 1, jobId: job.id, jobDir, pid: null, processStart: null, backend: job.request.backend ?? "codex", class: cls, weight: WEIGHTS[cls], state: "spawning", spawnAt: iso(deps.now()), since: iso(deps.now()) };
       writeSlot(home, slot);
-      try { spawned = spawn(); return spawned; }
+      try { spawned = launch(); return spawned; }
       catch (e) { fs.rmSync(slotFile(home, job.id), { force: true }); throw e; }
     });
     if (!decision.locked) {
-      writeJob(jobDir, { ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker", reason: "admission lock busy", since: job.admission?.since ?? iso(deps.now()), notes: [] } });
+      writeJob(jobDir, { ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker", reason: lockReason(home, job.id, decision.holder, deps), since: job.admission?.since ?? iso(deps.now()), notes: [] } });
       return null;
     }
+    lockWaits.delete(`${home}:${job.id}`);
     return decision.value;
   } catch (e) {
-    if (spawned) return spawned;
+    if (spawnAttempted) throw e;
     process.stderr.write(`relay load guard: worker spawn bypassed (${e.message})\n`);
     return spawn();
   }

@@ -12,6 +12,7 @@ const cases = [
   ["codex", { codexErrorInfo: "usageLimitExceeded" }, "usage"],
   ["codex", { codexErrorInfo: { rateLimitExceeded: {} } }, "rate"],
   ["codex", { data: { codexErrorInfo: "usageLimitExceeded" } }, "usage"],
+  ["codex", { data: { data: { codexErrorInfo: "usageLimitExceeded" } } }, "usage"],
   ...["5-hour", "weekly (7-day)", "monthly"].map(p => ["kimi", { message: `You've reached your ${p} usage limit` }, "usage"]),
   ["kimi", { message: "reached your concurrent request limit", data: { details: { statusCode: 403 } } }, "concurrency"],
   ["kimi", { message: "Too many requests" }, "rate"],

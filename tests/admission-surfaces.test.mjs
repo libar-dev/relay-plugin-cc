@@ -38,3 +38,10 @@ test("corrupt stored settings normalize; JSON listing reads no sensors or lock",
   assert.equal(JSON.parse(listing.stdout).loadGuard.enabled, true);
   assert.equal(fs.existsSync(env.RELAY_ADMISSION_HOME), false);
 });
+
+test("a worker-spawn failure is never retried as a guard failure", async t => {
+  const { spawnWithAdmission } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  let calls = 0;
+  assert.throws(() => spawnWithAdmission("/synthetic/absent", { RELAY_ADMISSION: "off" }, () => { calls++; throw new Error("synthetic spawn failure"); }), /synthetic spawn failure/);
+  assert.equal(calls, 1);
+});

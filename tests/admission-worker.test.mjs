@@ -19,7 +19,7 @@ function seed(t, brief = "[quick] First turn.") {
   const { jobDir: dir } = createJobDir(ctx.work, "job-admission-worker", ctx.env);
   fs.writeFileSync(jobPaths(dir).brief, brief);
   writeJob(dir, { id: "job-admission-worker", kind: "task", state: "starting", createdAt: new Date().toISOString(), pendingFirstTurn: true, attempts: [],
-    request: buildLaunchRequest({ model: "synthetic-model", effort: "low", cd: ctx.work }, { baseDir: ctx.work, env: ctx.env }) });
+    request: buildLaunchRequest({ model: "synthetic-model", effort: D.lightEfforts[0], cd: ctx.work }, { baseDir: ctx.work, env: ctx.env }) });
   let now = Date.now(), blocked = true;
   const options = { env: ctx.env, admission: { now: () => now, scanUnslotted: () => [], readMachine: () => ({ totalBytes: 128 * GiB, availableBytes: blocked ? 0 : 100 * GiB, cores: 64, load5: 0, notes: [] }) },
     admissionSleep: async () => { now += Math.max(D.spacingMs, D.aboveMinSpacingMs); await new Promise(r => setTimeout(r, 10)); } };
@@ -100,10 +100,12 @@ test("structured turn/start refusal is preserved, pauses the backend and never r
   s.options.sleep = async () => retries++;
   t.mock.method(backend, "connect", async (...args) => {
     const connection = await connect(...args);
-    t.mock.method(connection, "run", async () => {
+    const request = connection.client.request.bind(connection.client);
+    t.mock.method(connection.client, "request", async (method, params, ...rest) => {
+      if (method !== "turn/start") return request(method, params, ...rest);
       runs++;
       const error = new Error("synthetic usage limit at turn/start");
-      error.data = { codexErrorInfo: "usageLimitExceeded" };
+      error.data = { code: -32000, message: error.message, data: { codexErrorInfo: "usageLimitExceeded" } };
       throw error;
     });
     return connection;
@@ -133,4 +135,12 @@ test("capacity retries check critical pressure before sending another turn", asy
   postInboxMessage(s.dir, { kind: "cancel" }); await running;
   assert.equal(runs, 1);
   assert.equal(readJob(s.dir).state, "cancelled");
+});
+
+test("guard off creates no admission files during worker execution or cleanup", async t => {
+  const s = seed(t);
+  s.options.env.RELAY_ADMISSION = "off";
+  await runWorker(s.dir, s.options);
+  assert.equal(readJob(s.dir).state, "completed");
+  assert.equal(fs.existsSync(s.ctx.env.RELAY_ADMISSION_HOME), false);
 });
