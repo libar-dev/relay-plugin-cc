@@ -45,8 +45,6 @@ fs.appendFileSync(file + '.invocations', JSON.stringify({ args: process.argv.sli
 if (process.argv[2] === '--version' && options.versionFail) { console.error('VERSION DENIED'); process.exit(9); }
 if (process.argv[2] === '--version') { console.log('grok 1.0.fake'); process.exit(0); }
 if (process.argv[2] === 'models' && options.modelsHangMs) { setTimeout(() => process.exit(0), options.modelsHangMs); return; }
-// The first models call, of every home setup checks at once, answers signed out: the marker's
-// exclusive create picks exactly one, where a read-modify-write could pick two.
 // Each home's first models call answers signed out and its later calls hang, as a retry that never answers.
 if (process.argv[2] === 'models' && options.modelsHangAfterFirstMs) {
   let first = true;
@@ -54,6 +52,8 @@ if (process.argv[2] === 'models' && options.modelsHangAfterFirstMs) {
   if (first) { console.log('Not signed in'); process.exit(1); }
   setTimeout(() => process.exit(0), options.modelsHangAfterFirstMs); return;
 }
+// The first models call, of every home setup checks at once, answers signed out: the marker's
+// exclusive create picks exactly one, where a read-modify-write could pick two.
 if (process.argv[2] === 'models' && options.signedOutOnce) {
   let first = true;
   try { fs.writeFileSync(file + '.signed-out-once', '', { flag: 'wx' }); } catch { first = false; }

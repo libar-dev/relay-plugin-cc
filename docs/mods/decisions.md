@@ -640,6 +640,61 @@ now tells Claude that `can.steer` is steering the running turn and that a backen
 JSON's `can.steer` keeps its meaning, so a script reading it is unchanged. Rejected: a new JSON field, which would
 change the block's shape for one word of rendering.
 
+### D73. Model-run commands carry arguments in a Write-created file (release lead)
+
+`review`, `adversarial-review` and `setup` allocate a private directory under `os.tmpdir()`.
+Claude's `Write` tool writes the raw arguments into `args.txt`. All three commands allow `Write`.
+The companion's `--args-file <path>` reads the exact text with the existing single-string parser.
+There is no framing newline. Only the generated path enters Bash. The same file serves the estimate
+and the review, or setup's post-install rerun. Review runs remove it immediately after reading.
+Estimates and setup retain it for reuse. Explicit cleanup handles stops and setup's completion.
+It accepts missing files and directories. It checks the generated path shape and never removes a
+directory recursively. Background reviews need no cleanup turn. Output and exit codes are preserved.
+`rescue` passes its brief as Agent prose.
+
+`review --estimate` and `adversarial-review --estimate` accept file transport. The fixed outer argv
+flag selects estimation; a payload cannot select or disable it. The estimate uses the review's
+`resolveReviewTarget` and merge-base comparison. It prints the target label, unique file count,
+untracked count and shortstat. It starts no backend or job. An explicit base selects branch scope.
+`auto` selects a dirty working tree or, when clean, the branch. Invalid and option-like revisions
+are rejected. Git receives argv with `shell: false` and option parsing terminated before revisions.
+Claude reads the estimate rather than building a Git command from `--base`.
+
+Setup adopts the review commands' single-string grammar. Variables, command substitutions and
+globs are literal. Quotes group whitespace. Backslash escapes even inside quotes; double literal
+backslashes. Empty quoted words are dropped, so empty values are missing-value errors. Every command
+using `--cwd` expands leading `~/` and bare `~`. Home options already support `~/`. Use absolute
+paths or `~/` rather than `$HOME`. A separate parser preserving setup's shell grammar was rejected.
+The tokenizer for reviews is unchanged; their `--cwd` gains that home expansion too.
+
+Rejected designs: quoted heredocs depend on the model checking delimiter collisions. Double quotes
+still evaluate substitutions. Model-generated shell escaping and JavaScript strings add another
+interpretation boundary. The unreleased stdin transport added a second framing rule with no caller,
+so it was removed. One file transport has one rule: preserve every character. NUL is rejected.
+Long input uses the same file route and has no shell argument-size limit. There is no shell fallback.
+
+Grok and Kimi sign-in advice uses one shared shell-assignment helper. It quotes the home value,
+including embedded single quotes. Markdown turns a carriage return into a line feed, so the helper
+writes one as printf's `\r` outside the quotes, as the hooks module does. The login command, in a
+block's `detail` and in Next steps, is inline code, or a fenced Markdown block when it holds
+backticks or newlines. This change touches only how the advice is rendered; D71's retry changes the
+probe, and every signed-out reading renders through the same helper.
+
+Tests extract every companion recipe and audit inline shell instructions. Hostile samples guard
+against a return to interpolation. Current recipes pass fixed argv and get their payload from Write.
+Tests cover exact file content, parser parity, selector errors, home shorthand, target selection,
+cleanup and outer estimation. Signed-out fake backends exercise sign-in advice pasted into Bash.
+
+The hooks module's rerun advice (`companionShell` in `hooks/mod/register.js`, now `rerunHint` and
+`shellWord`) was the other place user text reached a shell command; Phase 4's PR #21 quotes it, and
+it merged before this change. A live check on Linux (Claude Code 2.1.309, auto mode, `--plugin-dir`)
+ran `/relay:setup` and `/relay:adversarial-review` with focus text holding backticks, `$(…)` and
+both quote kinds: Write took the file with no prompt, the review ran on Codex, and nothing in the
+text ran. Still unchecked live, for pre.2's install on the M3 and a later Linux run: default
+permission mode (in auto mode the classifier approved each Bash step), the sandbox's temporary
+directory, `/relay:review`'s estimate and size question, and `--background` delivery. Unscoped
+`Write` stays until a path-scoped rule is verified.
+
 ### D74. New skills wait for a package after 3.0; corrections ship now (owner, 23 October 2026)
 
 The four proposed new skills go to a package after 3.0. Corrections to existing instructions that are wrong or

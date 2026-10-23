@@ -4,7 +4,7 @@ import { default as path } from "node:path";
 import { default as process } from "node:process";
 import { fileURLToPath } from "node:url";
 import { parseStructuredOutput, readOutputSchema } from "../lib/review/structured-output.mjs";
-import { collectReviewContext, DEFAULT_INLINE_DIFF_MAX_BYTES, resolveReviewTarget } from "../lib/review/git.mjs";
+import { collectReviewContext, DEFAULT_INLINE_DIFF_MAX_BYTES, estimateReviewSize, resolveReviewTarget } from "../lib/review/git.mjs";
 import { BACKEND_HEADER_KEYS, backendHeaderValues, DEFAULT_BACKEND, backendFor } from "../lib/backends/index.mjs";
 import { readProcessStartTime } from "../lib/util/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "../lib/review/prompts.mjs";
@@ -61,6 +61,7 @@ function recordForegroundJob(cwd, kind, summary, request) {
 
 
 const REVIEW_OPTIONS = {
+  argsFile: true,
   valueOptions: ["base", "scope", "model", "effort", "backend", ...Object.keys(BACKEND_HEADER_KEYS), "cwd"],
   booleanOptions: ["json", "background", "wait"],
   aliasMap: { m: "model" }
@@ -295,7 +296,11 @@ async function executeBackendReview({ request, context, focusText, reviewName, t
 
 
 export async function handleReviewCommand(argv, config) {
-  const { options, positionals } = parseCommandInput(argv, REVIEW_OPTIONS);
+  // The recipe's outer estimate mode cannot be disabled by options in raw text.
+  const estimateOnly = argv.includes("--estimate");
+  const { options, positionals } = parseCommandInput(argv.filter(token => token !== "--estimate"), {
+    ...REVIEW_OPTIONS, consumeArgsFile: !estimateOnly
+  });
   const cwd = resolveCommandCwd(options);
   const focusText = positionals.join(" ").trim();
   const request = buildReviewRequest(options, cwd, config.reviewName);
@@ -304,6 +309,12 @@ export async function handleReviewCommand(argv, config) {
   if (!backend.capabilities[capability]) throw new UsageError(`${backend.label} does not support ${config.reviewName.toLowerCase()}.`);
   const target = resolveReviewTarget(cwd, { base: options.base, scope: options.scope });
   config.validateRequest?.(target, focusText);
+  if (estimateOnly) {
+    const size = estimateReviewSize(cwd, target);
+    if (options.json) printJson("review-estimate", { target, ...size });
+    else process.stdout.write(`target: ${target.label}\nfiles: ${size.fileCount}\nuntracked: ${size.untrackedCount}\n${size.shortstat || "(empty diff)"}\n`);
+    return;
+  }
   let context = backend.review.inlineDiff ? inlineReviewContext(cwd, target, backend) : null;
 
   const kind = config.reviewName === "Adversarial Review" ? "adversarial-review" : "review";

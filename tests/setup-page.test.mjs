@@ -181,7 +181,7 @@ test("a signed-out backend shows binary, sign-in and model, then stops; --backen
   const grok = report.backends.find(block => block.backend === "grok");
   assert.equal(grok.signIn.state, "signed-out");
   assert.match(grok.signIn.detail, /Not signed in/);
-  assert.ok(report.nextSteps.some(step => step.includes(`GROK_HOME=${path.join(ctx.user, ".grok")} grok login`)));
+  assert.ok(report.nextSteps.some(step => step.includes(`GROK_HOME='${path.join(ctx.user, ".grok")}' grok login`)));
   assert.equal(report.backends.find(block => block.backend === "zcode").ready, true);
   const text = companion(ctx, ["setup"]).stdout;
   const block = text.slice(text.indexOf("## codex  ~/.codex  signed out"), text.indexOf("## grok  ~/.grok "));
@@ -351,9 +351,9 @@ test("a Grok retry that hangs keeps the first reading: signed out, with its sign
   for (const block of groks) {
     assert.equal(block.signIn.state, "signed-out", JSON.stringify(block.signIn));
     assert.match(block.signIn.detail, /Not signed in/);
-    assert.match(block.signIn.detail, new RegExp(`GROK_HOME=${block.home} grok login`));
+    assert.ok(block.signIn.detail.includes(`GROK_HOME='${block.home}' grok login`), block.signIn.detail);
+    assert.ok(report.nextSteps.some(step => step.includes(`GROK_HOME='${block.home}' grok login`)), report.nextSteps.join("\n"));
   }
-  assert.ok(report.nextSteps.some(step => step.includes(`GROK_HOME=${path.join(ctx.user, ".grok")} grok login`)), report.nextSteps.join("\n"));
   // Each home: the first listing, then the retry that hung.
   assert.equal(ctx.grok().invocations.filter(call => call.args[0] === "models").length, 4);
 });
@@ -395,7 +395,7 @@ test("--backend checks one home, keeps exit codes, and refuses mixed flags", t =
   assert.equal(kimiJobs.status, 1);
   assert.equal(kimiJobs.page.backends[0].home, path.join(ctx.user, ".kimi-code-jobs"));
   assert.equal(kimiJobs.page.backends[0].signIn.state, "signed-out");
-  assert.ok(kimiJobs.page.nextSteps.some(step => step.includes(`KIMI_CODE_HOME=${path.join(ctx.user, ".kimi-code-jobs")} kimi login --region global`) && step.includes("--region mainland-cn for a kimi.com account")), kimiJobs.page.nextSteps.join("\n"));
+  assert.ok(kimiJobs.page.nextSteps.some(step => step.includes(`KIMI_CODE_HOME='${path.join(ctx.user, ".kimi-code-jobs")}' kimi login --region global`) && step.includes("--region mainland-cn for a kimi.com account")), kimiJobs.page.nextSteps.join("\n"));
 
   const configPath = path.join(ctx.jobs, "config.json");
   for (const [args, message] of [
