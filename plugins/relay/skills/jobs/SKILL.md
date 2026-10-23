@@ -168,9 +168,9 @@ dir: ~/.relay-jobs/<repo>/<job>
 <report>
 ```
 
-- `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the worker died, and its automatic retry was spent or a cancel was under way), or `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
+- `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the worker died, and its automatic retry was spent or a cancel was under way), or `queued` (waiting for the load guard; `queued:` says why), `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
 - `completed` means the job finished its answer, not that its commands passed. Read the report.
-- Lines that may appear: `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (messages to the job, acknowledged and not run yet; `resume` runs them; it says nothing about the report), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
+- Lines that may appear: `queued:`, `refusal:`, `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (messages to the job, acknowledged and not run yet; `resume` runs them; it says nothing about the report), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
 
 `status` marks a relay job that ended with no hand-back of its result `not handed back` (`notHandedBack: true` in `--json`): its caller died or gave up, and `C result <job>` has the report. A job a `TaskStop` cancelled counts as handed back: the TaskStop result carried its block.
 
@@ -229,10 +229,20 @@ You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:setup` and 
 | `C prune [--older-than 14d] [--all] [--dry-run]` | remove old ended jobs; live workers are kept |
 | `C setup --fast-tier allowed\|off` | with `off`, the default, jobs started from now on ignore `fast: true` and the Codex config sets their tier; with `allowed`, `fast: true` selects `priority` |
 | `C setup --job-mcp-off name,name...\|none` | Codex jobs pass `enabled=false` for each listed name that the Codex home's `config.toml` defines; undefined names are skipped with a note |
+| `C setup --admission on\|off` | turn the user load guard on or off; `RELAY_ADMISSION=off` also bypasses it |
+| `C setup --min-weight N\|default --max-weight N\|default --max-very-heavy N\|default` | override scheduling limits at user scope; ranges 1–1000, 1–10000 and 1–100 respectively |
+| `C setup --model-class "pattern=light,other-*=medium"\|none` | first matching model pattern wins; classes `light`, `medium`, `very-heavy`; `*` matches any run |
 | `C setup [--json]` | every backend home found (the Codex home, `~/.grok` and `~/.grok-*`, ZCode, `~/.kimi-code` and `~/.kimi-code-*`): binary and version, sign-in, default model and effort, models, `can`; exits 0 whatever it finds |
 | `C setup --backend codex\|grok\|zcode\|kimi [--grok-home H\|--kimi-home H] [--json]` | one backend home; exits 1 when it is not ready |
 
 A wide fan-out that needs no steering can start its jobs with `C start` a few seconds apart and collect them with `C wait` or `C status`; no Claude agent is held per job. Jobs started within the same second can hit a provider's request-rate limit. For Codex and Grok routes, the worker retries at 30, 60 and 120 s. ZCode and Kimi retry model calls themselves.
+
+A job can wait as `queued` before it starts or between turns: the load guard spaces starts,
+holds new work while memory or load is too high, and holds a backend after a usage or rate
+limit. Keep calling `wait`; queued work remains pending, including in a Workflow. Cancel, steer
+and continue still work. A job deferred without a worker needs its submitter's `wait`, message
+or relay hook to retry; a bare `start` can stay queued until someone waits. `/relay:setup
+--admission off`, or `RELAY_ADMISSION=off`, turns the guard off.
 
 `--json` prints one object whose first fields are `schema` (`relay.<command>/1`), `relayVersion` and `relayBuild`. An error under `--json` is that header with `error: { kind, message }` on stdout, `kind` one of `busy` (exit 4: try again), `not-found`, `usage`, `attempt-changed` or `error`. `C status --json` lists slim rows, newest first, 50 a page (`--limit N`, up to 200), with `nextCursor` for `--cursor`; `--active` lists only jobs that run, died or owe messages. One job (`C status <job> --json`, `result`, `wait`, `cancel`) has every field, among them `attemptRecords` and `messages`, each message with how the job took it.
 

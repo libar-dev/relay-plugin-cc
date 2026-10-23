@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.0-dev.14
+
+- Add a per-user load guard for worker launches and turns, with memory headroom, startup
+  reserves, shared pacing, weighted limits and a bounded resident queue. Deferred jobs remain
+  queued and cancellable; submitter waits and relay hooks retry them.
+- Pause recognized provider refusals with a single fenced probe, preserve structured RPC
+  errors, and limit Kimi's default silent retries while the guard is on.
+- Show queued reasons on job/status/board surfaces and expose user setup overrides and an
+  immediate off switch. Running turns are never interrupted by admission.
+
 ## 3.0.0 (unreleased)
 
 The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5 and Phase 6's report, built
