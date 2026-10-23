@@ -1,9 +1,9 @@
 # Using relay
 
-This guide walks through relay the way you meet it: install it, check your backends, run a job, talk to it, read
-it, stop it, run jobs from a Workflow, and watch them with the status line and the board. The [README](../README.md)
-has the install requirements and the full reference (the header, the commands, the review flags),
-[desktop.md](desktop.md) the Claude desktop app, and [design.md](design.md) how it works.
+This guide walks through relay the way you meet it: install it, check your backends, run a job, talk to it, read it,
+stop it, run jobs from a Workflow, and watch them with the status line and the board. The [README](../README.md) has
+the install requirements and the full reference (the header, the commands, the review flags), [desktop.md](desktop.md)
+the Claude desktop app, and [design.md](design.md) how it works.
 
 Relay runs jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code. You launch a job like a Claude agent,
 as a `relay:job` agent, and Claude coordinates the work. The job runs on its backend, in its own process, and the
@@ -64,10 +64,10 @@ block a launch and what to add. `/relay:rescue <task>` builds the prompt for you
 `--model`.
 
 Claude launches the agent; ask it for the job id, or read it in `/relay:status`. The agent appears in the list under
-the prompt, beside `main`,
-with its running time. Press `↓` until it is selected and `Enter` to open its view: the prompt it was given, and the
-agent waiting on the job. With the agent selected, `x` stops the agent but not its job (see [Stop a job](#stop-a-job)).
-The agent is a small Claude agent (Haiku) that relays; the job itself runs on the model in the header.
+the prompt, beside `main`, with its running time. Press `↓` until it is selected and `Enter` to open its view: the
+prompt it was given, and the agent waiting on the job. With the agent selected, `x` stops the agent but not its job
+(see [Stop a job](#stop-a-job)). The agent is a small Claude agent (Haiku) that relays; the job itself runs on the
+model in the header.
 
 <!-- screenshot G3: the launched job, and the agent list under the prompt -->
 <!-- screenshot G4: the agent view, waiting on the job -->
@@ -84,14 +84,14 @@ While the job runs, ask Claude to send its agent a message:
 Send that relay:job agent this message with SendMessage: "Also quote this exact line in your report."
 ```
 
-Claude Code says the message is queued for the agent's next tool round. Relay wakes the agent at once, so the job
-gets the message within a few seconds, inside the turn it is running. The report quotes it.
+Claude Code says the message is queued for the agent's next tool round. Relay wakes the agent at once, so the job gets
+the message within a few seconds, inside the turn it is running. The report quotes it.
 
 <!-- screenshot G5: the steer sent, and the report that quotes it -->
 
 Kimi is the exception: a running Kimi turn takes no message, so Kimi runs it as the next turn, once the running one
-ends. A message from another agent, such as a Workflow agent or an orchestrator, steers a job the same way. This
-is for a relay the Agent tool started; a Workflow job's relay differs (see [Jobs in a Workflow](#jobs-in-a-workflow)).
+ends. A message from another agent, such as a Workflow agent or an orchestrator, steers a job the same way. This is
+for a relay the Agent tool started; a Workflow job's relay differs (see [Jobs in a Workflow](#jobs-in-a-workflow)).
 One moment does not steer: a message that reaches a job in the few seconds before a turn starts (just after a continue
 was accepted, or at the launch) waits until that whole turn ends, then runs as the next turn.
 
@@ -108,11 +108,10 @@ You can also type to a relay yourself, in its own view:
 
 To redirect the job at once, press `Esc` once at the agent's prompt, then send the line right away. The Esc stops the
 relay, and the view shows `Interrupted`; if it does not, the Esc only left the list: press `Esc` once more. The line
-you send resumes the
-relay and reaches the job within seconds (Kimi: as its next turn). Claude tells your session that you stopped the
-agent, then that you resumed it. If you send nothing after the Esc, the relay stays stopped and its job runs on, as
-under [Stop a job](#stop-a-job). Check that the rule above the prompt names the agent before you press `Esc`: in the
-main view, Esc interrupts your own session.
+you send resumes the relay and reaches the job within seconds (Kimi: as its next turn). Claude tells your session that
+you stopped the agent, then that you resumed it. If you send nothing after the Esc, the relay stays stopped and its
+job runs on, as under [Stop a job](#stop-a-job). Check that the rule above the prompt names the agent before you press
+`Esc`: in the main view, Esc interrupts your own session.
 
 Do not press `←` (`← for agents`): it opens Claude Code's session manager and moves your conversation to a new
 session. The desktop app and T3 Code have no agent view to type into; ask Claude to send the message there.
@@ -120,8 +119,8 @@ session. The desktop app and T3 Code have no agent view to type into; ask Claude
 ## Continue a finished job
 
 After the hand-back, ask Claude to send the agent another message. The agent resumes, the job runs a new turn on the
-same backend session, and you get a second hand-back with the new report. The block keeps the job id and the
-session, and counts `attempts: 2`.
+same backend session, and you get a second hand-back with the new report. The block keeps the job id and the session,
+and counts `attempts: 2`.
 
 A finished agent leaves the list under the prompt within about 15 seconds. If you kept its view open through the
 hand-back, a line typed there continues the job too, and arrives within seconds.
@@ -205,20 +204,21 @@ one agent of a Workflow.
 The job id is the sure route because a relay that a Workflow script started takes messages to its agent differently
 (measured on Claude Code 2.1.308, in few runs). A message while it runs starts a second loop of the agent beside the
 first: in the runs measured, a steer reached the job through it, and the message `cancel` cancelled the job within 3
-seconds, but Claude Code can then write the relay's later entries to a second transcript that relay does not read,
-and a message that lands there never reaches the job. A message after the relay ended fails, or a general-purpose
-agent answers in its place, and the job gets no turn. A line typed into its view has not been measured.
+seconds, but Claude Code can then write the relay's later entries to a second transcript that relay does not read, and
+a message that lands there never reaches the job. A message after the relay ended fails, or a general-purpose agent
+answers in its place, and the job gets no turn. A line typed into its view has not been measured.
 
 ## Jobs outlive your session
 
-A job does not belong to the Claude session that started it. End the session, and the job runs on; start a new
-session in the same folder and `/relay:status` shows it, `/relay:result` its report. If the backend's server dies,
-or the worker dies while its agent waits, the job resumes its session once by itself.
+A job does not belong to the Claude session that started it. End the session, and the job runs on; start a new session
+in the same folder and `/relay:status` shows it, `/relay:result` its report. If the backend's server dies, or the
+worker dies while its agent waits, the job resumes its session once by itself.
 
-Two issues of T3 Code on macOS reach here. Quitting the T3 app has killed relay workers, for a reason not known yet:
-the job is then `dead`, and a message or `resume` continues it. And after a T3 restart, the old Claude processes kept
-working for minutes beside the resumed ones, so a side effect could happen twice. The
-[pre-release guide](mods/pre-release-3.0.md#issues-of-t3-code-on-every-cut) tracks both.
+On macOS, with T3 Code, two things reach here. Quitting the T3 app has killed relay workers, for a reason not known
+yet: the job is then `dead`, and a message or the companion's `resume` continues it. And after a T3 restart, the old
+Claude processes kept working for minutes beside the resumed ones, so a side effect could happen twice; T3 may also
+say the background work was cancelled, which for relay jobs it was not. The [pre-release
+guide](mods/pre-release-3.0.md#issues-of-t3-code-on-every-cut) tracks them.
 
 ## Long orchestrations
 
@@ -236,29 +236,29 @@ resume picks it up.
 its jobs are not cancelled. The TaskStop's result names each job that keeps running.
 
 **Resume it.** In the same conversation (the same T3 thread, or `claude --resume`), ask Claude to run the Workflow
-again with `resumeFromRunId` and the run id. A call whose result had reached the Workflow comes back from its cache.
-A call whose job had completed but whose result had not reached the Workflow yet runs again: its new relay takes the
-job over and hands back its result, and the job does not run again. A job that is still running gets a new relay
-that takes it over and waits for it. Each takeover adds a `relay-adopted:` line to the job's block. A worker that
-died meanwhile is resumed once, and its block says so in `automatic-resume:`. A job that was cancelled or failed is
-not taken over: a resume runs its call again as a new job, so collect its work first.
+again with `resumeFromRunId` and the run id. A call whose result had reached the Workflow comes back from its cache. A
+call whose job had completed but whose result had not reached the Workflow yet runs again: its new relay takes the job
+over and hands back its result, and the job does not run again. A job that is still running gets a new relay that
+takes it over and waits for it. Each takeover adds a `relay-adopted:` line to the job's block. A worker that died
+meanwhile is resumed once, and its block says so in `automatic-resume:`. A job that was cancelled or failed is not
+taken over: a resume runs its call again as a new job, so collect its work first.
 
-**Save a cancelled job's work.** A cancelled job writes no report, but if its turn had started it keeps its session
-on the backend. Send its agent a message such as "Report what you have done so far, then stop", and the job reports
-in a new turn of that session. That works for a job started with the Agent tool; a Workflow job's agent has ended, so
-ask Claude to continue the job by its id with the companion's `continue`, as the jobs skill says, and read the answer
-with `/relay:result <job>` (see [Jobs in a Workflow](#jobs-in-a-workflow)).
+**Save a cancelled job's work.** A cancelled job writes no report, but if its turn had started it keeps its session on
+the backend. Send its agent a message such as "Report what you have done so far, then stop", and the job reports in a
+new turn of that session. That works for a job started with the Agent tool; a Workflow job's agent has ended, so ask
+Claude to continue the job by its id with the companion's `continue`, as the jobs skill says, and read the answer with
+`/relay:result <job>` (see [Jobs in a Workflow](#jobs-in-a-workflow)).
 
-**Collect the results.** `/relay:status --workflow <run>` lists every job one Workflow run started, in any
-repository, cancelled ones included, and `/relay:result <job>` shows each one's block and full report. Both answer with
-no model turn, also after a resume. A resume under a different relay version from the one that started the Workflow
-has not been tested: let the Workflow finish before an update, or read its jobs.
+**Collect the results.** `/relay:status --workflow <run>` lists every job one Workflow run started, in any repository,
+cancelled ones included, and `/relay:result <job>` shows each one's block and full report. Both answer with no model
+turn, also after a resume. A resume under a different relay version from the one that started the Workflow has not
+been tested: let the Workflow finish before an update, or read its jobs.
 
 **What a stop keeps.**
 
 | You stop | The job |
 |---|---|
-| one job with `/relay:cancel <job>`, or its Agent-tool relay with TaskStop or the message `cancel` | is cancelled, and keeps its session for a continue |
+| one job with `/relay:cancel <job>`, or its Agent-tool relay with TaskStop or the message `cancel` | is cancelled, and keeps its session, if its turn had started, for a continue |
 | a Workflow with TaskStop | runs on; the TaskStop names the jobs that keep running, and a resume takes them over |
 | an agent by hand: `x`, one Esc at its prompt, or the desktop app's Stop button | runs on to its report, marked `not handed back` |
 | the Claude session | runs on |
@@ -297,13 +297,13 @@ counts them:
 ```
 
 - `running` counts the jobs that are starting or running.
-- `dead` counts jobs whose worker died or never came up; a message or `resume` continues a dead job (a review is
-  run again instead).
+- `dead` counts jobs whose worker died or never came up; a message or the companion's `resume` continues a dead job
+  (a review is run again instead).
 - `owed` counts messages a job has acknowledged and not run yet.
 
-A count of 0 is left out, and the line goes away when all are 0. A `+` after each count (`200+ running`) means
-there were more active jobs than one read holds, so each count is a lower bound. `status unavailable` means the last
-read failed; the next good read replaces it.
+A count of 0 is left out, and the line goes away when all are 0. A `+` after each count (`200+ running`) means there
+were more active jobs than one read holds, so each count is a lower bound. `status unavailable` means the last read
+failed; the next good read replaces it.
 
 A job that a `relay:job` agent of this session starts shows within about five seconds. A review, a start that waited
 on a permission prompt, or a job started from another session or from a shell shows within about thirty. In T3 Code
@@ -328,12 +328,13 @@ layout from 110 columns, and sits above the prompt otherwise.
 - **Steer** (`Queue next turn` on Kimi) sends text to a starting or running job, and **Continue** to an ended or dead
   one; a review takes no messages. Which way the text goes is decided at the press:
   - **Through the relay**, as Claude's `SendMessage` would, when a relay of this session started the job with the
-    Agent tool: for a running job only while that relay is still running and has called within 15 minutes; for an
-    ended job through its finished relay. The relay then hands the result back to your session.
+    Agent tool: for a starting or running job only while that relay is still running and has called within 15
+    minutes; for an ended or dead job always, through its finished relay, even one you stopped. The relay then hands
+    the result back to your session.
   - **To the job directly** otherwise: a Workflow job, another session's job (or one from before `/clear` or `←`), a
-    job whose relay you stopped or that has been silent for 15 minutes, or a job with no relay. A steer sent that way
-    comes back in the block of the relay that still waits on the job, if one does; a continue runs a turn no relay
-    hands back, and the board shows its report.
+    running job whose relay you stopped or that has been silent for 15 minutes, or a job with no relay. A steer sent
+    that way comes back in the block of the relay that still waits on the job, if one does; a continue runs a turn no
+    relay hands back, and the board shows its report.
   - Each message says which way it went. A send the relay refuses offers `Send to the job directly`; nothing is sent
     twice.
 - **Cancel** asks again, naming the job and its attempt, and cancels only that attempt.
@@ -354,9 +355,9 @@ clicks, a narrow one by keys. The desktop app: the M3 lead's board pass after pr
 
 ## In the desktop app
 
-The Code tab of the Claude desktop app runs relay too. [desktop.md](desktop.md) says how to install it there, what
-it shows differently (the Background tasks panel, a command's answer as a block with a copy button) and how to check
-that it works. A message reaches a relay there only through Claude: the agent's side view has no input box.
+The Code tab of the Claude desktop app runs relay too. [desktop.md](desktop.md) says how to install it there, what it
+shows differently (the Background tasks panel, a command's answer as a block with a copy button) and how to check that
+it works. A message reaches a relay there only through Claude: the agent's side view has no input box.
 
 <!-- screenshot G16: /relay:status in the Code tab -->
 <!-- screenshot G17: a steered job in the Background tasks panel -->
@@ -365,12 +366,11 @@ that it works. A message reaches a relay there only through Claude: the agent's 
 
 ## In T3 Code
 
-In a T3 Code thread the commands answer as the assistant's message, with no model turn, and steering, continuing
-and TaskStop through Claude work as in the terminal. T3 draws no agent view, no status line and no board. T3's Stop
-ends the thread's process: its relays end and their jobs run on, so resume a Workflow as above, and read an
-Agent-tool job with `/relay:result <job>`. For a plain
-fan-out of independent agents, a T3 delegate is often the better fit; relay carries the Workflow jobs and what needs
-relay itself.
+In a T3 Code thread the commands answer as the assistant's message, with no model turn, and steering, continuing and
+TaskStop through Claude work as in the terminal. T3 draws no agent view, no status line and no board. T3's Stop ends
+the thread's process: its relays end and their jobs run on, so resume a Workflow as above, and read an Agent-tool job
+with `/relay:result <job>`. For a plain fan-out of independent agents, a T3 delegate is often the better fit; relay
+carries the Workflow jobs and what needs relay itself.
 
 ## What each backend can do
 

@@ -111,8 +111,8 @@ Write only under src/ and tests/. Report the cause, the change and the test run.
 ```
 
 The header sets the job. `model:` and `effort:` are required, and `default` takes the home's own
-setting. The brief after `---` reaches the job byte for byte. When the job ends, the agent returns
-a state block and the report:
+setting (ZCode's effort excepted: relay uses `high` where ZCode's own is `max`). The brief after `---`
+reaches the job byte for byte. When the job ends, the agent returns a state block and the report:
 
 ```
 state: completed

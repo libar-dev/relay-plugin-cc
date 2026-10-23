@@ -87,6 +87,8 @@ Two issues of T3 Code, not relay, that affect long Workflows:
   the M3 are on hold until you decide.
 - **After a Stop, an interrupt or a restart, T3 can say a thread's background work "was cancelled".** For a relay
   Workflow that is false: resume it (below).
+- **On macOS, quitting the T3 app has killed relay workers,** for a reason not known yet (D96). The job is then
+  `dead`; a message or the companion's `resume` continues it.
 
 ## After each install: a check
 
