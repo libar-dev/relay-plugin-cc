@@ -504,7 +504,7 @@ The later PRs, in this light:
 ### The status line (done, on `release/3.0`)
 
 What shipped (D63): `2 running · 1 dead · 3 owed` for the session's repository, from `status --json --active
---limit 200`, cleared when all three are 0, `+` on the running count when more pages exist, kept on a busy answer,
+--limit 200`, cleared when all three are 0, `+` on every count when more pages exist, kept on a busy answer,
 `status unavailable` on any other failure. A five-second timer from `session.start`, one per load of the module; a
 tick reads only while a surface draws, one read at a time; a cleared line reads every thirty seconds, and every five
 for thirty seconds after a relay event the module saw or a busy answer. Two review rounds by GPT-6.1 Sol and Opus 5.5

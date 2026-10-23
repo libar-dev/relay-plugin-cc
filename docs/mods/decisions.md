@@ -599,7 +599,7 @@ Claude Code draws as `⚠ relay: 2 running · 1 dead · 3 owed` (it puts the plu
 so the text leaves `relay: ` out). Running is `starting` and `running`, dead is `dead`, owed is the sum of the rows'
 `undeliveredCount`; a part at 0 is left out, and with all three at 0 the line is cleared. It reads
 `companion status --json --active --limit 200` in the session's directory, by argv with a 10 s timeout, one read at a
-time. More pages write the running count with a `+`; a busy answer keeps the line; any other failure shows
+time. More pages put a `+` on every count shown, each then a lower bound; a busy answer keeps the line; any other failure shows
 `status unavailable` until the next good answer.
 
 It reads only while `$.session.surfaces()` is not empty, so in an Agent SDK host such as T3 Code, where nothing

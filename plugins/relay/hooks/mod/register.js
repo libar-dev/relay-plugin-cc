@@ -249,16 +249,18 @@ function statusText(ran) {
     // The count, not the list: a row's list of owed messages is cut to a few.
     owed += Number.isInteger(job?.undeliveredCount) ? job.undeliveredCount : 0;
   }
+  // More pages exist, and the line does not page: every count is then a lower bound, and an older
+  // running job may sit on a later page.
+  const more = answer.nextCursor != null ? "+" : "";
   const parts = [];
   if (running > 0) {
-    // More pages exist, and the line does not page.
-    parts.push(running + (answer.nextCursor != null ? "+" : "") + " running");
+    parts.push(running + more + " running");
   }
   if (dead > 0) {
-    parts.push(dead + " dead");
+    parts.push(dead + more + " dead");
   }
   if (owed > 0) {
-    parts.push(owed + " owed");
+    parts.push(owed + more + " owed");
   }
   return parts.length === 0 ? undefined : parts.join(" · ");
 }

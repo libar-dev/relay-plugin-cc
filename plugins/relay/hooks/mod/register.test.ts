@@ -854,14 +854,18 @@ test('the line counts running, dead and owed jobs, leaves out a part at 0, and c
   expect(seen.lines).toEqual(['2 running', '2 running · 1 dead · 23 owed', '1 dead', '2 owed', undefined])
 })
 
-test('with more pages, the running count carries a +', async ($, on) => {
-  const seen = await statusEngine($, on, {
-    run: () => ({ value: listing([job('j-3', 'running'), job('j-2', 'running'), job('j-1', 'dead')], 'WyJ4IiwiaiJd') }),
-  })
+test('with more pages, every count carries a +, a page with no running job included', async ($, on) => {
+  const pages = [
+    listing([job('j-3', 'running'), job('j-2', 'running'), job('j-1', 'dead', 2)], 'WyJ4IiwiaiJd'),
+    // Newest first: a full page of dead jobs can hide an older running one on the next page.
+    listing([job('j-2', 'dead'), job('j-1', 'dead')], 'WyJ5IiwiaiJd'),
+  ]
+  let next = 0
+  const seen = await statusEngine($, on, { run: () => ({ value: pages[next++] }) })
 
-  await seen.clock.advance(5000)
+  await seen.clock.advance(10000)
 
-  expect(seen.lines).toEqual(['2+ running · 1 dead'])
+  expect(seen.lines).toEqual(['2+ running · 1+ dead · 2+ owed', '2+ dead'])
 })
 
 test('a busy listing keeps the line, and the next good answer replaces it', async ($, on) => {
