@@ -644,17 +644,23 @@ so it was removed. One file transport has one rule: preserve every character. NU
 Long input uses the same file route and has no shell argument-size limit. There is no shell fallback.
 
 Grok and Kimi sign-in advice uses one shared shell-assignment helper. It quotes the home value,
-including embedded single quotes. Commands with backticks or newlines use fenced Markdown blocks.
-The Grok change is confined to guidance rendering; its sign-in probe flow is unchanged for PR #19.
+including embedded single quotes. Markdown turns a carriage return into a line feed, so the helper
+writes one as printf's `\r` outside the quotes, as the hooks module does. The login command, in a
+block's `detail` and in Next steps, is inline code, or a fenced Markdown block when it holds
+backticks or newlines. This change touches only how the advice is rendered; D71's retry changes the
+probe, and every signed-out reading renders through the same helper.
 
 Tests extract every companion recipe and audit inline shell instructions. Hostile samples guard
 against a return to interpolation. Current recipes pass fixed argv and get their payload from Write.
 Tests cover exact file content, parser parity, selector errors, home shorthand, target selection,
 cleanup and outer estimation. Signed-out fake backends exercise sign-in advice pasted into Bash.
 
-The hooks module's rerun advice (`companionShell` in `hooks/mod/register.js`) was the other place user
-text reached a shell command; Phase 4's PR #21 quotes it, and it merged before this change. A live
-check on Linux (Claude Code 2.1.309, auto mode, `--plugin-dir`) ran `/relay:setup` and
-`/relay:adversarial-review` with focus text holding backticks, `$(…)` and both quote kinds: Write
-took the file with no prompt, the review ran on Codex, and nothing in the text ran. The Mac is
-checked by pre.2's install on the M3. Unscoped `Write` stays until a path-scoped rule is verified.
+The hooks module's rerun advice (`companionShell` in `hooks/mod/register.js`, now `rerunHint` and
+`shellWord`) was the other place user text reached a shell command; Phase 4's PR #21 quotes it, and
+it merged before this change. A live check on Linux (Claude Code 2.1.309, auto mode, `--plugin-dir`)
+ran `/relay:setup` and `/relay:adversarial-review` with focus text holding backticks, `$(…)` and
+both quote kinds: Write took the file with no prompt, the review ran on Codex, and nothing in the
+text ran. Still unchecked live, for pre.2's install on the M3 and a later Linux run: default
+permission mode (in auto mode the classifier approved each Bash step), the sandbox's temporary
+directory, `/relay:review`'s estimate and size question, and `--background` delivery. Unscoped
+`Write` stays until a path-scoped rule is verified.

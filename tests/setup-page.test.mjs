@@ -352,8 +352,8 @@ test("a Grok retry that hangs keeps the first reading: signed out, with its sign
     assert.equal(block.signIn.state, "signed-out", JSON.stringify(block.signIn));
     assert.match(block.signIn.detail, /Not signed in/);
     assert.ok(block.signIn.detail.includes(`GROK_HOME='${block.home}' grok login`), block.signIn.detail);
+    assert.ok(report.nextSteps.some(step => step.includes(`GROK_HOME='${block.home}' grok login`)), report.nextSteps.join("\n"));
   }
-  assert.ok(report.nextSteps.some(step => step.includes(`GROK_HOME='${path.join(ctx.user, ".grok")}' grok login`)), report.nextSteps.join("\n"));
   // Each home: the first listing, then the retry that hung.
   assert.equal(ctx.grok().invocations.filter(call => call.args[0] === "models").length, 4);
 });

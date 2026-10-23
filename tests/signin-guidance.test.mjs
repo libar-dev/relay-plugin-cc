@@ -9,7 +9,7 @@ import { installFakeKimi } from "./fakes/kimi.mjs";
 import { KimiConnection } from "../plugins/relay/scripts/lib/backends/kimi/connection.mjs";
 
 for (const backend of ["grok", "kimi"]) {
-  for (const sample of ["space here", "single'and\"double", "`touch backtick-ran`", "$(touch substitution-ran)", "first\nsecond"]) {
+  for (const sample of ["space here", "single'and\"double", "`touch backtick-ran`", "$(touch substitution-ran)", "first\nsecond", "cr\rhere", "crlf\r\nhere"]) {
     test(`${backend}: signed-out advice preserves ${JSON.stringify(sample)} in Bash`, t => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-signin-guidance-"));
       t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -55,8 +55,10 @@ for (const backend of ["grok", "kimi"]) {
         assert.equal(pasted.status, 0, pasted.stderr);
         assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "received.json"), "utf8")),
           { home, args: backend === "grok" ? ["login"] : ["login", "--region", "global"] });
+        // Markdown turns a carriage return into a line feed: none may reach the command as written.
+        assert.doesNotMatch(command, /\r/);
         // Markdown command advice must retain newlines and embedded backticks when copied.
-        if (text !== block.signIn.detail && /[`\n]/.test(command)) {
+        if (/[`\n]/.test(command)) {
           assert.ok(text.includes(`\n${command}\n`), "use a fenced block for multiline/backtick commands");
         }
       }

@@ -90,7 +90,7 @@ async function checkGrokHome(cwd, home, env, shared, limits) {
   }
   if (!parsed.signedIn) {
     const said = firstLine(listing.stdout) || firstLine(listing.stderr) || failure || "grok models printed nothing";
-    block.signIn = { state: "signed-out", method: null, detail: `${said} (sign in: ${shellAssignment("GROK_HOME", home.home)} grok login; see grok-home.md)` };
+    block.signIn = { state: "signed-out", method: null, detail: `${said} (sign in: ${shellCommandMarkdown(`${shellAssignment("GROK_HOME", home.home)} grok login`)}; see grok-home.md)` };
     block.modelsReason = "signed out";
     if (failure) block.error = failure;
     return block;

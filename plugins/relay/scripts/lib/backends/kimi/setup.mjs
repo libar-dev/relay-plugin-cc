@@ -76,7 +76,7 @@ async function checkKimiHome(cwd, home, env, shared, limits) {
     return block;
   }
   const parsed = parseKimiProviders(listing.stdout);
-  const login = `${kimiLoginCommand(home.home)}, or ${KIMI_REGION_HINT}`;
+  const login = `${shellCommandMarkdown(kimiLoginCommand(home.home))}, or ${KIMI_REGION_HINT}`;
   if (!parsed || parsed.providers.length === 0) {
     const said = parsed ? "no provider is configured" : firstLine(listing.stdout) || "kimi provider list printed nothing";
     block.signIn = { state: "signed-out", method: null, detail: `${said} (sign in: ${login}; see kimi-home.md)` };

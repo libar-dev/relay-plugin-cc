@@ -704,7 +704,7 @@ test("setup checks the version and the providers without starting acp; a signed-
     assert.equal(block.home, home);
     assert.equal(block.version, "2.2.0-fake");
     assert.equal(block.signIn.state, signedOut ? "signed-out" : "credentials-present");
-    if (signedOut) assert.match(block.signIn.detail, /no provider is configured \(sign in: KIMI_CODE_HOME=.* kimi login --region global, or --region mainland-cn for a kimi\.com account; see kimi-home\.md\)/);
+    if (signedOut) assert.match(block.signIn.detail, /no provider is configured \(sign in: `KIMI_CODE_HOME=.* kimi login --region global`, or --region mainland-cn for a kimi\.com account; see kimi-home\.md\)/);
     assert.deepEqual(ctx.kimi().invocations.map(call => call.args.join(" ")).sort(), ["--version", "provider list --json"]);
     assert.equal(ctx.kimi().invocations.find(call => call.args[0] === "provider").env.KIMI_CODE_HOME, home);
     assert.ok(ctx.kimi().invocations.every(call => call.env.KIMI_CODE_TRUST_WORKSPACE === undefined));

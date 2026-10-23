@@ -1,6 +1,7 @@
-// A POSIX shell assignment: its value is one literal word, including quotes and newlines.
+// A POSIX shell assignment: its value is one literal word, including quotes and newlines. Markdown
+// turns a carriage return into a line feed, so one is written as printf's `\r` outside the quotes.
 export function shellAssignment(name, value) {
-  return `${name}='${String(value).replaceAll("'", "'\\''")}'`;
+  return `${name}='${String(value).replaceAll("'", "'\\''").replaceAll("\r", "'\"$(printf '\\r')\"'")}'`;
 }
 
 // Inline Markdown normalizes newlines and backticks can close its delimiter.
