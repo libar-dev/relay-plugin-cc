@@ -19,10 +19,26 @@ const informational = (entries, name) => entries.filter(entry => !entry.isSidech
 const turnEnd = (entries, after) => entries.find(entry => !entry.isSidechain && entry.type === 'system' &&
   entry.subtype === 'turn_duration' && Date.parse(entry.timestamp) > Date.parse(after));
 
+const taskStopRequests = (entries, sentAt) => entries.filter(entry => !entry.isSidechain &&
+  Date.parse(entry.timestamp) >= Date.parse(sentAt) && (
+    entry.type === 'user' && !entry.isMeta && textContent(entry.message?.content) === taskStopLine ||
+    entry.type === 'attachment' && entry.attachment?.type === 'queued_command' &&
+      entry.attachment.origin?.kind === 'human' && textContent(entry.attachment.prompt) === taskStopLine));
+const notification = (entries, receipt) => entries.find(entry => {
+  if (entry.isSidechain || !(Date.parse(entry.timestamp) >= Date.parse(receipt.keyAt))) return false;
+  const text = entry.type === 'user' ? textContent(entry.message?.content) :
+    entry.type === 'attachment' && entry.attachment?.type === 'queued_command' ? textContent(entry.attachment.prompt) : '';
+  return text.includes('<task-notification>') && text.includes(`<task-id>${receipt.agentId}</task-id>`) &&
+    text.includes('<status>killed</status>');
+});
+const notificationBar = screen => screen.slice([...screen.matchAll(/^.*─{10,}.*$/gm)].at(-1)?.index ?? screen.length)
+  .split('\n').slice(1).join(' ').replace(/\s+/g, ' ').trim();
+const skippedLine = (text, agentId, after) => text.split('\n').find(line =>
+  line.endsWith(`stop notice skipped for ${agentId}: TaskStop named it`) &&
+  Date.parse(line.split(/\s/)[0]) >= Date.parse(after));
 
 function taskStopEnd(entries, sentAt) {
-  const request = entries.find(entry => !entry.isSidechain && entry.type === 'user' && !entry.isMeta &&
-    textContent(entry.message?.content) === taskStopLine && Date.parse(entry.timestamp) >= Date.parse(sentAt));
+  const request = taskStopRequests(entries, sentAt)[0];
   if (!request) return null;
   const call = transcriptCalls(entries).calls.find(call => call.name === 'TaskStop' &&
     Date.parse(call.timestamp) >= Date.parse(request.timestamp));
@@ -88,23 +104,59 @@ function runsOn(input, agent, { job, jobDir }, receipt) {
   const cleanupAt = Date.parse(receipt.cleanupAt);
   if (cancels.some(message => !(Date.parse(message.createdAt ?? message.at) >= cleanupAt)) ||
       (receipt.cleanupAt && !(cleanupAt >= Date.parse(after.at)))) throw new Error(`Early cancellation of ${agent.name}.`);
-  if (job.state === 'running' && attempt.state === 'running' && !attempt.endedAt && !job.completedAt && !cancels.length) return;
   if (job.state !== 'cancelled' || attempt.state !== 'cancelled' || !Number.isFinite(cleanupAt) ||
       !(Date.parse(attempt.endedAt) >= cleanupAt) || !(Date.parse(job.completedAt) >= cleanupAt)) {
     throw new Error(`${agent.name}'s job did not run on until check cleanup.`);
   }
+  const messages = new Map(cancels.map(message => [message.id, message]));
+  const message = [...messages.values()][0];
+  const outcome = message?.id && readJson(path.join(jobDir, 'inbox/outcomes', `${path.basename(message.id)}.json`), true);
+  if (messages.size !== 1 || outcome?.messageId !== message?.id || outcome?.action !== 'cancelled') {
+    throw new Error(`Missing cancelled cleanup receipt for ${agent.name}.`);
+  }
 }
 
 export async function driveStops(ctx, { drive = pane, sleep = pause, now = Date.now, check = () => {},
-  beforeStop = () => {}, beforeTaskStop = () => {}, submitted = () => false } = {}) {
+  beforeStop = () => {}, beforeTaskStop = () => {}, submitted = () => false,
+  entries = () => [], record = () => {} } = {}) {
   const options = { agentCount: 3, drive, sleep, now, check };
+  const receipt = key => ctx.run.stopNotice.codex[key];
+  const poll = async (nav, value, kind, ready, timeoutMs) => {
+    const startedAt = new Date(now()).toISOString(), deadline = now() + timeoutMs;
+    let found, reads = 1;
+    while (true) {
+      check();
+      try { found = ready(value); }
+      catch (error) { if (!error.message.startsWith('Invalid JSON at ')) throw error; }
+      if (found || now() >= deadline) break;
+      await sleep(Math.min(250, deadline - now()));
+      value = nav.screen(); reads++;
+    }
+    const detail = { startedAt, at: new Date(now()).toISOString(), elapsedMs: now() - Date.parse(startedAt),
+      timeoutMs, reads, found: Boolean(found), source: found || null, screen: nav.screenFile };
+    record(kind, detail);
+    nav.verify(value, () => Boolean(found), `${kind} within ${timeoutMs / 1000} seconds`);
+    return value;
+  };
+  const idle = (nav, value, key, phase) => poll(nav, value, `${key}-${phase}-idle`, screen => {
+    const event = notification(entries(), receipt(key));
+    if (event && turnEnd(entries(), event.timestamp)) return 'turn_duration';
+    // An empty input is also drawn during a turn; require the notification and no busy indicator.
+    const busy = /esc to interrupt|^[ \t]*[✢✳✶✻✽*·].*…/mu.test(screen);
+    const mainRow = nav.rows(screen).find(row => row.name === 'main');
+    const notified = event || screen.includes(`Agent "stop-${key}" was stopped by user`);
+    if (notified && !busy && (mainRow?.idle || mainRow?.viewed && !screen.includes('Message @') && /^\s*❯[ \t\u00a0]*$/m.test(screen))) {
+      return 'screen';
+    }
+    return false;
+  }, 30000);
   const main = async (nav, value) => {
-    if (nav.prompt('main')(value)) return;
+    if (nav.prompt('main')(value)) return value;
     if (nav.cursor(value) === null) value = await nav.key('Down', next => nav.cursor(next) !== null, 'a selected footer row');
     await nav.walk(value, 'Up', nav.selected('main'), 'selector on main');
     await nav.key('Enter', next => nav.selected('main')(next) && nav.rows(next).some(row => row.name === 'main' && row.viewed) &&
       !next.includes('Message @'), 'the main view with selector on main');
-    await nav.key('Up', nav.prompt('main'), 'the main prompt');
+    return nav.key('Up', nav.prompt('main'), 'the main prompt');
   };
   const x = viewNavigation(ctx, 'stop-x', () => taskStopLine, options);
   const initial = x.screen();
@@ -112,22 +164,27 @@ export async function driveStops(ctx, { drive = pane, sleep = pause, now = Date.
   const selected = await x.walk(initial, 'Down', x.selected('stop-x'), 'selector on stop-x');
   x.verify(selected, value => /\bx to stop\b/.test(value), 'x to stop on stop-x');
   check(); beforeStop('x');
-  const stopped = await x.key('x', value => !x.rows(value).some(row => row.name === 'stop-x') ||
+  let stopped = await x.key('x', value => !x.rows(value).some(row => row.name === 'stop-x') ||
     (x.selected('stop-x')(value) && /\bx to clear\b/.test(value)), 'stop-x stopped in the footer', 15000);
-  await main(x, stopped);
+  stopped = await poll(x, stopped, 'x-toast', value =>
+    notificationBar(value).includes(noticeText('stop-x', receipt('x').jobId)) && 'notification-bar', 15000);
+  stopped = await idle(x, stopped, 'x', 'main');
+  const mainAfterX = await main(x, stopped);
 
   const esc = viewNavigation(ctx, 'stop-esc', () => taskStopLine, options);
-  await esc.walk(esc.screen(), 'Down', esc.selected('stop-esc'), 'selector on stop-esc');
+  await esc.walk(mainAfterX, 'Down', esc.selected('stop-esc'), 'selector on stop-esc');
   const opened = await esc.key('Enter', value => esc.viewPrompt(value) &&
     esc.rows(value).some(row => row.name === 'stop-esc' && row.viewed), "stop-esc's view");
   await esc.walk(opened, 'Up', esc.prompt('stop-esc'), "stop-esc's prompt");
   check(); beforeStop('esc');
   const interrupted = await esc.key('Escape', value => esc.prompt('stop-esc')(value) && /\bInterrupted\b/.test(value),
     "stop-esc's interrupted prompt", 15000);
-  await main(esc, interrupted);
+  const quiet = await idle(esc, interrupted, 'esc', 'main');
+  await main(esc, quiet);
 
   const lead = viewNavigation(ctx, 'main', () => taskStopLine, options);
-  lead.verify(lead.screen(), lead.prompt('main'), 'the main prompt before TaskStop');
+  const ready = await idle(lead, lead.screen(), 'esc', 'send');
+  lead.verify(ready, lead.prompt('main'), 'the main prompt before TaskStop');
   check(); beforeTaskStop();
   await lead.key('send', value => lead.prompt('main')(value) && submitted(), 'the main TaskStop request in the transcript', 15000);
 }
@@ -188,17 +245,30 @@ export default {
         if (readJob(item.jobDir).state !== 'running') throw new Error(`${item.agent.name}'s job is not running before its stop.`);
         receipts[key] = { agentId: item.agent.agentId, jobId: item.job.id, keyAt: new Date(now()).toISOString() }; ctx.save();
       };
-      await driveStops(ctx, { drive, sleep, now, check, beforeStop, beforeTaskStop() {
-        const item = [...started.values()].find(item => item.key === 'taskStop');
-        if (readJob(item.jobDir).state !== 'running') throw new Error('stop-ts is not running before TaskStop.');
-        receipts.taskStop = { text: taskStopLine, sentAt: new Date(now()).toISOString() }; ctx.save();
-      }, submitted: () => {
-        try { return entries().some(entry => !entry.isSidechain && entry.type === 'user' && !entry.isMeta &&
-          textContent(entry.message?.content) === taskStopLine && Date.parse(entry.timestamp) >= Date.parse(receipts.taskStop.sentAt)); }
-        catch (error) { if (!error.message.startsWith('Invalid JSON at ')) throw error; return false; }
-      } });
+      await driveStops(ctx, { drive, sleep, now, check, beforeStop, entries,
+        record(kind, detail) {
+          (run.stopNotice.waits ??= []).push({ kind, ...detail });
+          if (kind === 'x-toast') receipts.x.toast = detail;
+          ctx.save();
+        }, beforeTaskStop() {
+          const item = [...started.values()].find(item => item.key === 'taskStop');
+          if (readJob(item.jobDir).state !== 'running') throw new Error('stop-ts is not running before TaskStop.');
+          receipts.taskStop = { text: taskStopLine, sentAt: new Date(now()).toISOString() }; ctx.save();
+        }, submitted: () => {
+          try { return taskStopRequests(entries(), receipts.taskStop.sentAt).length > 0; }
+          catch (error) { if (!error.message.startsWith('Invalid JSON at ')) throw error; return false; }
+        } });
       await waitFor(() => taskStopEnd(entries(), receipts.taskStop.sentAt), 'the TaskStop lead turn to end', 120000);
       receipts.taskStop.endedAt = new Date(now()).toISOString(); ctx.save();
+      const call = transcriptCalls(entries()).calls.find(call => call.name === 'TaskStop');
+      const agent = [...started.values()].find(item => item.key === 'taskStop').agent;
+      await waitFor(() => {
+        if (!run.debugLog || !fs.existsSync(run.debugLog)) return false;
+        const log = fs.readFileSync(run.debugLog, 'utf8');
+        if (!skippedLine(log, agent.agentId, call.timestamp)) return false;
+        fs.writeFileSync(path.join(ctx.evidenceDir, 'stop-notice-debug.txt'), log);
+        return true;
+      }, 'the TaskStop marked-agent debug line');
       for (const key of ['x', 'esc']) {
         const item = [...started.values()].find(item => item.key === key);
         await waitFor(() => now() - Date.parse(receipts[key].keyAt) >= 15000, `${item.agent.name}'s observation time`);
@@ -252,6 +322,8 @@ export default {
       if (run.runId !== input.runId || !this.completed(entries)) throw new Error('Missing stop-notice run or marker.');
       if (run.error || run.interrupted || run.completed !== true) throw new Error(run.error || 'Stop-notice run did not complete.');
       const receipts = run.stopNotice?.[backend];
+      const errors = [run.cleanupError, run.cleanupScanError, ...Object.values(receipts ?? {}).map(receipt => receipt.cleanupError)].filter(Boolean);
+      if (errors.length) throw new Error(`Cleanup failed: ${errors.join('; ')}`);
       for (const job of loaded) requireBackend(job.job, backend);
       for (const [i, key] of [[0, 'x'], [1, 'esc']]) {
         const agent = spawned[i], receipt = receipts?.[key];
@@ -261,20 +333,30 @@ export default {
         }
         const seconds = (Date.parse(notices[0].timestamp) - Date.parse(receipt?.keyAt)) / 1000;
         if (!(seconds >= 0)) throw new Error(`Invalid notice timing for ${agent.name}.`);
+        if (key === 'x') {
+          const toast = receipt?.toast;
+          const screen = toast?.screen && path.join(input.evidenceDir, path.basename(toast.screen));
+          if (!toast?.found || !(Date.parse(toast.at) >= Date.parse(receipt.keyAt)) ||
+              !screen || !fs.existsSync(screen) || !notificationBar(fs.readFileSync(screen, 'utf8')).includes(noticeText(agent.name, loaded[i].job.id))) {
+            throw new Error('Missing stop-x toast on the notification bar.');
+          }
+        }
         runsOn(input, agent, loaded[i], receipt);
         row.timings[`${key}NoticeSeconds`] = [seconds];
       }
       if (informational(entries, 'stop-ts').length) throw new Error('Unexpected notice for stop-ts.');
       const sent = receipts?.taskStop;
-      const requests = entries.filter(entry => !entry.isSidechain && entry.type === 'user' && !entry.isMeta &&
-        textContent(entry.message?.content) === taskStopLine && Date.parse(entry.timestamp) >= Date.parse(sent?.sentAt));
+      const requests = taskStopRequests(entries, sent?.sentAt);
       row.timings.cancelledSeconds = [cancelledByTaskStop(input, spawned[2], loaded[2], entries, parsed, results, sent?.sentAt)];
       const end = taskStopEnd(entries, sent?.sentAt);
       if (sent?.text !== taskStopLine || requests.length !== 1 || !end ||
           !(Date.parse(sent.endedAt) >= Date.parse(end.timestamp))) throw new Error('Missing main TaskStop request or ended turn.');
       if (receipts.taskStop.cleanupAt) throw new Error('TaskStop job required check cleanup.');
-      const errors = [run.cleanupError, run.cleanupScanError, ...Object.values(receipts).map(receipt => receipt.cleanupError)].filter(Boolean);
-      if (errors.length) throw new Error(`Cleanup failed: ${errors.join('; ')}`);
+      const debugFile = path.join(input.evidenceDir, 'stop-notice-debug.txt');
+      const call = parsed.calls.find(call => call.name === 'TaskStop');
+      if (!fs.existsSync(debugFile) || !skippedLine(fs.readFileSync(debugFile, 'utf8'), spawned[2].agentId, call.timestamp)) {
+        throw new Error('Missing TaskStop marked-agent debug line for stop-ts after TaskStop.');
+      }
     });
   },
   cell(record) {

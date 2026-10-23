@@ -471,7 +471,8 @@ agents it names first, and they get no notice, since the TaskStop hook cancels t
 
 What held: the measured signals were the same on Claude Code 2.1.309 as on 2.1.308, and the notice needed no
 companion change: Phase 4's slim `status --json` rows carry the relay's agent id. What is left: a Workflow's
-agents are never listed, so a stop of one shows no notice; the M3 lead can check Desktop's Stop button with the notice when it next runs the Desktop pass.
+agents are never listed, so a stop of one shows no notice. ctrl+x ctrl+k and Desktop's Stop button are not checked live with the
+notice yet; the M3 lead can check the Stop button when it next runs the Desktop pass.
 
 ## Phase 4: the terminal and Desktop board (separate PRs)
 

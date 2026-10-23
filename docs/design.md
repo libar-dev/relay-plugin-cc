@@ -694,8 +694,8 @@ content, the origin kinds `coordinator`, `peer`, `human` and `task-notification`
 types, and the coordinator's and the typed message's wrappers. From the Workflow harness: the
 transcript path, the marker lines, two system-prompt notes, two trailers, the meta file, the
 journal's `started` lines and the three retry suffixes. From the Mod API's `turn.complete` (an
-agent's `reason: "aborted"`), `tool.call` on `TaskStop` (its `task_id`), `$.agent.list()` (type and
-status), and `agent.spawn`: the agent
+agent's `reason: "aborted"`), `tool.call` on `TaskStop` (its `task_id`), `$.agent.list()` (id, name, type
+and status), and `agent.spawn`: the agent
 type, the prompt, `resume`, and the placeholder a Workflow run that withholds its script puts in
 the prompt. From `TaskStop`'s `PostToolUse`: the stopped task's id in its result.
 
@@ -1148,8 +1148,11 @@ agents) and Desktop's Stop button stop the relay agent and leave its job running
 relay other than TaskStop does (D96). Claude Code fires no hook for such a stop but the module's
 `turn.complete` (`reason: "aborted"`, the agent then listed `killed`), so the module shows a notice
 there: a line in the main transcript and a toast, naming the job, with `/relay:cancel <job>` and
-`/relay:result <job>`. It finds the job with `companion status --all --active --json` and stays
-silent when the job has ended or no job is found. A TaskStop raises the same `turn.complete`, after
+`/relay:result <job>`. It finds the job with `companion status --all --active --limit 200 --json`,
+following the listing's pages, and stays silent when the job is not `starting` or `running` (ended or
+dead), when no job is found, and where nothing draws (T3, `claude -p`); it shows the notice after the
+turn has completed, never holding it. Measured with `x to stop` and Esc; ctrl+x ctrl+k and Desktop's
+Stop button raise, as far as known, the same signal, but neither is checked live with the notice yet. A TaskStop raises the same `turn.complete`, after
 its `tool.call`; the module remembers the agents a TaskStop named there and shows them no notice, since
 the TaskStop hook cancels their jobs. A Workflow's agents are not listed, so their stops show none. A
 line typed in the view right after Esc resumes the relay and is delivered at once: a steer while the
