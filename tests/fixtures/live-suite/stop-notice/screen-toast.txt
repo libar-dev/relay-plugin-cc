@@ -1,0 +1,11 @@
+Claude Code v2.1.308
+● LIVE-STOP-NOTICE-READY
+
+❯ 
+──────────────────────────
+  Enter to view · x to clear
+  ● main
+❯ ◯ stop-x  background work  1m · ↓ 100 tokens
+  ◯ stop-esc  background work  1m · ↓ 100 tokens
+  ◯ stop-ts  background work  1m · ↓ 100 tokens
+  relay: stop-x was stopped, and its job job-x keeps running. /relay:cancel job-x cancels it, /relay:result job-x shows it.

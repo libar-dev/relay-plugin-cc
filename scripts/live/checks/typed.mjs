@@ -187,13 +187,13 @@ function footer(screen) {
   return main < 0 ? [] : rows.slice(main);
 }
 
-export async function typeInView(ctx, name, text, { agentCount, drive = pane, sleep = pause, now = Date.now, beforeSend = () => {}, beforeInterrupt = () => {}, check = () => {}, interrupt = false, followup } = {}) {
+export function viewNavigation(ctx, name, text, { agentCount, drive = pane, sleep = pause, now = Date.now, check = () => {} } = {}) {
   let step = 0;
   let screenFile;
   const screen = () => {
     check();
     const value = String(drive(['read', ctx.run.pane, '0']));
-    screenFile = `typed-${name}-${text.includes(' A2 ') ? 'A2' : 'first'}-${step++}.txt`;
+    screenFile = `typed-${name}-${text().includes(' A2 ') ? 'A2' : 'first'}-${step++}.txt`;
     fs.writeFileSync(path.join(ctx.evidenceDir, screenFile), value);
     return value;
   };
@@ -210,7 +210,7 @@ export async function typeInView(ctx, name, text, { agentCount, drive = pane, sl
   const stepUntil = async (action, expected, why, timeoutMs = 5000) => {
     check();
     const started = now(), deadline = started + timeoutMs;
-    drive([action === 'send' ? 'send' : 'keys', ctx.run.pane, action === 'send' ? text : action]);
+    drive([action === 'send' ? 'send' : 'keys', ctx.run.pane, action === 'send' ? text() : action]);
     let value, settled = false, reads = 0;
     while (now() < deadline) {
       await sleep(Math.min(200, deadline - now()));
@@ -223,15 +223,12 @@ export async function typeInView(ctx, name, text, { agentCount, drive = pane, sl
       settled = expected(value);
     }
     fs.appendFileSync(path.join(ctx.evidenceDir, 'typed-navigation.jsonl'), JSON.stringify({
-      agent: name, text, key: action, expected: why, elapsedMs: now() - started, timeoutMs, reads, settled, screen: screenFile
+      agent: name, text: text(), key: action, expected: why, elapsedMs: now() - started, timeoutMs, reads, settled, screen: screenFile
     }) + '\n');
     verify(value, () => settled, why);
     return value;
   };
   const key = stepUntil;
-  const send = () => stepUntil('send', value => prompt(name)(value) &&
-    value.slice(0, value.lastIndexOf('❯')).replace(/\s+/g, ' ').includes(text),
-  `${name}'s cleared prompt and submitted text`);
   const walk = async (value, direction, expected, why) => {
     for (let presses = 0; presses < agentCount + 2; presses++) {
       if (expected(value)) return value;
@@ -242,6 +239,15 @@ export async function typeInView(ctx, name, text, { agentCount, drive = pane, sl
     verify(value, expected, `${why} within ${agentCount + 2} ${direction} presses`);
     return value;
   };
+  return { screen, verify, cursor, selected, viewPrompt, prompt, key, walk, rows: footer, get screenFile() { return screenFile; } };
+}
+
+export async function typeInView(ctx, name, text, { agentCount, drive = pane, sleep = pause, now = Date.now, beforeSend = () => {}, beforeInterrupt = () => {}, check = () => {}, interrupt = false, followup } = {}) {
+  const navigation = viewNavigation(ctx, name, () => text, { agentCount, drive, sleep, now, check });
+  const { screen, verify, cursor, selected, viewPrompt, prompt, key, walk } = navigation;
+  const send = () => key('send', value => prompt(name)(value) &&
+    value.slice(0, value.lastIndexOf('❯')).replace(/\s+/g, ' ').includes(text),
+  `${name}'s cleared prompt and submitted text`);
   const initial = screen();
   verify(initial, prompt('main'), 'the main prompt');
   // The transcript supplies the total; the footer only shows the current scroll window.
@@ -265,7 +271,7 @@ export async function typeInView(ctx, name, text, { agentCount, drive = pane, sl
     while (true) {
       const value = screen();
       if (!viewPrompt(value) && followup.noRoute) {
-        followup.noRoute(`${name}'s view prompt disappeared after the hand-back; screen saved in ${screenFile}.`);
+        followup.noRoute(`${name}'s view prompt disappeared after the hand-back; screen saved in ${navigation.screenFile}.`);
         // A closed footer leaves only main; Left would open the session manager.
         if (prompt('main')(value) || (!footer(value).length && value.includes('← for agents') &&
             /^\s*❯\s*$/m.test(value) && !value.includes('Message @'))) return;
