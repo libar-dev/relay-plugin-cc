@@ -200,7 +200,7 @@ started. A worker started from a unit of the user's systemd runs in a scope of i
 cause is not known. With the start time in its identity, a dead worker and a pid with a different
 recorded start time read as dead (openai/codex-plugin-cc#704: a dead worker shown as running forever).
 
-**The backend server.** A worker starts its own `codex app-server`, `grok agent ... stdio`,
+**The backend server.** A worker starts its own `codex app-server`, `grok agent... stdio`,
 `zcode app-server` or `kimi acp` in the job's working directory, a new one after a server end, and stops it when
 its work ends. A review starts its own the same way. There is no shared broker. A long-lived shared
 Codex app-server reused ChatGPT's single-use refresh token and logged out every client of
@@ -564,7 +564,7 @@ A timer ticks every five seconds from `session.start`, once per load of the modu
 process runs. While a count shows, every tick reads. While the line is cleared, a tick reads every thirty seconds,
 and on every tick for thirty seconds after a relay event the module saw: a `relay:job` spawn, a send that woke a
 relay, one of the four commands above, or a busy answer. A job a `relay:job` agent of this session starts shows within
-about five seconds; a review, a start the model runs in Bash, or another session's job within thirty (D63).
+about five seconds; a review, a start the model runs in Bash, or another session's job within thirty.
 
 ### The board
 
@@ -572,12 +572,12 @@ about five seconds; a review, a start the model runs in Bash, or another session
 above the prompt otherwise. It lists the repository's jobs from `companion status --json`, newest first, 20 a page
 with a `More` row up to 200, then `Older jobs` and `Newest jobs` to page with the cursor: one row each with its id, backend, state and attempt, and its flags: owed messages,
 `not handed back` (after a continue the board sent directly it only means no relay handed that attempt back; see
-Known limits), `relay lost` (a running job whose relay has not called for 15 minutes, D59) and violations.
+Known limits), `relay lost` (a running job whose relay has not called for 15 minutes) and violations.
 Selecting a row shows the job from `result --json`: model and effort, its relay and Workflow run, each message with
 how the backend took it, and the report as Markdown.
 
 - **Steer** (a starting or running job; `Queue next turn` on Kimi) and **Continue** (an ended or dead job) send the
-  field's text by one route, chosen from the job as it is read at the press (D61): by the relay, as the lead's
+  field's text by one route, chosen from the job as it is read at the press: by the relay, as the lead's
   `SendMessage`, for an Agent-tool relay of this session that is alive, and for a continue of an ended job of this
   session by its finished relay; to the job directly with `companion steer` or `continue` otherwise. A send the relay refuses offers `Send to the job directly`; nothing is sent twice. Each message
   in the job's view says which route carried it.
@@ -591,7 +591,7 @@ state, attempts, open or owed messages, report or relay's last call change, and 
 message taken between two reads. State is written, and the pane drawn again, only when what it shows or what decides
 those reads changed. A busy answer keeps the last data, marked as such. Nothing runs while the pane is closed, hidden
 behind another pane's tab, or not drawn. A press says what it is doing at once (`Reading the job…`, `Cancelling attempt
-N…`), and another press on the same job waits for it. Its keys and clicks follow Claude Code's rules for panes (D65): the keyboard
+N…`), and another press on the same job waits for it. Its keys and clicks follow Claude Code's rules for panes: the keyboard
 between turns, the mouse in the fullscreen layout.
 
 ### The report
@@ -674,15 +674,14 @@ Violations are never removed; `result` and `status` print each as a `relay-viola
   machine's cores, within 2 and 16. Stopping a workflow, with TaskStop too, ends the relays, not the
   jobs, so a resume adopts them ([Cancel](#cancel)).
 - **A message to a Workflow relay's agent id is not a sure way to its job.** Claude Code lists no
-  Workflow agent, so the lead addresses one by id. Measured on 2.1.308 by the Phase 3 and Phase 6 threads
-  ([decisions.md](mods/decisions.md), D48 and D53); the live suite's `steer-workflow` check measures a
+  Workflow agent, so the lead addresses one by id. Observed on Claude Code 2.1.308; the live suite's `steer-workflow` check measures a
   Workflow agent sending to a relay the Agent tool started, not a message to a Workflow relay.
   - A steer while it runs: Claude Code starts a second loop of the agent under the same id. The
     first loop's model never sees the message; its guard can still read it in the transcript the loops
     share. In the one run measured, the second loop's guard
     delivered the steer, waited on the job beside the first loop, and sent the lead an extra completion
     notice.
-  - The message `cancel` while it runs travels the same way. In the Phase 3 probe, the wake ended the
+  - The message `cancel` while it runs travels the same way. In the observed run, the wake ended the
     first loop's wait, its guard delivered the cancel at its next call, the job was `cancelled` 1.8 s
     and 2.7 s after the send, and both loops returned `state: cancelled`.
   - After a fork, Claude Code can write the agent's later entries to `subagents/agent-<id>.jsonl`, not
@@ -698,12 +697,8 @@ Violations are never removed; `result` and `status` print each as a `relay-viola
 
   So a Workflow job is controlled by its job id: `companion steer`, `continue` and `cancel` post to the
   job's inbox with no relay in between ([Every message runs once or is reported](#every-message-runs-once-or-is-reported)).
-  The live suite's `board` check did this on all four backends with Claude Code 2.1.309
-  (`docs/live/records/20261023T003501Z-board-terminal-1f82.jsonl`): each steer reached the job 0.17–0.20 s
-  after the send (Kimi took it as its next turn), each continue started a new attempt 0.25–0.27 s after the
-  send, each `cancel --attempt` ended the continued attempt in 1.0–3.5 s, and no message reached a relay's
-  transcript or forked a relay loop. A steer or continue by id to a job whose relay still waits comes back in
-  that relay's block (D61). After its relay ended, a continue by id has no relay to hand back its turn, so
+  Job-id control was measured on all four backends with Claude Code 2.1.309 without forking a relay loop. A steer or continue by id to a job whose relay still waits comes back in
+  that relay's block. After its relay ended, a continue by id has no relay to hand back its turn, so
   `status` marks the job `not handed back` once that turn ends; `wait` and `result` collect it.
 
 ### Adoption by journal key
@@ -1106,10 +1101,10 @@ After a Claude Code update:
 - `not handed back` marks a relay job whose last attempt ended with no hand-back. After a `continue` or `resume` sent
   to the job directly (`C continue`, `C resume`, the board's direct route), no relay waited for that attempt, so the
   mark only says no relay handed it back: the report is in `result`. A job's records do not yet say whether a relay
-  waited for an attempt (D61).
+  waited for an attempt.
 - The board's Steer and Continue read the job, then send: a job that begins another attempt in the moment between
   the two gets the text in that attempt, as a `companion steer` from a shell would. `steer` and `continue` take no
-  expected attempt as `cancel --attempt` does (D61).
+  expected attempt as `cancel --attempt` does.
 - `cancel` of a dead job signals the recorded worker pid without checking its start time, and its
   process-group kill can reach a nested job that kept the worker's group.
 - A tool that the backend starts as the turn is interrupted, and that leaves the server's process tree before
@@ -1196,7 +1191,7 @@ relay's own view has no wake ([The wake](#the-wake)): it
 reaches the job at the relay's next call, up to 540 seconds later, or as a continue once the job
 has ended. Esc in a running relay's view, `x` on its row in the footer's agent list, ctrl+x ctrl+k (stop all
 agents) and Desktop's Stop button stop the relay agent and leave its job running, as any end of a
-relay other than TaskStop does (D96). Claude Code fires no hook for such a stop but the module's
+relay other than TaskStop does. Claude Code fires no hook for such a stop but the module's
 `turn.complete` (`reason: "aborted"`, the agent then listed `killed`), so the module shows a notice
 there: a line in the main transcript and a toast, naming the job, with `/relay:cancel <job>` and
 `/relay:result <job>`. It finds the job with `companion status --all --active --limit 200 --json`,

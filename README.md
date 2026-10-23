@@ -96,7 +96,8 @@ and the review and setup commands allow `Bash(node:*)`. Relay's commands, its re
 `relay:jobs` skill now tell Claude to stop at such an error and leave the choice to you:
 
 - Allow the jobs home in the sandbox, in your user settings (`~/.claude/settings.json`); name your
-  `$RELAY_JOBS_HOME` instead when you set one:
+  `$RELAY_JOBS_HOME` when set, and also the admission home (`$RELAY_ADMISSION_HOME`, default
+  `~/.relay-jobs/admission`) when distinct. Changing jobs home does not move admission state:
 
   ```json
   {"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}
@@ -104,7 +105,7 @@ and the review and setup commands allow `Bash(node:*)`. Relay's commands, its re
 
 - Or run relay without the sandbox.
 
-With only the jobs home allowed, a job or review whose backend writes its own home (`~/.codex`,
+With the jobs and admission homes allowed, a job or review whose backend writes its own home (`~/.codex`,
 `~/.grok`, `~/.kimi-code`, ZCode's) or needs the network may still fail inside the sandbox: that is
 not measured. To forbid every unsandboxed retry, set `sandbox.allowUnsandboxedCommands` to `false`,
 Claude Code's strict sandbox mode; to be asked each time instead, add an ask rule for
@@ -178,8 +179,7 @@ relay and reaches the job at once, steering it while it runs. `/relay:cancel <jo
 gets the state block back as a string. A message to a Workflow relay's agent id is not a sure way to
 its job: while it runs, it starts a second loop of the relay; after it ends, it reaches no job.
 Steer, continue or cancel a Workflow job by its job id with the companion (`steer`, `continue`,
-`cancel`), as the board does: its live check did so on all four backends, each steer and continue
-reaching the job within 0.3 s ([docs/live/capabilities.md](docs/live/capabilities.md)). The `relay:jobs` skill
+`cancel`), as the board does: job-id control works on all four backends. The `relay:jobs` skill
 has the rules, and the section
 [What the relay depends on in Claude Code](#what-the-relay-depends-on-in-claude-code) says what a
 Claude Code update can break.
@@ -231,7 +231,7 @@ The plugin's hooks module answers `/relay:status`, `/relay:result`, `/relay:canc
 tokens spent. The answer starts with the command as you typed it, then the companion's lines in a
 code block, as it prints them, then a job's report as Markdown, or the job list as a table.
 `claude -p "/relay:result <job>"` exits with the companion's exit code (0 completed with a report;
-3 failed, dead, completed without a report, or messages not yet run; 4 running; 5 cancelled), with
+3 failed, dead, completed without a report, or messages not yet run; 4 queued or running; 5 cancelled), with
 `--output-format text` or `json`; under `stream-json` Claude Code exits 0. These four run only when
 you type them. When you ask in plain words, Claude reads jobs with the companion in Bash, which a
 session in `default` permission mode asks you about, and cancels a job by sending its agent the
@@ -256,9 +256,9 @@ prompt for its own steps: a check in `default` permission mode on Claude Code 2.
 Their `allowed-tools` grant `Write`, for the temporary file that carries your arguments, and
 `Bash(node:*)`, for the companion (setup adds `Bash(npm:*)`, for the Codex install it offers).
 `Write` is not yet scoped to a path: the grant would let the command write any file, though its
-instructions name only that temporary one ([decisions.md](docs/mods/decisions.md), D73). The same
+instructions name only that temporary one. The same
 `Bash(node:*)` grant is why Claude could run the companion again outside Claude Code's sandbox
-without asking you (D79; see [Relay and Claude Code's sandbox](#relay-and-claude-codes-sandbox)).
+without asking you (see [Relay and Claude Code's sandbox](#relay-and-claude-codes-sandbox)).
 
 Every job has its own directory under `$RELAY_JOBS_HOME` (default `~/.relay-jobs`), its own
 worker and its own server process. Jobs belong to no Claude session and survive its end. The skill's
@@ -393,7 +393,7 @@ hooks need `SubagentHandback`. Its hooks module needs the `session.send`, `agent
 the Mod API, so the floor is Claude Code 2.1.307. A Claude Code update can break it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json`
 must hold the call's key as `relay.journalKey` (once another relay has adopted the job, its
 `relay.json` holds the binding), and the script must get the state block back. Repeat this check
-after a Claude Code update. It was last run in full on Claude Code 2.1.302, on Fedora, for the 2.1.0
+after a Claude Code update. It was last run in full on Claude Code 2.1.302, on Linux, for the 2.1.0
 release, on Codex, Grok, ZCode and Kimi: a foreground `relay:job` agent's hand-back, a Workflow
 call's state-block return with its `relay.journalKey`, a relay restarted with `TaskStop` and
 `resumeFromRunId` that adopted its running job, a background agent steered and then continued with

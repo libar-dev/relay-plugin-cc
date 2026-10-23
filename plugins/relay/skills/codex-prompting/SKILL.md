@@ -59,3 +59,5 @@ Prompt assembly checklist:
 Reusable blocks live in [references/prompt-blocks.md](references/prompt-blocks.md).
 Concrete end-to-end templates live in [references/codex-prompt-recipes.md](references/codex-prompt-recipes.md).
 Common failure modes to avoid live in [references/codex-prompt-antipatterns.md](references/codex-prompt-antipatterns.md).
+
+For model and effort choice, read [the dated model data](../jobs/models.md).

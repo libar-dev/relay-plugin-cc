@@ -1,6 +1,6 @@
 ---
-description: Check every backend the relay can run (Codex, Grok, ZCode, Kimi): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier or job MCP servers
-argument-hint: '[--backend codex|grok|zcode|kimi] [--grok-home H|--kimi-home H] [--enable-review-gate|--disable-review-gate] [--fast-tier allowed|off] [--job-mcp-off names|none]'
+description: Check every backend the relay can run (Codex, Grok, ZCode, Kimi): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier job MCP servers or the load guard
+argument-hint: '[--backend codex|grok|zcode|kimi] [--grok-home H|--kimi-home H] [--enable-review-gate|--disable-review-gate] [--fast-tier allowed|off] [--job-mcp-off names|none] [--admission on|off] [--max-very-heavy 1|2|default]'
 allowed-tools: Write, Bash(node:*), Bash(npm:*), AskUserQuestion
 ---
 
@@ -23,7 +23,7 @@ node --input-type=module -e 'const { pathToFileURL } = await import("node:url");
 
 Reject NUL-containing arguments with a usage error; do not normalize them or retry through a shell. File contents do not count toward the shell command's argument-size limit: use the same file route for long input and never fall back to embedding it in a command.
 
-Under Claude Code's sandbox, never run a companion call again with `dangerouslyDisableSandbox` unless the user asked for that. If a call fails with `EPERM` or "operation not permitted" (macOS), or `EROFS` or "read-only file system" (Linux), the sandbox most likely kept the companion from writing, usually to the jobs home. Stop: print the error, then tell the user the two choices: add the jobs home to the sandbox's write paths, with `{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}` in their user settings (`~/.claude/settings.json`; their `$RELAY_JOBS_HOME` path instead when that is set), or run setup without the sandbox.
+Under Claude Code's sandbox, never run a companion call again with `dangerouslyDisableSandbox` unless the user asked for that. If a call fails with `EPERM` or "operation not permitted" (macOS), or `EROFS` or "read-only file system" (Linux), the sandbox most likely kept the companion from writing, usually to the jobs home. Stop: print the error, then tell the user the two choices: Allow the effective jobs home (`$RELAY_JOBS_HOME`, default `~/.relay-jobs`) and the effective admission home (`$RELAY_ADMISSION_HOME`, default `~/.relay-jobs/admission`) in `sandbox.filesystem.allowWrite`; include both when distinct. For the defaults, use `{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}` in `~/.claude/settings.json`. Changing the jobs home does not move admission state. Backend-home writes and network access may still need permissions; full end-to-end sandbox operation is not measured. Or run setup without the sandbox.
 
 Setup uses relay's raw-argument grammar. `$VAR`, command substitutions and globs are literal. Use an absolute path or `~/` for homes and `--cwd` (`~` alone also means the home directory). Quotes group whitespace; backslash is an escape even inside quotes, so double a literal backslash. Empty quoted words are dropped: an empty value is a missing-value error. This prevents argument text from executing shell syntax or selecting paths through environment expansion.
 
@@ -59,8 +59,20 @@ model and effort, models, ready. Under the table, give each installed backend's 
 once per backend, on one short line (`binaries: codex ~/.local/bin/codex · grok ~/.local/bin/grok`): the
 Desktop app starts Claude Code with an environment of its own, and the path says which binary this session
 runs. Put `can` as one short line under the table only where a backend lacks something another has. `can.steer` is steering the running turn: a backend without it (Kimi) takes a
-message to a running job as its next turn, so write `steer (next turn)` for it, never "no steering". Then the settings line, `Actions taken` if any, and `Next steps`
-verbatim. Preserve any fenced command blocks, including their newlines. Never add rows for node or npm. The sign-in cell keeps the block's own
+message to a running job as its next turn, so write `steer (next turn)` for it, never "no steering". Then display the settings and load guard from this same JSON snapshot. `settings.loadGuard`
+holds configured admission, cap, busy seats, waiting-worker limit and the shared-domain `configPath`;
+`loadGuard` holds effective state and sensors. Configured on can coexist with effective off (environment
+or unsupported platform). Preserve off reasons, degraded notes, unreadable state and provider pauses.
+For exact settings/sensor lines, save the captured JSON with Write to `<args-file>.snapshot.json`, then
+run this fixed formatter recipe (no backend probes). Remove that snapshot before the normal cleanup:
+
+```bash
+node --input-type=module -e 'import fs from "node:fs"; import { pathToFileURL } from "node:url"; const { renderSetupPage } = await import(pathToFileURL(process.argv[1]).href); console.log(renderSetupPage(JSON.parse(fs.readFileSync(process.argv[2], "utf8"))));' "${CLAUDE_PLUGIN_ROOT}/scripts/lib/setup/page.mjs" "<args-file>.snapshot.json"
+node -e 'require("node:fs").rmSync(process.argv[1], { force: true });' "<args-file>.snapshot.json"
+```
+
+Copy its `settings:`, `load guard:`, `load-guard:`, notes, paused lines, `Actions taken` and `Next steps`
+verbatim. Never rerun setup just for formatting. Preserve any fenced command blocks, including their newlines. Never add rows for node or npm. The sign-in cell keeps the block's own
 `signIn.state`. For `signed-out` or `not-installed`, put that state (`signed out`, `not installed`) in the cell, and print
 `signIn.detail` and the command it names below the table, never in a cell: a fenced command cannot go in a table cell.
 For a block with `error`, print `error: <the error>` below the table, whatever its sign-in. Then go on; only Codex gets the
@@ -83,8 +95,12 @@ task, a Workflow or a job of this repository runs, while a stop-hook continuatio
 in progress, and when Codex is unavailable or the review fails. Grok, ZCode and Kimi do not run
 it; use `/relay:review` on those.
 
-The switches (`--enable-review-gate`, `--disable-review-gate`, `--fast-tier`, `--job-mcp-off`)
+The switches (`--enable-review-gate`, `--disable-review-gate`, `--fast-tier`, `--job-mcp-off`, `--admission`, `--max-very-heavy`)
 work with the overview, which applies them first; with `--backend` they are a usage error.
+
+`--admission on|off` changes the load guard for every session of this user; change it only when
+the user asks. `--max-very-heavy 1|2|default` lowers or resets the shared quota (default 2).
+The configured guard path is independent of `RELAY_JOBS_HOME`.
 
 If `Next steps` says to install Codex with npm:
 - Use `AskUserQuestion` exactly once to ask whether Claude should install Codex now.

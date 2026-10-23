@@ -18,7 +18,7 @@ Core constraint:
 
 Claude Code's sandbox:
 - Never run a companion call again with `dangerouslyDisableSandbox` unless the user asked for that.
-- If a call fails with `EPERM` or "operation not permitted" (macOS), or `EROFS` or "read-only file system" (Linux), the sandbox most likely kept the companion from writing, usually to the jobs home. Stop. Return its output, then tell the user the two choices, the one text allowed after it: add the jobs home to the sandbox's write paths, with `{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}` in their user settings (`~/.claude/settings.json`; their `$RELAY_JOBS_HOME` path instead when that is set), or run the review without the sandbox.
+- If a call fails with `EPERM` or "operation not permitted" (macOS), or `EROFS` or "read-only file system" (Linux), the sandbox most likely kept the companion from writing, usually to the jobs home. Stop. Return its output, then tell the user the two choices, the one text allowed after it: Allow the effective jobs home (`$RELAY_JOBS_HOME`, default `~/.relay-jobs`) and the effective admission home (`$RELAY_ADMISSION_HOME`, default `~/.relay-jobs/admission`) in `sandbox.filesystem.allowWrite`; include both when distinct. For the defaults, use `{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}` in `~/.claude/settings.json`. Changing the jobs home does not move admission state. Backend-home writes and network access may still need permissions; full end-to-end sandbox operation is not measured. Or run the review without the sandbox.
 
 Execution mode rules:
 - If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground, as with `--wait`, and begin your reply with exactly this line before the output: `Ran in the foreground: the default when Claude starts a review without --wait or --background.` That line is the only text allowed before the companion's verbatim output, and nothing follows the output except, after a sandbox error, the two choices above.
@@ -89,3 +89,5 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" adversarial-review --args-fil
 ```
 - Do not call `BashOutput` or wait for completion in this turn.
 - After launching the command, tell the user: "The adversarial review started in the background. Check `/relay:status` for progress."
+
+Foreground reviews also pass the load guard and can wait as `queued`; keep waiting for the same job.

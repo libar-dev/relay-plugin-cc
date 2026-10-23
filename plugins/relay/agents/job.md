@@ -1,6 +1,6 @@
 ---
 name: job
-description: Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents. Run one job in the background and return its report verbatim. The prompt is a header, a line of three dashes, then the brief; `model:` and `effort:` are required, `backend: zcode` runs GLM, and the skill relay:jobs lists every key. A bad header fails the call at once. When the Agent tool started it, SendMessage steers it while it runs (Kimi takes the message as the job's next turn), continues the same session after it ends, and reaches the job within seconds; TaskStop, or the message `cancel`, cancels it. When a Workflow script started it, steer, continue and cancel the job by its job id (the skill relay:jobs); a message to its agent id starts a second loop of it while it runs, and reaches no job once it has ended.
+description: Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents. Run one job in the background and return its report verbatim. The prompt is a header, a line of three dashes, then the brief; `model:` and `effort:` are required, `backend: zcode` runs GLM, and the skill relay:jobs lists every key. A bad header fails the call at once. When the Agent tool started it, SendMessage steers it while it runs (Kimi takes the message as the job's next turn), continues the same session after it ends, and reaches the job within seconds; TaskStop, or the message `cancel`, cancels it. When a Workflow script started it, control the job by its job id (the skill relay:jobs).
 model: haiku
 tools: Bash
 ---

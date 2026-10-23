@@ -115,7 +115,7 @@ Phase 3, spawn and stop like a Claude agent:
   TaskStop on a Workflow comes back with the list of its jobs that keep running. A cancel the hook
   could not finish is told to the caller and shown as a `relay-violation:` line. The
   message `cancel` still cancels a job and lets its relay hand back the cancelled state. TaskStop has no
-  task for one agent of a Workflow, except a second loop that a message to it started (D48); cancel such a job
+  task for one agent of a Workflow, except a second loop that a message to it started; cancel such a job
   with `C cancel <job>`.
 - **A bad header fails at the spawn.** The hooks module has an `agent.spawn` hook: before a
   `relay:job` agent starts, it runs the new `companion check-header`, the parser and request
@@ -312,11 +312,12 @@ Fixes from the pre-releases:
 - The jobs skill's continue recipe goes on to the result: send once, wait for the job to end in waits that fit the
   Bash tool's timeout, read its state and its open messages, run an owed message with `resume` and wait again,
   then collect the new report. `C steer`, `C continue` and `C resume` exit 4 when the message was posted but no
-  outcome came within 60 s; read the job's messages before sending again, since every call posts a new one.
+  outcome came within 60 s. Exit 1 can also occur after posting, before a receipt is printed; after any nonzero
+  exit read the job's messages before sending again, since every call posts a new one.
 - The Workflow example in the jobs skill refuses `report: none` for a step that reads the report, and says that
   `completed` is only the first gate.
 - `dead` and exit 3 are defined as the code has them: `dead` is a job that has not ended whose worker is gone or
-  never started within 60 s, whatever recovery did; exit 3 also covers a failed or dead job with a report, and a
+  never started within 60 s, except a workerless admission wait; exit 3 also covers a failed or dead job with a report, and a
   completed job without one.
 - The `result-handling` skill reads the state before the report, and keeps a command's verbatim output apart from
   a result Claude uses: Claude adds no line of its own after a command's verbatim output. Any review the user asked
@@ -330,11 +331,12 @@ Fixes from the pre-releases:
 - `/relay:setup` shows each backend's binary path under the table. For a signed-out or missing backend it prints
   the sign-in `detail`, which can hold a fenced command, below the table instead of in a cell; for a block with an
   error it prints `error:` with the error below the table, and keeps the sign-in the check read.
-- **Relay never leaves Claude Code's sandbox unasked (D79).** Under the sandbox the companion fails with `EPERM`
+- **Relay never leaves Claude Code's sandbox unasked.** Under the sandbox the companion fails with `EPERM`
   when it writes the jobs home, and Claude ran a review's companion call again with `dangerouslyDisableSandbox`
   without asking: the commands' `Bash(node:*)` grant approves that retry. The review and setup commands, the relay
   agent and the jobs skill now say never to retry without the sandbox unless the user asked, and to offer the two
-  choices: add the jobs home to `sandbox.filesystem.allowWrite` in the user settings, or run without the sandbox.
+  choices: allow the effective jobs and admission homes in `sandbox.filesystem.allowWrite`, including both
+  when distinct, or run without the sandbox. Backend-home and network access remain separate caveats.
 - `/relay:adversarial-review`'s argument hint says that quotes and apostrophes in the focus text group words and
   are removed, as before the argument file.
 - When a person stops a relay from Claude Code's own controls (`x to stop` in the agent list, Esc at the relay's
@@ -347,6 +349,16 @@ Fixes from the pre-releases:
   (T3 Code, `claude -p`).
 
 Docs:
+
+- The installed jobs skill now includes a light orchestration guide and a dated model/benchmark/price snapshot
+  with public sources, cache-write costs, distinct benchmark task bases, and a minor-release refresh procedure.
+  It describes one shared quota of two very heavy jobs (GPT-6 Astra and Kimi K3, any effort); effort alone on
+  other models does not enter the pool. This text is merge-ordered after the model-only admission update.
+- The user guide covers queued work, conditional stop notices, Workflow job-id control and direct continuation,
+  queued status-line/board controls, and both sandbox storage paths. Relay requires no external search or
+  scraping service; optional services are the user's configuration.
+- Setup renders configured and effective guard state from one captured JSON snapshot, including domain settings,
+  off reasons, degraded/unreadable readings and provider pauses, without another backend probe.
 
 - The README has a section on Claude Code's sandbox, with the setting that allows the jobs home and
   `sandbox.allowUnsandboxedCommands`; says that the review and setup commands ask no permission for their own

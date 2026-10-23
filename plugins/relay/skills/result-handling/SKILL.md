@@ -6,7 +6,9 @@ user-invocable: false
 
 # Job result handling
 
-A result is a state block, then a line `---` and the report when there is one. Read the state before any finding:
+A result is a state block, then a line `---` and the report when there is one. `queued`, `starting` and `running` are not results: keep waiting.
+
+Read the state before any finding:
 - `completed` with a `report:` path: the job finished its answer. That does not prove its commands passed or its edits are right; the report and the files say that.
 - `failed` (with `error:`), `dead`, `cancelled`, or `report: none`: there is no finished answer. Say so, with the `error:` line; do not present a partial report as the answer.
 - `undelivered:`, `not-delivered:` and `relay-violation:` are warnings about messages and the relay. Name them, and decide what each means for the work.

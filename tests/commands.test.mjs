@@ -198,15 +198,14 @@ const section = (text, from, to) => {
 const DESIGN = () => flat(fs.readFileSync(path.join(ROOT, "docs/design.md"), "utf8"));
 const README = () => flat(fs.readFileSync(path.join(ROOT, "README.md"), "utf8"));
 
-// The release gate (docs/mods/release-3.0.md): no text promises for a Workflow relay what holds for one the Agent
-// tool started (D48, D53), and each says how to control a Workflow job instead.
+// Agent-tool and Workflow relays have distinct delivery guarantees; both routes remain discoverable.
 test("the docs separate relays the Agent tool started from Workflow relays, and control a Workflow job by job id", () => {
   const skill = flat(read("skills/jobs/SKILL.md"));
   const talking = section(skill, "## Talking to a running or finished job", "## Inside a workflow script");
   assert.ok(talking.includes("For a relay you started with the Agent tool"));
   const workflow = section(talking, "A relay that a Workflow script started");
   for (const fact of ["second loop", "the first loop's guard delivered the message `cancel`", "not measured",
-    "`C steer <job>", "`C continue <job>", "`C cancel <job>`", "20261023T003501Z-board-terminal-1f82.jsonl",
+    "`C steer <job>", "`C continue <job>", "`C cancel <job>`",
     "whose relay still waits comes back in that relay's block", "After its relay ended, a continue by id"]) {
     assert.ok(workflow.includes(fact), fact);
   }
@@ -216,13 +215,13 @@ test("the docs separate relays the Agent tool started from Workflow relays, and 
   assert.doesNotMatch(read("skills/jobs/internals.md"), /All of this holds for a relay the Agent tool started/);
   const description = /^description: (.*)$/m.exec(read("agents/job.md"))[1];
   for (const fact of ["When the Agent tool started it, SendMessage steers it", "Kimi takes the message as the job's next turn",
-    "When a Workflow script started it, steer, continue and cancel the job by its job id", "second loop"]) {
+    "When a Workflow script started it, control the job by its job id"]) {
     assert.ok(description.includes(fact), fact);
   }
   const design = DESIGN();
   assert.ok(design.includes("hold for a relay the Agent tool started"));
   const underWorkflow = section(design, "**A message to a Workflow relay's agent id is not a sure way to its job.**", "### Adoption by journal key");
-  for (const fact of ["not measured", "20261023T003501Z-board-terminal-1f82.jsonl", "(D61)", "After its relay ended, a continue by id",
+  for (const fact of ["not measured", "all four backends", "After its relay ended, a continue by id",
     "its guard can still read it"]) {
     assert.ok(underWorkflow.includes(fact), fact);
   }
@@ -254,7 +253,7 @@ test("the jobs skill and design.md say a message that arrives while a turn is st
 
 test("dead and exit 3 are defined as view.mjs computes them, and the continue recipe waits within the Bash timeout", () => {
   const skill = flat(read("skills/jobs/SKILL.md"));
-  for (const fact of ["none started within 60 s of the launch", "(even with a report)", "`completed` with no report",
+  for (const fact of ["none started within 60 s of the launch", "except a workerless job queued for admission", "(even with a report)", "`completed` with no report",
     "`completed` is only the first gate"]) {
     assert.ok(skill.includes(fact), fact);
   }
@@ -266,7 +265,7 @@ test("dead and exit 3 are defined as view.mjs computes them, and the continue re
   const recipe = section(skill, "### Continue a job by its id", "How the hook carries the relay");
   for (const fact of ["Exit `4`", "acknowledgement window (60 s)", "`skipped`", "--timeout-seconds 100",
     "the Bash tool's default timeout of 120 s", "the `undelivered` list", "After a `resume`, go back to step 2.",
-    "`report: none` is no new report"]) {
+    "`report: none` is no new report", "Absence of a receipt alone proves nothing", "after any nonzero exit", "`queued-next-turn` with a queue `reason:`"]) {
     assert.ok(recipe.includes(fact), fact);
   }
   assert.doesNotMatch(recipe, /`no-op`/);
@@ -326,14 +325,14 @@ test("setup shows each backend's binary path, keeps the sign-in state, and print
   assert.doesNotMatch(setup, /put only `error`, `signed out` or `not installed` in its sign-in cell/);
 });
 
-// D79: Claude never runs the companion outside Claude Code's sandbox unasked; on EPERM it stops and gives the
+// Claude never runs the companion outside Claude Code's sandbox unasked; on EPERM it stops and gives the
 // user the two choices.
-test("the commands, the relay, the jobs skill and the README never leave the sandbox unasked (D79)", () => {
+test("the commands, the relay, the jobs skill and the README never leave the sandbox unasked", () => {
   const allowWrite = '{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}';
   for (const name of ["review", "adversarial-review", "setup"]) {
     const source = flat(read(`commands/${name}.md`));
     for (const fact of ["`dangerouslyDisableSandbox` unless the user asked for that", "`EPERM`", "operation not permitted",
-      "`EROFS`", "read-only file system", allowWrite, "`$RELAY_JOBS_HOME`", "without the sandbox"]) {
+      "`EROFS`", "read-only file system", allowWrite, "`$RELAY_JOBS_HOME`", "`$RELAY_ADMISSION_HOME`", "include both when distinct", "without the sandbox"]) {
       assert.ok(source.includes(fact), `${name}: ${fact}`);
     }
     // No text may tell Claude to retry outside the sandbox on its own.
@@ -358,7 +357,6 @@ test("the commands, the relay, the jobs skill and the README never leave the san
   }
   assert.ok(readme.includes("shows no permission prompt for its own steps"));
   assert.ok(readme.includes("`Write` is not yet scoped to a path"));
-  assert.match(fs.readFileSync(path.join(ROOT, "docs/mods/decisions.md"), "utf8"), /^### D79\. /m);
 });
 
 test("the review docs say Codex's stderr reaches /relay:review and --job-mcp-off quiets a server for jobs and reviews", () => {
