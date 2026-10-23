@@ -2881,3 +2881,13 @@ test('a queued board job stays live with reason, since and Queue next turn', asy
   expect(texts).toContain('queued: memory low (since 2025-01-01T00:00:00Z)')
   await ui.unmount()
 })
+
+test('the board shows a closed wait with a fixed duration after admission', async ($, on) => {
+  await boardEngine($, on, { jobs: () => [row('j-admitted', { admission: { reason: null, since: '2025-01-01T00:00:00Z', admittedAt: '2025-01-01T00:00:05Z' } })] })
+  const { ui } = await openBoard($, 'terminal')
+  await ui.press({ key: 'job:j-admitted' })
+  const texts = (await ui.findAll({ type: 'Text' })).map((node: any) => node.text).join(' ')
+  expect(texts).toContain('waited 5.0s before admission')
+  expect(texts).not.toContain('queued:')
+  await ui.unmount()
+})

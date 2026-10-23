@@ -30,7 +30,7 @@ const backendKeys = (common, backend) => common.flatMap(key => key === "backend"
 const PAGE = ["loadGuard", "jobsHome", "scope", "repoSlug", "workflowRunId", "active", "limit", "jobs", "nextCursor"];
 const MESSAGE = ["id", "kind", "createdAt", "stage", "preview", "relay", "outcome"];
 const OUTCOME = ["action", "at", "reason", "attempt", "turnId"];
-const ATTEMPT = ["attempt", "source", "automatic", "messageId", "startedAt", "relayVersion", "turnId", "state"];
+const ATTEMPT = ["attempt", "source", "automatic", "messageId", "startedAt", "relayVersion", "turnId", "state", "admission"];
 const SERVER = ["pid", "startTime", "startedAt"];
 const ENDED_SERVER = [...SERVER, "code", "signal", "endedAt", "stdoutClosedBeforeExit", "partialStdoutBytes", "stderrTail"];
 const AT = "2026-01-01T00:00:00.000Z";
