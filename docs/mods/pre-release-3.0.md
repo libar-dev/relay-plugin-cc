@@ -128,7 +128,8 @@ Each line is what should happen. When one does not, note it (next section).
 
 `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` take no model turn, but like every plugin
 command they run only once the session's current turn has ended. A lead that holds its turn for hours will not answer
-them until then: type them in another thread on the same repository.
+them until then: type `/relay:status`, `/relay:result` or `/relay:cancel <job>` in another thread on the same
+repository. `/relay:transfer` transfers the session it is typed in, so it waits for that one.
 
 **Jobs started with the Agent tool**
 - A message sent through Claude to a running job's agent reaches the job within seconds, and the report shows it.

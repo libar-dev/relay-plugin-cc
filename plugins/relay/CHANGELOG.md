@@ -236,13 +236,13 @@ Docs:
 
 - [docs/desktop.md](../../docs/desktop.md): relay in the Code tab of the Claude desktop app. It covers what runs
   there, installing with the CLI (the app loads what the CLI installs), the permission modes, a check that it works,
-  and how to try a build in one folder. Checked on a Mac in Claude for Mac 3.6556.1 with relay 3.0.0-dev.4; a second
-  check there ran `/relay:cancel` and `/relay:transfer`, and found that the Background tasks Stop button ends the
+  and how to try a build in one folder. Checked on a Mac in Claude for Mac 3.6556.1 with relay 3.0.0-dev.4; later
+  checks there ran `/relay:cancel` and `/relay:transfer`, and found that the Background tasks Stop button ends the
   relay agent, not its job, and that the agent's view has no input box.
 - [docs/guide.md](../../docs/guide.md): a walk through relay the way a user meets it, from the install to the status
   line and the board, with Claude Code 2.1.309's keys, and links to the README and desktop.md for the reference.
-- [docs/mods/pre-release-3.0.md](../../docs/mods/pre-release-3.0.md): the owner's guide to the pre-release cuts
-  (D93): each cut and its known issues, a check after each install, what should happen while working, a note
+- [docs/mods/pre-release-3.0.md](../../docs/mods/pre-release-3.0.md): the owner's guide to the pre-release cuts:
+  each cut and its known issues, a check after each install, what should happen while working, a note
   template, and how a machine is switched.
 
 ## 2.2.0 (2026-10-22)

@@ -8,8 +8,9 @@ how to try an unreleased build in one folder. The [README](../README.md) has the
 Checked with Claude for Mac 3.6556.1 (8e298a), its Claude Code 2.1.308, relay 3.0.0-dev.4 (2ffd7ba), Codex 0.163.0
 and Node 24.21.0, on macOS 27.2, on 22 October 2026. The check used a local session in Auto mode. It covered
 `/relay:status`, `/relay:setup`, `/relay:result`, a job steered with `SendMessage`, a refused header, `TaskStop` and
-a Workflow job. A second check on the same app and build ran `/relay:cancel <job>` and `/relay:transfer` in the Code
-tab. They did not cover the Manual permission mode, an SSH session, Windows, a backend other than Codex, or the
+a Workflow job. Later checks on the same app, with the same plugin code (3.0.0-dev.4 at 962130b), ran
+`/relay:cancel <job>` and `/relay:transfer` in the Code tab, and the Background tasks Stop button and Esc in an agent's
+view. They did not cover the Manual permission mode, an SSH session, Windows, a backend other than Codex, or the
 status line and the board, which came later.
 
 ## What runs where
@@ -134,7 +135,7 @@ the system's temporary folder, and the uninstall refuses to run once that folder
   model turn.
 - **Background tasks.** A background `relay:job` agent and a Workflow each appear in the Background tasks panel,
   with their elapsed time and a stop button. A stopped agent stays there, marked Stopped. The stop button stops the
-  relay agent, not its job: the job runs on to its end, as after `x` in the terminal's agent list (D96). To cancel
+  relay agent, not its job: the job runs on to its end, as after `x` in the terminal's agent list. To cancel
   the job, ask Claude to TaskStop the agent, or use `/relay:cancel <job>`.
 - **The relay's own waits.** The relay agent's `companion wait` calls show in the conversation as
   "Background command completed · Wait for the relay job to finish". They are the relay agent's calls, not the

@@ -140,10 +140,10 @@ ends the current step, and its hook delivers the message at the next. Send the a
 src/net/client.mjs." with `SendMessage` while the job runs, and Codex gets it inside the running
 turn. Sent after the job has ended, the same message starts a new turn on the same session, and the
 agent returns the new report. The message `cancel` cancels the job. In the terminal, a line you type into the agent's
-own view (↓ in the footer, Enter, then ↑ to its prompt) reaches the job too, at the relay's next step: up
-to nine minutes later, or as a new turn once the job has ended. Esc at that prompt, or `x` in the agent
-list, stops the relay agent and leaves the job running; a line typed right after Esc resumes the relay
-and reaches the job at once, steering it while it runs. `/relay:cancel <job>` cancels the job.
+own view (↓ in the footer until the agent is selected, Enter, then ↑ past `main` to its prompt) reaches the job
+too, at the relay's next step: up to nine minutes later, or as a new turn once the job has ended. Esc at that
+prompt, or `x` in the agent list, stops the relay agent and leaves the job running; a line typed right after Esc
+resumes the relay and reaches the job at once, steering it while it runs. `/relay:cancel <job>` cancels the job.
 
 **In a workflow.** A Workflow script runs a job with `agent(prompt, { agentType: 'relay:job' })` and
 gets the state block back as a string. The `relay:jobs` skill has the rules, and the section
@@ -185,7 +185,7 @@ message: a message sent while it runs becomes the next turn.
 | `/relay:setup --fast-tier allowed\|off` | with `off`, the default, jobs ignore `fast: true`; with `allowed`, it asks for the priority tier |
 | `/relay:setup --job-mcp-off name,...\|none` | Codex jobs turn off these MCP servers |
 | `/relay:rescue <task>` | hand an investigation or a fix to a `relay:job` agent; `--backend`, `--model`, `--effort`, `--grok-home`, `--kimi-home`, `--read-only` and `--write` become its header, `--background` runs the agent in the background |
-| `/relay:status [job] [--all]` | this repository's newest 20 jobs, every repository's with `--all`, or one job's state block |
+| `/relay:status [job] [--all] [--workflow <run>]` | this repository's newest 20 jobs, every repository's with `--all`, every job of one Workflow run with `--workflow`, or one job's state block |
 | `/relay:result [job]` | a job's state block and report; without a job, the newest finished job of this repository |
 | `/relay:cancel [job]` | interrupt the turn; the worker is killed if the job has not ended 10 s later; without a job, the only active job of this repository |
 | `/relay:review` | a review of the working tree or of a branch, on Codex's own reviewer or, with `--backend grok\|zcode\|kimi`, the plugin's prompt |
