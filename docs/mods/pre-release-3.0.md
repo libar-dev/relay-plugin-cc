@@ -134,7 +134,8 @@ them until then: type them in another thread on the same repository.
 - A message sent through Claude to a running job's agent reaches the job within seconds, and the report shows it.
   Kimi runs it as its next turn. A message that reaches a job in the few seconds before a turn starts (just after a
   continue was accepted, or at the launch) does not steer that turn: it waits until the whole turn ends, then runs as
-  the next turn.
+  the next turn. This holds for a relay the Agent tool started; a Workflow job's relay differs (see "Long
+  Workflows").
 - A message after the hand-back continues the same job: the same `job:` and `session:`, and `attempts:` one higher.
 - **Typing to a relay, in the terminal** (from pre.2; keys as of Claude Code 2.1.309):
   - To reach its prompt: press `↓` until the agent is selected in the list under the prompt, and `Enter` to open its
@@ -182,8 +183,15 @@ unless a line says otherwise. The others are relay's documented behaviour.
   "report what you have done so far, then stop". The job runs a new turn on the same session and reports.
 - **To collect a cancelled Workflow job's work,** ask Claude to continue the job by its id with the companion's
   `continue`, as the jobs skill says: its agent has ended, so a message to it does not reach the job.
+- **Messages to a Workflow job's agent** (measured on Claude Code 2.1.308, in few runs). A message while the relay
+  runs starts a second loop of the agent beside the first. In the runs measured, a steer reached the job through that
+  loop, and the message `cancel` cancelled the job within 3 seconds, but Claude Code can then write the relay's later
+  entries to a second transcript that relay does not read, and a message that lands there never reaches the job. A
+  message after the relay ended fails, or a general-purpose agent answers in the relay's place, and the job gets no
+  turn. A line typed into its view: not measured. So steer, continue or cancel a Workflow job by its job id: ask
+  Claude to use the companion's `steer`, `continue` or `cancel` on it, or type `/relay:cancel <job>`.
 - **To cancel one job of a running Workflow,** use `/relay:cancel <job>`, from another thread if the lead holds its
-  turn. TaskStop cannot target one agent of a Workflow.
+  turn. TaskStop finds no task for one agent of a Workflow.
 - `/relay:status --workflow <run>` lists every job of a run, in any repository, cancelled ones included (checked by
   typing it after a resume, on the installed pre.1).
 - **Do not resume a Workflow under a different cut** from the one that started it: that has not been tested. Let it
@@ -194,7 +202,9 @@ unless a line says otherwise. The others are relay's documented behaviour.
 
 **Stopping**
 - TaskStop on one relay agent, the message `cancel` to it, and `/relay:cancel <job>` each cancel that job within
-  seconds.
+  seconds, for a relay the Agent tool started. For a Workflow job, use `/relay:cancel <job>`: TaskStop finds no task
+  for one agent of a Workflow, and the message `cancel` to it was measured only in few runs (see "Long
+  Workflows").
 - TaskStop on a Workflow ends its relays and leaves its jobs running, for a resume to take over.
 - Stopping an agent yourself (`x` in the agent list or Esc in its view in the terminal, or the Stop button in
   the desktop app's Background tasks panel) ends the agent only, and the job runs to its end, `not handed back`.
