@@ -1,0 +1,1 @@
+{"id": "grok-job", "state": "cancelled", "request": {"backend": "grok", "model": "grok-4.7"}, "attempts": [{"relayVersion": "3.0.0-test"}]}

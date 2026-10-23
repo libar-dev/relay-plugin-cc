@@ -7,6 +7,7 @@ Usage: pane.sh start NAME DIR [--env VAR=value]... -- command [args...]
        pane.sh send NAME TEXT             TEXT - reads stdin
        pane.sh keys NAME KEY...
        pane.sh read NAME [LINES]          Default: 200 lines of scrollback
+       pane.sh screen NAME                Whole visible screen, without joining wrapped lines
        pane.sh wait NAME REGEX [SECONDS]  An extended regex matched against each screen line. Default: 30 seconds
        pane.sh trust NAME
        pane.sh attach-command NAME
@@ -22,7 +23,7 @@ die() { printf '%s\n' "$*" >&2; exit 2; }
 [[ $# -gt 0 ]] || { usage >&2; exit 2; }
 action=$1; shift
 case "$action" in -h|--help) usage; exit 0 ;; esac
-case "$action" in start|send|keys|read|wait|trust|attach-command|pid|stop|list) ;; *) die "Unknown command: $action" ;; esac
+case "$action" in start|send|keys|read|screen|wait|trust|attach-command|pid|stop|list) ;; *) die "Unknown command: $action" ;; esac
 name=
 if [[ "$action" == list ]]; then
   [[ $# == 0 ]] || die 'Usage: pane.sh list'
@@ -53,7 +54,7 @@ case "$action" in
     [[ $# -ge 1 && $# -le 2 && ${2:-30} =~ ^[0-9]+$ ]] || die 'Usage: pane.sh wait NAME REGEX [SECONDS]'
     regex=$1
     grep -Eq -- "$regex" <<<'' || [[ $? != 2 ]] || die 'Invalid regular expression.' ;;
-  trust|attach-command|pid|stop) [[ $# == 0 ]] || die "Usage: pane.sh $action NAME" ;;
+  screen|trust|attach-command|pid|stop) [[ $# == 0 ]] || die "Usage: pane.sh $action NAME" ;;
 esac
 
 socket_dir=${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/claude-tmux}
@@ -109,6 +110,7 @@ case "$action" in
     tmux -S "$SOCK" send-keys -t "$target" Enter ;;
   keys) tmux -S "$SOCK" send-keys -t "$target" "$@" ;;
   read) tmux -S "$SOCK" capture-pane -p -J -t "$target" -S "-${1:-200}" ;;
+  screen) tmux -S "$SOCK" capture-pane -p -t "$target" ;;
   wait)
     deadline=$((SECONDS + ${2:-30}))
     while :; do
@@ -121,8 +123,15 @@ case "$action" in
   trust)
     screen=$(tmux -S "$SOCK" capture-pane -p -J -t "$target")
     if [[ "$screen" == *'Yes, I trust this folder'* ]]; then
-      tmux -S "$SOCK" send-keys -t "$target" Down Enter
-      printf 'Accepted folder trust in %s\n' "$name"
+      # The dialog opens on "No, exit". Down and Enter go in separate answers, each chosen by what is
+      # selected, so a lost Down never lets an Enter answer "No, exit".
+      if [[ "$screen" == *'❯ Yes, I trust this folder'* ]]; then
+        tmux -S "$SOCK" send-keys -t "$target" Enter
+        printf 'Accepted folder trust in %s\n' "$name"
+      else
+        tmux -S "$SOCK" send-keys -t "$target" Down
+        printf 'Selected folder trust in %s\n' "$name"
+      fi
     fi ;;
   pid) tmux -S "$SOCK" display-message -p -t "$target" '#{pane_pid}' ;;
   stop)

@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { main, parseArgs } from '../scripts/live/suite.mjs';
 import { analyzeCheck, BACKENDS, BACKEND_NAMES, MODELS, STEER_DELIVERY, JOBS_HOME_EXPR,
   readTranscript, transcriptCalls, runSpan, hasMarker, claudeCodeVersionOf, leadModelOf,
   formatSeconds, readJob, scopeToRun, promptText, runLine } from '../scripts/live/lib/evidence.mjs';
@@ -554,8 +556,8 @@ test('formatSeconds uses one decimal and an en dash for a range', () => {
 });
 
 test('registry keeps the prompt checks\' interface, with the command checks between continue and stop', () => {
-  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless', 'stop', 'session-end', 'spawn-check', 'typed']);
-  assert.equal(new Set(checks.map(check => check.id)).size, 11);
+  assert.deepEqual(checks.map(check => check.id), ['steer-main', 'steer-workflow', 'steer-plugin', 'continue', 'commands', 'transfer', 'headless', 'stop', 'session-end', 'spawn-check', 'typed', 'status-line']);
+  assert.equal(new Set(checks.map(check => check.id)).size, 12);
   for (const check of checks.filter(check => !['commands', 'transfer', 'headless'].includes(check.id))) {
     assert.match(check.id, /^[a-z0-9-]+$/);
     assert.equal(typeof check.title, 'string');
@@ -568,7 +570,7 @@ test('registry keeps the prompt checks\' interface, with the command checks betw
     assert.ok(Array.isArray(check.surfaces));
     assert.ok(Array.isArray(check.probes));
     assert.equal(check.timeoutMinutes, check.id === 'typed' ? 25 : check.id === 'steer-main' ? 20 : 15);
-    assert.deepEqual(check.surfaces, ['steer-plugin', 'session-end', 'typed'].includes(check.id) ? ['terminal'] : ['terminal', 't3']);
+    assert.deepEqual(check.surfaces, ['steer-plugin', 'session-end', 'typed', 'status-line'].includes(check.id) ? ['terminal'] : ['terminal', 't3']);
     assert.deepEqual(check.probes, check.id === 'steer-plugin' ? ['wake-probe'] : []);
     assert.equal(getCheck(check.id), check);
     if (check.probes.length) assert.deepEqual(check.surfaces, ['terminal']);
@@ -2586,3 +2588,352 @@ for (const when of ['start', 'wait']) {
     assert.deepEqual(ctx.run.setup.cancellations, [{ jobId: 'job-1', status: 'cancelled' }]);
   });
 }
+
+function statusInput(dir) {
+  const run = { ...read(path.join(dir, 'run.json')), jobsHome: path.join(dir, 'jobs'),
+    transcript: path.join(dir, 'transcript.jsonl') };
+  return { ...input(dir, run.backends), run, evidenceDir: dir };
+}
+
+test('status-line is terminal only and run all includes it', async () => {
+  const check = getCheck('status-line');
+  assert.deepEqual(check.surfaces, ['terminal']);
+  assert.equal(typeof check.runTerminal, 'function');
+  assert.deepEqual(parseArgs(['run', 'status-line'], checks, BACKENDS).backends, BACKENDS);
+  assert.ok(parseArgs(['run', 'all'], checks, BACKENDS).checks.includes('status-line'));
+  const warnings = [];
+  assert.equal(await main(['prepare', 'status-line', '--surface', 't3', '--work-dir', '/tmp'], checks,
+    evidenceReaders, { warn: text => warnings.push(text) }), 1);
+  assert.deepEqual(warnings, ['status-line does not support t3.']);
+  assert.doesNotMatch(check.prompt({ runId: 'synthetic-run' }), /relay: /);
+});
+
+const statusScreen = text => `────────────────────\n❯ \n────────────────────\n${text ? `  ${text}\n` : ''}  ⏵⏵ bypass permissions on\n`;
+
+test('status-line captured footer fixture passes for all four backends with both timings', () => {
+  const data = statusInput(path.join(fixture, 'status-line')), check = getCheck('status-line');
+  const analyzed = check.analyze(data);
+  assert.deepEqual(analyzed.results, BACKENDS.map(backend => ({ backend, model: MODELS[backend],
+    relayVersion: '3.0.0-test', delivery: null, timings: { shownSeconds: [3], clearedSeconds: [4] }, result: 'pass', reason: null })));
+  assert.equal(analyzed.evidence.files.length, 4);
+  assert.equal(analyzed.evidence.agents.length, 4);
+  assert.equal(check.cell(analyzed.results[0]), 'count shown in 3.0 s, cleared in 4.0 s');
+});
+
+for (const [failure, file, text, reason] of [
+  ['never appears', 'running', statusScreen(''), /No screen shows relay: 4 running/],
+  ['shows another count', 'running', statusScreen('⚠ relay: 3 running'), /No screen shows relay: 4 running/],
+  ['is quoted by the assistant', 'running', `● The previous run said relay: 4 running.\n${statusScreen('')}`, /No screen shows/],
+  ['has a warning quoted above the prompt', 'running', `  ⚠ relay: 4 running\n${statusScreen('')}`, /No screen shows/],
+  ['lacks the warning prefix', 'running', statusScreen('relay: 4 running'), /No screen shows/],
+  ['has two pinned relay lines', 'running', statusScreen('⚠ relay: 4 running\n  ⚠ relay: 4 running'), /No screen shows/],
+  ['has another relay error line', 'running', statusScreen('⚠ relay: 4 running\n  ⚠ relay: status unavailable'), /No screen shows/],
+  ['has a second relay line below a blank row', 'running', statusScreen('⚠ relay: 4 running\n\n  ⚠ relay: 4 running'), /No screen shows/],
+  ['has the old double prefix', 'running', statusScreen('⚠ relay: relay: 4 running'), /No screen shows/],
+  ['has a wrong count prefix', 'running', statusScreen('⚠ relay: 40 running'), /No screen shows/],
+  ['uses the wrong part separator', 'running', statusScreen('⚠ relay: 4 running | 1 dead'), /No screen shows/],
+  ['has unavailable instead of a count', 'running', statusScreen('⚠ relay: status unavailable'), /No screen shows/],
+  ['joins across a blank footer boundary', 'running', statusScreen('⚠ relay: 4\n\nrunning'), /No screen shows/],
+  ['joins across another widget', 'running', statusScreen('⚠ relay: 4\n  other widget\n  running'), /No screen shows/],
+  ['joins a transcript count to a footer word', 'running', `⚠ relay: 4\n${statusScreen('running')}`, /No screen shows/],
+  ['never clears', 'cleared', statusScreen('⚠ relay: 1 dead · 2 owed'), /never clears/],
+  ['keeps a wrapped count', 'cleared', statusScreen('⚠ relay: 4\n  running'), /never clears/],
+  ['becomes unavailable', 'cleared', statusScreen('⚠ relay: status unavailable'), /never clears/],
+  ['wraps inside its prefix', 'cleared', statusScreen('⚠ rel\n  ay: status unavailable'), /never clears/],
+  ['is below a blank footer row', 'cleared', statusScreen('\n  ⚠ relay: status unavailable'), /never clears/],
+  ['has an empty capture', 'cleared', '', /never clears/],
+  ['loses its prompt', 'cleared', 'How did this session go?\n', /never clears/],
+  ['has only a transcript prompt', 'cleared', '● Example:\n❯\n', /never clears/],
+  ['has a blank before capture', 'before', '', /visible prompt/],
+  ['starts with unavailable', 'before', statusScreen('⚠ relay: status unavailable'), /visible prompt/]
+]) {
+  test(`status-line rejects a screen where the line ${failure}`, t => {
+    const dir = copy(t, 'status-line');
+    fs.writeFileSync(path.join(dir, `screen-${file}.txt`), text);
+    const results = getCheck('status-line').analyze(statusInput(dir)).results;
+    for (const row of results) { assert.equal(row.result, 'fail'); assert.match(row.reason, reason); }
+  });
+}
+
+for (const text of ['⚠ relay: 4\n  running', '⚠ relay:\n  4 running', '⚠ relay: 4 running · 1 dead · 2 owed',
+  '⚠ relay: 4\n  running · 1\n  dead · 2 owed']) {
+  test(`status-line accepts pinned count parts, including physical wrapping: ${JSON.stringify(text)}`, t => {
+    const dir = copy(t, 'status-line');
+    fs.writeFileSync(path.join(dir, 'screen-running.txt'), statusScreen(text));
+    assert.ok(getCheck('status-line').analyze(statusInput(dir)).results.every(row => row.result === 'pass'));
+  });
+}
+
+for (const gap of [0, 5, 5.001, 6]) {
+  test(`status-line requires clear captures strictly more than five seconds apart: ${gap}`, t => {
+    const data = statusInput(copy(t, 'status-line'));
+    data.run.statusLine.screens.at(-1).at = new Date(Date.parse(data.run.statusLine.screens.at(-2).at) + gap * 1000).toISOString();
+    const results = getCheck('status-line').analyze(data).results;
+    assert.ok(results.every(row => row.result === (gap > 5 ? 'pass' : 'fail')));
+  });
+}
+
+test('status-line restarts clear confirmation after a redraw or a returning line', t => {
+  const data = statusInput(copy(t, 'status-line'));
+  for (const text of ['', statusScreen('⚠ relay: status unavailable')]) {
+    fs.writeFileSync(path.join(data.evidenceDir, 'redraw.txt'), text);
+    const changed = structuredClone(data);
+    changed.run.statusLine.screens.splice(-1, 0, { phase: 'cleared', file: 'redraw.txt', at: '2026-10-22T10:00:20.000Z' });
+    assert.ok(getCheck('status-line').analyze(changed).results.every(row => row.result === 'fail' && /never clears/.test(row.reason)));
+  }
+});
+
+test('status-line ignores transcript quotations when judging a cleared footer', t => {
+  const dir = copy(t, 'status-line');
+  for (const phase of ['cleared', 'cleared-confirmed']) {
+    fs.writeFileSync(path.join(dir, `screen-${phase}.txt`), `● The previous run said ⚠ relay: 4 running.\n${statusScreen('')}`);
+  }
+  assert.ok(getCheck('status-line').analyze(statusInput(dir)).results.every(row => row.result === 'pass'));
+});
+
+for (const state of [{ completed: false, error: 'Could not cancel status-line jobs; see run.json.' },
+  { completed: true, error: 'Could not stop pane.' }, { completed: false }, { completed: undefined }]) {
+  test(`status-line separates the lead marker from run failure: ${JSON.stringify(state)}`, t => {
+    const data = statusInput(copy(t, 'status-line')), check = getCheck('status-line');
+    Object.assign(data.run, state);
+    assert.equal(check.completed(readTranscript(data.transcript), data.run), true);
+    const analyzed = analyzeRun(data.run, data.evidenceDir, [check], evidenceReaders,
+      { recordsDir: path.join(data.evidenceDir, 'records') });
+    for (const row of analyzed.records) {
+      assert.equal(row.result, 'fail');
+      assert.equal(row.reason, state.error ?? 'The status-line run did not complete.');
+      assert.doesNotMatch(row.reason, /did not print/);
+    }
+  });
+}
+
+test('status-line rejects observations beyond either 60 second bound', t => {
+  const data = statusInput(copy(t, 'status-line')), check = getCheck('status-line');
+  for (const phase of ['running', 'cleared']) {
+    const changed = structuredClone(data);
+    if (phase === 'running') changed.run.statusLine.screens.filter(row => row.phase === phase).at(-1).at = '2026-10-22T10:02:00.000Z';
+    else {
+      // The clear is timed from its first capture, so every capture of it moves past the bound.
+      const rows = changed.run.statusLine.screens.filter(row => row.phase === phase), shift = Date.parse('2026-10-22T10:02:00.000Z') - Date.parse(rows[0].at);
+      for (const row of rows) row.at = new Date(Date.parse(row.at) + shift).toISOString();
+    }
+    for (const row of check.analyze(changed).results) {
+      assert.equal(row.result, 'fail'); assert.match(row.reason, /60 second bounds/);
+    }
+  }
+});
+
+test('status-line records replay from copied screens and jobs after the originals disappear', t => {
+  const dir = copy(t, 'status-line'), data = statusInput(dir), check = getCheck('status-line');
+  const recordsDir = path.join(dir, 'records');
+  const first = analyzeRun(data.run, dir, [check], evidenceReaders, { recordsDir });
+  assert.ok(first.records.every(row => row.result === 'pass'));
+  assert.ok(first.records.every(row => row.finishedAt === data.run.checkFinishedAt));
+  for (const screen of data.run.statusLine.screens) fs.rmSync(path.join(dir, screen.file));
+  fs.rmSync(data.transcript);
+  fs.rmSync(data.jobsHome, { recursive: true });
+  assert.deepEqual(analyzeRun(data.run, dir, [check], evidenceReaders, { recordsDir, fromCopy: true }).records, first.records);
+});
+
+function statusDriver(t, failure, { keep = false, startMs = 1000, cancelMs = 1000 } = {}) {
+  const dir = temp(t), jobsHome = path.join(dir, 'jobs'), controller = new AbortController();
+  fs.mkdirSync(jobsHome);
+  const run = { runId: 'synthetic-run', check: 'status-line', backends: BACKENDS, surface: 'terminal',
+    relayVersion: '3.0.0-test', jobsHome, jobsHomeCreated: true, workDir: dir, pluginDir: '/build/relay' };
+  const calls = [], check = getCheck('status-line');
+  let clock = Date.parse('2026-10-22T10:00:00.000Z'), ready = false, starts = 0, cancels = 0, runningReads = 0, clearedReads = 0;
+  const ctx = { ...run, run, evidenceDir: dir, save() { write(path.join(dir, 'run.json'), run); },
+    async paneDriver(input, selected, options) {
+      assert.equal(input, ctx); assert.equal(options.keep, undefined, 'the suite owns --keep');
+      assert.equal(selected.completed([{ type: 'assistant', message: { content: [{ type: 'text', text: check.marker }] } }]), true);
+      run.pane = 'fake-pane'; run.promptSentAt = new Date(clock).toISOString();
+      fs.copyFileSync(path.join(fixture, 'status-line/transcript.jsonl'), path.join(dir, 'transcript.jsonl'));
+      run.transcript = path.join(dir, 'transcript.jsonl');
+      run.completed = ready = true;
+      if (!keep) options.drive(['stop', run.pane]);
+      assert.equal(calls.some(args => args[0] === 'stop'), false, 'the pane must stay open for the observations');
+    } };
+  const dependencies = { env: { RELAY_JOBS_CANCEL_GRACE_MS: '0', CLAUDECODE: '1' }, signal: controller.signal,
+    now: () => clock, sleep: async ms => { clock += ms; },
+    drive(args) {
+      calls.push(args);
+      if (args[0] === 'stop') return '';
+      assert.deepEqual(args, ['screen', 'fake-pane']);
+      if (!starts) return statusScreen('');
+      if (!cancels) {
+        if (failure === 'interrupted') controller.abort(new Error('Interrupted.'));
+        if (failure === 'missing job') fs.rmSync(path.join(jobsHome, 'repo/grok-job'), { recursive: true, force: true });
+        return ++runningReads > 2 && !['never appears', 'dead job', 'missing job', 'status failure'].includes(failure) ? statusScreen('⚠ relay: 4 running') : statusScreen('');
+      }
+      if (failure === 'unavailable') return statusScreen('⚠ relay: status unavailable');
+      if (failure === 'blank cleared') return '';
+      if (failure === 'clear redraw' && clearedReads === 5) { clearedReads++; return ''; }
+      return ++clearedReads > 3 && failure !== 'never clears' ? statusScreen('') : statusScreen('⚠ relay: 1 running');
+    },
+    async execute(command, args, options) {
+      assert.equal(command, process.execPath); assert.equal(args[0], '/build/relay/scripts/companion.mjs');
+      assert.equal(options.cwd, dir); assert.equal(options.env.RELAY_JOBS_HOME, jobsHome);
+      assert.equal(options.env.CLAUDECODE, undefined); assert.equal(options.detached, true);
+      assert.equal(ready, true);
+      if (args[1] === 'status') {
+        assert.deepEqual(args.slice(1), ['status', '--json', '--limit', '200']);
+        assert.equal(options.timeout, 10000);
+        if (failure === 'status failure') throw new Error('Listing timed out.');
+        const jobs = BACKENDS.flatMap(backend => {
+          const file = path.join(jobsHome, 'repo', `${backend}-job`, 'job.json');
+          if (!fs.existsSync(file)) return [];
+          const job = read(file);
+          if (failure === 'dead job' && backend === 'grok') {
+            assert.equal(job.state, 'running', 'dead is computed, never stored');
+            job.state = 'dead';
+          }
+          return [job];
+        });
+        return { stdout: JSON.stringify({ schema: 'relay.status/1', jobs, nextCursor: null }) };
+      }
+      if (args[1] === 'cancel') {
+        assert.equal(options.timeout, 40000); assert.equal(options.signal, undefined);
+        cancels++; clock += cancelMs;
+        if (failure === 'cancel failure') throw new Error('Cancel failed.');
+        edit(dir, `jobs/repo/${args[2]}/job.json`, job => { job.state = 'cancelled'; });
+        return { stdout: '' };
+      }
+      assert.equal(args[1], 'start'); assert.equal(args[2], '--prompt-file');
+      const backend = BACKENDS[starts++], id = `${backend}-job`, jobDir = path.join(jobsHome, 'repo', id);
+      const prompt = fs.readFileSync(args[3], 'utf8');
+      assert.ok(prompt.includes(`model: ${MODELS[backend]}\neffort: low\n---\n`));
+      assert.match(prompt, /`sleep 150` exactly once and wait for it/);
+      assert.doesNotMatch(prompt, /relay: /);
+      write(path.join(jobDir, 'job.json'), { id, state: 'running', request: { backend, model: MODELS[backend] }, attempts: [{ relayVersion: run.relayVersion }] });
+      clock += startMs;
+      const stdout = `job: ${id}\ndir: ${jobDir}\n`;
+      if (failure === 'partial start') throw Object.assign(new Error('Start failed after its receipt.'), { stdout });
+      if (starts === 2 && ['missing receipt', 'incomplete receipt'].includes(failure)) {
+        throw Object.assign(new Error('Second start timed out.'), { stdout: failure === 'missing receipt' ? undefined : `job: ${id}\n` });
+      }
+      return { stdout };
+    } };
+  return { ctx, dependencies, state: () => ({ calls, starts, cancels, runningReads, clearedReads }) };
+}
+
+test('status-line runTerminal starts all backends in one ready pane, captures screens and cancels before clearing', async t => {
+  const { ctx, dependencies, state } = statusDriver(t);
+  await getCheck('status-line').runTerminal(ctx, dependencies);
+  const analyzed = getCheck('status-line').analyze(statusInput(ctx.evidenceDir));
+  assert.ok(analyzed.results.every(row => row.result === 'pass'));
+  assert.deepEqual(analyzed.results[0].timings, { shownSeconds: [6], clearedSeconds: [7] });
+  assert.equal(state().starts, 4); assert.equal(state().cancels, 4);
+  assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
+  assert.equal(ctx.run.statusLine.screens.length, 14);
+  assert.equal(ctx.run.completed, true);
+});
+
+for (const failure of ['never appears', 'never clears', 'unavailable', 'blank cleared', 'interrupted', 'partial start',
+  'missing receipt', 'incomplete receipt', 'dead job', 'status failure']) {
+  test(`status-line runTerminal cleans up when ${failure}`, async t => {
+    const { ctx, dependencies, state } = statusDriver(t, failure);
+    await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies),
+      failure === 'interrupted' ? /Interrupted/ : failure === 'partial start' ? /Start failed/ :
+        failure.includes('receipt') ? /Second start timed out/ : /within 60 seconds/);
+    assert.equal(state().cancels, state().starts);
+    assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
+    assert.equal(ctx.run.completed, false);
+    assert.ok(ctx.run.error);
+    if (failure === 'never appears') assert.equal(state().runningReads, 57);
+    if (failure === 'never clears') assert.equal(state().clearedReads, 61);
+    if (failure === 'dead job') assert.match(ctx.run.error, /Jobs not starting or running: grok-job \(dead\)/);
+    if (failure === 'status failure') {
+      for (const backend of BACKENDS) assert.ok(ctx.run.error.includes(`${backend}-job (unreadable)`));
+      assert.match(ctx.run.error, /Status read failed: Listing timed out/);
+    }
+    if (failure.includes('receipt')) assert.deepEqual(ctx.run.cancellations.map(row => row.jobId), ['codex-job', 'grok-job']);
+  });
+}
+
+test('status-line includes every sequential start and cancel in its timings', async t => {
+  const { ctx, dependencies } = statusDriver(t, undefined, { startMs: 10000, cancelMs: 10000 });
+  await getCheck('status-line').runTerminal(ctx, dependencies);
+  const results = getCheck('status-line').analyze(statusInput(ctx.evidenceDir)).results;
+  assert.ok(results.every(row => row.result === 'pass'));
+  assert.deepEqual(results[0].timings, { shownSeconds: [42], clearedSeconds: [43] });
+});
+
+test('status-line names a missing setup job at the running deadline', async t => {
+  const { ctx, dependencies, state } = statusDriver(t, 'missing job');
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Jobs not starting or running: grok-job \(missing\)/);
+  assert.equal(state().cancels, 3);
+});
+
+test('status-line also cleans receiptless jobs in a supplied empty home', async t => {
+  const { ctx, dependencies, state } = statusDriver(t, 'missing receipt');
+  ctx.run.jobsHomeCreated = ctx.jobsHomeCreated = false;
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Second start timed out/);
+  assert.equal(state().cancels, 2);
+});
+
+test('status-line runTerminal waits a fresh poll interval after an empty redraw', async t => {
+  const { ctx, dependencies, state } = statusDriver(t, 'clear redraw');
+  await getCheck('status-line').runTerminal(ctx, dependencies);
+  assert.equal(state().clearedReads, 13);
+  assert.deepEqual(getCheck('status-line').analyze(statusInput(ctx.evidenceDir)).results[0].timings,
+    { shownSeconds: [6], clearedSeconds: [10] });
+});
+
+for (const failure of [undefined, 'never appears', 'cancel failure']) {
+  test(`status-line honours --keep through cleanup: ${failure ?? 'success'}`, async t => {
+    const { ctx, dependencies, state } = statusDriver(t, failure, { keep: true });
+    const check = getCheck('status-line');
+    if (failure) await assert.rejects(check.runTerminal(ctx, dependencies), /within 60 seconds|Could not cancel/);
+    else await check.runTerminal(ctx, dependencies);
+    assert.equal(state().calls.some(args => args[0] === 'stop'), false);
+    assert.ok(state().cancels >= state().starts);
+  });
+}
+
+test('status-line stops the pane of an interrupted run even under --keep', async t => {
+  const { ctx, dependencies, state } = statusDriver(t, 'interrupted', { keep: true });
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Interrupted/);
+  assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
+  assert.equal(state().cancels, state().starts);
+});
+
+test('status-line keeps the first failure in run.error when cleanup fails too', async t => {
+  const { ctx, dependencies } = statusDriver(t, 'never appears');
+  const execute = dependencies.execute;
+  dependencies.execute = async (command, args, options) => {
+    if (args[1] === 'cancel') throw new Error('Cancel failed.');
+    return execute(command, args, options);
+  };
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Could not cancel/);
+  assert.match(ctx.run.error, /did not show the running count within 60 seconds/);
+  assert.equal(ctx.run.completed, false);
+});
+
+test('status-line stops after failed cleanup when --keep is absent', async t => {
+  const { ctx, dependencies, state } = statusDriver(t, 'cancel failure');
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /Could not cancel/);
+  assert.deepEqual(state().calls.at(-1), ['stop', 'fake-pane']);
+  assert.equal(ctx.run.completed, false);
+});
+
+test('status-line rejects an occupied home without cancelling its jobs', async t => {
+  const { ctx, dependencies, state } = statusDriver(t);
+  write(path.join(ctx.jobsHome, 'repo/existing/job.json'), { id: 'existing', state: 'running' });
+  await assert.rejects(getCheck('status-line').runTerminal(ctx, dependencies), /empty jobs home/);
+  assert.equal(state().starts, 0);
+  assert.equal(state().cancels, 0);
+  assert.deepEqual(state().calls, []);
+});
+
+test('pane screen captures visible physical lines without joining or scrollback', t => {
+  const dir = temp(t), bin = path.join(dir, 'bin'), log = path.join(dir, 'args.json');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!${process.execPath}\n` +
+    `require('node:fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));\n` +
+    'process.stdout.write("relay: 4\\nrunning\\n");\n', { mode: 0o755 });
+  const result = spawnSync('bash', [fileURLToPath(new URL('../scripts/smoke/pane.sh', import.meta.url)), 'screen', 'test-pane'],
+    { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_RUNTIME_DIR: dir } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'relay: 4\nrunning\n');
+  assert.deepEqual(read(log), ['-S', path.join(dir, 'claude-tmux/tmux.sock'), 'capture-pane', '-p', '-t', '=test-pane:']);
+});

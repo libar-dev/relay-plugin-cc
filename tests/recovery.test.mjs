@@ -763,13 +763,16 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
 
 for (const gone of ["removed", "dead", "reused pid"]) {
   test(`recovery waits for a live cancel record and resumes after it is ${gone}`, async t => {
-    const ctx = setup(t, { turnMs: 60000 });
+    // The turn outlasts the test, so the cleanup cancels a running job: a short grace keeps that cancel's
+    // bound (twice the grace plus 40 s) from being the test's run time on a loaded machine. Every wait is on
+    // its condition, with a bound load does not reach.
+    const ctx = setup(t, { turnMs: 60000, env: { RELAY_JOBS_CANCEL_GRACE_MS: "500" } });
     const { id } = startJob(ctx, undefined, "First turn.");
     const dir = jobDirs(ctx).find(dir => path.basename(dir) === id);
-    await waitForJob(() => readJob(ctx, id).turnId);
+    await waitForJob(() => readJob(ctx, id).turnId, 60000);
     const before = readJob(ctx, id);
     process.kill(before.worker.pid, "SIGKILL");
-    await waitForJob(() => !isWorkerAlive(before.worker));
+    await waitForJob(() => !isWorkerAlive(before.worker), 60000);
     const holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
     t.after(() => holder.kill("SIGKILL"));
     const record = path.join(dir, "cancelling", `${holder.pid}.json`);
@@ -793,7 +796,7 @@ for (const gone of ["removed", "dead", "reused pid"]) {
       await exited;
     } else fs.writeFileSync(record, JSON.stringify({ ...identity, startTime: "another process" }));
     assert.equal(await resumeDeadJobOnce(dir, ctx.env), true);
-    await waitForJob(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
+    await waitForJob(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId, 60000);
     assert.equal(readJob(ctx, id).automaticResumes.length, 1);
   });
 }

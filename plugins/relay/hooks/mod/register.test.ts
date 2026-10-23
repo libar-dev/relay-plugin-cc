@@ -6,7 +6,7 @@
 // each session.send test also proves the hook ran: by the wake it ran, or by the agent list it
 // read. Each agent.spawn test does the same by the check it ran, or by a deny that kept the
 // spawn from the engine.
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const AGENTS = [
   { id: 'a-lead', name: 'lead', description: 'lead', type: 'general-purpose', status: 'running' },
@@ -733,4 +733,353 @@ test('a hook that fails is answered by its .catch, never by the markdown command
   expect(seen.runs.map((r) => r.argv)).toEqual([companionArgv('result', 'j-1')])
   expect(result.exitCode).toBe(1)
   expect(result.text).toMatch(/^\/relay:result j-1\n\nThe relay module failed while answering it: .+\. Run `node '[^']*' result 'j-1'` in a shell to see its output\.$/)
+})
+
+// The status line. Its timer starts at session.start on the kit's mocked clock, so a test raises
+// session.start and moves the clock; nothing beneath answers the session's surfaces, the listing
+// or the line, so each test answers them, and every line below is one the module set.
+
+const STATUS_ARGV = [
+  'node',
+  expect.stringMatching(/^\/.*\/scripts\/companion\.mjs$/),
+  'status',
+  '--json',
+  '--active',
+  '--limit',
+  '200',
+]
+
+type StatusOptions = {
+  surfaces?: () => string[] | Promise<string[]>
+  run?: () => unknown
+  start?: { surface: string | null; isInteractive: boolean }
+}
+
+// The engine beneath the plugin for the status line: the session's start, directory and
+// surfaces, a process runner answering the listing, and the line, each recording what reached it.
+async function statusEngine($: any, on: any, options: StatusOptions = {}) {
+  const runs: any[] = []
+  const lines: (string | undefined)[] = []
+  let surfaceReads = 0
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('session.cwd', () => ({ value: CWD }))
+  on('session.surfaces', () => {
+    surfaceReads++
+    const answer = options.surfaces ? options.surfaces() : ['terminal']
+    return answer instanceof Promise ? answer.then((value) => ({ value })) : { value: answer }
+  })
+  on('process.run', (_: unknown, e: any) => {
+    runs.push(e)
+    return options.run ? options.run() : { value: listing([]) }
+  })
+  on('ui.status', (_: unknown, e: any) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  const clock = mock.clock(on)
+  await $.session.start({ cwd: CWD, ...(options.start ?? { surface: 'terminal', isInteractive: true }) })
+  return { runs, lines, clock, surfaceReads: () => surfaceReads }
+}
+
+// A listing as `companion status --json --active` prints it, cut to the fields the line reads.
+const listing = (jobs: object[], nextCursor: string | null = null) =>
+  printed(JSON.stringify({ schema: 'relay.status/1', relayVersion: '3.0.0', relayBuild: null, active: true, limit: 200, jobs, nextCursor }))
+
+const job = (id: string, state: string, undeliveredCount = 0) => ({ id, state, undeliveredCount })
+
+const failed = (kind: string, exitCode: number) =>
+  printed(JSON.stringify({ schema: 'relay.status/1', relayVersion: '3.0.0', relayBuild: null, error: { kind, message: kind } }), '', exitCode)
+
+test('with no surface, ticks run no process', async ($, on) => {
+  let surfaces: string[] = []
+  const seen = await statusEngine($, on, { surfaces: () => surfaces })
+
+  await seen.clock.advance(15000)
+
+  expect(seen.surfaceReads()).toBe(3)
+  expect(seen.runs).toHaveLength(0)
+  expect(seen.lines).toEqual([])
+
+  // The same timer reads once a surface draws, so it was running above.
+  surfaces = ['terminal']
+  await seen.clock.advance(5000)
+  expect(seen.runs).toHaveLength(1)
+})
+
+test('a tick runs the active listing by argv in the session directory, every five seconds', async ($, on) => {
+  // A count shows, so every tick reads.
+  const seen = await statusEngine($, on, { run: () => ({ value: listing([job('j-1', 'running')]) }) })
+
+  await seen.clock.advance(4999)
+  expect(seen.runs).toHaveLength(0)
+  await seen.clock.advance(1)
+  await seen.clock.advance(5000)
+
+  expect(seen.runs).toEqual([
+    { argv: STATUS_ARGV, init: { cwd: CWD, timeoutMs: 10000 } },
+    { argv: STATUS_ARGV, init: { cwd: CWD, timeoutMs: 10000 } },
+  ])
+})
+
+test('a second session.start starts no second timer', async ($, on) => {
+  const seen = await statusEngine($, on)
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+
+  await seen.clock.advance(5000)
+
+  expect(seen.runs).toHaveLength(1)
+})
+
+test('the line counts running, dead and owed jobs, leaves out a part at 0, and clears with none', async ($, on) => {
+  const answers = [
+    listing([job('j-2', 'running'), job('j-1', 'starting')]),
+    listing([
+      job('j-4', 'running'),
+      job('j-3', 'starting'),
+      job('j-2', 'dead', 1),
+      // A row's owed list is cut to a few ids; its count is not.
+      { ...job('j-1', 'completed', 22), undelivered: Array.from({ length: 20 }, (_, i) => 'm-' + i) },
+    ]),
+    listing([job('j-1', 'dead')]),
+    listing([job('j-1', 'cancelled', 2)]),
+    listing([]),
+  ]
+  let next = 0
+  const seen = await statusEngine($, on, { run: () => ({ value: answers[next++] }) })
+
+  for (let i = 0; i < answers.length; i++) {
+    await seen.clock.advance(5000)
+  }
+
+  expect(seen.lines).toEqual(['2 running', '2 running · 1 dead · 23 owed', '1 dead', '2 owed', undefined])
+})
+
+test('with more pages, every count carries a +, a page with no running job included', async ($, on) => {
+  const pages = [
+    listing([job('j-3', 'running'), job('j-2', 'running'), job('j-1', 'dead', 2)], 'WyJ4IiwiaiJd'),
+    // Newest first: a full page of dead jobs can hide an older running one on the next page.
+    listing([job('j-2', 'dead'), job('j-1', 'dead')], 'WyJ5IiwiaiJd'),
+  ]
+  let next = 0
+  const seen = await statusEngine($, on, { run: () => ({ value: pages[next++] }) })
+
+  await seen.clock.advance(10000)
+
+  expect(seen.lines).toEqual(['2+ running · 1+ dead · 2+ owed', '2+ dead'])
+})
+
+test('a busy listing keeps the line, and the next good answer replaces it', async ($, on) => {
+  const answers = [listing([job('j-1', 'running')]), failed('busy', 4), listing([job('j-1', 'dead')])]
+  let next = 0
+  const seen = await statusEngine($, on, { run: () => ({ value: answers[next++] }) })
+
+  await seen.clock.advance(15000)
+
+  expect(seen.runs).toHaveLength(3)
+  expect(seen.lines).toEqual(['1 running', '1 dead'])
+})
+
+test('every other failure shows the status as unavailable until a good answer', async ($, on) => {
+  const answers: Array<() => unknown> = [
+    // Still running at the timeout, and a child that never started: $.process.run rejects.
+    () => ({ deny: 'timed out after 10000 ms' }),
+    () => ({ deny: 'spawn node ENOENT' }),
+    () => ({ value: { ...listing([job('j-1', 'running')]), isStdoutTruncated: true } }),
+    () => ({ value: printed('{"schema":"relay.status/1","jobs":[') }),
+    () => ({ value: printed(JSON.stringify({ schema: 'relay.result/1', jobs: [] })) }),
+    () => ({ value: failed('error', 1) }),
+    () => ({ value: failed('usage', 1) }),
+    // Busy only with busy's exit code.
+    () => ({ value: failed('busy', 1) }),
+    () => ({ value: { ...listing([job('j-1', 'running')]), exitCode: 1 } }),
+    () => ({ value: listing([job('j-1', 'running')]) }),
+  ]
+  let next = 0
+  const seen = await statusEngine($, on, { run: () => answers[next++]() })
+
+  for (let i = 0; i < answers.length; i++) {
+    await seen.clock.advance(5000)
+  }
+
+  expect(seen.runs).toHaveLength(answers.length)
+  expect(seen.lines).toEqual([...Array(answers.length - 1).fill('status unavailable'), '1 running'])
+})
+
+test('a tick while a read is in flight runs nothing', async ($, on) => {
+  let answer: (value: unknown) => void = () => {}
+  let held = true
+  const seen = await statusEngine($, on, {
+    run: () => (held ? new Promise((resolve) => (answer = resolve)) : { value: listing([job('j-1', 'dead')]) }),
+  })
+
+  await seen.clock.advance(5000)
+  await seen.clock.advance(10000)
+  expect(seen.surfaceReads()).toBe(3)
+  expect(seen.runs).toHaveLength(1)
+  expect(seen.lines).toEqual([])
+
+  held = false
+  answer({ value: listing([job('j-1', 'running')]) })
+  await seen.clock.settle()
+  expect(seen.lines).toEqual(['1 running'])
+
+  await seen.clock.advance(5000)
+  expect(seen.runs).toHaveLength(2)
+  expect(seen.lines).toEqual(['1 running', '1 dead'])
+})
+
+test('ticks whose surface reads are slow still run one read at a time', async ($, on) => {
+  const surfaces: ((value: string[]) => void)[] = []
+  const runs: ((value: unknown) => void)[] = []
+  const seen = await statusEngine($, on, {
+    surfaces: () => new Promise<string[]>((resolve) => surfaces.push(resolve)),
+    run: () => new Promise((resolve) => runs.push(resolve)),
+  })
+
+  await seen.clock.advance(10000)
+  expect(surfaces).toHaveLength(2)
+  // Both surface reads answer while neither tick has read yet: only the first may run the listing.
+  for (const answer of surfaces) answer(['terminal'])
+  await seen.clock.settle()
+  expect(seen.runs).toHaveLength(1)
+
+  runs[0]({ value: listing([job('j-1', 'running')]) })
+  await seen.clock.settle()
+  expect(seen.lines).toEqual(['1 running'])
+})
+
+test('a desktop session that starts with no surface reads once the desktop attaches', async ($, on) => {
+  let surfaces: string[] = []
+  // The desktop app's local session starts as the SDK's does, drawing nowhere yet.
+  const seen = await statusEngine($, on, {
+    surfaces: () => surfaces,
+    run: () => ({ value: listing([job('j-1', 'running')]) }),
+    start: { surface: null, isInteractive: false },
+  })
+
+  await seen.clock.advance(10000)
+  expect(seen.runs).toHaveLength(0)
+  expect(seen.lines).toEqual([])
+
+  surfaces = ['desktop']
+  await seen.clock.advance(5000)
+  expect(seen.runs).toEqual([{ argv: STATUS_ARGV, init: { cwd: CWD, timeoutMs: 10000 } }])
+  expect(seen.lines).toEqual(['1 running'])
+})
+
+// The listing's runs among every run a test's hooks made (a check, a wake, a command's own run).
+const listings = (runs: any[]) => runs.filter((r) => r.argv.includes('--active'))
+
+test('while the line is cleared a tick reads every thirty seconds, and every five while a count shows', async ($, on) => {
+  const answers = [
+    listing([]),
+    listing([job('j-1', 'running')]),
+    listing([job('j-1', 'running')]),
+    listing([]),
+    // Unavailable is no good answer, so it reads at every tick as a count does.
+    failed('error', 1),
+    listing([]),
+    // A busy answer keeps the line, cleared here, and reads at the next tick: a record was changing.
+    failed('busy', 4),
+    listing([]),
+  ]
+  let next = 0
+  const seen = await statusEngine($, on, { run: () => ({ value: answers[next++] }) })
+
+  // The first tick reads, and the line clears.
+  await seen.clock.advance(5000)
+  expect(seen.runs).toHaveLength(1)
+  // The next read is due thirty seconds after it, at the sixth tick.
+  await seen.clock.advance(25000)
+  expect(seen.runs).toHaveLength(1)
+  expect(seen.surfaceReads()).toBe(6)
+  await seen.clock.advance(5000)
+  expect(seen.runs).toHaveLength(2)
+  // A count shows: every tick reads until the line clears again.
+  await seen.clock.advance(10000)
+  expect(seen.runs).toHaveLength(4)
+  expect(seen.lines).toEqual([undefined, '1 running', '1 running', undefined])
+  await seen.clock.advance(25000)
+  expect(seen.runs).toHaveLength(4)
+  await seen.clock.advance(5000)
+  expect(seen.runs).toHaveLength(5)
+  await seen.clock.advance(5000)
+  expect(seen.runs).toHaveLength(6)
+  expect(seen.lines.slice(4)).toEqual(['status unavailable', undefined])
+  await seen.clock.advance(30000)
+  expect(seen.runs).toHaveLength(7)
+  await seen.clock.advance(5000)
+  expect(seen.runs).toHaveLength(8)
+  expect(seen.lines).toEqual([undefined, '1 running', '1 running', undefined, 'status unavailable', undefined, undefined])
+})
+
+// Each relay event the module sees makes every tick read for thirty seconds while the line is cleared.
+async function quietLine($: any, on: any, extra: (on: any) => void = () => {}) {
+  const runs: any[] = []
+  on('agent.list', () => ({ value: AGENTS }))
+  on('session.send', () => ({ isDelivered: true }))
+  on('agent.spawn', () => STARTED)
+  extra(on)
+  const seen = await statusEngine($, on, {
+    run: () => ({ value: listing([]) }),
+  })
+  await seen.clock.advance(5000)
+  expect(listings(seen.runs)).toHaveLength(1)
+  // Cleared, so the next tick does not read.
+  await seen.clock.advance(5000)
+  expect(listings(seen.runs)).toHaveLength(1)
+  return seen
+}
+
+// After the event, a read at each of the next six ticks (thirty seconds), and none at the tick after.
+async function readsForThirty(seen: any) {
+  const before = listings(seen.runs).length
+  for (let tick = 1; tick <= 6; tick++) {
+    await seen.clock.advance(5000)
+    expect(listings(seen.runs)).toHaveLength(before + tick)
+  }
+  await seen.clock.advance(5000)
+  expect(listings(seen.runs)).toHaveLength(before + 6)
+}
+
+test('a relay:job spawn makes every tick read for thirty seconds while the line is cleared', async ($, on) => {
+  const seen = await quietLine($, on)
+
+  // Another agent type is no relay event.
+  expect(await $.agent.spawn({ prompt: 'look', subagentType: 'Explore', description: 'look around' })).toEqual(STARTED)
+  await seen.clock.advance(5000)
+  expect(listings(seen.runs)).toHaveLength(1)
+
+  expect(await $.agent.spawn(relay(GOOD))).toEqual(STARTED)
+  await readsForThirty(seen)
+  // A resumed relay can resume a job, and is an event too.
+  expect(await $.agent.spawn(relay('Go on.', { resume: { agentId: 'a-job' } }) as any)).toEqual(STARTED)
+  await readsForThirty(seen)
+})
+
+test('a send that wakes a relay makes every tick read for thirty seconds while the line is cleared', async ($, on) => {
+  const seen = await quietLine($, on)
+
+  // A listed agent of another type gets no wake, and is no relay event.
+  expect(await $.session.send({ to: 'lead', text: 'hello', origin: { kind: 'model' } })).toEqual({ isDelivered: true })
+  await seen.clock.advance(5000)
+  expect(listings(seen.runs)).toHaveLength(1)
+
+  expect(await $.session.send({ to: 'worker', text: 'steer', origin: { kind: 'model' } })).toEqual({ isDelivered: true })
+  expect(seen.runs.filter((r) => r.argv.includes('wake'))).toHaveLength(1)
+  await readsForThirty(seen)
+})
+
+test('each of the relay commands makes every tick read for thirty seconds while the line is cleared', async ($, on) => {
+  const seen = await quietLine($, on, (on) => {
+    on('env.get', () => ({ value: undefined }))
+    on('session.id', () => ({ value: SESSION }))
+  })
+
+  for (const name of ['relay:status', 'relay:result', 'relay:cancel', 'relay:transfer']) {
+    await $.command.run(command(name, 'j-1'))
+    await readsForThirty(seen)
+  }
+  // The commands' own runs are not listing reads.
+  expect(seen.runs.filter((r) => !r.argv.includes('--active'))).toHaveLength(4)
 })

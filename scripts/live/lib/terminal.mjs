@@ -8,6 +8,13 @@ import { cancelGrace, cancelTimeout, configDirectory, findTranscript } from './r
 const paneScript = fileURLToPath(new URL('../../smoke/pane.sh', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// The text in Claude Code's input box: the ❯ row right under a rule, or null when none is drawn.
+export function inputRow(screen) {
+  const lines = String(screen ?? '').split('\n');
+  const at = lines.findLastIndex((line, i) => i > 0 && /^\s*─{3,}\s*$/.test(lines[i - 1]) && /^\s*❯/.test(line));
+  return at < 0 ? null : lines[at].replace(/^\s*❯\s?/, '').trim();
+}
+
 export function inspectDebug(text, pluginDir, pluginName = 'relay') {
   const lines = text.split('\n');
   const hooksPath = path.join(pluginDir, 'hooks/hooks.json');
@@ -17,8 +24,11 @@ export function inspectDebug(text, pluginDir, pluginName = 'relay') {
   const pluginLines = lines.filter(line => line.includes(`Read hooks.json for plugin ${pluginName} (enabled=true):`) && line.includes(hooksPath));
   const startupLines = lines.filter(line => line.includes('Hooks: SessionStart:startup') && line.includes(pluginDir));
   const moduleLines = lines.filter(line => line.includes(modulePath) || named.test(line));
-  const moduleErrors = moduleLines.filter(line => /error|fail|refus|cannot|not loaded|could not|rejected/i.test(line));
-  const moduleLoaded = moduleLines.some(line => /\bloaded\b/i.test(line) && !/not loaded|unloaded/i.test(line));
+  // --plugin-dir's copy loads as <name>@inline; a copy installed from a marketplace as <name>@<marketplace>,
+  // and its module would answer for the build under test.
+  const foreign = new RegExp(`hooks module ${name}@(?!inline\\b)\\S+ loaded`, 'i');
+  const moduleErrors = moduleLines.filter(line => /error|fail|refus|cannot|not loaded|could not|rejected/i.test(line) || foreign.test(line));
+  const moduleLoaded = moduleLines.some(line => /\bloaded\b/i.test(line) && !/not loaded|unloaded/i.test(line) && !foreign.test(line));
   return { pluginRead: pluginLines.length > 0, startup: startupLines.length > 0,
     moduleLoaded: moduleLoaded && moduleErrors.length === 0, modulePath,
     pluginLines, startupLines, moduleLines, moduleErrors };
@@ -67,17 +77,23 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
     }
     startSucceeded = true;
     log(drive(['attach-command', name]).trim());
-    let trusted = false, ready = false;
+    let ready = false, polls = 0, answers = 0, answeredAt = -Infinity;
     const startupDeadline = Math.min(deadline, Date.now() + 120000);
     while (Date.now() < startupDeadline && !aborted) {
+      const poll = polls++;
       const screen = drive(['read', name, '0']);
       fs.writeFileSync(path.join(ctx.evidenceDir, 'screen.txt'), screen);
       if (/Yes, I (accept|understand)/i.test(screen) && /bypass|skip.permissions|dangerously/i.test(screen)) {
         throw new Error('The bypass-permissions dialog appeared; it is not answered here, since that changes the user\'s settings.');
       }
-      if (!trusted && screen.includes('Yes, I trust this folder')) {
+      if (screen.includes('Yes, I trust this folder')) {
         if (!ctx.workDirCreated) throw new Error(`${ctx.workDir} is not trusted by Claude Code; open it in Claude Code once, or let the runner create the work folder.`);
-        drive(['trust', name]); trusted = true;
+        // pane.sh trust moves to "Yes" or, once it is selected, presses Enter. A key sent while the dialog
+        // draws can be lost, so it answers again while the dialog is still shown two polls later.
+        if (poll - answeredAt >= 2) {
+          if (answers === 6) throw new Error('The folder trust dialog stayed after six answers; see screen.txt.');
+          drive(['trust', name]); answers += 1; answeredAt = poll;
+        }
         await pause(1000); continue;
       }
       const debug = fs.existsSync(debugLog) ? fs.readFileSync(debugLog, 'utf8') : '';
@@ -94,13 +110,23 @@ export async function runTerminal(ctx, check, { run, save, readers, keep = false
     if (!ready) throw new Error('Startup timed out without plugin and module load evidence; see run.json and screen.txt.');
     await pause(1000);
     if (aborted) throw new Error('Interrupted.');
-    drive(['send', name, '-'], fs.readFileSync(path.join(ctx.evidenceDir, 'prompt.txt'), 'utf8'));
+    const prompt = fs.readFileSync(path.join(ctx.evidenceDir, 'prompt.txt'), 'utf8');
+    drive(['send', name, '-'], prompt);
     run.promptSentAt = new Date().toISOString();
     save();
-    let done = false, lastUpdate = 0;
+    let done = false, lastUpdate = 0, waits = 0, resent = 0, resentAt = 0;
+    const head = prompt.split('\n')[0].slice(0, 40);
     while (Date.now() < deadline && !aborted) {
+      const wait = waits++;
       const screen = drive(['read', name, '2000']);
       fs.writeFileSync(path.join(ctx.evidenceDir, 'screen.txt'), screen);
+      // An Enter sent while Claude Code draws the paste can be lost. The prompt then still holds the
+      // text, unsent, so pressing Enter again cannot send it twice.
+      const input = inputRow(screen);
+      if (input !== null && (input.includes('[Pasted text #') || (head && input.startsWith(head))) && wait - resentAt >= 1) {
+        if (resent === 3) throw new Error('The prompt stayed unsent after three more Enters; see screen.txt.');
+        drive(['keys', name, 'Enter']); resent += 1; resentAt = wait;
+      }
       run.transcript = findTranscript(ctx.workDir, debugLog, configDir, readers.readTranscript);
       let all = null;
       try { all = run.transcript ? readers.readTranscript(run.transcript) : null; }

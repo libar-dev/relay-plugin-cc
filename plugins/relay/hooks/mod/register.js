@@ -15,6 +15,13 @@
 // It also answers /relay:status, /relay:result, /relay:cancel and /relay:transfer itself: each runs
 // the companion and shows what it printed, with no model turn. The markdown commands of those
 // names only say the module did not load.
+//
+// The status line counts the repository's jobs that are running, dead or owed messages, from
+// `companion status --json --active`, read every five seconds while a surface draws the session.
+// While the line is cleared it reads every thirty seconds, and every five for thirty after a relay event
+// the module sees. Under an Agent SDK host (T3) nothing draws, so status polling starts no process
+// there. The timer starts at session.start, which fires again in the fresh copy after a reload
+// ends the old copy's timers.
 
 // A line that is `---`, trailing spaces or tabs allowed: the line parseHeaderPrompt (in
 // scripts/lib/jobs/request.mjs) ends a header with. Its two patterns, `---` before a line break
@@ -206,8 +213,119 @@ function moduleFailed($, e, next, sub) {
   return errorText(e, "The relay module failed while answering it: " + why + ". " + rerunHint($, sub, e.args, "to see its output"));
 }
 
+// Claude Code draws a plugin's status line after the plugin's name ("relay: "), so the text leaves it out.
+const UNAVAILABLE = "status unavailable";
+
+// The status line's text for one run of the listing: the line, undefined to clear it, or null to
+// keep it as it is, since a busy listing only means a job's record was changing.
+function statusText(ran) {
+  if (ran?.isStdoutTruncated !== false || typeof ran.stdout !== "string") {
+    return UNAVAILABLE;
+  }
+  let answer;
+  try {
+    answer = JSON.parse(ran.stdout);
+  } catch {
+    return UNAVAILABLE;
+  }
+  if (answer?.schema !== "relay.status/1") {
+    return UNAVAILABLE;
+  }
+  if (answer.error?.kind === "busy" && ran.exitCode === 4) {
+    return null;
+  }
+  if (ran.exitCode !== 0 || answer.error != null || !Array.isArray(answer.jobs)) {
+    return UNAVAILABLE;
+  }
+  let running = 0;
+  let dead = 0;
+  let owed = 0;
+  for (const job of answer.jobs) {
+    if (job?.state === "starting" || job?.state === "running") {
+      running++;
+    } else if (job?.state === "dead") {
+      dead++;
+    }
+    // The count, not the list: a row's list of owed messages is cut to a few.
+    owed += Number.isInteger(job?.undeliveredCount) ? job.undeliveredCount : 0;
+  }
+  // More pages exist, and the line does not page: every count is then a lower bound, and an older
+  // running job may sit on a later page.
+  const more = answer.nextCursor != null ? "+" : "";
+  const parts = [];
+  if (running > 0) {
+    parts.push(running + more + " running");
+  }
+  if (dead > 0) {
+    parts.push(dead + more + " dead");
+  }
+  if (owed > 0) {
+    parts.push(owed + more + " owed");
+  }
+  return parts.length === 0 ? undefined : parts.join(" · ");
+}
+
+// One read of the listing, as statusText reads it; a run that failed shows the line is unavailable.
+async function statusLine($) {
+  const argv = ["node", $.plugin.root + "/scripts/companion.mjs", "status", "--json", "--active", "--limit", "200"];
+  let ran;
+  try {
+    ran = await $.process.run(argv, { cwd: await $.session.cwd(), timeoutMs: 10000 });
+  } catch {
+    return UNAVAILABLE;
+  }
+  return statusText(ran);
+}
+
+// While the line is cleared, the ticks between reads: thirty seconds at one tick in five.
+const CLEARED_TICKS = 6;
+
+// One tick: a read only while a surface draws the session and no read is in flight. While the
+// last good answer cleared the line, a job can only appear through a start the module rarely
+// sees, so a tick reads only every CLEARED_TICKS ticks, or at every tick for CLEARED_TICKS ticks
+// after a relay event it did see (a relay's job exists only once its start has run) or a busy
+// answer.
+async function poll($, poller, tick) {
+  if ((await $.session.surfaces()).length === 0 || poller.isReading) {
+    return;
+  }
+  if (poller.isCleared && tick > poller.fastUntil && tick - poller.readTick < CLEARED_TICKS) {
+    return;
+  }
+  poller.isReading = true;
+  poller.readTick = tick;
+  try {
+    const text = await statusLine($);
+    if (text !== null) {
+      $.ui.status(text);
+      poller.isCleared = text === undefined;
+    } else if (poller.isCleared) {
+      // Busy: a job's record is being written, often by a worker that has just started.
+      poller.fastUntil = tick + CLEARED_TICKS;
+    }
+  } finally {
+    poller.isReading = false;
+  }
+}
+
 export function register(on) {
+  // One timer and one read in flight per load of the module. `fastUntil` is the last tick of the
+  // every-tick reads a relay event (a relay:job spawn, a wake, one of the commands below) asks for.
+  const poller = { timer: null, ticks: 0, isReading: false, isCleared: false, readTick: 0, fastUntil: 0 };
+  on("session.start", ($, e, next) => {
+    // session.start fires again without a reload (an enable, another plugin's engine.create),
+    // and this copy's timer is still running then.
+    poller.timer ??= $.clock.every(5000, () => {
+      // A tick that failed leaves the line as it is; the next one reads again.
+      poll($, poller, ++poller.ticks).catch(() => {});
+    });
+    return next(e);
+  });
+
   on("agent.spawn", async ($, e, next) => {
+    if (e?.subagentType === "relay:job") {
+      poller.fastUntil = poller.ticks + CLEARED_TICKS;
+    }
     if (!isCheckedSpawn(e)) {
       return next(e);
     }
@@ -241,6 +359,7 @@ export function register(on) {
       const matches = agents.filter((a) => a.id === e.to || a.name === e.to);
       const ids = matches.length > 0 ? matches.filter((a) => a.type === "relay:job").map((a) => a.id) : [e.to];
       for (const id of ids) {
+        poller.fastUntil = poller.ticks + CLEARED_TICKS;
         await $.process.run(["node", $.plugin.root + "/scripts/companion.mjs", "wake", "--agent", id], { timeoutMs: 10000 });
       }
     } catch {
@@ -250,14 +369,18 @@ export function register(on) {
     return result;
   });
 
-  on("command.run", { command: "relay:status" }, ($, e) => answerCommand($, e, "status", 30000))
+  // A command marks the event when it ends, after the change it made to a job.
+  const marked = () => {
+    poller.fastUntil = poller.ticks + CLEARED_TICKS;
+  };
+  on("command.run", { command: "relay:status" }, ($, e) => answerCommand($, e, "status", 30000).finally(marked))
     .catch(($, e, next) => moduleFailed($, e, next, "status"));
-  on("command.run", { command: "relay:result" }, ($, e) => answerCommand($, e, "result", 30000))
+  on("command.run", { command: "relay:result" }, ($, e) => answerCommand($, e, "result", 30000).finally(marked))
     .catch(($, e, next) => moduleFailed($, e, next, "result"));
   // Cancel's timeout follows the grace it waits for the worker (cancelTimeoutMs), transfer's sits
   // above the two minutes it allows Codex's import.
-  on("command.run", { command: "relay:cancel" }, async ($, e) => answerCommand($, e, "cancel", await cancelTimeoutMs($)))
+  on("command.run", { command: "relay:cancel" }, async ($, e) => answerCommand($, e, "cancel", await cancelTimeoutMs($)).finally(marked))
     .catch(($, e, next) => moduleFailed($, e, next, "cancel"));
-  on("command.run", { command: "relay:transfer" }, ($, e) => answerCommand($, e, "transfer", 180000, true))
+  on("command.run", { command: "relay:transfer" }, ($, e) => answerCommand($, e, "transfer", 180000, true).finally(marked))
     .catch(($, e, next) => moduleFailed($, e, next, "transfer"));
 }
