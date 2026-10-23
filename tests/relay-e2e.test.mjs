@@ -355,3 +355,222 @@ test("end to end under the Workflow harness: a relay the harness re-spawned take
     .flatMap((slug) => fs.readdirSync(path.join(first.home, slug)));
   assert.deepEqual(dirs, [jobId], "one job directory");
 });
+
+// D48: Claude Code writes these as user entries without origin or isMeta when it
+// interrupts a relay. Delivering one to a cancelled job would continue that job.
+for (const marker of [
+  "[Request interrupted by user for tool use]",
+  "[Request interrupted by user]",
+  "[Request interrupted: the session ended before this agent finished. Nobody asked it to stop.]"
+]) {
+  for (const toolName of ["Bash", "SubagentHandback"]) for (const fromPerson of [false, true]) {
+    test(`end to end: after cancellation through ${toolName}, ${fromPerson ? "a person still delivers" : "the relay ignores"} ${marker}`, async t => {
+      const ctx = relayContext("job", { turnMs: 60000 });
+      const brief = "D48: keep the cancelled job stopped.";
+      ctx.append(ctx.prompt(`model: gpt-test\neffort: low\n---\n${brief}`));
+      const started = await relayCall(ctx, "Bash", { command: agentCommand("start --from-relay") });
+      assert.equal(started.decision, "allow");
+      assert.equal(started.result.status, 0, started.result.stdout + started.result.stderr);
+      const jobId = /^job: (\S+)$/m.exec(started.result.stdout)[1];
+      t.after(() => companion(ctx, ["cancel", jobId]));
+      await waitFor(() => readJobJson(ctx, jobId).turnId && readJobJson(ctx, jobId).state === "running" && codexReceived(ctx).turns.length === 1);
+
+      // The same cancellation command TaskStop's hook runs, before the relay runs again.
+      const cancelled = companion(ctx, ["cancel", jobId]);
+      assert.equal(cancelled.status, 0, cancelled.stdout + cancelled.stderr);
+      await waitFor(() => readJobJson(ctx, jobId).state === "cancelled");
+      const before = readJobJson(ctx, jobId);
+      assert.equal(before.attempts.length, 1);
+      assert.deepEqual(codexReceived(ctx), { turns: [brief], steers: [] });
+      const dir = jobDirOf(ctx, jobId);
+      const inboxFiles = () => Object.fromEntries(["", "claimed", "outcomes", "relay"].map(part => {
+        const folder = path.join(dir, "inbox", part);
+        return [part, fs.existsSync(folder) ? fs.readdirSync(folder).filter(name => name.endsWith(".json")).sort() : []];
+      }));
+      const beforeInbox = inboxFiles();
+      const beforeAttempts = fs.readdirSync(path.join(dir, "attempts")).sort();
+
+      const command = agentCommand("wait <id> --timeout-seconds 540").replace("<id>", jobId);
+      const note = { ...ctx.userTurn(marker), message: { role: "user", content: [{ type: "text", text: marker }] } };
+      if (fromPerson) note.origin = { kind: "human" };
+      assert.equal(Object.hasOwn(note, "isMeta"), false);
+      assert.equal(Object.hasOwn(note, "origin"), fromPerson);
+      // On resume the interrupt note precedes a fresh tool use. Exercise both
+      // the wait hook and hand-back, which sync through the same transcript parser.
+      ctx.append(note, ctx.toolUse(toolName === "Bash" ? command : toolName));
+      const input = hookInput(ctx, "PreToolUse", {
+        tool_name: toolName, tool_input: toolName === "Bash" ? { command } : { message: "done" }
+      });
+      for (let check = 0; check < 2; check += 1) {
+        const guarded = await runHookProcess(ctx, input);
+        assert.equal(guarded.status, 0, guarded.stderr);
+        assert.equal(guarded.json?.hookSpecificOutput?.permissionDecision,
+          toolName === "SubagentHandback" && fromPerson ? "deny" : "allow", guarded.stdout);
+      }
+
+      if (fromPerson) {
+        // Acknowledging a continue precedes turn/start; wait for backend delivery.
+        await waitFor(() => codexReceived(ctx).turns.length === 2);
+        assert.deepEqual(codexReceived(ctx), { turns: [brief, marker], steers: [] });
+        assert.equal(readJobJson(ctx, jobId).attempts.length, 2);
+        assert.deepEqual(inboxFiles().relay, [`${note.uuid}.json`], "one delivery despite two guard calls");
+        const receipt = JSON.parse(fs.readFileSync(path.join(dir, "inbox", "relay", `${note.uuid}.json`), "utf8"));
+        assert.equal(receipt.kind, "continue");
+        assert.equal(receipt.status, "done");
+        const message = JSON.parse(fs.readFileSync(path.join(dir, "inbox", "claimed", `${receipt.messageId}.json`), "utf8"));
+        assert.equal(message.text, marker);
+        assert.equal(message.relayUuid, note.uuid);
+      } else {
+        assert.equal(readJobJson(ctx, jobId).state, "cancelled", "the guard must not restart the cancelled job");
+        assert.deepEqual(readJobJson(ctx, jobId).attempts, before.attempts, "no new attempt");
+        assert.deepEqual(fs.readdirSync(path.join(dir, "attempts")).sort(), beforeAttempts);
+        assert.deepEqual(inboxFiles(), beforeInbox, "no pending, claimed, outcome or relay message added");
+        assert.deepEqual(codexReceived(ctx), { turns: [brief], steers: [] }, "no new backend turn or steer");
+      }
+      assert.equal(fs.existsSync(path.join(dir, "relay-violations.jsonl")), false, "no relay violation recorded");
+      assert.doesNotMatch(companion(ctx, ["result", jobId]).stdout, /relay-violation/);
+    });
+  }
+}
+
+// D100-D102: compare the complete persisted receipts, including the acknowledgement
+// action. Continue acknowledges acceptance before turn/start: await backend delivery too.
+for (const [origin, kind] of [
+  ["coordinator", "steer"], ["coordinator", "continue"], ["peer", "steer"],
+  ["human", "steer"], ["human", "continue"]
+]) {
+  test(`end to end: exact relay ledger record for ${origin} ${kind}`, async (t) => {
+    const ctx = relayContext("job", { turnMs: 100 });
+    ctx.env.FAKE_CODEX_RELEASE_FILE = path.join(ctx.work, "ledger-release");
+    const brief = "[held] Ledger receipt brief.";
+    ctx.append(ctx.prompt(`model: gpt-test\neffort: low\n---\n${brief}`));
+    const started = await relayCall(ctx, "Bash", { command: agentCommand("start --from-relay") });
+    assert.equal(started.decision, "allow");
+    assert.equal(started.result.status, 0, started.result.stderr);
+    const id = /^job: (\S+)$/m.exec(started.result.stdout)[1];
+    t.after(() => companion(ctx, ["cancel", id]));
+    await waitFor(() => readJobJson(ctx, id).state === "running" && readJobJson(ctx, id).turnId && codexReceived(ctx).turns.length === 1);
+    const dir = jobDirOf(ctx, id);
+    if (kind === "continue") {
+      fs.writeFileSync(ctx.env.FAKE_CODEX_RELEASE_FILE, "");
+      await waitFor(() => readJobJson(ctx, id).state === "completed");
+      const handback = await relayCall(ctx, "SubagentHandback", { message: "done" });
+      assert.equal(handback.decision, "allow");
+      // Hold the next backend process until the ledger acknowledges acceptance.
+      // This pins accepted-next-turn without racing its later turn-started update.
+      const binary = path.join(ctx.binDir, "codex");
+      const real = path.join(ctx.binDir, "codex-real");
+      const gate = path.join(ctx.work, "continue-backend-release");
+      fs.renameSync(binary, real);
+      fs.writeFileSync(binary, `#!/usr/bin/env node
+const fs = require("node:fs");
+const launch = () => {
+  if (!fs.existsSync(${JSON.stringify(gate)})) return setTimeout(launch, 20);
+  const child = require("node:child_process").spawn(process.execPath, [${JSON.stringify(real)}, ...process.argv.slice(2)], { stdio: "inherit" });
+  child.on("exit", code => process.exit(code ?? 1));
+};
+launch();
+`, { mode: 0o755 });
+    }
+    const text = `  ${origin} ${kind}: preserve\nthese spaces.  `;
+    const entry = origin === "coordinator" ? (kind === "steer" ? ctx.queued(text) : ctx.afterHandback(text)) :
+      origin === "peer" ? ctx.peerQueued(text) : (kind === "steer" ? ctx.humanQueued(text) : ctx.humanAfterHandback(text));
+    ctx.append(entry);
+    const before = Date.now();
+    const delivery = relayCall(ctx, "Bash", { command: `${RELAY_CMD} status ${id}` });
+    if (kind === "continue") {
+      await waitFor(() => {
+        const file = path.join(dir, "inbox", "relay", `${entry.uuid}.json`);
+        return fs.existsSync(file) && JSON.parse(fs.readFileSync(file, "utf8")).status === "done";
+      });
+      fs.writeFileSync(path.join(ctx.work, "continue-backend-release"), "");
+    }
+    const delivered = await delivery;
+    const after = Date.now();
+    assert.equal(delivered.decision, "allow");
+    assert.equal(delivered.result.status, 0, delivered.result.stderr);
+    await waitFor(() => codexReceived(ctx)[kind === "steer" ? "steers" : "turns"].includes(text));
+    assert.deepEqual(codexReceived(ctx), kind === "steer" ? { turns: [brief], steers: [text] } : { turns: [brief, text], steers: [] });
+    const readJson = file => JSON.parse(fs.readFileSync(file, "utf8"));
+    const claimed = fs.readdirSync(path.join(dir, "inbox", "claimed")).map(name => readJson(path.join(dir, "inbox", "claimed", name)));
+    assert.equal(claimed.length, 1);
+    const [message] = claimed;
+    assert.equal(message.relayUuid, entry.uuid);
+    assert.equal(message.kind, kind);
+    assert.equal(message.text, text);
+    assert.match(message.id, /^[a-z0-9]+-[a-f0-9]{8}$/);
+    if (kind === "continue") await waitFor(() => readJson(path.join(dir, "inbox", "outcomes", `${message.id}.json`)).action === "turn-started");
+    const outcome = readJson(path.join(dir, "inbox", "outcomes", `${message.id}.json`));
+    assert.equal(outcome.action, kind === "steer" ? "steered" : "turn-started");
+    const ledgerDir = path.join(dir, "inbox", "relay");
+    assert.deepEqual(fs.readdirSync(ledgerDir), [`${entry.uuid}.json`]);
+    const receipt = readJson(path.join(ledgerDir, `${entry.uuid}.json`));
+    // Validate every nondeterministic value before using it in the exact object.
+    for (const key of ["at", "postedAt", "updatedAt"]) {
+      assert.equal(new Date(receipt[key]).toISOString(), receipt[key], key);
+      assert.ok(Date.parse(receipt[key]) >= before && Date.parse(receipt[key]) <= after, key);
+    }
+    assert.ok(Date.parse(receipt.at) <= Date.parse(message.createdAt));
+    if (kind === "steer") assert.ok(Date.parse(receipt.postedAt) >= Date.parse(outcome.at));
+    assert.ok(Date.parse(receipt.updatedAt) >= Date.parse(receipt.postedAt));
+    assert.deepEqual(receipt, {
+      uuid: entry.uuid, kind, messageId: message.id, status: "done", at: receipt.at,
+      postedAt: receipt.postedAt, outcome: kind === "steer" ? "steered" : "accepted-next-turn", updatedAt: receipt.updatedAt
+    });
+    await relayCall(ctx, "Bash", { command: `${RELAY_CMD} status ${id}` });
+    assert.deepEqual(readJson(path.join(ledgerDir, `${entry.uuid}.json`)), receipt, "a second guard call leaves the receipt unchanged");
+    assert.equal(fs.existsSync(path.join(dir, "relay-violations.jsonl")), false);
+  });
+}
+
+test("end to end: an unknown origin records one exact violation and no delivery ledger record", async (t) => {
+  const ctx = relayContext("job", { turnMs: 100 });
+  ctx.append(ctx.prompt("model: gpt-test\neffort: low\n---\n[quick] Unknown-origin brief."));
+  const started = await relayCall(ctx, "Bash", { command: agentCommand("start --from-relay") });
+  assert.equal(started.result.status, 0, started.result.stderr);
+  const id = /^job: (\S+)$/m.exec(started.result.stdout)[1];
+  t.after(() => companion(ctx, ["cancel", id]));
+  await waitFor(() => readJobJson(ctx, id).state === "completed");
+  const dir = jobDirOf(ctx, id);
+  const entry = ctx.humanAfterHandback("Do not restart the job for a harness notice.");
+  entry.origin = { kind: "bridge" };
+  ctx.append(entry);
+  const before = Date.now();
+  for (let call = 0; call < 2; call++) {
+    const result = await relayCall(ctx, "Bash", { command: `${RELAY_CMD} status ${id}` });
+    assert.equal(result.decision, "allow");
+    assert.equal(result.result.status, 0, result.result.stderr);
+  }
+  const violations = fs.readFileSync(path.join(dir, "relay-violations.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  assert.equal(violations.length, 1);
+  const [violation] = violations;
+  assert.equal(new Date(violation.at).toISOString(), violation.at);
+  assert.ok(Date.parse(violation.at) >= before && Date.parse(violation.at) <= Date.now());
+  assert.deepEqual(violation, {
+    at: violation.at, kind: "transcript", agentId: ctx.agentId,
+    reason: `messages could not be checked: entry ${entry.uuid} is a user entry of origin bridge, which the relay does not deliver`
+  });
+  assert.equal(fs.existsSync(path.join(dir, "inbox", "relay")), false);
+  assert.deepEqual(fs.readdirSync(path.join(dir, "inbox", "claimed")), []);
+  assert.deepEqual(fs.readdirSync(path.join(dir, "inbox", "outcomes")), []);
+  assert.equal(readJobJson(ctx, id).state, "completed");
+  assert.equal(readJobJson(ctx, id).attempts.length, 1);
+  assert.deepEqual(codexReceived(ctx), { turns: ["[quick] Unknown-origin brief."], steers: [] });
+});
+
+test("end to end: CLI refuses a second start for the same relay", async (t) => {
+  const ctx = relayContext("job", { turnMs: 100 });
+  ctx.append(ctx.prompt("model: gpt-test\neffort: low\n---\n[quick] One start only."));
+  const started = await relayCall(ctx, "Bash", { command: agentCommand("start --from-relay") });
+  assert.equal(started.result.status, 0, started.result.stderr);
+  const id = /^job: (\S+)$/m.exec(started.result.stdout)[1];
+  t.after(() => companion(ctx, ["cancel", id]));
+  await waitFor(() => readJobJson(ctx, id).state === "completed");
+  // Bypass the guard: this is the CLI's independent defense against double starts.
+  const again = companion(ctx, ["start", "--from-relay", "--relay-agent", ctx.agentId, "--relay-transcript", ctx.transcript]);
+  assert.equal(again.status, 1);
+  assert.equal(again.stderr, "");
+  assert.equal(again.stdout, `job: ${id}\nerror: this relay already started job ${id}\n`);
+  assert.deepEqual(codexReceived(ctx), { turns: ["[quick] One start only."], steers: [] });
+  assert.deepEqual(JSON.parse(companion(ctx, ["status", "--all", "--json"]).stdout).jobs.map(job => job.id), [id]);
+});
