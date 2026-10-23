@@ -1,0 +1,37 @@
+{
+  "id": "job-workflow-codex",
+  "createdAt": "2026-10-22T10:00:03.000Z",
+  "launchedBy": { "claudeSessionId": "board-session" },
+  "state": "cancelled",
+  "completedAt": "2026-10-22T10:02:43.000Z",
+  "request": {
+    "backend": "codex",
+    "model": "gpt-6.1-sol"
+  },
+  "relay": {
+    "agentId": "workflow-codex",
+    "label": "board-wf-codex",
+    "workflowRunId": "wf-board",
+    "transcriptPath": "../transcript/subagents/workflows/wf-board/agent-workflow-codex.jsonl"
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "startedAt": "2026-10-22T10:00:04.000Z",
+      "endedAt": "2026-10-22T10:02:05.000Z",
+      "state": "completed",
+      "relayVersion": "3.0.0-test",
+      "turnId": "first"
+    },
+    {
+      "attempt": 2,
+      "source": "continue",
+      "messageId": "continue",
+      "startedAt": "2026-10-22T10:02:33.000Z",
+      "endedAt": "2026-10-22T10:02:43.000Z",
+      "state": "cancelled",
+      "relayVersion": "3.0.0-test"
+    }
+  ],
+  "messages": []
+}
