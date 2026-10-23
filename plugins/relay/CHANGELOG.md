@@ -1,27 +1,5 @@
 # Changelog
 
-## 3.0.0-dev.15
-
-- Restart Claude sessions after upgrading so all job readers and workers use the load guard.
-  Deferred-spawn retries refresh the start grace for older readers while a waiter is active.
-- Keep admitted jobs moving under high CPU load or macOS warning pressure; critical host
-  memory and critical pressure still hold next turns with a visible reason.
-
-- Add a per-user load guard for worker launches and turns, with memory headroom, startup
-  holds, shared five-second pacing, a two-job very-heavy-model quota and a bounded resident queue.
-  Healthy machines have no fixed active ceiling; host and finite cgroup memory tests are separate. Deferred jobs remain
-  queued and cancellable; submitter waits and relay hooks retry them.
-- Pause recognized provider refusals with a single fenced probe, preserve structured RPC
-  errors, and limit Kimi's default silent retries while the guard is on.
-- Gate foreground reviews, use macOS free+inactive and pressure signals, and visibly bypass
-  native Windows. Keep admission settings shared across jobs homes.
-- Show queued reasons and completed wait timing on job/status/board surfaces and expose an
-  immediate off switch. Running turns are never interrupted by admission.
-
-## 3.0.0-dev.14
-
-- Clarify Workflow relay framing and recovery guidance.
-
 ## 3.0.0 (unreleased)
 
 The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5 and Phase 6's report, built
@@ -57,6 +35,28 @@ Pre-release cuts:
     50 a page, newest first (follow `nextCursor` with `--cursor`; `status <job> --json` has the full record), and a
     `--json` error is JSON on stdout, not text on stderr.
   - Still open: `/relay:transfer` takes no job id (known issue 5).
+- `3.0.0-pre.3` (2026-10-23, tag `v3.0.0-pre.3`): what it adds and fixes over pre.2. The details are in "Phase 4",
+  "Load guard" and "Fixes from the pre-releases" below.
+  - **Load guard.** Before a job starts, and before each later turn, relay checks the machine:
+    - A job starts only while enough memory stays free after it starts. The jobs that started in the last 30 s
+      count toward that.
+    - Starts are spaced 5 s apart across all sessions.
+    - At most 2 very heavy models run at once. That is a quota limit.
+    - A backend pauses after its provider refuses work for a usage limit, rate limit or concurrency limit.
+
+    A job that has to wait shows `queued` with the reason. Running turns are never stopped.
+    `RELAY_ADMISSION=off` or `/relay:setup --admission off` turns the guard off. Kimi jobs retry each step at most
+    3 times unless you set `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP`. Restart Claude sessions after upgrading: a session
+    still on pre.2 doesn't know the `queued` state.
+  - **The status line and the board** (Phase 4). One line under the prompt counts the repository's running and
+    dead jobs and owed messages, and the board lists jobs with their actions.
+  - **A person's stop names the job.** When a person stops a relay from Claude Code's controls, relay now says
+    that the relay's job keeps running, and which job it is. `TaskStop` and the message `cancel` still cancel it.
+  - **A Workflow relay keeps to its job.** Claude Code 2.1.309 shows a Workflow agent the lead's request as "user
+    request". The relay is told that this request is not its task, so it runs its three commands. In pre.2, 2 of
+    40 relays in a soak refused their job. Not yet checked live.
+  - Still open: after a continue sent to a job directly, the job shows `not handed back` although no relay waited
+    for it, and `/relay:transfer` takes no job id.
 
 Phase 1, steer wake:
 
@@ -201,6 +201,32 @@ Phase 6, an investigation (the plugin does not change):
 - [docs/mods/messages-from-a-job.md](../../docs/mods/messages-from-a-job.md) reports what Codex, Grok, ZCode and
   Kimi allow for a job that sends a message to the agent that started it, or to a peer, and how such a message
   and its reply would travel. Messages from a job are not part of 3.0.
+
+Load guard:
+
+- Before a job starts, and before each later turn, relay checks the machine it runs on. It covers every session
+  and jobs home of the user. The README's "Load guard" section has the rules and their defaults.
+  - Memory: a job starts only while enough memory stays free after it starts. The test is
+    `available − recent starts' holds − this job's hold ≥ max(2 GiB, 15% of RAM)`, where a hold is 0.5 GiB for
+    Codex or Grok and 1 GiB for Kimi, ZCode or an unknown backend, for 30 s. Finite Linux cgroup limits are tested
+    separately. On macOS, available memory is `vm_stat` free plus inactive pages, and a pressure warning holds new
+    jobs.
+  - Pacing: one start or turn every 5 s across all sessions. There is no fixed job ceiling on a healthy machine.
+    When the 5-minute load is high or memory can't be read, new jobs stop at `min(16, max(2, CPUs − 2))`.
+  - Quota: at most 2 very heavy models (Astra, Kimi K3, or any `max`/`ultra` effort) run at once. This is a quota
+    limit, not a memory one.
+  - Provider refusals: a usage limit, rate limit or concurrency refusal pauses that backend. After the pause, one
+    probe job goes first. Kimi jobs retry a step at most 3 times unless `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP` is set.
+- A job that waits shows `queued` with its reason in status, `--json`, the status line and the board, and can be
+  cancelled. High load and a macOS pressure warning hold only new jobs. Critical memory and critical macOS
+  pressure also hold next turns. A turn that is running is never stopped. Foreground reviews pass the same check.
+- When too many workers already wait, a new job is recorded `queued` without a worker. The submitter's `wait` (a
+  relay agent's or yours) starts it later; `status` only reads.
+- `RELAY_ADMISSION=off`, or `/relay:setup --admission off`, turns the guard off. On native Windows the guard does
+  nothing and says so.
+- Not covered: memory used later by commands a job runs (tests, builds), native Claude agents, other harness
+  sessions and other users. The research behind the defaults is in
+  [docs/research/resource-budgets-and-load-guard.md](../../docs/research/resource-budgets-and-load-guard.md).
 
 Fixes from the pre-releases:
 
