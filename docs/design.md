@@ -1099,7 +1099,8 @@ After a Claude Code update:
 **Processes.**
 
 - `not handed back` marks a relay job whose last attempt ended with no hand-back. After a `continue` or `resume` sent
-  to the job directly (`C continue`, `C resume`, the board's direct route), no relay waited for that attempt, so the
+  to the job directly (`C continue`, `C resume`, the board's direct route) once its relay has ended, no relay waited
+  for that attempt, so the
   mark only says no relay handed it back: the report is in `result`. A job's records do not yet say whether a relay
   waited for an attempt.
 - The board's Steer and Continue read the job, then send: a job that begins another attempt in the moment between

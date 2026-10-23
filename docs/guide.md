@@ -286,7 +286,7 @@ While this repository has jobs queued, running or dead, or messages a job has ta
 counts them:
 
 ```
-⚠ relay: 2 running · 1 queued (start spacing) · 1 dead · 3 owed
+⚠ relay: 2 running · 1 queued (memory low) · 1 dead · 3 owed
 ```
 
 - `queued` counts pending jobs and shows a queue reason; a workerless admission wait is not dead.

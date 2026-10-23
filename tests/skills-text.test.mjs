@@ -89,6 +89,8 @@ test("setup's captured-snapshot formatter preserves configured versus effective 
 
 test("the guide reconciles direct continuation, queued UI and conditional stop notices", () => {
   const guide = fs.readFileSync(path.join(root, "docs/guide.md"), "utf8").replace(/\s+/g, " ");
+  const design = fs.readFileSync(path.join(root, 'docs/design.md'), 'utf8').replace(/\s+/g, ' ');
+  assert.ok(design.includes("the board's direct route) once its relay has ended"));
   assert.doesNotMatch(guide, /No relay hands back a turn that a continue by job id starts/);
   for (const fact of ["if it still waits", "Queue next turn", "queued job", "queue reason", "no notice", "does not ask Claude to cancel"]) {
     assert.ok(guide.includes(fact), fact);
