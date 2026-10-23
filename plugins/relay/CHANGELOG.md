@@ -225,9 +225,10 @@ Load guard:
     `vm_stat` free plus inactive pages as a fallback, and a pressure warning holds new jobs.
   - Pacing: one start or turn every 5 s across all sessions. There is no fixed job ceiling on a healthy machine.
     When the 5-minute load is high or memory can't be read, new jobs stop at `min(16, max(2, CPUs − 2))`.
-  - Quota: at most 2 very heavy models (Astra, Kimi K3, or any `max`/`ultra` effort) run at once. This is a quota
-    limit, not a memory one.
-  - Provider refusals: a usage limit, rate limit or concurrency refusal pauses that backend. After the pause, one
+  - Quota: at most 2 very heavy jobs (GPT-6 Astra and Kimi K3, at any effort) run at once across backends.
+    Effort alone on other models never enters the pool. This quota is independent of memory.
+  - Provider refusals: recognized Codex/Kimi/ZCode usage or rate errors, and Kimi concurrency refusals,
+    pause that backend; Grok has no classifier coverage. A pause does not resume the failed job. After the pause, one
     probe job goes first. Only while the guard is on, Kimi defaults to 3 total attempts per step unless
     `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP` is set; this default does not apply with the guard off or on native Windows.
 - A job that waits shows `queued` with its reason in status, `--json`, the status line and the board, and can be

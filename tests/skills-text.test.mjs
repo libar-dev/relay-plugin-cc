@@ -50,6 +50,10 @@ test("documented guard defaults agree with local runtime exports", () => {
     const source = read(`skills/jobs/${f}`);
     assert.match(source, /(?:quota.{0,20}2|2 very heavy)/);
   }
+  for (const file of [path.join(root, 'README.md'), path.join(plugin, 'CHANGELOG.md')]) {
+    const source = fs.readFileSync(file, 'utf8');
+    assert.doesNotMatch(source, /Astra, (?:the Kimi K3 family|Kimi K3), or (?:effective|any) `max`/);
+  }
   for (const effort of ["low", "default", "high"]) {
     assert.equal(modelClass({ backend: "codex", model: "gpt-6-astra", effort }), "very-heavy");
     for (const model of ["kimi-code/k3", "kimi-code/k3-highspeed"]) {

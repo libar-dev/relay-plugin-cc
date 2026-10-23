@@ -331,8 +331,8 @@ Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
   those next turns too, with a visible reason. Host load is skipped with a note when its
   CPU scope differs from available CPUs.
 - The very-heavy-model **quota** is two concurrent participating jobs total across backends:
-  Astra, the Kimi K3 family, or effective `max`/`ultra` effort. This is a quota/token limit,
-  independent of RAM; ordinary `high`/`xhigh` work is outside it. Opaque default selections
+  GPT-6 Astra and the Kimi K3 family at any effort. This is a quota/token limit, independent
+  of RAM. Effort alone, including `max`/`ultra` on other models, never enters this pool. Opaque default selections
   remain unknown, so only identified selections are covered.
 - At most `Q = max(8, 2F)` resident waiting workers, including workers being spawned, are kept.
   Worker creation holds `64 MiB` for 30 seconds against the same host/scope budget. A full
