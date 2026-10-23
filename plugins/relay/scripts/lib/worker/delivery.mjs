@@ -8,10 +8,10 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { absoluteJobsHomeEnv, jobPaths, readJob, TERMINAL_STATES } from "../jobs/store.mjs";
+import { absoluteJobsHomeEnv, jobPaths, readJob, writeJob, TERMINAL_STATES } from "../jobs/store.mjs";
 import { isMessagePending, messageAccount, pendingInboxMessages, postInboxMessage, readOutcome, writeOutcome } from "../jobs/messages.mjs";
 import { isWorkerLease, readLease, releaseWorkerLease } from "../jobs/lease.mjs";
-import { spawnWithAdmission } from "./admission.mjs";
+import { spawnWithAdmission, DEFAULTS } from "./admission.mjs";
 import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
 import { holderAlive } from "./admission.mjs";
 import { inOwnUserScope } from "../util/process.mjs";
@@ -30,7 +30,16 @@ function sleep(ms) {
 export function spawnWorker(jobDir, cwd, env = process.env) {
   const lease = jobPaths(jobDir).lease;
   if (!acquireOwnership(lease, { pid: process.pid, startTime: null, role: "spawn" }, { isAlive: holderAlive })) return null;
-  try { return spawnWithAdmission(jobDir, env, () => spawnWorkerProcess(jobDir, cwd, env)); }
+  try {
+    const job = readJob(jobDir);
+    const retryAt = Date.parse(job?.admission?.workerRetryAt);
+    const poll = envNumber(env, "RELAY_ADMISSION_POLL_MS", DEFAULTS.pollMs);
+    if (job?.state === "queued" && job.admission?.waitKind === "worker" && Date.now() >= retryAt && Date.now() - retryAt < poll) return null;
+    const result = spawnWithAdmission(jobDir, env, () => spawnWorkerProcess(jobDir, cwd, env));
+    const deferred = readJob(jobDir);
+    if (deferred?.state === "queued" && deferred.admission?.waitKind === "worker") writeJob(jobDir, { ...deferred, admission: { ...deferred.admission, workerRetryAt: new Date(Date.now()).toISOString() } });
+    return result;
+  }
   finally { releaseOwnership(lease); }
 }
 

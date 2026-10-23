@@ -608,7 +608,7 @@ function boardRow(job, at) {
   return {
     id: job.id, state: job.state, backend: job.backend, model: job.model, effort: job.effort, attempts: job.attempts,
     completedAt: job.completedAt, reportPath: job.reportPath, relay,
-    admission: job.admission == null ? null : { reason: job.admission.reason?.slice(0, 300) ?? null, since: job.admission.since ?? null },
+    admission: job.admission == null ? null : { reason: job.admission.reason?.slice(0, 300) ?? null, since: job.admission.since ?? null, admittedAt: job.admission.admittedAt ?? null },
     isRelayLost: job.state === "running" && relay !== null && isRelayQuiet(job, at),
     notHandedBack: job.notHandedBack, undeliveredCount: job.undeliveredCount,
     relayViolationCount: job.relayViolationCount, openMessages: job.openMessages,
@@ -637,7 +637,7 @@ function rowText(job) {
 // an attempt, or ends and lands its report. Not `updatedAt`, which the worker's heartbeat rewrites
 // every ten seconds.
 function detailMark(job) {
-  return [job.state, job.attempts, job.openMessages, job.undeliveredCount, job.reportPath, job.completedAt, job.relay?.lastToolAt ?? null, job.admission?.reason ?? null, job.admission?.since ?? null].join("|");
+  return [job.state, job.attempts, job.openMessages, job.undeliveredCount, job.reportPath, job.completedAt, job.relay?.lastToolAt ?? null, job.admission?.reason ?? null, job.admission?.since ?? null, job.admission?.admittedAt ?? null].join("|");
 }
 
 // Whether the selected job's view is read at this read: a new job, a stale view that is not
@@ -988,6 +988,7 @@ async function drawJob($, { Box, Text, Button, Input, Markdown }, job, board) {
     h(Text, null, relay === null ? "no relay" : "relay " + (relay.label ?? relay.agentId) + (relay.workflowRunId === null ? "" : " · Workflow run " + relay.workflowRunId)),
   ];
   if (job.state === "queued" && job.admission?.reason) nodes.push(h(Text, null, "queued: " + job.admission.reason + " (since " + (job.admission.since ?? "unknown") + ")"));
+  if (job.admission?.since && job.admission.admittedAt) nodes.push(h(Text, null, "waited " + Math.max(0, (Date.parse(job.admission.admittedAt) - Date.parse(job.admission.since)) / 1000).toFixed(1) + "s before admission"));
   // The mobile app draws no text field. The field is the job's own, so text typed for one job
   // never stays in it for another.
   if (Input !== undefined) {

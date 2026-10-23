@@ -22,7 +22,7 @@ function seed(t, brief = "[quick] First turn.") {
     request: buildLaunchRequest({ model: "synthetic-model", effort: D.lightEfforts[0], cd: ctx.work }, { baseDir: ctx.work, env: ctx.env }) });
   let now = Date.now(), blocked = true;
   const options = { env: ctx.env, admission: { now: () => now, scanUnslotted: () => [], readMachine: () => ({ totalBytes: 128 * GiB, availableBytes: blocked ? 0 : 100 * GiB, cores: 64, load5: 0, notes: [] }) },
-    admissionSleep: async () => { now += Math.max(D.spacingMs, D.aboveMinSpacingMs); await new Promise(r => setTimeout(r, 10)); } };
+    admissionSleep: async () => { now += D.spacingMs; await new Promise(r => setTimeout(r, 10)); } };
   return { ctx, dir, options, unblock: () => blocked = false, block: () => blocked = true };
 }
 
@@ -164,4 +164,33 @@ test("a provider refusal followed by a backend exit is failed without automatic 
   assert.equal(job.refusal.kind, "usage");
   assert.equal(connections, 1);
   assert.equal(job.automaticResumes?.length ?? 0, 0);
+});
+
+test("an impossible backend scope fails clearly without connecting or retrying", async t => {
+  const s = seed(t); s.unblock();
+  s.options.admission.readMachine = () => ({ totalBytes: 64 * GiB, availableBytes: 60 * GiB, cores: 8, load5: 0, notes: [], group: "/synthetic",
+    scopes: [{ id: "/synthetic", limitBytes: 0.5 * GiB, currentBytes: 0, remainingBytes: 0.5 * GiB }] });
+  await runWorker(s.dir, s.options);
+  const job = readJob(s.dir);
+  assert.equal(job.state, "failed"); assert.equal(job.admission.state, "failed");
+  assert.match(job.errorMessage, /cannot fit cgroup/);
+  assert.equal(fs.existsSync(path.join(s.ctx.bin, "fake-codex-state.json")), false);
+});
+
+test("deferred worker retries are throttled across callers at the admission poll interval", async t => {
+  const { retryQueuedWorker } = await import("../plugins/relay/scripts/lib/worker/delivery.mjs");
+  const s = seed(t);
+  s.ctx.env.RELAY_ADMISSION_READINGS = path.join(s.ctx.root, "readings.json");
+  fs.writeFileSync(s.ctx.env.RELAY_ADMISSION_READINGS, JSON.stringify({ totalBytes: 64 * GiB, availableBytes: 0, cores: 8, load5: 0 }));
+  const job = readJob(s.dir);
+  writeJob(s.dir, { ...job, state: "queued", admission: { state: "waiting", waitKind: "worker", since: new Date().toISOString() } });
+  let now = Date.now(); t.mock.method(Date, "now", () => now);
+  retryQueuedWorker(s.dir, s.ctx.env);
+  const first = readJob(s.dir).admission.workerRetryAt;
+  now += D.pollMs - 1;
+  retryQueuedWorker(s.dir, s.ctx.env);
+  assert.equal(readJob(s.dir).admission.workerRetryAt, first);
+  now++;
+  retryQueuedWorker(s.dir, s.ctx.env);
+  assert.notEqual(readJob(s.dir).admission.workerRetryAt, first);
 });

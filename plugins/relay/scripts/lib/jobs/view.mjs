@@ -257,6 +257,9 @@ export function renderJobBlock(view) {
   if (view.state === "queued" && job.admission?.reason) {
     lines.push(`queued: ${job.admission.reason} (since ${job.admission.since ?? "unknown"})`);
   }
+  if (job.admission?.state === "admitted" && job.admission.since && job.admission.admittedAt) {
+    lines.push(`waited ${Math.max(0, (Date.parse(job.admission.admittedAt) - Date.parse(job.admission.since)) / 1000).toFixed(1)}s before admission`);
+  }
   for (const note of job.admission?.notes ?? []) {
     if (note !== "load guard off") lines.push(`note: load guard: ${note}`);
   }

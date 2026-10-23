@@ -16,7 +16,6 @@ import path from "node:path";
 import process from "node:process";
 
 import { admit, admissionHome, releaseSlot, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded } from "./admission.mjs";
-import { readUserConfig } from "../jobs/config.mjs";
 import { backendFor } from "../backends/index.mjs";
 import { truncateCodePoints } from "../util/text.mjs";
 import { acquireWorkerLease, releaseWorkerLease, readLease } from "../jobs/lease.mjs";
@@ -178,7 +177,7 @@ async function runWorkerRound(jobDir, options, held) {
   const admissionDeps = { env: { ...process.env, ...options.env }, ...options.admission };
   const home = admissionHome(admissionDeps.env);
   let slot = null;
-  const guardOn = admissionEnabled(admissionDeps.env, readUserConfig(admissionDeps.env));
+  const guardOn = admissionEnabled(admissionDeps.env, undefined, admissionDeps.platform ?? process.platform);
   let lastEventAt = job.lastEventAt ?? null;
   const save = (patch = {}) => {
     job = { ...job, ...patch, lastEventAt, heartbeatAt: nowIso() };
@@ -544,17 +543,21 @@ async function runWorkerRound(jobDir, options, held) {
     for (;;) {
       if (cancelRequested) return false;
       const decision = admit({ home, jobId: job.id, jobDir, me, request: { ...job.request, backend: backend.name },
-        waitingSince: job.admission?.state === "waiting" ? job.admission.since : null }, admissionDeps);
+        admission: job.admission, waitingSince: job.admission?.state === "waiting" ? job.admission.since : null }, admissionDeps);
       if (decision.slot) slot = decision.slot;
+      if (decision.permanent) {
+        save({ admission: decision.record });
+        throw Object.assign(new Error(decision.reason), { admissionPermanent: true });
+      }
       if (decision.admit) {
         touchEvents();
         save({ state: "starting", admission: decision.record });
-        updateAttempt({ state: "starting" });
+        updateAttempt({ state: "starting", admission: decision.record });
         return true;
       }
       if (job.state !== "queued" || job.admission?.reason !== decision.reason) {
         save({ state: "queued", admission: decision.record });
-        updateAttempt({ state: "queued" });
+        updateAttempt({ state: "queued", admission: decision.record });
       }
       await (options.admissionSleep ?? interruptibleSleep)(Math.min(decision.retryMs, config.admissionPollMs), () => cancelRequested);
     }
@@ -771,6 +774,7 @@ async function runWorkerRound(jobDir, options, held) {
 
         break;
       } catch (error) {
+        if (error.admissionPermanent) throw error;
         accept(claimInboxMessages(jobDir));
         // The process exited and the connection is still draining its pipes: wait for the end
         // record, which the connection completes within its drain time.
