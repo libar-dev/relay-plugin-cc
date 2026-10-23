@@ -356,6 +356,10 @@ test("review and adversarial-review are model-invocable; status, result, cancel 
     assert.match(frontmatter(name), /^description: .{40,}$/m, name);
     assert.match(frontmatter(name), /^argument-hint: /m, name);
   }
+  assert.match(frontmatter("status"), /^argument-hint: '\[job-id\] \[--all\] \[--workflow <run>\]'$/m);
+  // Claude renders /relay:setup from the JSON, where Kimi's can.steer is false: setup.md says what it means.
+  const setupBody = read("commands/setup.md").replace(/\s+/g, " ");
+  assert.ok(setupBody.includes("a backend without it (Kimi) takes a message to a running job as its next turn, so write `steer (next turn)` for it, never \"no steering\""), setupBody);
   for (const name of ["review", "adversarial-review"]) {
     const source = read(`commands/${name}.md`);
     assert.match(source, /If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground/, name);

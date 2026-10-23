@@ -132,7 +132,7 @@ test("the overview shows every backend home in one shape, ready, with no thread,
     "## kimi  ~/.kimi-code  ready",
     "model: kimi-code/k3  effort: high",
     "models: kimi-code/k3, kimi-code/kimi-for-coding-highspeed",
-    "can: yolo, read-only (write refused) · resume · review · adversarial review · stop gate, transfer: Codex only",
+    "can: yolo, read-only (write refused) · steer (next turn) · resume · review · adversarial review · stop gate, transfer: Codex only",
     "Setup made no changes.",
     "Optional: `/relay:setup --enable-review-gate` has Codex review each turn's edits before the main thread stops (Codex only, off by default; skips while agents or jobs run)."
   ]) assert.ok(text.stdout.split("\n").includes(line), `${line}\n---\n${text.stdout}`);
@@ -171,6 +171,8 @@ test("a signed-out backend shows binary, sign-in and model, then stops; --backen
   const ctx = everyBackend(t, "logged-out", { signedOut: true });
   const { status, page: report } = page(ctx);
   assert.equal(status, 0);
+  // A signed-out Grok home is asked twice before setup says so.
+  assert.equal(ctx.grok().invocations.filter(call => call.args[0] === "models").length, 4);
   const codex = report.backends[0];
   assert.equal(codex.signIn.state, "signed-out");
   assert.equal(codex.ready, false);
@@ -254,6 +256,8 @@ test("a check that hangs answers with its time limit while the others finish, an
     assert.equal(grok.signIn.state, "unknown");
     assert.equal(grok.error, "grok models: no answer in 0.6 s");
   }
+  // A listing that timed out is not asked again: one per home.
+  assert.equal(ctx.grok().invocations.filter(call => call.args[0] === "models").length, 2);
   const zcode = report.backends.find(block => block.backend === "zcode");
   assert.equal(zcode.ready, false);
   assert.equal(zcode.error, "zcode --version failed (exit 3). zcode wrapper failed");
@@ -303,7 +307,8 @@ test("a malformed Codex catalog entry is skipped and the overview still prints e
   assert.equal(text.stdout.match(/^## /gm).length, 5);
 });
 
-// Capability facts have one declaration; the text and the JSON agree.
+// Capability facts have one declaration; the text and the JSON agree. A capability note adds words
+// beside an item ("steer (next turn)" for Kimi), never an item the JSON lacks.
 test("every block's can: line says what its JSON can says, and nothing else", t => {
   const ctx = everyBackend(t, "home-probe");
   const report = page(ctx).page;
@@ -328,6 +333,43 @@ test("every block's can: line says what its JSON can says, and nothing else", t 
   // The fixed table, as the page prints it.
   const grok = report.backends.find(block => block.backend === "grok");
   assert.deepEqual(grok.can, { modes: ["yolo", "write", "read-only"], steer: true, resume: true, webSearchOff: false, review: true, adversarialReview: true, stopGate: false, transfer: false });
+  // Kimi takes a message as its next turn: the line says so, and the JSON's steer stays the in-turn one.
+  const kimiIndex = report.backends.findIndex(block => block.backend === "kimi");
+  assert.equal(report.backends[kimiIndex].can.steer, false);
+  assert.match(sections[kimiIndex], /^can: yolo, read-only \(write refused\) · steer \(next turn\) · resume · /m);
+  for (const [index, block] of report.backends.entries()) {
+    if (block.backend !== "kimi") assert.doesNotMatch(sections[index], /next turn/, block.backend);
+  }
+});
+
+test("a Grok retry that hangs keeps the first reading: signed out, with its sign-in step", t => {
+  const ctx = everyBackend(t, "home-probe", { modelsHangAfterFirstMs: 60000 });
+  const { status, page: report } = page(ctx, [], { RELAY_SETUP_COMMAND_MS: "600", ...backendReadyEnv(ctx.env) });
+  assert.equal(status, 0);
+  const groks = report.backends.filter(block => block.backend === "grok");
+  assert.equal(groks.length, 2);
+  for (const block of groks) {
+    assert.equal(block.signIn.state, "signed-out", JSON.stringify(block.signIn));
+    assert.match(block.signIn.detail, /Not signed in/);
+    assert.ok(block.signIn.detail.includes(`GROK_HOME='${block.home}' grok login`), block.signIn.detail);
+  }
+  assert.ok(report.nextSteps.some(step => step.includes(`GROK_HOME='${path.join(ctx.user, ".grok")}' grok login`)), report.nextSteps.join("\n"));
+  // Each home: the first listing, then the retry that hung.
+  assert.equal(ctx.grok().invocations.filter(call => call.args[0] === "models").length, 4);
+});
+
+test("a Grok home that reads signed out once is asked again, and setup says signed in", t => {
+  const ctx = everyBackend(t, "home-probe", { signedOutOnce: true });
+  const { status, page: report } = page(ctx);
+  assert.equal(status, 0);
+  const groks = report.backends.filter(block => block.backend === "grok");
+  assert.equal(groks.length, 2);
+  for (const block of groks) {
+    assert.equal(block.signIn.state, "signed-in", JSON.stringify(block.signIn));
+    assert.equal(block.ready, true);
+  }
+  // One home's first answer was "not authenticated": three model listings for two homes.
+  assert.equal(ctx.grok().invocations.filter(call => call.args[0] === "models").length, 3);
 });
 
 test("--backend checks one home, keeps exit codes, and refuses mixed flags", t => {

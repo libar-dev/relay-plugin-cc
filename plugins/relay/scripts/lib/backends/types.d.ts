@@ -56,6 +56,8 @@ export interface Capabilities {
 export interface CapabilityNotes {
   /** After the mode list: "write refused". */
   modes?: string;
+  /** For a backend without in-turn steering, how a message is taken instead: "next turn". */
+  steer?: string;
   /** After "web search off": "tool filter". */
   webSearchOff?: string;
   /** After the review features the backend lacks: "Codex only". */
