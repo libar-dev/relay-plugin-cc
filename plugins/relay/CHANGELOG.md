@@ -181,6 +181,10 @@ Phase 6, an investigation (the plugin does not change):
 
 Fixes from the pre-releases:
 
+- A relay job continued or resumed directly (`C continue`, `C resume`, the board's direct route) is no longer marked
+  `not handed back` once that attempt ends: no relay waited for it, so its report was never lost. An attempt a relay
+  waited for (the brief, an automatic resume, a steer's next turn, a message the relay delivered) is still marked
+  when its hand-back is missing.
 - When `/relay:status`, `/relay:result`, `/relay:cancel` or `/relay:transfer` fails, the shell command its answer
   names single-quotes the plugin's path and what you typed, one shell word each, so it passes the companion the
   same arguments as the hooks module's own call. A job id or `--source` path with backticks, `$(...)` or quotes now

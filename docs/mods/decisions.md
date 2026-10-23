@@ -622,8 +622,8 @@ relay's transcript, so a second route could deliver the message twice. The pane 
 result comes from the job's `messages` on its next read (the outcome, never the send's `isDelivered` alone); a send by
 the relay reads as delivered only once a message with the sent text's preview, carried by the relay since the send,
 shows there. The board
-records no hand-back: a continue sent to the job directly runs an attempt nobody hands back, so that attempt stays
-`not handed back`, and the board shows its report. A steer sent directly to a job whose relay still waits comes back in
+records no hand-back: a continue sent to the job directly runs an attempt no relay waits for, which `not handed back`
+does not count (D66), and the board shows its report. A steer sent directly to a job whose relay still waits comes back in
 that relay's block, to the Workflow script or the other session.
 
 Decided with GPT-6.1 Sol and Opus 5.5 as advisors. They rejected routing by `$.agent.list()` alone (it holds no Workflow
@@ -673,6 +673,16 @@ reaches the pane at any time in the fullscreen layout (`CLAUDE_CODE_NO_FLICKER=1
 transcript from 110 columns). On the main screen, the default, the inline pane takes no clicks. So while relays run in
 the background, which is when the board is most useful, it is driven by the mouse in the fullscreen layout, or by keys
 once the lead is idle. The docs say so; the live check drives the wide session by clicks and the narrow one by keys.
+
+### D66. `not handed back` counts only an attempt a relay waited for (Phase 4 thread)
+
+`not handed back` says a relay's caller died or gave up and the result never reached it. A `continue` or `resume` sent
+to the job directly (`C continue`, `C resume`, the board's direct route, D61) starts an attempt no relay waits for: its
+report is in `result`, and no caller lost it. So the flag counts the last attempt only when a relay waited for it: the
+brief's, an automatic resume (a relay's `wait --auto-resume` started it), one a steer started (Kimi's next turn, which
+a relay waiting on the running job hands back), and one started by a message the relay delivered, which the job's
+`inbox/relay/` ledger names. The ledger is read only for an attempt a direct-looking `continue` or `resume` started.
+The board's direct Continue no longer leaves a false `not handed back`; it still records no hand-back of its own.
 
 ### D70. Pre-release cuts: version numbers, the cut PR and the tag (release lead)
 

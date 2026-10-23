@@ -172,18 +172,28 @@ export const CLOSED_ACTIONS = new Set([...DELIVERED_ACTIONS, "dropped", "skipped
 const WORK_KINDS = new Set(["steer", "continue", "resume"]);
 
 
-export function readJobMessages(jobDir) {
-  const paths = jobPaths(jobDir);
+function jsonNamesIn(dir) {
+  try { return fs.readdirSync(dir).filter(name => name.endsWith(".json") && !name.startsWith(".")); }
+  catch { return []; }
+}
+
+
+// The relay's ledger (inbox/relay/), by the id of the message each record delivered to the job.
+export function relayDeliveries(jobDir) {
+  const relayDir = path.join(jobPaths(jobDir).inbox, "relay");
   const relays = new Map();
-  const namesIn = (dir) => {
-    try { return fs.readdirSync(dir).filter(name => name.endsWith(".json") && !name.startsWith(".")); }
-    catch { return []; }
-  };
-  const relayDir = path.join(paths.inbox, "relay");
-  for (const name of namesIn(relayDir).sort()) {
+  for (const name of jsonNamesIn(relayDir).sort()) {
     const record = readJsonOrNull(path.join(relayDir, name));
     if (record?.messageId) relays.set(record.messageId, { entry: record.uuid ?? name.slice(0, -5), at: record.at ?? null });
   }
+  return relays;
+}
+
+
+export function readJobMessages(jobDir) {
+  const paths = jobPaths(jobDir);
+  const relays = relayDeliveries(jobDir);
+  const namesIn = jsonNamesIn;
   // Read pending before claimed so a message moved during the read keeps its latest stage.
   const seen = new Map();
   for (const [dir, stage] of [[paths.inbox, "pending"], [paths.claimed, "claimed"]]) {

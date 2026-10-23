@@ -8,7 +8,7 @@ import path from "node:path";
 import { isWorkerAlive } from "./lease.mjs";
 import { isWorkerLease, readLease } from "./lease.mjs";
 import { jobPaths, readJob, readJsonOrNull, TERMINAL_STATES } from "./store.mjs";
-import { messageAccount, readJobMessages, readRelayHandbacks, readRelayViolations } from "./messages.mjs";
+import { messageAccount, readJobMessages, readRelayHandbacks, readRelayViolations, relayDeliveries } from "./messages.mjs";
 
 export const EXIT = {
   ok: 0,
@@ -310,10 +310,21 @@ export function handedBackAt(view) {
   return (view.handbacks ?? []).findLast((entry) => entry.attempts === attempts && isTerminalView(entry))?.at ?? null;
 }
 
-// A relay job whose last attempt ended with no hand-back. Only an attempt that records its
-// version can say: before 2.2.0 no hand-back was recorded.
+// A relay job whose last attempt ended with no hand-back, when a relay waited for that attempt.
+// Only an attempt that records its version can say: before 2.2.0 no hand-back was recorded.
 function notHandedBack(view) {
-  return Boolean(view.job.relay && isTerminalView(view) && view.job.attempts?.at(-1)?.relayVersion && !handedBackAt(view));
+  const last = view.job.attempts?.at(-1);
+  return Boolean(view.job.relay && isTerminalView(view) && last?.relayVersion && !handedBackAt(view) && isAwaited(view, last));
+}
+
+// Whether a relay waits to hand an attempt back. A continue or resume sent to the ended job directly
+// (`C continue`, the board's direct route) starts an attempt no relay waits for, so its missing
+// hand-back is no lost result. Every other attempt is awaited: the brief's, an automatic resume (a
+// relay's wait started it), one a steer started (a relay waiting on the running job hands that turn
+// back), and one started by a message the relay delivered, which its ledger records.
+function isAwaited(view, attempt) {
+  if (!["continue", "resume"].includes(attempt.source) || attempt.automatic || !attempt.messageId) return true;
+  return relayDeliveries(view.jobDir).has(attempt.messageId);
 }
 
 function summarizeJob(view) {

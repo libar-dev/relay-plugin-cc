@@ -195,6 +195,39 @@ test("busy readers return JSON error objects with exit 4 and keep text errors", 
   }
 });
 
+test("not handed back counts only an attempt a relay waited for", t => {
+  const ctx = setup(t);
+  const brief = { attempt: 1, source: "brief", automatic: false, messageId: null, relayVersion: VERSION, state: "completed" };
+  const second = (fields) => ({ attempt: 2, automatic: false, relayVersion: VERSION, state: "completed", ...fields });
+  // [job, its last attempt, a relay ledger record for that attempt's message, flagged]
+  const cases = [
+    ["job-brief", null, false, true],
+    // `C continue` or the board's direct route: no relay waits for the new attempt.
+    ["job-direct-continue", second({ source: "continue", messageId: "m-1" }), false, false],
+    ["job-direct-resume", second({ source: "resume", messageId: "m-1" }), false, false],
+    // A continue the relay delivered (D17) is the relay's to hand back.
+    ["job-relay-continue", second({ source: "continue", messageId: "m-1" }), true, true],
+    // An automatic resume, and a default resume with no message, come from a relay's wait.
+    ["job-automatic-resume", second({ source: "resume", messageId: "m-1", automatic: true }), false, true],
+    ["job-default-resume", second({ source: "resume", messageId: null }), false, true],
+    // A steer that became the next turn (Kimi) is handed back by a relay waiting on the running job.
+    ["job-direct-steer", second({ source: "steer", messageId: "m-1" }), false, true],
+  ];
+  for (const [id, last, ledger, flagged] of cases) {
+    const dir = fixture(ctx, id, { relay: { agentId: `relay-${id}` }, attempts: last ? [brief, last] : [brief] });
+    if (ledger) put(path.join(dir, "inbox/relay/entry-1.json"), { uuid: "entry-1", messageId: last.messageId, at: END });
+    assert.equal(json(ctx, ["status", id]).notHandedBack, flagged, id);
+  }
+  const rows = Object.fromEntries(json(ctx, ["status"]).jobs.map(row => [row.id, row.notHandedBack]));
+  assert.deepEqual(rows, Object.fromEntries(cases.map(([id, , , flagged]) => [id, flagged])));
+  // The text listing marks the same jobs.
+  const text = companion(ctx, ["status"]).stdout;
+  for (const [id, , , flagged] of cases) {
+    const line = text.split("\n").find(row => row.includes(id)) ?? "";
+    assert.equal(line.includes("not handed back"), flagged, `${id}: ${line}`);
+  }
+});
+
 test("full views expose message outcomes, relay entries, previews and open work", t => {
   const ctx = setup(t);
   const dir = fixture(ctx, "job-messages", {
