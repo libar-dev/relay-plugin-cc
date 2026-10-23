@@ -486,7 +486,7 @@ test("status, result, wait and cancel retain their exact text output", t => {
   assert.equal(listed.stderr, "");
   assert.equal(listed.stdout, [
     `jobs-home: ${ctx.jobs}`, `repo: ${repoSlugFor(ctx.work)}`, "review-gate: disabled", "fast-tier: off",
-    `relay-version: ${VERSION}${PLUGIN_BUILD !== null ? ` (${PLUGIN_BUILD})` : ""}`, "jobs: 1", "",
+    `relay-version: ${VERSION}${PLUGIN_BUILD !== null ? ` (${PLUGIN_BUILD})` : ""}`, "load-guard: off (RELAY_ADMISSION=off)", "jobs: 1", "",
     "| job   | state     | kind | backend | model/effort | duration | summary | relay |",
     "|-------|-----------|------|---------|--------------|----------|---------|-------|",
     "| job-1 | completed | task | codex   | gpt-test/low | 7s       | Done.   |       |", ""

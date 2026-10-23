@@ -16,7 +16,7 @@ import { installFakeZcode } from "./fakes/zcode.mjs";
 // Rows omit messages; --estimate uses relay.review-estimate/1 for BOTH reviews.
 const HEAD = ["schema", "relayVersion", "relayBuild"];
 const JOB = [
-  "id", "kind", "state", "storedState", "stalled", "deadReason", "sessionId", "turnId",
+  "id", "kind", "state", "storedState", "admission", "refusal", "stalled", "deadReason", "sessionId", "turnId",
   "claudeSessionId", "model", "effort", "backend", "fast", "serviceTier", "mode", "webSearch",
   "cwd", "attempts", "errorMessage", "createdAt", "updatedAt", "completedAt", "jobDir",
   "reportPath", "hasReport", "summary", "relay", "relayViolations", "relayViolationCount",
@@ -27,7 +27,7 @@ const JOB = [
 const ROW = JOB.filter(key => !["attemptRecords", "server", "messages"].includes(key));
 const LAUNCH = ["jobId", "state", "jobDir", "notes", "backend"];
 const backendKeys = (common, backend) => common.flatMap(key => key === "backend" ? [key, `${backend}Home`] : [key]);
-const PAGE = ["jobsHome", "scope", "repoSlug", "workflowRunId", "active", "limit", "jobs", "nextCursor"];
+const PAGE = ["loadGuard", "jobsHome", "scope", "repoSlug", "workflowRunId", "active", "limit", "jobs", "nextCursor"];
 const MESSAGE = ["id", "kind", "createdAt", "stage", "preview", "relay", "outcome"];
 const OUTCOME = ["action", "at", "reason", "attempt", "turnId"];
 const ATTEMPT = ["attempt", "source", "automatic", "messageId", "startedAt", "relayVersion", "turnId", "state"];
@@ -280,8 +280,10 @@ for (const background of [false, true]) {
 test("setup --json golden page, backend, settings, sign-in, capability and model shapes", t => {
   const ctx = setup(t);
   for (const args of [["setup"], ["setup", "--backend", "codex"]]) {
-    const value = json(ctx, args, ["ready", "jobsHome", "settings", "backends", "actionsTaken", "nextSteps"]);
-    keys(value.settings, ["fastTier", "mcpOff", "reviewGate"], "setup.settings");
+    const value = json(ctx, args, ["ready", "jobsHome", "loadGuard", "settings", "backends", "actionsTaken", "nextSteps"]);
+    keys(value.settings, ["loadGuard", "fastTier", "mcpOff", "reviewGate"], "setup.settings");
+    keys(value.settings.loadGuard, ["admission", "minWeight", "maxWeight", "maxVeryHeavy", "modelClasses", "headroomBytes"], "setup.settings.loadGuard");
+    keys(value.loadGuard, ["enabled", "reason", "pauses"], "setup.loadGuard");
     assert.ok(value.backends.length > 0);
     for (const [i, block] of value.backends.entries()) {
       const at = `setup.backends[${i}]`;
