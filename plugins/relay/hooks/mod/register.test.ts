@@ -393,7 +393,7 @@ const companionArgv = (sub: string, ...args: string[]) => [
 ]
 
 // The `<shell>` of the error texts, the plugin's folder left open.
-const shell = (sub: string) => new RegExp('Run `node "/[^"]*/scripts/companion\\.mjs" ' + sub + '` in a shell')
+const shell = (sub: string) => new RegExp("Run `node '/[^']*/scripts/companion\\.mjs' " + sub + '` in a shell')
 
 const GRACE = 'env RELAY_JOBS_CANCEL_GRACE_MS'
 
@@ -607,7 +607,7 @@ test('a run with no exit code shows none of its output', async ($, on) => {
 
   expect(seen.runs.map((r) => r.argv)).toEqual([companionArgv('status', '--all')])
   expect(result).toEqual({
-    text: '/relay:status --all\n\nEnded without an exit code. Run `node "' + seen.runs[0].argv[1] + '" status --all` in a shell to see its output.',
+    text: "/relay:status --all\n\nEnded without an exit code. Run `node '" + seen.runs[0].argv[1] + "' status '--all'` in a shell to see its output.",
     exitCode: 1,
   })
 })
@@ -636,7 +636,7 @@ test('a truncated stream shows none of the output and names the stream', async (
   results.forEach((result, i) => {
     expect(result.exitCode).toBe(1)
     expect(result.text).toBe(
-      '/relay:status\n\nPrinted more than 4 MiB on ' + streams[i] + ', more than Claude Code passes to a plugin, so none of it is shown. Run `node "' + seen.runs[i].argv[1] + '" status` in a shell to read it.',
+      '/relay:status\n\nPrinted more than 4 MiB on ' + streams[i] + ", more than Claude Code passes to a plugin, so none of it is shown. Run `node '" + seen.runs[i].argv[1] + "' status` in a shell to read it.",
     )
     expect(result.text).not.toContain('No jobs')
     expect(result.text).not.toContain('partial')
@@ -674,14 +674,34 @@ test('a run that does not finish answers an error text; only a cancel cut off by
 
   expect(seen.runs.map((r) => r.argv)).toEqual([companionArgv('status'), companionArgv('cancel', 'j-1'), companionArgv('cancel', 'j-2')])
   expect(status.exitCode).toBe(1)
-  expect(status.text).toMatch(/^\/relay:status\n\nDid not finish: .*timed out after 30000 ms.*\. Run `node "[^"]*" status` in a shell to see its output\.$/)
+  expect(status.text).toMatch(/^\/relay:status\n\nDid not finish: .*timed out after 30000 ms.*\. Run `node '[^']*' status` in a shell to see its output\.$/)
   expect(cancel.exitCode).toBe(1)
   expect(cancel.text).toMatch(
-    /^\/relay:cancel j-1\n\nDid not finish: .*timed out after 60000 ms.*\. Run `node "[^"]*" cancel j-1` in a shell to see its output\. The cancel may have gone through anyway; \/relay:status shows the job's state\.$/,
+    /^\/relay:cancel j-1\n\nDid not finish: .*timed out after 60000 ms.*\. Run `node '[^']*' cancel 'j-1'` in a shell to see its output\. The cancel may have gone through anyway; \/relay:status shows the job's state\.$/,
   )
   // A process that could not start cancelled nothing.
   expect(unstarted.exitCode).toBe(1)
-  expect(unstarted.text).toMatch(/^\/relay:cancel j-2\n\nDid not finish: .*spawn node ENOENT.*\. Run `node "[^"]*" cancel j-2` in a shell to see its output\.$/)
+  expect(unstarted.text).toMatch(/^\/relay:cancel j-2\n\nDid not finish: .*spawn node ENOENT.*\. Run `node '[^']*' cancel 'j-2'` in a shell to see its output\.$/)
+})
+
+test('the shell line quotes the plugin path and the typed text as one word each, so nothing typed runs', async ($, on) => {
+  const seen = companion(on, { run: () => ({ value: printed('', '', 0) }) })
+  const typed = `j-1 $(touch x) --source "/tmp/it's here.jsonl"`
+  const ticked = 'j-2 `touch y`'
+
+  const quoted: any = await $.command.run(command('relay:transfer', typed))
+  const fenced: any = await $.command.run(command('relay:result', ticked))
+  const blank: any = await $.command.run(command('relay:status', ' \t '))
+
+  expect(seen.runs.map((r) => r.argv)).toEqual([companionArgv('transfer', typed), companionArgv('result', ticked), companionArgv('status')])
+  const root = seen.runs[0].argv[1]
+  expect(quoted.text).toBe(
+    `/relay:transfer ${typed}\n\nPrinted nothing (exit 0). Run \`node '${root}' transfer 'j-1 $(touch x) --source "/tmp/it'\\''s here.jsonl"'\` in a shell to see its output.`,
+  )
+  // A backtick in the line takes a longer fence, so the code span shows the line whole.
+  expect(fenced.text).toBe(`/relay:result ${ticked}\n\nPrinted nothing (exit 0). Run \`\`node '${root}' result 'j-2 \`touch y\`'\`\` in a shell to see its output.`)
+  // Blank text is no word at all.
+  expect(blank.text).toBe(`/relay:status\n\nPrinted nothing (exit 0). Run \`node '${root}' status\` in a shell to see its output.`)
 })
 
 test('a session directory or id that cannot be read answers an error text and runs nothing', async ($, on) => {
@@ -699,9 +719,9 @@ test('a session directory or id that cannot be read answers an error text and ru
   expect(seen.runs).toHaveLength(0)
   expect(cancel.exitCode).toBe(1)
   // The cancel never started, so the text does not say it may have gone through.
-  expect(cancel.text).toMatch(/^\/relay:cancel j-1\n\nDid not finish: .*no session directory.*\. Run `node "[^"]*" cancel j-1` in a shell to see its output\.$/)
+  expect(cancel.text).toMatch(/^\/relay:cancel j-1\n\nDid not finish: .*no session directory.*\. Run `node '[^']*' cancel 'j-1'` in a shell to see its output\.$/)
   expect(transfer.exitCode).toBe(1)
-  expect(transfer.text).toMatch(/^\/relay:transfer\n\nDid not finish: .*no session id.*\. Run `node "[^"]*" transfer` in a shell to see its output\.$/)
+  expect(transfer.text).toMatch(/^\/relay:transfer\n\nDid not finish: .*no session id.*\. Run `node '[^']*' transfer` in a shell to see its output\.$/)
 })
 
 test('a hook that fails is answered by its .catch, never by the markdown command', async ($, on) => {
@@ -712,5 +732,5 @@ test('a hook that fails is answered by its .catch, never by the markdown command
 
   expect(seen.runs.map((r) => r.argv)).toEqual([companionArgv('result', 'j-1')])
   expect(result.exitCode).toBe(1)
-  expect(result.text).toMatch(/^\/relay:result j-1\n\nThe relay module failed while answering it: .+\. Run `node "[^"]*" result j-1` in a shell to see its output\.$/)
+  expect(result.text).toMatch(/^\/relay:result j-1\n\nThe relay module failed while answering it: .+\. Run `node '[^']*' result 'j-1'` in a shell to see its output\.$/)
 })

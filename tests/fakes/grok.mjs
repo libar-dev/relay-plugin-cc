@@ -45,6 +45,20 @@ fs.appendFileSync(file + '.invocations', JSON.stringify({ args: process.argv.sli
 if (process.argv[2] === '--version' && options.versionFail) { console.error('VERSION DENIED'); process.exit(9); }
 if (process.argv[2] === '--version') { console.log('grok 1.0.fake'); process.exit(0); }
 if (process.argv[2] === 'models' && options.modelsHangMs) { setTimeout(() => process.exit(0), options.modelsHangMs); return; }
+// The first models call, of every home setup checks at once, answers signed out: the marker's
+// exclusive create picks exactly one, where a read-modify-write could pick two.
+// Each home's first models call answers signed out and its later calls hang, as a retry that never answers.
+if (process.argv[2] === 'models' && options.modelsHangAfterFirstMs) {
+  let first = true;
+  try { fs.writeFileSync(file + '.first-' + encodeURIComponent(process.env.GROK_HOME || ''), '', { flag: 'wx' }); } catch { first = false; }
+  if (first) { console.log('Not signed in'); process.exit(1); }
+  setTimeout(() => process.exit(0), options.modelsHangAfterFirstMs); return;
+}
+if (process.argv[2] === 'models' && options.signedOutOnce) {
+  let first = true;
+  try { fs.writeFileSync(file + '.signed-out-once', '', { flag: 'wx' }); } catch { first = false; }
+  if (first) { console.log('You are not authenticated'); process.exit(1); }
+}
 if (process.argv[2] === 'models') { console.log(options.signedOut ? 'Not signed in' : 'You are logged in with grok.com.\\n\\nDefault model: grok-4.7\\n\\nAvailable models:\\n  * grok-4.7 (default)\\n  - grok-4.6'); process.exit(options.signedOut ? 1 : 0); }
 state.starts.push({ args: process.argv.slice(2), env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('GROK_'))), cwd: process.cwd() }); save();
 if (options.sandboxFail && process.env.GROK_SANDBOX) { console.error('Refusing to start with its protections missing'); process.exit(1); }

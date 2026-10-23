@@ -107,8 +107,35 @@ Phase 4, the companion's JSON, changed in place (the status line and the board r
 - The stop-time review gate reads the new JSON. `check-header` keeps its text answer.
 - The live suite's `stop` check requires the hand-back record.
 
-Messages typed into a relay's own view (a fix found by the Desktop and CLI passes):
+Phase 5, the live suite (development tooling; the plugin itself does not change):
 
+- `scripts/live/suite.mjs` runs live checks against the real backends, in the terminal and in T3 Code, and
+  writes one record per check and backend to `docs/live/records/`. `docs/live/capabilities.md`, generated from
+  the records, shows what the suite has passed on each backend and surface. It replaces
+  `scripts/live/steer-wake.mjs`.
+- The checks so far: a steer from the main thread, from a Workflow agent and from another plugin's
+  `$.session.send`, and a continue after the hand-back, on all four backends. A steer passes only when the job's
+  record shows how the backend took it: into the running turn on Codex, Grok and ZCode, as the next turn on Kimi.
+
+Phase 6, an investigation (the plugin does not change):
+
+- [docs/mods/messages-from-a-job.md](../../docs/mods/messages-from-a-job.md) reports what Codex, Grok, ZCode and
+  Kimi allow for a job that sends a message to the agent that started it, or to a peer, and how such a message
+  and its reply would travel. Messages from a job are not part of 3.0.
+
+Fixes from the pre-releases:
+
+- When `/relay:status`, `/relay:result`, `/relay:cancel` or `/relay:transfer` fails, the shell command its answer
+  names single-quotes the plugin's path and what you typed, one shell word each, so it passes the companion the
+  same arguments as the hooks module's own call. A job id or `--source` path with backticks, `$(...)` or quotes now
+  runs nothing when the line is pasted into a shell; with a line break in what you typed, the command is shown in a
+  fenced block, which Markdown leaves as written.
+- `/relay:setup` asks Grok's `grok models` a second time, a second apart, before it says a home is signed out: a
+  signed-in home once answered "You are not authenticated" and then signed in.
+- `/relay:setup` shows Kimi as `steer (next turn)`, not as having no steering: a message to a running Kimi job is
+  taken as its next turn. The command tells Claude so, and `companion setup`'s text says it in Kimi's `can:` line.
+  The JSON's `can.steer` is unchanged, and still means steering the running turn.
+- `/relay:status`'s argument hint names `--workflow <run>`.
 - **A line the user types into a `relay:job` agent's view reaches the job.** Claude Code in the terminal lets
   a person open a running agent's view (↓ in the footer, then Enter) and type at `Message @<agent>…`; the
   Desktop app's agent view has no input. Claude Code
@@ -135,22 +162,6 @@ Messages typed into a relay's own view (a fix found by the Desktop and CLI passe
   being dropped in silence (the harness's own `task-notification` notices are skipped), and the same
   transcript problem is recorded once, not again at every hook call.
 - The live suite has a check `typed` (terminal only: T3 Code draws no agent view).
-
-Phase 5, the live suite (development tooling; the plugin itself does not change):
-
-- `scripts/live/suite.mjs` runs live checks against the real backends, in the terminal and in T3 Code, and
-  writes one record per check and backend to `docs/live/records/`. `docs/live/capabilities.md`, generated from
-  the records, shows what the suite has passed on each backend and surface. It replaces
-  `scripts/live/steer-wake.mjs`.
-- The checks so far: a steer from the main thread, from a Workflow agent and from another plugin's
-  `$.session.send`, and a continue after the hand-back, on all four backends. A steer passes only when the job's
-  record shows how the backend took it: into the running turn on Codex, Grok and ZCode, as the next turn on Kimi.
-
-Phase 6, an investigation (the plugin does not change):
-
-- [docs/mods/messages-from-a-job.md](../../docs/mods/messages-from-a-job.md) reports what Codex, Grok, ZCode and
-  Kimi allow for a job that sends a message to the agent that started it, or to a peer, and how such a message
-  and its reply would travel. Messages from a job are not part of 3.0.
 
 Docs:
 

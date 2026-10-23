@@ -291,7 +291,7 @@ headers and wakes a waiting relay: delivery runs on command hooks and the transc
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.5. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.7. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
