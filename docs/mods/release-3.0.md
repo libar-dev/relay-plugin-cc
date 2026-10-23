@@ -71,10 +71,10 @@ Phase 4's `--json` and the typed-message fix merge, and more as Phase 4 lands an
 ## What a phase PR must pass
 
 - `npm test`, `npm run check`, `claude plugin validate plugins/relay`, `claude plugin test plugins/relay`, and CI.
-- A review by two model families before the bots: GPT-6.1 Sol through relay, and Opus 5.5. Each gets the brief
+- A review by two model families before Greptile: GPT-6.1 Sol through relay, and Opus 5.5. Each gets the brief
   and the code, not the author's conclusions.
-- CodeRabbit and Greptile, followed with T3's `watch_pull_request`. A finding is answered on its thread when it
-  is fixed or declined, then the thread is resolved.
+- Greptile, followed with T3's `watch_pull_request`; CodeRabbit is not a gate (D78). A finding is answered on its
+  thread when it is fixed or declined, then the thread is resolved.
 - When the phase changes plugin code: its own checks in the live suite, in the terminal and in T3, on the Fedora
   ThinkPad, with their records committed and `docs/live/capabilities.md` regenerated
   (`node scripts/live/suite.mjs table`); and the smoke kit (`relay-plugin-cc-smoke`) on the PR's head, which
@@ -94,7 +94,7 @@ D93) and the user guide, and the reviews, and dropped the demo recording: featur
 replace it.
 
 - `npm test`, `npm run check`, `claude plugin validate plugins/relay`, `claude plugin test plugins/relay`, CI,
-  CodeRabbit and Greptile.
+  and Greptile.
 - The full live suite on all four backends, in the terminal and in T3, on the release head.
 - The real-API suite, which replaces the smoke kit's release run, on the release head, on Fedora and on a Mac
   through cmux.
@@ -135,7 +135,7 @@ owner's heavy production starts on pre.2 (D99). A survey of how the cuts are use
 A cut is a PR into `release/3.0` that changes only the version fields `node scripts/bump-version.mjs 3.0.0-pre.N`
 sets, the README's Development line and one CHANGELOG entry under the 3.0.0 heading (D70). It merges once
 `npm run check-version` and CI pass, and its merge commit is tagged `v3.0.0-pre.N` and pushed: no GitHub release,
-no npm. The two-family review and the bots follow the merge, and what they find goes into the next cut. The fixes
+no npm. The two-family review and Greptile follow the merge, and what they find goes into the next cut. The fixes
 and phase PRs it carries have passed their own gates first. The release lead tells the coordinating thread before
 it pushes each tag, and the coordinating thread has libar-infra install the cut. Every plugin install or update on
 a machine, at any scope, goes through libar-infra; a `--plugin-dir` run installs nothing and stays with the leads

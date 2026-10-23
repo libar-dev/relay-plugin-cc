@@ -671,6 +671,15 @@ A user-level install reaches new Claude sessions at once, and an existing sessio
 no T3 restart is needed for a plugin update. Every install and every piece of infrastructure work goes to a new infra
 session on the M1's libar-infra project; leads do none of it (D97).
 
+### D78. CodeRabbit is not a gate (owner, 23 October 2026)
+
+CodeRabbit is not a gate: the two-family review goes much deeper. Nobody requests a CodeRabbit review or waits for
+one, and no PR carries a note about it. A PR's gates are CI, Greptile and the two-family review. This holds from
+pre.2's PRs on: the security fix (D73), the docs PR (#18) and the pre.2 cut.
+
+What it changes: release-3.0.md's gates for a phase PR, for the other PRs into `release/3.0` and for the release PR
+drop CodeRabbit; D70's "the bots" after a cut is Greptile. D16's `.coderabbit.yaml` is unchanged.
+
 ### D90. One walkthrough, two documents (guide lead)
 
 The guide lead writes one feature walkthrough. It covers every user-facing feature of 3.0 in the order a user meets
