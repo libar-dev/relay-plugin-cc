@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { DEFAULTS, modelClass } from "../plugins/relay/scripts/lib/worker/admission.mjs";
@@ -97,16 +96,41 @@ test("the guide reconciles direct continuation, queued UI and conditional stop n
   }
 });
 
-test("new public text avoids private identifiers while permitting generic default homes", t => {
-  const privateText = /(?:\/home\/[^/\s]+\/|\/Users\/[^/\s]+\/|\b(?:ThinkPad|fleet|D\d{2,})\b|\b\d{8}T\d{6}Z-[\w-]+\.jsonl\b)/i;
+// This PR's content scope is explicit: no Git state, remote refs, fetch depth or calendar age.
+// AGENTS.md states the rule itself and belongs outside the content corpus.
+const publicTextFiles = new Set([
+  ".claude-plugin/marketplace.json", "package.json", "package-lock.json", "README.md",
+  "docs/design.md", "docs/desktop.md", "docs/guide.md",
+  "plugins/relay/.claude-plugin/plugin.json", "plugins/relay/CHANGELOG.md",
+  "plugins/relay/agents/job.md", "plugins/relay/commands/adversarial-review.md",
+  "plugins/relay/commands/review.md", "plugins/relay/commands/setup.md",
+  "plugins/relay/skills/codex-prompting/SKILL.md",
+  "plugins/relay/skills/codex-prompting/references/codex-prompt-recipes.md",
+  "plugins/relay/skills/codex-prompting/references/prompt-blocks.md",
+  "plugins/relay/skills/jobs/SKILL.md", "plugins/relay/skills/jobs/internals.md",
+  "plugins/relay/skills/jobs/models.md", "plugins/relay/skills/jobs/orchestration.md",
+  "plugins/relay/skills/result-handling/SKILL.md",
+  "tests/commands.test.mjs", "tests/skills-text.test.mjs",
+]);
+// Character classes keep the rule's regex source from matching its own literal identifiers.
+const privateText = /(?:\/home\/[^/\s]+\/|\/Users\/[^/\s]+\/|\b(?:[T]hinkPad|[f]leet|D\d{2,})\b|\b\d{8}T\d{6}Z-[\w-]+\.jsonl\b)/i;
+const publicTextViolations = entries => entries
+  .filter(([file]) => publicTextFiles.has(file))
+  .filter(([, source]) => privateText.test(source))
+  .map(([file]) => file);
+
+test("public content scans the explicit changed-file corpus and permits generic default homes", () => {
   assert.ok(!privateText.test("~/.relay-jobs ~/.relay-jobs/admission ~/.claude/settings.json"));
-  let diff;
-  try {
-    diff = execFileSync("git", ["diff", "--no-ext-diff", "--unified=0", "origin/release/3.0", "--", "."], { cwd: root, encoding: "utf8" });
-  } catch { return t.skip("No release comparison ref in this checkout; review changed text manually"); }
-  // Inspect additions across the entire PR, including docs, tests and HTML comments. Regex source
-  // and synthetic examples are code, so the checks target literal private content rather than tokens
-  // such as a generic word like 'owner' that has valid process-ownership uses.
-  const additions = diff.split("\n").filter(l => l.startsWith("+") && !l.startsWith("+++") && !l.includes("const privateText =")).join("\n");
-  assert.doesNotMatch(additions, privateText);
+  const entries = [...publicTextFiles].map(file => [file, fs.readFileSync(path.join(root, file), "utf8")]);
+  assert.deepEqual(publicTextViolations(entries), []);
+});
+
+test("AGENTS.md rule prose cannot enter the public content corpus", () => {
+  assert.equal(publicTextFiles.has("AGENTS.md"), false);
+  const entries = [
+    ["AGENTS.md", fs.readFileSync(path.join(root, "AGENTS.md"), "utf8")],
+    ["README.md", "Generic defaults: ~/.relay-jobs ~/.claude/settings.json"],
+    ["docs/guide.md", `D${42}`], // synthetic private decision marker in an included file
+  ];
+  assert.deepEqual(publicTextViolations(entries), ["docs/guide.md"]);
 });

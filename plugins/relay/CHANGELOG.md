@@ -343,7 +343,7 @@ Fixes from the pre-releases:
 - When a person stops a relay from Claude Code's own controls (`x to stop` in the agent list, Esc at the relay's
   view prompt, ctrl+x ctrl+k, the desktop app's Stop button), its job keeps running, as before, and relay now
   says so: a line in the transcript and a toast name the job, with `/relay:cancel <job>` to cancel it and
-  `/relay:result <job>` to read it (D96). Until now the job ran on with no word. `TaskStop` and the message
+  `/relay:result <job>` to read it. Until now the job ran on with no word. `TaskStop` and the message
   `cancel` still cancel the job, and show no notice. Checked live with `x to stop` and Esc; ctrl+x ctrl+k and
   the desktop app's Stop button are expected to behave the same but are not checked live yet. A Workflow's
   relays, which Claude Code does not list, get no notice, and none is shown where nothing draws the session
