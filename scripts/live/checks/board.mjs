@@ -162,6 +162,7 @@ function route(item, action, message) {
   if (origin?.kind !== 'coordinator' || origin.plugin !== 'relay' || text !== carried) throw new Error('Agent delivery lacks the main conversation origin with plugin relay.');
   seconds(record.postedAt, action.at, action.action === 'steer' ? 30 : 60, 'Relay delivery');
   seconds(entry.timestamp, action.at, action.action === 'steer' ? 30 : 60, 'Relay transcript entry');
+  return record;
 }
 
 export default {
@@ -427,7 +428,7 @@ export default {
             seconds(attempt.endedAt, action.at, 15, 'Attempt cancellation');
             elapsed = seconds(job.completedAt, action.at, 15, 'Cancellation');
           } else {
-            route(item, action, message);
+            const delivered = route(item, action, message);
             if (kind === 'workflow') {
               if (!action.relayEntries || typeof action.relayEntries !== 'object') throw new Error('Missing Workflow transcript snapshot before the press.');
               for (const [file, entries] of workflowTranscripts(input, item, evidence)) {
@@ -460,10 +461,15 @@ export default {
                 if (!queued || outcome.action !== 'turn-started' || !target || target.attempt <= active.attempt || target.messageId !== message.id ||
                     !(Date.parse(target.startedAt) >= Date.parse(active.endedAt))) throw new Error('Kimi steer did not queue and start a later attempt.');
                 requireVersion(target, input.relayVersion);
-                elapsed = seconds(queued.at, action.at, 30, 'Steer');
+                seconds(queued.at, action.at, 30, 'Kimi queue');
+                elapsed = seconds(delivered?.postedAt ?? message.createdAt, action.at, 30, 'Steer');
               } else {
-                if (outcome.action !== 'steered' || target !== active) throw new Error('Steer outcome did not reach the active attempt.');
-                elapsed = seconds(outcome.at, action.at, 30, 'Steer');
+                // A steered outcome names the turn it joined, not an attempt. The backend takes the message
+                // when it can (Grok only once the running command ends), so the bound is on its reaching the
+                // job, as the steer checks measure delivery: the relay's post, or the direct message itself.
+                if (outcome.action !== 'steered' || !active.turnId || outcome.turnId !== active.turnId ||
+                    !(Date.parse(outcome.at) <= Date.parse(active.endedAt))) throw new Error('Steer outcome did not reach the active attempt.');
+                elapsed = seconds(delivered?.postedAt ?? message.createdAt, action.at, 30, 'Steer');
               }
             }
           }

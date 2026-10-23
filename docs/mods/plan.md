@@ -551,7 +551,13 @@ with `companion steer` or `continue` for every other job. Cancel asks again and 
 draws from state; one read at a time, every three seconds while it is open, placed and drawn. A review round by GPT-6.1
 Sol and Opus 5.5 and its fixes; the `board` live check in the terminal.
 
-Live results: BOARD-LIVE-RESULTS.
+Live results (the Fedora machine, Claude Code 2.1.309, Sonnet 5.5 lead, all four backends, on 79d3c98; records in
+`docs/live/records/`): in a 200-column fullscreen session, by clicks while eight relays ran, a steer of each Agent-tool
+job reached it by the relay in 3.3–4.1 s and of each Workflow job directly in 0.2–0.3 s; each continue started a new
+attempt in 1.9–2.3 s (by the relay, then handed back to the lead) and 0.2–0.3 s (directly); each Cancel stopped the
+attempt it named in 1.0–3.5 s. A 100-column main-screen session listed every job and showed one by keys. Grok takes a
+steer into its turn only once the running command ends, so the check bounds a steer's delivery, not the backend's
+taking it, as the Phase 1 steer checks do; its analysis was re-run with that rule after the run.
 
 ### After the board: what held and what changed
 

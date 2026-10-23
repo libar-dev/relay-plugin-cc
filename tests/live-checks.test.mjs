@@ -2968,15 +2968,18 @@ test('board reduced fixture passes for two backends with all five action timings
   const result = getCheck('board').analyze(boardInput(path.join(fixture, 'board')));
   assert.deepEqual(result.results.map(row => [row.backend, row.result, row.reason]), [['codex', 'pass', null], ['kimi', 'pass', null]]);
   for (const row of result.results) {
-    assert.deepEqual(row.timings, { steerAgentSeconds: [2], continueAgentSeconds: [3], steerWorkflowSeconds: [2], continueWorkflowSeconds: [3], cancelSeconds: [3] });
-    assert.equal(getCheck('board').cell(row), 'steer agent 2.0 s, workflow 2.0 s; continue agent 3.0 s, workflow 3.0 s; cancel 3.0 s');
+    assert.deepEqual(row.timings, { steerAgentSeconds: [1], continueAgentSeconds: [3], steerWorkflowSeconds: [1], continueWorkflowSeconds: [3], cancelSeconds: [3] });
+    assert.equal(getCheck('board').cell(row), 'steer agent 1.0 s, workflow 1.0 s; continue agent 3.0 s, workflow 3.0 s; cancel 3.0 s');
   }
 });
 
 const boardAgent = 'jobs/repo/job-agent-codex', boardWorkflowJob = 'jobs/repo/job-workflow-codex';
 for (const [name, change, reason] of [
   ['a steer with no outcome', dir => fs.rmSync(path.join(dir, boardAgent, 'inbox/outcomes/steer.json')), /Missing board message outcome/],
-  ['a steer outcome after 30 seconds', dir => edit(dir, `${boardAgent}/inbox/outcomes/steer.json`, value => { value.at = '2026-10-22T10:00:51Z'; }), /within 30 seconds/],
+  // A steer reaches the job within 30 s; the backend may take it into the running turn later (Grok, after the command ends).
+  ['a steer delivered after 30 seconds', dir => edit(dir, `${boardAgent}/inbox/relay/steer-entry.json`, value => { value.postedAt = '2026-10-22T10:00:51Z'; }), /within 30 seconds/],
+  ['a steer outcome in another turn', dir => edit(dir, `${boardAgent}/inbox/outcomes/steer.json`, value => { value.turnId = 'another'; }), /did not reach the active attempt/],
+  ['a steer outcome after its turn ended', dir => edit(dir, `${boardAgent}/inbox/outcomes/steer.json`, value => { value.at = '2026-10-22T10:02:06Z'; }), /did not reach the active attempt/],
   ['an Agent steer without an inbox/relay record', dir => fs.rmSync(path.join(dir, boardAgent, 'inbox/relay/steer-entry.json')), /no completed inbox\/relay record/],
   ['a Workflow steer with an inbox/relay record', dir => write(path.join(dir, boardWorkflowJob, 'inbox/relay/extra.json'), { messageId: 'steer' }), /Workflow action has an inbox\/relay record/],
   ['a Workflow steer that started a new relay loop', dir => lines(path.join(dir, 'transcript/subagents/workflows/wf-board/agent-fork.jsonl'), [textEntry('user', 'fork', '2026-10-22T10:00:21Z', { agentId: 'workflow-codex' })]), /new relay loop/],
