@@ -467,7 +467,7 @@ for (const signal of [{ load5: 40.9 }, { pressure: 2 }, { load5: 40.9, pressure:
     assert.equal(admit(warm, s.deps).admit, true); s.tick();
     s.setMachine(signal);
     const held = admit(s.ctx(), s.deps);
-    assert.equal(held.waitKind, "critical");
+    assert.equal(held.waitKind, signal.load5 ? "critical" : "warning");
     assert.match(held.reason, /load|pressure warning/);
     assert.equal(admit(warm, s.deps).admit, true, "next turn/capacity retry retains its seat"); s.tick();
     releaseSlot(s.home, warm.jobId, warm.me, s.deps);
@@ -620,7 +620,8 @@ test("warning pressure renders warning and keeps the new-job-only hold", t => {
   assert.equal(admit(c, s.deps).admit, true); s.tick();
   s.setMachine({ pressure: 2 });
   assert.match(renderGuard(describeGuard(s.env, {}, s.deps))[0], /on · warning ·/);
-  assert.equal(admit(s.ctx(), s.deps).waitKind, "critical");
+  const held = admit(s.ctx(), s.deps);
+  assert.equal(held.waitKind, "warning");
   assert.equal(admit(c, s.deps).admit, true);
   s.setMachine({ pressure: 4 });
   assert.match(renderGuard(describeGuard(s.env, {}, s.deps))[0], /on · critical ·/);

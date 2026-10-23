@@ -363,16 +363,19 @@ function legacyCandidates(deps) {
   const dirs = directories(deps.env, deps.now());
   const cache = discovered.get(deps.env.RELAY_JOBS_HOME ?? "default").jobs;
   return dirs.filter(dir => {
-    const stat = fs.statSync(path.join(dir, "job.json"), { throwIfNoEntry: false });
+    let stat;
+    try { stat = fs.statSync(path.join(dir, "job.json"), { throwIfNoEntry: false }); } catch { stat = null; }
     if (!stat) { cache.delete(dir); return false; }
     const signature = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
     let entry = cache.get(dir);
     if (!entry || entry.signature !== signature) {
-      entry = { signature, job: readJob(dir) }; cache.set(dir, entry);
+      // Cache only the decision: candidates are reread under the lock.
+      const job = readJob(dir);
+      entry = { signature, candidate: Boolean(job && job.state !== "queued" && (!TERMINAL_STATES.has(job.state) ||
+        [job.server, ...(job.attempts ?? []).flatMap(a => a.servers ?? [])].some(s => s?.pid && !s.endedAt))) };
+      cache.set(dir, entry);
     }
-    const job = entry.job;
-    return job && job.state !== "queued" && (!TERMINAL_STATES.has(job.state) ||
-      [job.server, ...(job.attempts ?? []).flatMap(a => a.servers ?? [])].some(s => s?.pid && !s.endedAt));
+    return entry.candidate;
   });
 }
 function legacyJobs(current, slotted, candidates, deps) {
@@ -429,7 +432,7 @@ function memoryCheck(machine, settings, pending, bytes, warm = false) {
   }
   const pendingBytes = pending.reduce((n, s) => n + s.holdBytes, 0);
   const state = machineState(machine, pendingBytes);
-  if (["critical", "warning"].includes(state.state) && (!warm || state.holdsTurns)) return { kind: "critical", reason: state.detail };
+  if (["critical", "warning"].includes(state.state) && (!warm || state.holdsTurns)) return { kind: state.state, reason: state.detail };
   if (machine.availableBytes !== null && machine.availableBytes - pendingBytes - bytes < settings.headroomBytes) return { kind: "memory", reason: `host memory low: ${(machine.availableBytes / GiB).toFixed(1)} GiB available; ${(pendingBytes / GiB).toFixed(2)} GiB pending holds; ${(settings.headroomBytes / GiB).toFixed(1)} GiB reserve required after startup allowance` };
   for (const scope of machine.scopes ?? []) {
     const margin = Math.min(DEFAULTS.scopeMarginGiB * GiB, DEFAULTS.scopeMarginFraction * scope.limitBytes);
