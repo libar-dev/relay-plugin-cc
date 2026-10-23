@@ -56,25 +56,27 @@ AA Intelligence Index (II) is a broad composite, not a coding-only score. The ne
 are its agentic component evaluations: Briefcase and GDPval are Elo; Automation and Terminal-Bench
 4.0 (TB4) are percentages. Costs/time are AA's weighted **whole-II task** means, including cache
 reads/writes at API list prices, not the cost of an average relay job or an agentic-only task.
+The TB4 cost/time column is one agentic Terminal-Bench task in AA's model-evaluation harness,
+not the whole-II mean or the separate Coding Agent Index run.
 Claude adaptive rows use AA's default fallback; [Sonnet's pre-release build][sonnet-note] had a
 structured-output bug, so those rows are provisional pending a rerun.
 
-| Model, measured effort | II | Briefcase / GDPval | Automation / TB4 % | II $/task / minutes | Source |
-|---|---|---|---|---|---|
-| GPT-6 Astra (max) | 52.7 | 1568 / 1574 | 68.5 / 59.1 | 3.258 / 7.9 | [AA][gpt-6-astra] |
-| GPT-6.1 Sol (high) | 50.2 | 1465 / 1509 | 64.5 / 51.5 | 0.319 / 4.5 | [AA][gpt-6-1-sol-high] |
-| GPT-6.1 Sol (xhigh) | 51.0 | 1502 / 1536 | 66.6 / 54.0 | 0.393 / 5.8 | [AA][gpt-6-1-sol-xhigh] |
-| GPT-6.1 Sol (max) | 51.8 | 1555 / 1596 | 64.9 / 56.1 | 0.724 / 11.6 | [AA][gpt-6-1-sol] |
-| GPT-6 Luna (max) | 38.1 | 1336 / 1433 | 53.2 / 12.6 | 0.068 / 6.1 | [AA][gpt-6-luna] |
-| Grok 4.7 (xhigh) | 46.4 | 1639 / 1714 | 65.6 / 25.8 | 3.738 / 14.2 | [AA][grok-4-7] |
-| GLM-5.3 (max) | 44.8 | 1505 / 1649 | 62.2 / 41.9 | 2.006 / 11.7 | [AA][glm-5-3] |
-| GLM-5.3-Flash | 41.8 | 1453 / 1642 | 60.4 / 32.8 | 0.284 / 13.8 | [AA][glm-5-3-flash] |
-| Kimi K3 (max) | 43.6 | 1499 / 1534 | 58.3 / 12.6 | 2.000 / 19.8 | [AA][kimi-k3] |
-| Claude Opus 5.5 (high with fallback) | 53.6 | 1685 / 1703 | 63.2 / 56.6 | 1.823 / 4.7 | [AA][claude-opus-5-5-high] |
-| Claude Opus 5.5 (max with fallback) | 57.6 | 1801 / 1866 | 69.5 / 59.6 | 5.982 / 13.3 | [AA][claude-opus-5-5] |
-| Claude Sonnet 5.5 (max with fallback) | 56.0 | 1816 / 1838 | 71.8 / 63.6 | 5.461 / 15.8 | [AA][claude-sonnet-5-5] |
-| Claude Haiku 5.5 (max) | 43.4 | 1575 / 1619 | 35.4 / 32.8 | 0.213 / 7.2 | [AA][claude-haiku-5-5] |
-| Claude Fable 5.1 (max with fallback) | 53.4 | 1671 / 1755 | 59.4 / 52.0 | 7.630 / 12.3 | [AA][claude-fable-5-1] |
+| Model, measured effort | II | Briefcase / GDPval | Automation / TB4 % | II $/task / minutes | TB4 $/task / minutes | Source |
+|---|---|---|---|---|---|---|
+| GPT-6 Astra (max) | 52.7 | 1568 / 1574 | 68.5 / 59.1 | 3.258 / 7.9 | 8.498 / 22.0 | [AA][gpt-6-astra] |
+| GPT-6.1 Sol (high) | 50.2 | 1465 / 1509 | 64.5 / 51.5 | 0.319 / 4.5 | 0.828 / 14.8 | [AA][gpt-6-1-sol-high] |
+| GPT-6.1 Sol (xhigh) | 51.0 | 1502 / 1536 | 66.6 / 54.0 | 0.393 / 5.8 | 1.026 / 18.7 | [AA][gpt-6-1-sol-xhigh] |
+| GPT-6.1 Sol (max) | 51.8 | 1555 / 1596 | 64.9 / 56.1 | 0.724 / 11.6 | 1.823 / 32.8 | [AA][gpt-6-1-sol] |
+| GPT-6 Luna (max) | 38.1 | 1336 / 1433 | 53.2 / 12.6 | 0.068 / 6.1 | 0.236 / 17.2 | [AA][gpt-6-luna] |
+| Grok 4.7 (xhigh) | 46.4 | 1639 / 1714 | 65.6 / 25.8 | 3.738 / 14.2 | 14.604 / 27.9 | [AA][grok-4-7] |
+| GLM-5.3 (max) | 44.8 | 1505 / 1649 | 62.2 / 41.9 | 2.006 / 11.7 | 8.064 / 31.9 | [AA][glm-5-3] |
+| GLM-5.3-Flash | 41.8 | 1453 / 1642 | 60.4 / 32.8 | 0.284 / 13.8 | 0.889 / 36.3 | [AA][glm-5-3-flash] |
+| Kimi K3 (max) | 43.6 | 1499 / 1534 | 58.3 / 12.6 | 2.000 / 19.8 | 5.088 / 50.3 | [AA][kimi-k3] |
+| Claude Opus 5.5 (high with fallback) | 53.6 | 1685 / 1703 | 63.2 / 56.6 | 1.823 / 4.7 | 5.119 / 13.2 | [AA][claude-opus-5-5-high] |
+| Claude Opus 5.5 (max with fallback) | 57.6 | 1801 / 1866 | 69.5 / 59.6 | 5.982 / 13.3 | 13.109 / 28.2 | [AA][claude-opus-5-5] |
+| Claude Sonnet 5.5 (max with fallback) | 56.0 | 1816 / 1838 | 71.8 / 63.6 | 5.461 / 15.8 | 12.646 / 30.6 | [AA][claude-sonnet-5-5] |
+| Claude Haiku 5.5 (max) | 43.4 | 1575 / 1619 | 35.4 / 32.8 | 0.213 / 7.2 | 0.652 / 15.4 | [AA][claude-haiku-5-5] |
+| Claude Fable 5.1 (max with fallback) | 53.4 | 1671 / 1755 | 59.4 / 52.0 | 7.630 / 12.3 | 19.218 / 30.2 | [AA][claude-fable-5-1] |
 
 Kimi K2.8 Preview: no public benchmark result verified in this snapshot; no score is inferred.
 GLM-5.3-Flash's AA variant is labelled max; relay's ZCode default is high. Those are different settings.
