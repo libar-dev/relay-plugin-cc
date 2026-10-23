@@ -16,7 +16,7 @@ the [README](../README.md) installation and the commands, and the `relay:jobs` s
 | `Agent({subagent_type, description, prompt})`, run in the background | `Agent({subagent_type: "relay:job", description, prompt})`, the same |
 | The completion notice carries the agent's final message | The completion notice carries a state block and the job's report, verbatim |
 | `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within seconds; a turn that cannot take it, or has just ended, gets it as the next turn |
-| A line the person types into its view (↓, Enter) reaches it between tool calls | A line typed into its view reaches the job at the relay's next call: when its wait returns, at most 540 s later, or as a new turn once the job has ended; typed after it ended, a new turn at once on 2.1.308 (2.1.309 drops a finished agent from the list) ([The wake](#the-wake)) |
+| A line the person types into its view (↓, Enter) reaches it between tool calls | A line typed into its view reaches the job at the relay's next call: when its wait returns, at most 540 s later, or as a new turn once the job has ended; typed after it ended in a view still open, a new turn at once (2.1.309 drops a finished agent from the list unless its view is open) ([The wake](#the-wake)) |
 | `SendMessage` after it ends continues it with its context | `SendMessage` after it ends starts a new turn on the same backend session and returns the new report |
 | `TaskStop` stops it | `TaskStop` stops the relay, and the plugin's hook cancels its job. The message `cancel`, or `companion cancel <job>`, cancels the job and leaves the relay to hand back its state |
 | A bad parameter fails the Agent call at once | A bad header fails the Agent call, or a Workflow script's `agent()`, at once, with the parser's message |
@@ -483,9 +483,9 @@ A line the person types into the relay's own view (↓ in the footer, Enter, the
 neither the view nor the agent. Claude Code writes the line into the relay's transcript when the
 relay's current tool call returns, so it reaches the job at the relay's next call: when its `wait`
 returns, at most 540 seconds later, or when the job ends, and then as a continue, not a steer. A
-line typed after the hand-back resumes the relay at once and continues the job (Claude Code 2.1.308;
-from 2.1.309 a finished agent leaves the footer's list, so that route is gone and a continue goes
-through `SendMessage` or `C continue`), and one typed right
+line typed after the hand-back resumes the relay at once and continues the job while its view is open (from
+Claude Code 2.1.309 a finished agent leaves the footer's list within about 15 s unless its view is
+open; once it has left, a continue goes through `SendMessage` or `C continue`), and one typed right
 after Esc interrupted the relay resumes it at once too: a steer while the job runs.
 
 The module draws nothing, so it runs wherever the plugin loads: the terminal, Desktop, `claude -p`

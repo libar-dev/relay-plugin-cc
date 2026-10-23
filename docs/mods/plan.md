@@ -420,8 +420,8 @@ had passed it on. What shipped (D100 to D104):
   first full run a relay sent the result fenced nine times and was let go after eight blocks).
 - No wake: no hook names a typed line's recipient, so it reaches the job at the relay's next call, at most 540 s
   later, or as a continue when the job ends first. A line typed after an interrupt arrives at once, and so does one
-  typed after a hand-back on Claude Code 2.1.308; 2.1.309 drops a finished agent from the footer's list, so that
-  route is gone and a continue goes through Claude.
+  typed after a hand-back in a view still open; Claude Code 2.1.309 drops a finished agent from the footer's list
+  unless its view is open, so once a person has left the view a continue goes through Claude.
 - The live check `typed` (terminal only) types into three relays per backend: unassisted (in a view held open
   through the hand-back), with a hand-made wake, and after an interrupt. It passed on all four backends in one run.
 

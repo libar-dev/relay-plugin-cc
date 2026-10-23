@@ -16,7 +16,7 @@ const companion = (ctx, args) => execFileSync(process.execPath,
   { encoding: 'utf8', env: { ...process.env, RELAY_JOBS_HOME: ctx.jobsHome }, timeout: 100000 });
 
 // Visits overlap the running jobs; the stagger allows time for delivery, hand-back and navigation.
-const aSleepSeconds = (n, index) => 60 + 40 * n + 360 * index;
+const aSleepSeconds = (n, index) => 180 + 40 * n + 360 * index;
 
 function humanText(entry) {
   if (entry.type === 'attachment' && entry.attachment?.type === 'queued_command' && entry.attachment.origin?.kind === 'human') {
@@ -307,8 +307,8 @@ export default {
     const { run } = ctx;
     if (ctx.timeoutMinutes === this.timeoutMinutes) {
       ctx.timeoutMinutes += 5 * (run.backends.length - 1);
-      // Four backends need 2410 seconds with startup, the final visit and settlement.
-      if (run.backends.length === 4) ctx.timeoutMinutes++;
+      // Four backends need about 2530 seconds with startup, the final visit and settlement.
+      if (run.backends.length === 4) ctx.timeoutMinutes += 3;
     }
     run.timeoutMinutes = ctx.timeoutMinutes;
     const deadline = now() + ctx.timeoutMinutes * 60000;

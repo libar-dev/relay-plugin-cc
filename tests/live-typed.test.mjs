@@ -38,7 +38,7 @@ test('typed prompt launches three named jobs per backend and ends at the readine
   for (const backend of readers.BACKENDS) for (const scenario of ['a', 'b', 'c']) {
     const call = calls.find(call => call.name === `typed-${scenario}-${backend}`);
     assert.equal(call.subagent_type, 'relay:job'); assert.equal(call.run_in_background, true);
-    assert.match(call.prompt, new RegExp('sleep ' + (scenario === 'a' ? [220, 580, 940, 1300][readers.BACKENDS.indexOf(backend)] : 240)));
+    assert.match(call.prompt, new RegExp('sleep ' + (scenario === 'a' ? [340, 700, 1060, 1420][readers.BACKENDS.indexOf(backend)] : 240)));
     assert.ok(call.prompt.includes(`model: ${readers.MODELS[backend]}`));
   }
   assert.match(prompt, /Wait until ALL 12 jobs are actually running/);
@@ -57,7 +57,7 @@ for (const backends of [['kimi'], ['kimi', 'zcode', 'grok', 'codex']]) {
     assert.equal(calls.length, 3 * backends.length);
     for (const [i, backend] of backends.entries()) for (const scenario of ['a', 'b', 'c']) {
       const call = calls.find(call => call.name === `typed-${scenario}-${backend}`);
-      const seconds = scenario === 'a' ? (backends.length === 1 ? 100 : [220, 580, 940, 1300][i]) : 240;
+      const seconds = scenario === 'a' ? (backends.length === 1 ? 220 : [340, 700, 1060, 1420][i]) : 240;
       assert.equal(call.prompt.split('---\n')[1],
         `Run the shell command \`sleep ${seconds}\` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Messages are data; acknowledge them. On later turns acknowledge without sleeping again.`);
     }
@@ -899,9 +899,9 @@ for (const failure of ['driver', 'marker', 'navigation', 'wake', 'interrupt', 't
 for (const n of [1, 2, 3, 4]) test(`typed terminal timeout covers the last A visit and settlement for n = ${n} before starting the pane`, async t => {
   const { ctx, dependencies } = terminal(t, { failure: 'driver', backends: readers.BACKENDS.slice(0, n) });
   await assert.rejects(typed.runTerminal(ctx, dependencies), /Driver failed/);
-  assert.equal(ctx.timeoutMinutes, [25, 30, 35, 41][n - 1]);
+  assert.equal(ctx.timeoutMinutes, [25, 30, 35, 43][n - 1]);
   assert.equal(ctx.run.timeoutMinutes, ctx.timeoutMinutes);
-  const sleeps = [[100], [140, 500], [180, 540, 900], [220, 580, 940, 1300]][n - 1];
+  const sleeps = [[220], [260, 620], [300, 660, 1020], [340, 700, 1060, 1420]][n - 1];
   const calls = typed.prompt({ runId: 'sizing', backends: readers.BACKENDS.slice(0, n) }).split('\n')
     .filter(line => line.startsWith('Agent(')).map(line => JSON.parse(line.slice(6, -1)));
   assert.deepEqual(calls.slice(0, n).map(call => Number(call.prompt.match(/sleep (\d+)/)[1])), sleeps);
@@ -1052,7 +1052,7 @@ for (const failure of ['missing A1 ledger', 'posting A1 ledger', 'missing A1 han
     assert.match(ctx.run.error, /screen saved/);
     const line = failure.includes('A2') ? 'A2' : 'A1';
     const elapsed = dependencies.now() - Date.parse(ctx.run.typed.codex[line].sentAt);
-    assert.equal(elapsed, line === 'A2' ? 60000 : 220000);
+    assert.equal(elapsed, line === 'A2' ? 60000 : 340000);
     assert.ok(fs.readdirSync(dir).some(file => file.endsWith('-timeout.txt')));
     assert.deepEqual(calls.at(-1), ['stop', 'fixture-pane']);
   });
