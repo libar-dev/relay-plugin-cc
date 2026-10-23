@@ -15,10 +15,11 @@ one job and *hands back* its result; the *job* runs on Codex, Grok Build, ZCode 
 ## pre.2
 
 Version `3.0.0-pre.2`, tag `v3.0.0-pre.2` (aab8fc3), cut on 23 October 2026. Heavy production runs on it. The status
-line and the board come in a later cut. Each of its changes passed its own PR's gates (a two-family review, the test
-suite, CI and the live suite); the checks against the installed cut follow its install, as for pre.1.
+line and the board come in a later cut. Each of its PRs passed a two-family review, the test suite and CI, and the
+live suite where a check covers the change (the typed lines and the JSON). No live check covers the setup fixes, and
+the text handling is known issue 4. The checks against the installed cut follow its install, as for pre.1.
 
-It fixes pre.1's known issues 1, 3 and 4, and the code-fence case of issue 2:
+It fixes pre.1's known issues 1, 3 and 4, the code-fence case of issue 2, and one more defect (the third line):
 
 - A line typed into a relay's own view in the terminal reaches the job (see "Typing to a relay" below).
 - A relay that hands back the job's block inside one plain code fence is accepted.
@@ -137,14 +138,15 @@ them until then: type them in another thread on the same repository.
 - A message after the hand-back continues the same job: the same `job:` and `session:`, and `attempts:` one higher.
 - **Typing to a relay, in the terminal** (from pre.2; keys as of Claude Code 2.1.309):
   - To reach its prompt: press `↓` until the agent is selected in the list under the prompt, and `Enter` to open its
-    view; the list keeps the keys. Then press `↑` until no row is selected, past `main`: the rule above the prompt
+    view; the list keeps focus. Then press `↑` until no row is selected, past `main`: the rule above the prompt
     reads `@<agent name>`, and the prompt `Message @<agent name>…` takes what you type.
   - A line you send there reaches the job at the relay's next step, up to about nine minutes later, or as a new turn
     when the job ends.
   - To redirect the job at once, press `Esc` once at the agent's prompt, then send the line right away. The Esc stops
     the relay (its job runs on), and the line resumes the relay and reaches the job within seconds (Kimi: as its next
-    turn). Your lead is told that you stopped the agent, then that you resumed it. If you send nothing after the Esc,
-    the relay stays stopped, as under "Stopping".
+    turn). The view shows `Interrupted` after the Esc; if it does not, the Esc only left the list. Your lead is told
+    that you stopped the agent, then that you resumed it. If you send nothing after the Esc, the relay stays stopped,
+    as under "Stopping".
   - Check that the rule above the prompt names the agent before you press `Esc`: in the main view, Esc interrupts
     your lead.
   - After the hand-back, type only while the agent's view is still open: a finished agent leaves the list within
