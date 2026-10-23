@@ -12,6 +12,45 @@ work, how to note a problem, and how a machine is switched. The [README](../../R
 user guide comes with a later docs PR. Two words used below: a *relay* is the small Claude agent (Haiku) that runs
 one job and *hands back* its result; the *job* runs on Codex, Grok Build, ZCode or Kimi Code.
 
+## pre.2
+
+Version `3.0.0-pre.2`, tag `v3.0.0-pre.2` (aab8fc3), cut on 23 October 2026. Heavy production runs on it. The status
+line and the board come in a later cut. Each of its PRs passed a two-family review, the test suite and CI, and the
+live suite where a check covers the change (the typed lines and the JSON). No live check covers the setup fixes, and
+the text handling is known issue 4. The checks against the installed cut follow its install, as for pre.1.
+
+It fixes pre.1's known issues 1, 3 and 4, the code-fence case of issue 2, and one more defect (the third line):
+
+- A line typed into a relay's own view in the terminal reaches the job (see "Typing to a relay" below).
+- A relay that hands back the job's block inside one plain code fence is accepted.
+- A relay that a message resumes after its hand-back must hand back the job's result again; in pre.1 its own words
+  could pass as the result.
+- A job cancelled with TaskStop is no longer marked `not handed back`.
+- `/relay:setup` asks Grok a second time before it says a home is signed out, and shows Kimi as `steer (next turn)`.
+
+What changes for you:
+
+- Text you give `/relay:review`, `/relay:adversarial-review` or `/relay:setup` reaches relay as written: backticks,
+  `$(…)` and `$VAR` no longer run in Claude's shell, so `$HOME` and other variables are not expanded. Use `~/` or a
+  full path. Setup no longer expands globs either; its quotes group spaces, and a backslash escapes the next character
+  even inside quotes, so write a literal backslash twice.
+- A script that reads the companion's `--json` must change. `status --json`, with or without `--all` or
+  `--workflow`, returns slim rows, 50 a page, newest first: to read them all, pass `nextCursor` back with `--cursor`.
+  `status <job> --json` keeps a job's full record. A `--json` error comes as JSON on stdout, not text on stderr.
+
+Its known issues, with what to do meanwhile:
+
+1. **A relay that writes prose instead of the job's block is still let go,** after eight blocks. It happened once,
+   after the message `cancel`. The job is fine; `/relay:status` marks it `not handed back`, its block carries a
+   `relay-violation:` line, and `/relay:result <job>` has the block and the report.
+2. **A line typed to a relay while it waits takes up to about nine minutes to arrive:** nothing wakes the relay for
+   it yet. For a steer within seconds, send the message through Claude, or stop the relay with one Esc at its prompt
+   and then send the line (see "Typing to a relay" below).
+3. **`/relay:transfer` takes no job id** (pre.1's issue 5).
+4. **Not yet checked live:** the new handling of text given to the review and setup commands, in default permission
+   mode (Claude may ask before it writes the text to a file), under the sandbox, and with `--background`.
+5. **T3 Code's own issues** still apply: see "Issues of T3 Code, on every cut".
+
 ## pre.1
 
 Version `3.0.0-pre.1`, tag `v3.0.0-pre.1` (217adc8): `release/3.0` at c73e053, with the plugin code of
@@ -24,8 +63,7 @@ end-to-end suite on Fedora (on the same code) and, since the install, on the M3,
 reads the jobs pre.1 writes). -->
 
 It passed the test suite and CI before its install, and the smoke test, libar-infra's thread tests and the rollback
-check after it. Its known issues, with what to do meanwhile; the first four are planned for pre.2 (Friday, about
-20:00):
+check after it. Its known issues, with what to do meanwhile; pre.2 fixes 1, 3 and 4, and the code-fence case of 2:
 
 1. **A message typed into an agent's own view is lost.** In the terminal's agent view (`↓`, `Enter`, then type), the
    message never reaches the job, while it runs or after it ends. Send messages through Claude.
@@ -39,6 +77,8 @@ check after it. Its known issues, with what to do meanwhile; the first four are 
 4. **`/relay:setup` can misread Grok's sign-in** and show it signed out: run it again. It also lists Kimi as lacking
    steering; a message to a running Kimi job runs as its next turn.
 5. **`/relay:transfer` takes no job id.** One typed after it is ignored, and the current session is transferred.
+
+## Issues of T3 Code, on every cut
 
 Two issues of T3 Code, not relay, that affect long Workflows:
 
@@ -91,22 +131,41 @@ command they run only once the session's current turn has ended. A lead that hol
 them until then: type them in another thread on the same repository.
 
 **Jobs started with the Agent tool**
-- A message to a running job's agent reaches the job within seconds, and the report shows it. Kimi runs it as its
-  next turn.
+- A message sent through Claude to a running job's agent reaches the job within seconds, and the report shows it.
+  Kimi runs it as its next turn. A message that reaches a job in the few seconds before a turn starts (just after a
+  continue was accepted, or at the launch) does not steer that turn: it waits until the whole turn ends, then runs as
+  the next turn.
 - A message after the hand-back continues the same job: the same `job:` and `session:`, and `attempts:` one higher.
+- **Typing to a relay, in the terminal** (from pre.2; keys as of Claude Code 2.1.309):
+  - To reach its prompt: press `↓` until the agent is selected in the list under the prompt, and `Enter` to open its
+    view; the list keeps focus. Then press `↑` until no row is selected, past `main`: the rule above the prompt
+    reads `@<agent name>`, and the prompt `Message @<agent name>…` takes what you type.
+  - A line you send there reaches the job at the relay's next step, up to about nine minutes later, or as a new turn
+    when the job ends.
+  - To redirect the job at once, press `Esc` once at the agent's prompt, then send the line right away. The Esc stops
+    the relay (its job runs on), and the line resumes the relay and reaches the job within seconds (Kimi: as its next
+    turn). The view shows `Interrupted` after the Esc; if it does not, the Esc only left the list. Your lead is told
+    that you stopped the agent, then that you resumed it. If you send nothing after the Esc, the relay stays stopped,
+    as under "Stopping".
+  - Check that the rule above the prompt names the agent before you press `Esc`: in the main view, Esc interrupts
+    your lead.
+  - After the hand-back, type only while the agent's view is still open: a finished agent leaves the list within
+    about 15 seconds unless its view is open, and then you continue the job through Claude. Do not press `←`
+    (`← for agents`): it opens Claude Code's session manager and moves your conversation to a new session.
 - A bad header fails the launch at once with the reason, and no job starts.
 
 **Long Workflows**
 
 <!-- The end-to-end suite on the pre.1 plugin code (3.0.0-dev.4, 962130b): run 20261022T212434Z-730a (resume-stop,
 resume-end, resume-cancelled) and run 20261022T210110Z-9dd6 (salvage); on the installed pre.1, run
-20261022T222258Z-ba8d (resume-stop; its resume-end was not resumed). Calls on resume, from the journals of the three
+20261022T222258Z-ba8d (resume-stop, and resume-collect: the typed /relay:status --workflow and /relay:result after the
+resume; its resume-end was not resumed). Calls on resume, from the journals of the three
 resumed Workflows (730a's resume-stop and resume-end, ba8d's resume-stop): of 15 calls that had completed, 11 came
 back from the cache (8 relay, 3 native) and 4 (three ZCode, one Kimi, whose jobs run longest) ran again and took over
 their completed job, one job and one attempt each. -->
 
-The end-to-end suite showed the first four lines on the pre.1 code, on all four backends unless a line says
-otherwise. The others are relay's documented behaviour.
+The end-to-end suite showed the first four lines and the `--workflow` line on the pre.1 code, on all four backends
+unless a line says otherwise. The others are relay's documented behaviour.
 
 - **A stopped Workflow keeps its jobs.** After a TaskStop on the Workflow, or when its session ends, its relays end
   and its jobs are not cancelled. The TaskStop's result names each job that keeps running.
@@ -125,7 +184,8 @@ otherwise. The others are relay's documented behaviour.
   `continue`, as the jobs skill says: its agent has ended, so a message to it does not reach the job.
 - **To cancel one job of a running Workflow,** use `/relay:cancel <job>`, from another thread if the lead holds its
   turn. TaskStop cannot target one agent of a Workflow.
-- `/relay:status --workflow <run>` lists every job of a run, in any repository.
+- `/relay:status --workflow <run>` lists every job of a run, in any repository, cancelled ones included (checked by
+  typing it after a resume, on the installed pre.1).
 - **Do not resume a Workflow under a different cut** from the one that started it: that has not been tested. Let it
   finish, or read its jobs with `/relay:result`.
 - **`not handed back`** means no relay handed back the job's result: its agent was stopped by hand, died or was let
@@ -138,13 +198,15 @@ otherwise. The others are relay's documented behaviour.
 - TaskStop on a Workflow ends its relays and leaves its jobs running, for a resume to take over.
 - Stopping an agent yourself (`x` in the agent list or Esc in its view in the terminal, or the Stop button in
   the desktop app's Background tasks panel) ends the agent only, and the job runs to its end, `not handed back`.
-  That is the owner's decision; a notice naming the job comes in a later cut.
+  That is the owner's decision; a notice naming the job comes in a later cut. From pre.2, a line typed in the
+  agent's view right after an Esc resumes it (see "Typing to a relay").
 - In T3, Stop ends the thread's process: its relays end and their jobs run on. Resume a Workflow as above, and read
   an Agent-tool job with `/relay:result <job>`.
 
 **Other surfaces**
 - In the desktop app, a message reaches a relay only through Claude: the agent's side view has no input box.
-- In T3, the commands answer as the assistant's message, and steering and continuing work as in the terminal.
+- In T3, the commands answer as the assistant's message, and steering and continuing through Claude work as in the
+  terminal. T3 has no agent view to type into.
 
 ## When something goes wrong
 
