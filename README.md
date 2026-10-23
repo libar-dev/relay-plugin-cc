@@ -296,7 +296,7 @@ and its status line counts the repository's running and dead jobs and owed messa
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-pre.2. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.10. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
