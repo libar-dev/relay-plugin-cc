@@ -100,7 +100,10 @@ them until then: type them in another thread on the same repository.
 **Long Workflows**
 
 <!-- The end-to-end suite on the pre.1 plugin code (3.0.0-dev.4, 962130b): run 20261022T212434Z-730a (resume-stop,
-resume-end, resume-cancelled) and run 20261022T210110Z-9dd6 (salvage). -->
+resume-end, resume-cancelled) and run 20261022T210110Z-9dd6 (salvage); on the installed pre.1, run
+20261022T222258Z-ba8d. Calls on resume, from the Workflow journals of 730a and ba8d: of 20 finished calls, 16 came
+back from the cache and 4 (ZCode or Kimi, whose relays return slowest) ran again and adopted their finished job, one
+job and one attempt each. -->
 
 The end-to-end suite showed the first four lines on the pre.1 code, on all four backends unless a line says
 otherwise. The others are relay's documented behaviour.
@@ -108,9 +111,12 @@ otherwise. The others are relay's documented behaviour.
 - **A stopped Workflow keeps its jobs.** After a TaskStop on the Workflow, or when its session ends, its relays end
   and its jobs are not cancelled. The TaskStop's result names each job that keeps running.
 - **Resume it in the same conversation:** `claude --resume` in a terminal, or the same T3 thread (shown by
-  libar-infra's thread tests), then the Workflow tool with `resumeFromRunId`. Calls that had finished are not run
-  again. Each running job is taken over, with a `relay-adopted:` line in its block, and the result has an entry for
-  every label. A worker that died meanwhile is resumed once as its job is taken over: `automatic-resume: … (worker)`.
+  libar-infra's thread tests), then the Workflow tool with `resumeFromRunId`. A call whose result had reached the
+  Workflow comes back from its cache. A call whose job had finished, but whose result had not reached the Workflow
+  yet, runs again: its new relay takes the finished job over and returns its result without doing the work again. A
+  running job is taken over and awaited. Each takeover adds a `relay-adopted:` line to the block, and the result has
+  an entry for every label. A worker that died meanwhile is resumed once as its job is taken over:
+  `automatic-resume: … (worker)`.
 - **A cancelled job is not taken over** (shown on Codex), and by design neither is a failed one: a resume runs its
   call again as a new job. Collect its work first.
 - **To collect a cancelled job's work** from a relay started with the Agent tool, send its agent a message such as
