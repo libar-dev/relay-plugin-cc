@@ -83,14 +83,31 @@ function withoutOuterFence(text, expected) {
   return fenced ? fenced[2] : text;
 }
 
+function stateBlockLines(value) {
+  return String(value ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+function firstDifferingLine(text, expected, stateBlock) {
+  const lines = stateBlock ? stateBlockLines : (value) => trimEnd(value).split("\n");
+  const written = lines(withoutOuterFence(text, expected));
+  const required = lines(expected);
+  // Only diagnose a recognisable job block; prose keeps the general instruction.
+  if (![written, required].every((block) => block[0]?.startsWith("state: ") && block[1]?.startsWith("job: "))) return "";
+  for (let index = 0; index < Math.max(written.length, required.length); index += 1) {
+    if (written[index] !== required[index]) {
+      return `One line differs: you wrote ${JSON.stringify(written[index] ?? "(missing line)")}; it must be ${JSON.stringify(required[index] ?? "(no line)")}.\n`;
+    }
+  }
+  return "";
+}
+
 // A string-return relay retypes the state block, and a small model drops a line that only restates
 // the request, most often its own `relay:` line. Its text passes when every line it holds is a line
 // of the block and no outcome line is missing. A line added or changed still fails, and so does a
 // missing state, error or undelivered line. Blank lines and one outer code fence are not counted.
 export function matchesStateBlock(text, expected) {
-  const lines = (value) => String(value ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const remaining = lines(expected);
-  for (const line of lines(withoutOuterFence(text, expected))) {
+  const remaining = stateBlockLines(expected);
+  for (const line of stateBlockLines(withoutOuterFence(text, expected))) {
     const index = remaining.indexOf(line);
     if (index === -1) return false;
     remaining.splice(index, 1);
@@ -444,7 +461,7 @@ async function handleSubagentStop(input, env = process.env) {
   if (expected != null && !matches) {
     problems.push({
       kind: "final-message",
-      reason: `Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n${expected}`
+      reason: `Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n${firstDifferingLine(input.last_assistant_message, expected, stateBlock)}${expected}`
     });
   }
   if (problems.length === 0) {

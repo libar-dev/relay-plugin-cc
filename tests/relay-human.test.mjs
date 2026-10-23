@@ -243,9 +243,9 @@ async function handedBack(ctx) {
   return { jobId, dir: jobDirOf(ctx, jobId), handback };
 }
 
-function assertExactResultBlock(output, ctx, jobId) {
+function assertExactResultBlock(output, ctx, jobId, difference = "") {
   assert.equal(output?.decision, "block");
-  assert.equal(output.reason, "Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n" + companion(ctx, ["result", jobId]).stdout);
+  assert.equal(output.reason, "Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n" + difference + companion(ctx, ["result", jobId]).stdout);
 }
 
 test("a hand-back followed by its SubagentStop is exempt", async () => {
@@ -427,17 +427,17 @@ test("without SubagentHandback, only one whole-message fence may surround the ex
     ["an unrecognized language tag fails", (text) => fence(text, "```aZ09_+.-")],
     ["an opening fence indented four spaces fails", (text) => fence(text, "    ```yaml")],
     ["a closing fence indented four spaces fails", (text) => fence(text, "```yaml", "    ```")],
-    ["an unclosed fence fails", (text) => `\`\`\`\n${text}`],
-    ["a fence with a changed line fails", (text) => fence(text.replace("state: completed", "state: cancelled"))],
-    ["a fence with an added line fails", (text) => fence(`${text}\nAdded line.`)],
+    ["an unclosed fence fails", (text) => `\`\`\`\n${text}`, 'One line differs: you wrote "(missing line)"; it must be "```".\n'],
+    ["a fence with a changed line fails", (text) => fence(text.replace("state: completed", "state: cancelled")), 'One line differs: you wrote "state: cancelled"; it must be "state: completed".\n'],
+    ["a fence with an added line fails", (text) => fence(`${text}\nAdded line.`), 'One line differs: you wrote ""; it must be "(no line)".\n'],
     ["a fence with a missing line fails", (text) => fence(text.replace(/^state:.*\n/, ""))],
     ["a fence around only part of the result fails", (text) => text.replace(/^state: completed\n/, "```\nstate: completed\n```\n")],
     ["different opening and closing runs fail", (text) => fence(text, "````", "```")],
     ["two enclosing fences fail", (text) => fence(fence(text), "````", "````")]
   ];
-  for (const [name, wrap] of cases) {
+  for (const [name, wrap, difference] of cases) {
     await t.test(name, async () => {
-      assertExactResultBlock(await stop(ctx, wrap(result())), ctx, jobId);
+      assertExactResultBlock(await stop(ctx, wrap(result())), ctx, jobId, difference);
       assert.equal(await stop(ctx, result()), null);
     });
   }

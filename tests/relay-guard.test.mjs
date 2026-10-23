@@ -459,6 +459,44 @@ test("without SubagentHandback, SubagentStop still checks the final text", async
   assert.equal(await stop(ctx, resultOf(ctx, jobId)), null);
 });
 
+for (const workflow of [false, true]) {
+  test(`${workflow ? "Workflow" : "Agent-tool"} hand-back names only the first differing line of a retyped block`, async () => {
+    const ctx = relayContext("job", { ...(workflow ? { workflow: WORKFLOW } : {}), turnMs: 100 });
+    let jobId;
+    if (workflow) {
+      ctx.append(ctx.userRequest(), ctx.workflowPrompt(), ctx.environment(), ctx.snapshot("string"));
+      ({ jobId } = await relayStart(ctx));
+      assert.ok(jobId);
+    } else {
+      jobId = await startedRelay(ctx, QUICK);
+    }
+    assert.equal(waitJob(ctx, jobId).status, 0);
+    const block = companion(ctx, ["result", jobId, ...(workflow ? ["--state-only"] : [])]).stdout;
+    const dir = `dir: ${jobDirOf(ctx, jobId)}`;
+    const report = `report: ${jobDirOf(ctx, jobId)}/report.md`;
+    const instruction = `${workflow ? `${WORKFLOW_NOTE}\n\n` : ""}Your final message must be exactly the job's result, with nothing added or removed. Reply with exactly this text and nothing else, with no code fence around it:\n`;
+    const hint = (written, required) => `One line differs: you wrote ${JSON.stringify(written)}; it must be ${JSON.stringify(required)}.\n`;
+
+    const wrongDir = block.replace(dir, `${dir}/report.md`);
+    // Use the same fence and whitespace normalization as the existing matcher.
+    const normalized = workflow
+      ? wrongDir.split("\n").map((line) => `  ${line}  `).join("\r\n")
+      : wrongDir;
+    const blocked = await stop(ctx, `\`\`\`yaml\n${normalized}\n\`\`\``);
+    assert.equal(blocked?.decision, "block");
+    assert.equal(blocked.reason, instruction + hint(`${dir}/report.md`, dir) + block);
+
+    const twoLines = await stop(ctx, wrongDir.replace(report, "report: none"));
+    assert.equal(twoLines?.decision, "block");
+    assert.equal(twoLines.reason, instruction + hint("report: none", report) + block);
+
+    const prose = await stop(ctx, "The job finished; here is my summary.");
+    assert.equal(prose?.decision, "block");
+    assert.equal(prose.reason, instruction + block, "unrelated prose keeps the old reason");
+    assert.equal(await stop(ctx, block), null, "the unchanged result still passes");
+  });
+}
+
 // ---------------------------------------------------------------------------------------
 
 test("an unreadable transcript is a recorded violation that is never forgotten, and the relay proceeds", async () => {
