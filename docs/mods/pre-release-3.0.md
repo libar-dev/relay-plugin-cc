@@ -102,9 +102,9 @@ them until then: type them in another thread on the same repository.
 <!-- The end-to-end suite on the pre.1 plugin code (3.0.0-dev.4, 962130b): run 20261022T212434Z-730a (resume-stop,
 resume-end, resume-cancelled) and run 20261022T210110Z-9dd6 (salvage); on the installed pre.1, run
 20261022T222258Z-ba8d (resume-stop; its resume-end was not resumed). Calls on resume, from the journals of the three
-resumed Workflows (730a's resume-stop and resume-end, ba8d's resume-stop): of 15 calls that had completed, 11 came back from the cache (8 relay, 3 native) and 4 (three
-ZCode, one Kimi, whose jobs run longest) ran again and took over their completed job, one job and one attempt each.
--->
+resumed Workflows (730a's resume-stop and resume-end, ba8d's resume-stop): of 15 calls that had completed, 11 came
+back from the cache (8 relay, 3 native) and 4 (three ZCode, one Kimi, whose jobs run longest) ran again and took over
+their completed job, one job and one attempt each. -->
 
 The end-to-end suite showed the first four lines on the pre.1 code, on all four backends unless a line says
 otherwise. The others are relay's documented behaviour.
