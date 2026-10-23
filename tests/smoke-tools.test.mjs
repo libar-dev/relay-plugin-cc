@@ -850,6 +850,39 @@ test('pane pid prints the pane process id on a private tmux socket', async t => 
   assert.notEqual(pane('pid', 'pid-test').status, 0);
 });
 
+test('pane bytes, escaped screen and size use the private socket and exact tmux arguments', t => {
+  const dir = copyFixture(t), bin = path.join(dir, 'bin'), log = path.join(dir, 'tmux-args.json');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!${process.execPath}\n` +
+    `require('node:fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));\n` +
+    'process.stdout.write("\\u001b[7mCancel\\u001b[0m\\n");\n', { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_RUNTIME_DIR: dir };
+  for (const [args, expected] of [
+    [['bytes', 'board', '18', '09', '0d'], ['send-keys', '-H', '-t', '=board:', '18', '09', '0d']],
+    [['screen-escapes', 'board'], ['capture-pane', '-p', '-e', '-t', '=board:']],
+    [['size', 'board', '100', '60'], ['resize-window', '-t', '=board:', '-x', '100', '-y', '60']]
+  ]) {
+    const result = spawnSync('bash', [path.join(root, 'scripts/smoke/pane.sh'), ...args], { env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, '\x1b[7mCancel\x1b[0m\n');
+    assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), ['-S', path.join(dir, 'claude-tmux/tmux.sock'), ...expected]);
+  }
+});
+
+test('pane rejects invalid bytes, escaped captures and dimensions before contacting tmux', t => {
+  const dir = copyFixture(t), bin = path.join(dir, 'bin'), log = path.join(dir, 'called');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\ntouch '${log}'\n`, { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_RUNTIME_DIR: dir };
+  for (const args of [['bytes', 'board'], ['bytes', 'board', '0'], ['bytes', 'board', '000'], ['bytes', 'board', 'gg'],
+    ['bytes', 'board', '-H'], ['screen-escapes', 'board', 'extra'], ['size', 'board'], ['size', 'board', '100'],
+    ['size', 'board', '100', '0'], ['size', 'board', '-1', '60'], ['size', 'board', '100', '60', 'extra']]) {
+    const result = spawnSync('bash', [path.join(root, 'scripts/smoke/pane.sh'), ...args], { env, encoding: 'utf8' });
+    assert.equal(result.status, 2, args.join(' '));
+  }
+  assert.equal(fs.existsSync(log), false);
+});
+
 test('pane start runs in its folder after the folder a tmux server started from is deleted', async t => {
   const dir = fs.realpathSync(fs.mkdtempSync('/tmp/relay-pane-cwd-test-'));
   // Each case has its own private runtime folder, so neither stops a server. pane.sh starts the first server with

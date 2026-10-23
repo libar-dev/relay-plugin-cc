@@ -4,7 +4,15 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { register } from "../plugins/relay/hooks/mod/register.js";
+import { register as registerHooks } from "node:module";
+
+// The module imports Claude Code's `claude-code` package for its state; outside Claude Code a stub
+// stands in, since the commands these tests drive keep no state.
+const stub = "data:text/javascript," + encodeURIComponent(
+  "export const atom = (key, initial) => ({ key, initial }); export const read = async () => null; export const update = async () => {};");
+registerHooks("data:text/javascript," + encodeURIComponent(
+  `export async function resolve(specifier, context, next) { return specifier === "claude-code" ? { url: ${JSON.stringify(stub)}, shortCircuit: true } : next(specifier, context); }`));
+const { register } = await import("../plugins/relay/hooks/mod/register.js");
 
 // The four commands the hooks module answers, each with the module's `$` faked: the companion run
 // prints nothing, so every answer names the shell command to run instead. That line, pasted into a
