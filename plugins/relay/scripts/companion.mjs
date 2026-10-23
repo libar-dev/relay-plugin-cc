@@ -47,7 +47,6 @@ function printUsage() {
       `                            ${homeFlags} [--base <ref>] [--scope <auto|working-tree|branch>] [--json]`,
       "  companion.mjs adversarial-review [the same options as review] [focus text] [--json]",
       "  setup, review and adversarial-review accept --args-file <path> [--json]: parse the exact file text as raw arguments.",
-      "    --args-stdin instead reads stdin and removes one final framing LF. Use exactly one transport selector.",
       "    No other argv options except --json and, for reviews, --estimate: print target label and size without starting a job.",
       "  companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "",

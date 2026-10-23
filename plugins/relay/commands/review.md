@@ -47,15 +47,15 @@ Argument handling:
 Before any companion call, allocate a private argument file with this fixed command (it contains no user text):
 
 ```bash
-node -e 'const fs = require("node:fs"); const dir = fs.mkdtempSync("/tmp/relay-args-"); console.log(dir + "/args.txt");'
+node -e 'const fs = require("node:fs"); const path = require("node:path"); const os = require("node:os"); const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-args-")); console.log(path.join(dir, "args.txt"));'
 ```
 
 Use `Write` with `file_path` set to the printed absolute path and `content` set to the raw slash-command arguments exactly, including empty text and trailing newlines. Do not add a framing newline. In every companion recipe, replace only `<args-file>` with that generated path. Never put argument values in Bash source, shell arguments, JavaScript source, or a heredoc; do not build other commands from them. `--args-file` reads the exact file content with the single-string argument parser. Allocate and write it once; reuse it for the estimate and the selected review flow. Writing this temporary transport file is permitted by the review-only constraint; do not write project files.
 
-After the final foreground call (including an error or an empty estimate), remove the file and its private directory with the fixed cleanup command below. For a background review, keep the file until its completion notification, then clean up; do not wait in the launching turn.
+The companion removes its generated argument file and directory immediately after reading them for a review. Estimates retain the file for the review call. After a final foreground call, an empty or failed estimate, or a stop before launch, run this cleanup. Missing files and directories are accepted. Cleanup refuses other path shapes and never removes a directory recursively. Background reviews need no later cleanup turn; do not wait in the launching turn.
 
 ```bash
-node -e 'const fs = require("node:fs"); const path = require("node:path"); fs.unlinkSync(process.argv[1]); fs.rmdirSync(path.dirname(process.argv[1]));' "<args-file>"
+node --input-type=module -e 'const { pathToFileURL } = await import("node:url"); const { cleanupArgumentFile } = await import(pathToFileURL(process.argv[1]).href); cleanupArgumentFile(process.argv[2]);' "${CLAUDE_PLUGIN_ROOT}/scripts/lib/util/argument-file.mjs" "<args-file>"
 ```
 
 Reject NUL-containing arguments with a usage error; do not normalize them or retry through a shell. File contents do not count toward the shell command's argument-size limit: use the same file route for long input and never fall back to embedding it in a command.

@@ -594,45 +594,48 @@ The parts:
 
 ### D73. Model-run commands carry arguments in a Write-created file (release lead)
 
-`review`, `adversarial-review` and `setup` allocate a private directory with a fixed Node command,
-then use Claude's `Write` tool to write the raw slash-command arguments without involving a shell.
-All three commands allow `Write`. The companion's `--args-file <path>` reads the exact text, with no
-framing newline, and uses the existing single-string parser. Only the generated path enters Bash;
-argument values never do, including during estimation. The same file serves the estimate and the
-foreground or background review, and setup's post-install rerun. Cleanup follows the last foreground
-call, setup's completion/error, or the background completion notification. No waiting is added to the
-background launch. Output and exit codes are preserved. `rescue` passes its brief as Agent prose.
+`review`, `adversarial-review` and `setup` allocate a private directory under `os.tmpdir()`.
+Claude's `Write` tool writes the raw arguments into `args.txt`. All three commands allow `Write`.
+The companion's `--args-file <path>` reads the exact text with the existing single-string parser.
+There is no framing newline. Only the generated path enters Bash. The same file serves the estimate
+and the review, or setup's post-install rerun. Review runs remove it immediately after reading.
+Estimates and setup retain it for reuse. Explicit cleanup handles stops and setup's completion.
+It accepts missing files and directories. It checks the generated path shape and never removes a
+directory recursively. Background reviews need no cleanup turn. Output and exit codes are preserved.
+`rescue` passes its brief as Agent prose.
 
-`review --estimate` and `adversarial-review --estimate` accept either file or stdin transport. They
-call `resolveReviewTarget` with the review's options, then print the target label, unique file count,
-untracked count and shortstat, without a backend call or job. An explicit base selects branch scope;
-`auto` selects a dirty working tree or, when clean, the branch. Branch estimates use the same
-merge-base comparison as reviews. Invalid and option-like revisions are rejected, and Git receives
-argv with `shell: false`; revision validation terminates options before the supplied revision.
-Claude reads the estimate instead of constructing a Git command from `--base`.
+`review --estimate` and `adversarial-review --estimate` accept file transport. The fixed outer argv
+flag selects estimation; a payload cannot select or disable it. The estimate uses the review's
+`resolveReviewTarget` and merge-base comparison. It prints the target label, unique file count,
+untracked count and shortstat. It starts no backend or job. An explicit base selects branch scope.
+`auto` selects a dirty working tree or, when clean, the branch. Invalid and option-like revisions
+are rejected. Git receives argv with `shell: false` and option parsing terminated before revisions.
+Claude reads the estimate rather than building a Git command from `--base`.
 
-Reviews retain their established single-string grammar. Setup moves from shell word splitting and
-expansion to that grammar: **no `$VAR` expansion**, command substitution or glob expansion. Quotes
-group whitespace; **backslash is an escape even inside quotes**, so a literal backslash must be
-doubled. Empty quoted words are dropped, making an empty option value a missing-value error.
-`--cwd` explicitly expands a leading `~/` (or bare `~`) as the home options already do; no other
-shell expansion is restored. These changes are the point: user text must not execute commands or
-silently select values through the shell's environment. Use absolute paths or `~/` instead of
-`$HOME`. Preserving setup's former shell grammar separately was rejected in favor of one documented,
-non-evaluating parser; review parsing is unchanged.
+Setup adopts the review commands' single-string grammar. Variables, command substitutions and
+globs are literal. Quotes group whitespace. Backslash escapes even inside quotes; double literal
+backslashes. Empty quoted words are dropped, so empty values are missing-value errors. Every command
+using `--cwd` expands leading `~/` and bare `~`. Home options already support `~/`. Use absolute
+paths or `~/` rather than `$HOME`. A separate parser preserving setup's shell grammar was rejected.
+The tokenizer for reviews is unchanged; their `--cwd` gains that home expansion too.
 
-The original quoted-heredoc design prevented ordinary substitutions but depended on Claude checking
-for a delimiter collision. A public delimiter, even with a random suffix, cannot guarantee that the
-text stays out of shell source. The file route costs one allocation and a Write call, fits all flows,
-and removes that boundary entirely, so it replaces heredocs. Double quotes, model-generated shell
-escaping and JavaScript strings were also rejected. The original `--args-stdin` API remains available
-with its one-final-LF framing rule; recipes no longer use it. Either transport rejects NUL rather
-than silently normalizing or retrying. Large file payloads have no shell argument-size limit; there
-is no new raw-input size cap or shell fallback.
+Rejected designs: quoted heredocs depend on the model checking delimiter collisions. Double quotes
+still evaluate substitutions. Model-generated shell escaping and JavaScript strings add another
+interpretation boundary. The unreleased stdin transport added a second framing rule with no caller,
+so it was removed. One file transport has one rule: preserve every character. NUL is rejected.
+Long input uses the same file route and has no shell argument-size limit. There is no shell fallback.
 
-Tests extract every companion recipe, including estimates, audit inline shell instructions, and
-exercise hostile text, delimiter lines, empty/dash/CRLF input, replacement-pattern text and long
-input. They check transport selector errors, parser parity, home shorthand and target selection.
-The command changes do not fix `hooks/mod/register.js`: its normal argv execution is safe, but
-`companionShell` still needs to render raw arguments as one correctly escaped shell word or replace
-the executable rerun with safe recovery guidance. That file belongs to the hooks module PR.
+Grok and Kimi sign-in advice uses one shared shell-assignment helper. It quotes the home value,
+including embedded single quotes. Commands with backticks or newlines use fenced Markdown blocks.
+The Grok change is confined to guidance rendering; its sign-in probe flow is unchanged for PR #19.
+
+Tests extract every companion recipe and audit inline shell instructions. Hostile samples guard
+against a return to interpolation. Current recipes pass fixed argv and get their payload from Write.
+Tests cover exact file content, parser parity, selector errors, home shorthand, target selection,
+cleanup and outer estimation. Signed-out fake backends exercise sign-in advice pasted into Bash.
+
+`hooks/mod/register.js` remains a release dependency. Its normal argv execution is safe, but
+`companionShell` still reconstructs unsafe rerun advice. This file belongs to the hooks module PR.
+Do not change it here: Phase 4 PR #21 quotes its rerun hint. A live Mac/Linux Claude Code check of
+Write permissions, sandbox behavior and background delivery remains outstanding. Unscoped `Write`
+remains until a path-scoped rule is verified in that environment.

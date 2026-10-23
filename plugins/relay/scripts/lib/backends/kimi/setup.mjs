@@ -1,3 +1,4 @@
+import { shellCommandMarkdown } from "../../util/shell.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { runLimited } from "../../util/process.mjs";
@@ -129,7 +130,7 @@ export const setupProbe = {
   signInText(block) { return block.signIn.state === "signed-out" ? `signed out: ${block.signIn.detail}` : null; },
   nextSteps(block) {
     return block.signIn.state === "signed-out"
-      ? [`Sign in to Kimi in ${block.home} once: \`${kimiLoginCommand(block.home)}\` (${KIMI_REGION_HINT}; see the jobs skill's kimi-home.md).`]
+      ? [`Sign in to Kimi in ${block.home} once: ${shellCommandMarkdown(kimiLoginCommand(block.home))} (${KIMI_REGION_HINT}; see the jobs skill's kimi-home.md).`]
       : [];
   }
 };

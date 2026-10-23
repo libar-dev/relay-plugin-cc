@@ -35,7 +35,7 @@ function setupSelection(options) {
 
 export async function handleSetup(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    argsStdin: true,
+    argsFile: true,
     valueOptions: ["cwd", "fast-tier", "job-mcp-off", ...BACKENDS.flatMap(backend => backend.setup.homeFlag ? [backend.setup.homeFlag] : []), "backend"],
     booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
   });

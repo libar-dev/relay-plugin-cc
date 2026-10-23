@@ -523,8 +523,8 @@ test("Kimi's refusals fail the start with its words: an unknown effort, an unkno
     ["backend: kimi\nmodel: kimi-code/nope\neffort: low", {}, /Internal error: Model "kimi-code\/nope" is not configured in config\.toml\./],
     // Kimi checks the sign-in at session/new: the advice names the job's own home and the region,
     // since a home with no login and no region marker signs in to kimi.com.
-    [HEADER, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\/\.kimi-code: run `KIMI_CODE_HOME=.*\/\.kimi-code kimi login --region global` \(--region mainland-cn for a kimi\.com account\)\./],
-    [`${HEADER}\nkimi-home: jobs`, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\/\.kimi-code-jobs: run `KIMI_CODE_HOME=.*\/\.kimi-code-jobs kimi login --region global` \(--region mainland-cn for a kimi\.com account\)\./]
+    [HEADER, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\/\.kimi-code: run `KIMI_CODE_HOME=.*\/\.kimi-code' kimi login --region global` \(--region mainland-cn for a kimi\.com account\)\./],
+    [`${HEADER}\nkimi-home: jobs`, { authError: true }, /Authentication required\. Kimi needs a sign-in for .*\/\.kimi-code-jobs: run `KIMI_CODE_HOME=.*\/\.kimi-code-jobs' kimi login --region global` \(--region mainland-cn for a kimi\.com account\)\./]
   ]) {
     const ctx = fixture(t, options);
     const { id } = startJob(ctx, header, "[quick] Refused.");

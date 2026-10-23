@@ -61,10 +61,9 @@ function recordForegroundJob(cwd, kind, summary, request) {
 
 
 const REVIEW_OPTIONS = {
-  argsStdin: true,
-  transportOptions: ["--estimate"],
+  argsFile: true,
   valueOptions: ["base", "scope", "model", "effort", "backend", ...Object.keys(BACKEND_HEADER_KEYS), "cwd"],
-  booleanOptions: ["json", "background", "wait", "estimate"],
+  booleanOptions: ["json", "background", "wait"],
   aliasMap: { m: "model" }
 };
 
@@ -299,7 +298,9 @@ async function executeBackendReview({ request, context, focusText, reviewName, t
 export async function handleReviewCommand(argv, config) {
   // The recipe's outer estimate mode cannot be disabled by options in raw text.
   const estimateOnly = argv.includes("--estimate");
-  const { options, positionals } = parseCommandInput(argv, REVIEW_OPTIONS);
+  const { options, positionals } = parseCommandInput(argv.filter(token => token !== "--estimate"), {
+    ...REVIEW_OPTIONS, consumeArgsFile: !estimateOnly
+  });
   const cwd = resolveCommandCwd(options);
   const focusText = positionals.join(" ").trim();
   const request = buildReviewRequest(options, cwd, config.reviewName);
@@ -308,7 +309,7 @@ export async function handleReviewCommand(argv, config) {
   if (!backend.capabilities[capability]) throw new UsageError(`${backend.label} does not support ${config.reviewName.toLowerCase()}.`);
   const target = resolveReviewTarget(cwd, { base: options.base, scope: options.scope });
   config.validateRequest?.(target, focusText);
-  if (estimateOnly || options.estimate) {
+  if (estimateOnly) {
     const size = estimateReviewSize(cwd, target);
     if (options.json) printJson("review-estimate", { target, ...size });
     else process.stdout.write(`target: ${target.label}\nfiles: ${size.fileCount}\nuntracked: ${size.untrackedCount}\n${size.shortstat || "(empty diff)"}\n`);

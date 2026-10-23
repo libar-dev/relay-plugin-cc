@@ -10,20 +10,20 @@ Raw slash-command arguments:
 Before any companion call, allocate a private argument file with this fixed command (it contains no user text):
 
 ```bash
-node -e 'const fs = require("node:fs"); const dir = fs.mkdtempSync("/tmp/relay-args-"); console.log(dir + "/args.txt");'
+node -e 'const fs = require("node:fs"); const path = require("node:path"); const os = require("node:os"); const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-args-")); console.log(path.join(dir, "args.txt"));'
 ```
 
 Use `Write` with `file_path` set to the printed absolute path and `content` set to the raw slash-command arguments exactly, including empty text and trailing newlines. Do not add a framing newline. In every companion recipe, replace only `<args-file>` with that generated path. Never put argument values in Bash source, shell arguments, JavaScript source, or a heredoc; do not build other commands from them. `--args-file` reads the exact file content with the single-string argument parser. Allocate and write it once; reuse it for the initial call and the post-install rerun.
 
-After setup finishes or stops (including an error), remove the file and its private directory with the fixed cleanup command below.
+After setup finishes or stops (including an error), remove the file and its private directory with the fixed cleanup command below. Missing files and directories are accepted. Cleanup refuses other path shapes and never removes a directory recursively.
 
 ```bash
-node -e 'const fs = require("node:fs"); const path = require("node:path"); fs.unlinkSync(process.argv[1]); fs.rmdirSync(path.dirname(process.argv[1]));' "<args-file>"
+node --input-type=module -e 'const { pathToFileURL } = await import("node:url"); const { cleanupArgumentFile } = await import(pathToFileURL(process.argv[1]).href); cleanupArgumentFile(process.argv[2]);' "${CLAUDE_PLUGIN_ROOT}/scripts/lib/util/argument-file.mjs" "<args-file>"
 ```
 
 Reject NUL-containing arguments with a usage error; do not normalize them or retry through a shell. File contents do not count toward the shell command's argument-size limit: use the same file route for long input and never fall back to embedding it in a command.
 
-Setup now uses relay's raw-argument grammar instead of shell word splitting and expansion. `$VAR`, command substitutions and globs are literal. Use an absolute path or `~/` for homes and `--cwd` (`~` alone also means the home directory). Quotes group whitespace; backslash is an escape even inside quotes, so double a literal backslash. Empty quoted words are dropped: an empty value is a missing-value error. This prevents argument text from executing shell syntax or selecting paths through environment expansion.
+Setup uses relay's raw-argument grammar. `$VAR`, command substitutions and globs are literal. Use an absolute path or `~/` for homes and `--cwd` (`~` alone also means the home directory). Quotes group whitespace; backslash is an escape even inside quotes, so double a literal backslash. Empty quoted words are dropped: an empty value is a missing-value error. This prevents argument text from executing shell syntax or selecting paths through environment expansion.
 
 Run:
 
@@ -54,7 +54,7 @@ the first turn. Every check has a time limit (10 s for a command, 20 s for an ap
 Render one table, one row per block, in the command's order: backend, home, version, sign-in,
 model and effort, models, ready. Put `can` as one short line under the table only where a backend
 lacks something another has. Then the settings line, `Actions taken` if any, and `Next steps`
-verbatim. Never add rows for node or npm. For a block with `error`, or `signIn.state` `signed-out`
+verbatim. Preserve any fenced command blocks, including their newlines. Never add rows for node or npm. For a block with `error`, or `signIn.state` `signed-out`
 or `not-installed`, print its `detail` and the command it names, and go on; only Codex gets the
 install offer below. Print every entry of a block's `warnings`; for Grok, a warning that the binary
 is a script names the real binary and `GROK_BINARY`.

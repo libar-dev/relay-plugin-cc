@@ -125,19 +125,19 @@ Phase 6, an investigation (the plugin does not change):
 
 Fixes from the pre-releases:
 
-- `/relay:review`, `/relay:adversarial-review` and `/relay:setup` use `Write` to put raw arguments in
-  a private file and pass only its path through `--args-file`, including background reviews and
-  setup's rerun. Argument values never enter shell source; heredoc delimiter collisions are removed.
-  Output and exit codes are unchanged. The stdin API remains available but is no longer the recipe.
-- Review-size estimation now runs in the companion with the review's target resolver and merge-base
-  rules, including clean `auto` selecting branch changes. It prints the target label, unique file
-  count, untracked count and shortstat without a backend/job. Invalid or option-like bases stay inert.
-- Reviews retain their single-string parser; setup switches from shell splitting/expansion to that
-  parser. No `$VAR` expansion, command substitution or glob expansion happens: that is the point of
-  keeping argument text out of the shell. Quotes group whitespace; backslash is an escape even inside
-  quotes, so double literal backslashes. Empty quoted values are missing-value errors. Use absolute
-  or `~/` paths instead of `$HOME`; `--cwd` now supports `~/` and bare `~`, as home options do.
-  Transport payloads reject NUL; file contents avoid the shell command argument-size limit.
+- Arguments that held backticks, `$(…)` or `$VAR` ran in Claude's shell before the companion started.
+  `/relay:review`, `/relay:adversarial-review` and `/relay:setup` use `Write` to put raw arguments in
+  a private temporary file. Only its path enters the shell. Background reviews and setup's rerun
+  use the same route. Output and exit codes are unchanged.
+- Review-size estimation runs in the companion with the review's target and merge-base rules.
+  Clean `auto` includes branch changes. The estimate prints the target, file count, untracked count
+  and shortstat. It starts no backend or job. Invalid or option-like bases stay inert.
+- Setup uses the review commands' single-string parser. Variables, command substitutions and globs
+  are literal. Quotes group whitespace. Backslash escapes even inside quotes; double literal
+  backslashes. Empty quoted values are missing-value errors. Use absolute or `~/` paths.
+  Commands with `--cwd` also accept `~/` and bare `~`. NUL is rejected. Long input uses the same file.
+- Grok and Kimi sign-in advice quotes home paths for safe copying into a shell.
+  Reviews remove their temporary argument files as soon as they read them.
 
 Docs:
 
