@@ -199,7 +199,7 @@ Control a Workflow job by its job id (the block's `job:` line, or `/relay:status
 steer, continue or cancel it with the companion's `steer`, `continue` or `cancel`, or type `/relay:cancel <job>`.
 No relay hands back a turn that a continue by job id starts: once `/relay:status` shows the job ended (marked
 `not handed back`), read it with `/relay:result <job>`, and do not send the continue again. TaskStop finds no task for
-one agent of a Workflow.
+one agent of a Workflow, apart from a second loop that a message started (one probe, D48).
 
 The job id is the sure route because a relay that a Workflow script started takes messages to its agent differently
 (measured on Claude Code 2.1.308, in few runs). A message while it runs starts a second loop of the agent beside the
