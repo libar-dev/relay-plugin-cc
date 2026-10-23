@@ -870,6 +870,15 @@ pre-release guide and the user guide, and D95's "built from the manual test scri
 Edited by the release lead from the guide lead's text, on the coordinating thread's instruction: the gates, the
 known-issues update and the go/no-go are named.
 
+### D94. The guide describes the status line and the board from the merged PRs, in the terminal (guide lead)
+
+`docs/guide.md` describes the status line and the board from #24 and #25 and their decisions (D61 to D65), as the
+terminal draws them and the live suite's `status-line` and `board` checks drove them. It does not describe them in
+the desktop app yet: the M3 lead captures both there, and runs the board's Desktop pass, after pre.3 is installed,
+and the guide's Desktop lines and screenshots G21 and G25 follow that pass. Until then, HTML comments mark those places
+(D92). Writing the sections before the captures lets the guide merge with the code it describes. Reopen if the
+Desktop pass finds the app draws either one differently from the terminal in a way a user would act on.
+
 ### D95. Pre-release cuts before 3.0.0, on the M3 and the ThinkPad (owner, 22 October 2026; amended by D97)
 
 The owner, in four messages that day:

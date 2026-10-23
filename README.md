@@ -11,8 +11,8 @@ the agent waits on it, the job resumes its session once. The agent returns the r
 with a state block that says what happened.
 
 `relay` started as a fork of [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc)
-1.0.6. [NOTICE](NOTICE) keeps the attribution and license terms. [docs/design.md](docs/design.md)
-explains the design.
+1.0.6. [NOTICE](NOTICE) keeps the attribution and license terms. [docs/guide.md](docs/guide.md)
+walks through using relay, and [docs/design.md](docs/design.md) explains the design.
 
 ## Backends
 
