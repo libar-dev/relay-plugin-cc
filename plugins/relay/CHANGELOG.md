@@ -55,9 +55,15 @@ Pre-release cuts:
     that the relay's job keeps running, and which job it is. `TaskStop` and the message `cancel` still cancel it.
   - **A Workflow relay keeps to its job.** Claude Code 2.1.309 shows a Workflow agent the lead's request as "user
     request". The relay is told that this request is not its task, so it runs its three commands. In pre.2, 2 of
-    40 relays in a soak refused their job. Not yet checked live.
+    40 relays in a soak refused their job; pre.3's soak had 0 refusals in 80 relays.
   - Still open: after a continue sent to a job directly, the job shows `not handed back` although no relay waited
     for it, and `/relay:transfer` takes no job id.
+- `3.0.0-pre.4` (2026-10-23, tag `v3.0.0-pre.4`): one fix over pre.3.
+  - **The load guard reads macOS memory the way macOS does.** pre.3 counted only free and inactive pages, so on a
+    healthy Mac it held light jobs back: in a soak on an 18 GiB Mac, about half as many ran at once as on pre.2,
+    and jobs waited 76 s at the median. Available memory is now macOS's own free percentage times total memory,
+    with free and inactive pages as a labelled fallback. The pressure check is unchanged: a warning holds new
+    jobs, critical also holds next turns. Linux is unchanged.
 
 Phase 1, steer wake:
 
