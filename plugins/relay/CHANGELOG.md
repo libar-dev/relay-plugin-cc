@@ -10,6 +10,31 @@ Pre-release cuts:
 
 - `3.0.0-pre.1` (2026-10-22, tag `v3.0.0-pre.1`): Phases 1, 2, 3 and 5 and Phase 6's report, as below; Phase 4
   has not landed.
+- `3.0.0-pre.2` (2026-10-23, tag `v3.0.0-pre.2`): what it fixes and changes over pre.1. The details are in
+  "Phase 4" and "Fixes from the pre-releases" below.
+  - A line typed into a relay's own agent view in the terminal reaches the job; in pre.1 it was lost (pre.1's known
+    issue 1). While the relay waits, the line can take up to nine minutes to arrive; a message sent through Claude
+    still arrives within seconds. After the hand-back, type only while the agent's view stays open: from Claude Code
+    2.1.309 a finished agent leaves the list within about 15 s, and then a continue goes through Claude.
+  - A relay that hands back the job's block inside one plain code fence is accepted, no longer blocked eight times
+    and let go as `not handed back` (known issue 2). A relay that keeps writing prose instead of the block, as one
+    did once after the message `cancel`, is still let go after eight blocks. A relay that a message resumes after its
+    hand-back must hand back the result again, where pre.1 let its own words through as the result.
+  - A job cancelled with TaskStop is no longer marked `not handed back` (known issue 3).
+  - `/relay:setup` asks Grok a second time before it says a home is signed out, and shows Kimi as
+    `steer (next turn)` (known issue 4).
+  - Text given to `/relay:review`, `/relay:adversarial-review` or `/relay:setup` no longer runs in Claude's shell
+    when it holds backticks, `$(…)` or `$VAR`: Claude writes it to a temporary file with its Write tool, and relay
+    reads it as written. So none of the three expands `$HOME` or another variable any more: use `~/` or a full path.
+    Setup no longer expands globs either; its quotes group spaces, and a backslash escapes the next character even
+    inside quotes, so a literal backslash is written twice. Not yet checked live: these commands in default permission mode (Claude may
+    ask before its Write), under the sandbox, and with `--background`. The shell commands relay suggests after an
+    error or for a sign-in quote what they carry.
+  - The companion's `--json` changed in place, for Phase 4's status line and board, which come in a later cut. A
+    script that reads it must change: `status --json`, with or without `--all` or `--workflow`, returns slim rows,
+    50 a page, newest first (follow `nextCursor` with `--cursor`; `status <job> --json` has the full record), and a
+    `--json` error is JSON on stdout, not text on stderr.
+  - Still open: `/relay:transfer` takes no job id (known issue 5).
 
 Phase 1, steer wake:
 
@@ -193,6 +218,19 @@ Fixes from the pre-releases:
   being dropped in silence (the harness's own `task-notification` notices are skipped), and the same
   transcript problem is recorded once, not again at every hook call.
 - The live suite has a check `typed` (terminal only: T3 Code draws no agent view).
+- Arguments that held backticks, `$(…)` or `$VAR` ran in Claude's shell before the companion started.
+  `/relay:review`, `/relay:adversarial-review` and `/relay:setup` use `Write` to put raw arguments in
+  a private temporary file. Only its path enters the shell, and a review removes the file as soon as
+  it reads it. Background reviews and setup's rerun use the same route. Output and exit codes are
+  unchanged.
+- Review-size estimation runs in the companion with the review's target and merge-base rules.
+  Clean `auto` includes branch changes. The estimate prints the target, file count, untracked count
+  and shortstat. It starts no backend or job. Invalid or option-like bases are refused.
+- Setup uses the review commands' single-string parser. Variables, command substitutions and globs
+  are literal. Quotes group whitespace. Backslash escapes even inside quotes; double literal
+  backslashes. Empty quoted values are missing-value errors. Use absolute or `~/` paths.
+  Commands with `--cwd` also accept `~/` and bare `~`. NUL is rejected. Long input uses the same file.
+- Grok and Kimi sign-in advice quotes home paths for safe copying into a shell.
 
 Docs:
 
