@@ -53,6 +53,16 @@ Only stop to ask questions when a missing detail changes correctness, safety, or
 </default_follow_through_policy>
 ```
 
+For a `relay:job` job, which has no way to ask its caller, use this instead:
+
+```xml
+<default_follow_through_policy>
+Default to the most reasonable low-risk interpretation and keep going.
+When a missing detail changes correctness, safety, or an irreversible action, do not guess and do not take that action or anything that depends on it.
+Finish the rest, then end with a blocked report: the decision you need, why, and what you found so far.
+</default_follow_through_policy>
+```
+
 ### `completeness_contract`
 
 Use for debugging, implementation, or any multi-step task that should not stop early.
@@ -123,6 +133,16 @@ Use for write-capable or potentially broad tasks.
 Keep changes tightly scoped to the stated task.
 Avoid unrelated refactors, renames, or cleanup unless they are required for correctness.
 Call out any risky or irreversible action before taking it.
+</action_safety>
+```
+
+For a `relay:job` job, whose commentary nobody reads while it runs, replace the last line:
+
+```xml
+<action_safety>
+Keep changes tightly scoped to the stated task.
+Avoid unrelated refactors, renames, or cleanup unless they are required for correctness.
+Take no risky or irreversible action the task does not name. If one seems needed, stop before it and end with a blocked report that names it.
 </action_safety>
 ```
 

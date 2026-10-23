@@ -168,8 +168,9 @@ dir: ~/.relay-jobs/<repo>/<job>
 <report>
 ```
 
-- `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the worker died, and its automatic retry was spent or a cancel was under way), or `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
+- `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the job has not ended, but its worker is gone, or none started within 60 s of the launch; whether a recovery was tried is another matter, shown by `automatic-resume:`), or `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
 - `completed` means the job finished its answer, not that its commands passed. Read the report.
+- Before you act on a result or show it, load the `result-handling` skill: it reads the state before the report.
 - Lines that may appear: `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (messages to the job, acknowledged and not run yet; `resume` runs them; it says nothing about the report), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
 
 `status` marks a relay job that ended with no hand-back of its result `not handed back` (`notHandedBack: true` in `--json`): its caller died or gave up, and `C result <job>` has the report. A job a `TaskStop` cancelled counts as handed back: the TaskStop result carried its block.
@@ -178,13 +179,24 @@ A failed cancel stays pending while the job runs and tries remain. A terminal jo
 
 ## Talking to a running or finished job
 
+For a relay you started with the Agent tool:
+
 | You do | While the job runs | After it ended |
 |---|---|---|
 | `SendMessage` with text | steers the running turn; if the turn cannot take it (always on Kimi), it becomes the next turn | a new turn on the same thread; the agent returns the new report |
 | `SendMessage` with exactly `cancel` | interrupts the turn; if the job has not ended 10 s later, kills the worker | nothing |
 | `TaskStop` on the agent | stops the agent and cancels the job, as `cancel` does; the TaskStop result comes with the cancelled job's block | nothing |
 
-A message reaches the job within seconds: the plugin's hooks module ends the relay's current wait when the message is sent, and the relay's hook delivers it. A line the user types into the agent's own view has no such wake: it reaches the job at the relay's next step, at most nine minutes later, or as a new turn once the job has ended. Stop a job with `TaskStop` when you no longer need the agent; send `cancel` when you want the agent to hand back the cancelled job's result. A job survives its agent ending any other way, and the end of the Claude session. A dead or failed job continues on a message or `C resume <job>`.
+A message reaches the job within seconds: the plugin's hooks module ends the relay's current wait when the message is sent, and the relay's hook delivers it. When the backend takes it is up to the job: a message that reaches it while a turn is starting (the job's first turn, or a continue the job has accepted, before the backend began that turn) runs as the next turn, after that whole turn (`queued-next-turn`). A line the user types into the agent's own view has no such wake: it reaches the job at the relay's next step, at most nine minutes later, or as a new turn once the job has ended. Stop a job with `TaskStop` when you no longer need the agent; send `cancel` when you want the agent to hand back the cancelled job's result. A job survives its agent ending any other way, and the end of the Claude session. A dead or failed job continues on a message or `C resume <job>`.
+
+A relay that a Workflow script started takes messages to its agent id differently (measured on Claude Code 2.1.308):
+
+- A message while it runs starts a second loop of the agent beside the first. In the runs measured, a steer reached the job through that loop, and the message `cancel` cancelled the job within 3 s. But after such a fork Claude Code can write the relay's later entries to a second transcript, which the hook does not read, and a message that lands there never reaches the job.
+- A message after it ended fails, or resumes a general-purpose agent that answers in the relay's place; the job gets no turn.
+- `TaskStop` finds no task for one agent of a workflow, except that second loop: stopping it cancels the job.
+- A line typed into its view: not measured.
+
+So control a Workflow job by its job id (the block's `job:` line, or `C status --workflow <run>`): `C steer <job> --message-file F`, `C continue <job> --message-file F`, `C cancel <job>`. A continue by id has no relay to hand back its turn: collect it as in [Continue a job by its id](#continue-a-job-by-its-id), and expect `status` to mark the job `not handed back`.
 
 ## Inside a workflow script
 
@@ -198,19 +210,21 @@ A message reaches the job within seconds: the plugin's hooks module ends the rel
     )
     const r = jobReturn(await agent(prompt, { agentType: 'relay:job', label: 'writer-3' }))
     if (r.state !== 'completed' || r.undelivered) return { step: 'writer-3', state: r.state, undelivered: r.undelivered, error: r.error, job: r.job }
+    if (!r.report || r.report === 'none') return { step: 'writer-3', state: r.state, error: 'no report', job: r.job }
 
+- `completed` is only the first gate: the backend finished its answer. A step that reads the report needs a `report:` path, not `none`, as above. Then check what the step was for: the file it had to write, the verification its brief asked for, or the report's content, through a Claude agent with a schema (below). Decide on each warning line yourself, such as `not-delivered:` (messages dropped), `relay-violation:` and `automatic-resume:`: go on, retry, or stop the run.
 - The relay retypes the block. The hook accepts it with a line left out that restates the request or only informs (`relay:`, `model:`, `mode:`, `cwd:`, `session:`, `note:` and the like), never with an outcome line left out (`state:`, `job:`, `duration:`, `report:`, `dir:`, `error:`, `undelivered:` and the like) or any line changed. A return with no `state:` line comes from a relay that was let go or a Claude Code failure such as a usage limit, and its job may still run: find it by label with `C status --workflow <run> --json` (50 jobs a page; `--cursor <nextCursor>` lists the next).
 - A relay is a Claude agent and spends Claude usage for its job's whole run. When Claude's usage limit ends the relays, their jobs run on; collect them with `C status --workflow <run>` or `C status --all`.
 - Give a `relay:job` agent no `schema`. A script cannot read files either: for structured data, ask the brief for the shape, then hand `r.report` to a Claude agent that has the schema: `agent(\`Read ${r.report} and return its findings.\`, { schema: FINDINGS })`.
 - The agent holds its slot for the job's whole run, so size a launch by job length. `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` caps how many run at once.
-- A retried or resumed call takes over its running job. Two calls with the same prompt and label are two jobs. Adoption is not a follow-up: a script cannot send a new turn to a job it names. To continue a finished job from a workflow, give a Claude agent the job id and have it run `C continue <job> --message-file F`.
+- A retried or resumed call takes over its running job. Two calls with the same prompt and label are two jobs. Adoption is not a follow-up: a script cannot send a new turn to a job it names. To continue a finished job from a workflow, give a Claude agent the job id and the recipe in [Continue a job by its id](#continue-a-job-by-its-id), and have it return the new block.
 - An `agent()` whose header is bad throws at once, before a relay starts: `Workflow agent spawn denied by a plugin: <reason>`. Catch it per call, `agent(prompt, opts).catch((error) => ({ refused: error.message }))`: an uncaught throw inside `parallel` fails the run while the other agents' jobs run on. After fixing the header, resume with `resumeFromRunId`, which adopts the running jobs.
-- A skipped agent returns null. Stopping the workflow, with `TaskStop` too, ends the relays, not the jobs, so a `resumeFromRunId` adopts them; a `TaskStop` on the workflow comes back with the list of its jobs that keep running. `C status --workflow <run>` lists them; `C cancel <job>` the ones you abandon. To cancel one agent's job, send its agent id the message `cancel`: `TaskStop` has no task for one agent of a workflow.
+- A skipped agent returns null. Stopping the workflow, with `TaskStop` too, ends the relays, not the jobs, so a `resumeFromRunId` adopts them; a `TaskStop` on the workflow comes back with the list of its jobs that keep running. `C status --workflow <run>` lists them; `C cancel <job>` the ones you abandon. To cancel one agent's job, have a Claude agent run `C cancel <job>`; a message to a Workflow relay's id is not sure to reach its job (see [Talking to a running or finished job](#talking-to-a-running-or-finished-job)).
 - A review can be a step: a Claude agent whose prompt says to run `C review --wait` (or `C adversarial-review --wait`, with `--backend` and the other review flags) and return its output. The review runs in the foreground and is recorded as a job. Outside a workflow you can invoke `/relay:review` and `/relay:adversarial-review` directly instead.
 
 ## Direct use
 
-You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:setup` and `/relay:rescue` yourself. A review you start never asks the user a question: without `--wait` or `--background` it runs in the foreground. `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` are the user's: the plugin's hooks module answers them without you. To read jobs yourself, run `C status` and `C result`, which print the same text; cancel a job with `TaskStop` on its agent, or by sending its agent the message `cancel`. The `C` commands below are for you, scripts and Workflow steps.
+You can invoke `/relay:review`, `/relay:adversarial-review`, `/relay:setup` and `/relay:rescue` yourself. A review you start never asks the user a question: without `--wait` or `--background` it runs in the foreground. `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` are the user's: the plugin's hooks module answers them without you. To read jobs yourself, run `C status` and `C result`, which print the same text; cancel a job with `TaskStop` on its agent, or by sending its agent the message `cancel`, and a Workflow job with `C cancel <job>`. The `C` commands below are for you, scripts and Workflow steps.
 
 `C` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs"`. In your own Bash, define it as a function, `C() { node "<that path>" "$@"; }`: a variable that holds the command does not split into words in zsh. A job lives in `$RELAY_JOBS_HOME` (default `~/.relay-jobs`) under `<repo-slug>/<job-id>/`; any command takes a job id or a unique prefix, or the job's directory inside that home.
 
@@ -236,6 +250,22 @@ A wide fan-out that needs no steering can start its jobs with `C start` a few se
 
 `--json` prints one object whose first fields are `schema` (`relay.<command>/1`), `relayVersion` and `relayBuild`. An error under `--json` is that header with `error: { kind, message }` on stdout, `kind` one of `busy` (exit 4: try again), `not-found`, `usage`, `attempt-changed` or `error`. `C status --json` lists slim rows, newest first, 50 a page (`--limit N`, up to 200), with `nextCursor` for `--cursor`; `--active` lists only jobs that run, died or owe messages. One job (`C status <job> --json`, `result`, `wait`, `cancel`) has every field, among them `attemptRecords` and `messages`, each message with how the job took it.
 
-Exit codes of `wait` and `result`: `0` completed with a report, `3` ended without a report or with messages not yet run, `4` still running, `5` cancelled, including with a pending continuation because cancellation takes precedence, `1` usage error.
+Exit codes of `wait` and `result`: `0` completed with a report; `3` ended with no answer to take, which is `failed` or `dead` (even with a report), `completed` with no report, or messages not yet run (`undelivered:`), so read the state, then any report; `4` still running; `5` cancelled, including with a pending continuation because cancellation takes precedence; `1` usage error.
+
+### Continue a job by its id
+
+`C steer`, `C continue` and `C resume` post a new message each time they run, and print a receipt: `job:`, `message: <kind> <id>`, `outcome:` and `state:`.
+
+- Exit `0`: the job recorded how it took the message, such as `steered`, `queued-next-turn`, `accepted-next-turn` or `turn-started`; `dropped` and `no-op` did not run, and `reason:` says why.
+- Exit `4`: the message was posted, but no outcome came within the acknowledgement window (60 s), so `outcome:` is `pending`. It stays in the job's inbox for a worker to take. That is neither a refusal nor a failure. (`resume` also exits 4 when the job is busy, before it posts anything.)
+- Exit `1`: a refusal, such as an empty message, a review job, `resume` on a job whose worker lives, or an unknown job. Nothing was posted.
+- Whether the turn then failed is the job's state, which `wait` reports. Before you send again after exit 4, read the job's `messages` in `C status <job> --json`: your message may have run since.
+
+A continue, in full:
+
+1. Send once: `C continue <job> --message-file F`. Keep the receipt's message id.
+2. Wait for the job to end: `C wait <job> --state-only`, again while it exits 4.
+3. Read its state and its open messages: `C status <job> --json` gives `state`, `openMessages`, and in `messages` the outcome of your message id (`turn-started` ran; `dropped` did not). An `undelivered:` line means it is still owed: `C resume <job>` runs it; do not send it again.
+4. Collect the new report: `C result <job>`, which exits 0 when the job completed with a report.
 
 How the hook carries the relay, automatic recovery, git worktrees and the job directory's files are in [`internals.md`](internals.md). Read it when a job died or was recovered, a relay misbehaved, a job runs in a git worktree, or you change the plugin.

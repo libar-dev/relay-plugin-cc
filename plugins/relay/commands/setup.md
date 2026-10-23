@@ -53,11 +53,14 @@ and the default model and effort in `config.toml`; whether the Kimi sign-in work
 the first turn. Every check has a time limit (10 s for a command, 20 s for an app-server).
 
 Render one table, one row per block, in the command's order: backend, home, version, sign-in,
-model and effort, models, ready. Put `can` as one short line under the table only where a backend
-lacks something another has. `can.steer` is steering the running turn: a backend without it (Kimi) takes a
+model and effort, models, ready. Under the table, give each installed backend's resolved `binary` path,
+once per backend, on one short line (`binaries: codex ~/.local/bin/codex · grok ~/.local/bin/grok`): the
+Desktop app starts Claude Code with an environment of its own, and the path says which binary this session
+runs. Put `can` as one short line under the table only where a backend lacks something another has. `can.steer` is steering the running turn: a backend without it (Kimi) takes a
 message to a running job as its next turn, so write `steer (next turn)` for it, never "no steering". Then the settings line, `Actions taken` if any, and `Next steps`
 verbatim. Preserve any fenced command blocks, including their newlines. Never add rows for node or npm. For a block with `error`, or `signIn.state` `signed-out`
-or `not-installed`, print its `detail` and the command it names, and go on; only Codex gets the
+or `not-installed`, put only `error`, `signed out` or `not installed` in its sign-in cell, and print its `detail` and the command it names
+below the table, never in a cell: a fenced command cannot go in a table cell. Then go on; only Codex gets the
 install offer below. Print every entry of a block's `warnings`; for Grok, a warning that the binary
 is a script names the real binary and `GROK_BINARY`.
 

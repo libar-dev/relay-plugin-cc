@@ -46,10 +46,11 @@ Phase 1, steer wake:
 - A relay waits on its job in steps of up to 540 s (Bash timeout 600 s) instead of 120 s, so a long
   job costs its Haiku relay about a quarter of the model calls.
 - A `SendMessage` from another agent, such as an orchestrator subagent or a Workflow agent, now
-  reaches the relay's job, while it runs and after it ended. The guard took only the main thread's
-  messages; Claude Code marks another agent's as `peer`, and the guard dropped it without a record.
-  The Phase 1 live check found it. A relay that lived through the update delivers the peer messages
-  it received before it, since none of them has a delivery record.
+  reaches the job of a relay the Agent tool started, while it runs and after it ended. The guard took
+  only the main thread's messages; Claude Code marks another agent's as `peer`, and the guard dropped
+  it without a record. The Phase 1 live check found it. A relay that lived through the update delivers
+  the peer messages it received before it, since none of them has a delivery record. A message to a
+  relay that a Workflow script started is another matter: see "Fixes from the pre-releases".
 - Needs Claude Code 2.1.307 or later, for the module's `session.send` event.
 
 Phase 2, commands answered by the module:
@@ -84,8 +85,8 @@ Phase 3, spawn and stop like a Claude agent:
   leaves its job running, so a `resumeFromRunId` after a stopped Workflow still adopts its jobs; a
   TaskStop on a Workflow comes back with the list of its jobs that keep running. A cancel the hook
   could not finish is told to the caller and shown as a `relay-violation:` line. The
-  message `cancel` still cancels a job and lets its relay hand back the cancelled state; it is also
-  how to cancel one Workflow agent's job, since TaskStop has no task for one agent of a Workflow.
+  message `cancel` still cancels a job and lets its relay hand back the cancelled state. TaskStop has no
+  task for one agent of a Workflow; cancel such a job with `C cancel <job>`.
 - **A bad header fails at the spawn.** The hooks module has an `agent.spawn` hook: before a
   `relay:job` agent starts, it runs the new `companion check-header`, the parser and request
   builder `start` uses, and refuses the spawn with the parser's message. The Agent call fails, or a
@@ -200,6 +201,32 @@ Fixes from the pre-releases:
   backslashes. Empty quoted values are missing-value errors. Use absolute or `~/` paths.
   Commands with `--cwd` also accept `~/` and bare `~`. NUL is rejected. Long input uses the same file.
 - Grok and Kimi sign-in advice quotes home paths for safe copying into a shell.
+- The docs no longer promise for a relay a Workflow script started what holds for one the Agent tool started.
+  A message to a running Workflow relay's agent id starts a second loop of it; that loop delivered a steer and a
+  `cancel` in the runs measured, but Claude Code can then write the relay's later entries to a transcript the guard
+  does not read, and a message there never reaches the job. A message after a Workflow relay ended fails, or
+  resumes a general-purpose agent that answers in its place. Steer, continue and cancel a Workflow job by its job
+  id: `C steer`, `C continue` and `C cancel`.
+- The jobs skill and the design say that a message reaching a job while a turn is starting (its first turn, or a
+  continue it accepted, before the backend began that turn) runs as the next turn, after that whole turn.
+- The jobs skill's continue recipe goes on to the result: send once, wait for the job to end, read its state and
+  its open messages, collect the new report. `C steer`, `C continue` and `C resume` exit 4 when the message was
+  posted but no outcome came within 60 s; read the job's messages before sending again, since every call posts
+  a new one.
+- The Workflow example in the jobs skill refuses `report: none` for a step that reads the report, and says that
+  `completed` is only the first gate.
+- `dead` and exit 3 are defined as the code has them: `dead` is a job that has not ended whose worker is gone or
+  never started within 60 s, whatever recovery did; exit 3 also covers a failed or dead job with a report, and a
+  completed job without one.
+- The `result-handling` skill reads the state before the report, keeps a command's verbatim output apart from a
+  result Claude uses, keeps `/relay:review` and `/relay:adversarial-review` review-only, and lets Claude go on with
+  work the user already asked for. It now loads for relay results, state blocks, failed jobs and report files.
+- The `codex-prompting` skill says a relay job cannot ask its caller anything: settle questions before launch, or
+  ask for a blocked report that names the missing decision.
+- A relay whose start failed hands back the start output at once, instead of first running `result` with no job
+  id, which the hook refused.
+- `/relay:setup` shows each backend's binary path under the table, and prints a block's sign-in `detail`, which can
+  hold a fenced command, below the table instead of in a cell.
 
 Docs:
 

@@ -15,7 +15,7 @@ the [README](../README.md) installation and the commands, and the `relay:jobs` s
 |---|---|
 | `Agent({subagent_type, description, prompt})`, run in the background | `Agent({subagent_type: "relay:job", description, prompt})`, the same |
 | The completion notice carries the agent's final message | The completion notice carries a state block and the job's report, verbatim |
-| `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within seconds; a turn that cannot take it, or has just ended, gets it as the next turn |
+| `SendMessage` while it runs reaches it between tool calls | `SendMessage` while it runs is steered into the running turn within seconds; a turn that cannot take it, has just ended, or has not begun yet (the job's first turn or an accepted continue, while the backend's session opens) gets it as the next turn |
 | A line the person types into its view (↓, Enter) reaches it between tool calls | A line typed into its view reaches the job at the relay's next call: when its wait returns, at most 540 s later, or as a new turn once the job has ended; typed after it ended in a view still open, a new turn at once (2.1.309 drops a finished agent from the list unless its view is open) ([The wake](#the-wake)) |
 | `SendMessage` after it ends continues it with its context | `SendMessage` after it ends starts a new turn on the same backend session and returns the new report |
 | `TaskStop` stops it | `TaskStop` stops the relay, and the plugin's hook cancels its job. The message `cancel`, or `companion cancel <job>`, cancels the job and leaves the relay to hand back its state |
@@ -23,7 +23,10 @@ the [README](../README.md) installation and the commands, and the `relay:jobs` s
 | The Agent tool's `model` picks the model | `model:` and `effort:` in the header pick the job's model; the Agent tool's `model` picks the relay's own |
 
 A Workflow script gets the same agent with `agent(prompt, { agentType: 'relay:job' })` and receives
-the state block as a string ([Under the Workflow tool](#under-the-workflow-tool)).
+the state block as a string ([Under the Workflow tool](#under-the-workflow-tool)). The rows on
+`SendMessage`, a typed line, `TaskStop` and the message `cancel` hold for a relay the Agent tool started. A
+Workflow relay takes a message to its agent id differently, and its job is steered, continued and cancelled by
+job id ([Under the Workflow tool](#under-the-workflow-tool)).
 
 Jobs outlive the relay and the Claude session on purpose, so stopping one is always an explicit
 act: a `TaskStop` on its relay, the message `cancel`, or `companion cancel`. A relay that ends any
@@ -116,7 +119,7 @@ words of the request.
 | Exit code of `wait` and `result` | Meaning |
 |---|---|
 | `0` | completed with a report |
-| `3` | ended without a report (failed or dead), or with messages not yet run |
+| `3` | failed or dead, with a report or without; completed without a report; or ended with messages not yet run |
 | `4` | still running |
 | `5` | cancelled; this wins over `3` |
 | `1` | usage error |
@@ -382,8 +385,10 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   relay's). A TaskStop on a whole Workflow cancels nothing: its
   relays end, the jobs run on, and the `resumeFromRunId` that usually follows adopts them, which it
   never does for a cancelled job. The hook tells the caller which of the run's jobs keep running,
-  with the command to cancel one. Cancel one Workflow job while its relay runs with the message
-  `cancel` to the relay's agent id, or at any time with `companion cancel`. A TaskStop that cancelled
+  with the command to cancel one. Cancel one Workflow job with `companion cancel <job>`, at any time.
+  The message `cancel` to a running Workflow relay's agent id cancelled its job in the one probe
+  measured, but it travels through a second loop of the relay ([Under the Workflow
+  tool](#under-the-workflow-tool)). A TaskStop that cancelled
   the job records a hand-back (`by: "TaskStop"`): the caller got the cancelled block, so `status` does
   not mark the job `not handed back`.
 
@@ -476,6 +481,14 @@ return to nobody. Two waits in one assistant message: the first would take the m
 second would run its whole bound before the boundary. A message queued just as the job ended, before
 a continue restarted it, would find no marker at all. A marker that only an earlier boundary covers
 costs one extra wait call; it cannot cause another, because the next call comes after a new boundary.
+
+The wake brings a message to the job within seconds; when the backend takes it is the worker's
+choice. The worker steers a message into a turn only once it has sent that turn to the backend
+(`turnActive` in `worker.mjs`). A steer it claims after it began an attempt and before that, while the
+backend's server starts and the session opens for the job's first turn or for a continue it has accepted
+(`accepted-next-turn`), is queued as the next turn (`queued-next-turn`, "no turn is running") and waits for
+that whole turn. The guard posts every message to a job that has not ended as a steer, so a `SendMessage`
+in that window waits the same way.
 
 A line the person types into the relay's own view (↓ in the footer, Enter, then the prompt
 `Message @<agent>…`) has no wake. No hook names its recipient: at Enter, `session.send`,
@@ -612,6 +625,32 @@ Violations are never removed; `result` and `status` print each as a `relay-viola
   `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` agents at once, by default two fewer than the
   machine's cores, within 2 and 16. Stopping a workflow, with TaskStop too, ends the relays, not the
   jobs, so a resume adopts them ([Cancel](#cancel)).
+- **A message to a Workflow relay's agent id is not a sure way to its job.** Claude Code lists no
+  Workflow agent, so the lead addresses one by id. Measured on 2.1.308 by the Phase 3 and Phase 6 threads
+  ([decisions.md](mods/decisions.md), D48 and D53); the live suite's `steer-workflow` check measures a
+  Workflow agent sending to a relay the Agent tool started, not a message to a Workflow relay.
+  - A steer while it runs: Claude Code starts a second loop of the agent under the same id, and the
+    first loop never reads the message in its turn. In the one run measured, the second loop's guard
+    delivered the steer, waited on the job beside the first loop, and sent the lead an extra completion
+    notice.
+  - The message `cancel` while it runs travels the same way. In the Phase 3 probe, the wake ended the
+    first loop's wait, its guard delivered the cancel at its next call, the job was `cancelled` 1.8 s
+    and 2.7 s after the send, and both loops returned `state: cancelled`.
+  - After a fork, Claude Code can write the agent's later entries to `subagents/agent-<id>.jsonl`, not
+    the same way each time. The guard reads the transcript the job recorded at start, so a message that
+    lands in the other file is not delivered. This is a known limit.
+  - A continue, a message after the relay ended: it fails ("No transcript found"), or resumes a
+    `general-purpose` agent on the lead's model that answers in the relay's place. The job gets no turn.
+  - TaskStop: Claude Code has no task for one Workflow agent (`No task found with ID`), except a second
+    loop a message started, which a TaskStop on its id ends, cancelling the job like any relay's
+    ([Cancel](#cancel)).
+  - A line typed into a Workflow relay's view: not measured; the `typed` check types into relays the
+    Agent tool started.
+
+  So a Workflow job is controlled by its job id: `companion steer`, `continue` and `cancel` post to the
+  job's inbox with no relay in between ([Every message runs once or is reported](#every-message-runs-once-or-is-reported)).
+  No relay hands back a turn that a continue by id started, so `status` marks the job `not handed back`
+  once that turn ends; `wait` and `result` collect it.
 
 ### Adoption by journal key
 
@@ -1099,6 +1138,11 @@ line typed in the view right after Esc resumes the relay and is delivered at onc
 job runs, a continue once it has ended. In the terminal, ↓ and Enter open the view with the cursor
 still in the agent list; ↑ (as many times as ↓) reaches the view's prompt, and the first Esc does
 the same. Esc at the view's prompt stops the relay.
+
+**Workflow relays.** A message to a running Workflow relay's agent id starts a second loop of it, and
+Claude Code can then write the agent's later entries to `subagents/agent-<id>.jsonl`, which the guard
+does not read; a message that lands there is not delivered. A message after a Workflow relay ended
+reaches no job. Control a Workflow job by its job id ([Under the Workflow tool](#under-the-workflow-tool)).
 
 **Not measured.** Sustained rate limits and simultaneous jobs on one plan for Grok, ZCode and Kimi,
 and a crash during a partial answer. Nothing caps how many jobs run at once.

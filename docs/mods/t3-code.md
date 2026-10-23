@@ -9,9 +9,10 @@ welcome.
 ## What relay is
 
 [relay](../../README.md) is an open-source Claude Code plugin. It runs jobs on Codex, Grok Build, ZCode (GLM)
-and Kimi Code as Claude agents. A main thread, or a Workflow script, starts a `relay:job` agent with the Agent
-tool. It steers the job with `SendMessage`, continues it after the report with another message, and gets the
-report back as the agent's result. Each job has a detached worker and survives the Claude session.
+and Kimi Code as Claude agents. A main thread starts a `relay:job` agent with the Agent tool, or a Workflow
+script with `agent()`. The main thread steers the job with `SendMessage`, continues it after the report with
+another message, and gets the report back as the agent's result; a Workflow job is steered and continued by its
+job id. Each job has a detached worker and survives the Claude session.
 
 ## Relay complements T3 Code
 
@@ -32,13 +33,19 @@ Relay is adding a Claude Code Mod ([the plan](plan.md)). Its parts don't all wor
 
 | Part | Terminal and Desktop | T3 Code today |
 |---|---|---|
-| A `session.send` hook that wakes a relay when it is sent a message, so a steer arrives in about two seconds | works | expected: event hooks ran in Agent SDK tests; not yet tested in T3 |
-| `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` answered by the module, with no model turn | works | expected when typed: the SDK returns the answer as an assistant message, which T3's adapter displays (from reading its code); not yet tested in T3 |
+| A `session.send` hook that wakes a relay when it is sent a message, so a steer arrives in about two seconds | works | works: relay's live suite steered a running job from a T3 thread on all four backends, delivered in 1.5–6.4 s (a missed wake would take up to 540 s), with Claude Code 2.1.308 (`20261022T144722Z-steer-main-t3-3f36.jsonl`) |
+| An `agent.spawn` hook that refuses a bad header before a relay starts | works | works: refused at the spawn with the parser's message on all four backends, with Claude Code 2.1.308 (`20261022T144722Z-spawn-check-t3-a4f2.jsonl`) |
+| `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer` answered by the module, with no model turn | works | works when sent to the thread: status, result and cancel on all four backends, answered in 0.1–0.6 s with no model turn (`20261022T205549Z-commands-t3-5091.jsonl`), and transfer on Codex in 0.3 s (`20261022T140608Z-transfer-t3-c056.jsonl`), with Claude Code 2.1.308 |
 | A status line ("2 running · 1 owed") with `$.ui.status` | drawn | not shown: arrives as `system/ui_status`, with no handler |
 | Notices with `$.ui.toast` and `$.ui.log` | drawn | not shown: `system/ui_toast` and `system/ui_log`, with no handler |
 | A job board pane with `$.ui.open` | drawn | not placed: the SDK host attaches no surface (`no-surface`) |
 | Commands the module registers itself | in the picker | not listed: T3's capability probe runs with `disableAllHooks`, and its Claude adapter doesn't handle `commands_changed` |
 | `immediate: true` commands during a turn | run at once | run when the turn ends |
+
+The T3 cells that say "works" come from relay's live suite, run in T3 threads on 22 October 2026; its records
+(`docs/live/records/`) name the Claude Code build, not T3's. Relay's command hooks, which are not part of the Mod,
+work in T3 too: a TaskStop on a relay cancels its job, in 1.5–3.9 s on the four backends
+(`20261022T205333Z-stop-t3-93fe.jsonl`).
 
 ## What would help, smallest change first
 

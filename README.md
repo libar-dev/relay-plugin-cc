@@ -134,7 +134,8 @@ relay: <the relay's agent id>
 
 `completed` means the job finished its answer, not that its commands passed. Read the report.
 
-**Talk to it.** A message reaches the job within seconds. The relay agent waits on the job in steps
+**Talk to it.** A message reaches the job within seconds, for a relay agent started with the Agent tool, as
+here; one that arrives while the job's turn is still starting runs as its next turn. The relay agent waits on the job in steps
 of up to nine minutes, so Claude Code's stall timer never fires on a long job. A message sent to it
 ends the current step, and its hook delivers the message at the next. Send the agent "Also check the retry path in
 src/net/client.mjs." with `SendMessage` while the job runs, and Codex gets it inside the running
@@ -146,7 +147,9 @@ list, stops the relay agent and leaves the job running; a line typed right after
 and reaches the job at once, steering it while it runs. `/relay:cancel <job>` cancels the job.
 
 **In a workflow.** A Workflow script runs a job with `agent(prompt, { agentType: 'relay:job' })` and
-gets the state block back as a string. The `relay:jobs` skill has the rules, and the section
+gets the state block back as a string. A message to a Workflow relay's agent id is not a sure way to its job: while
+it runs, it starts a second loop of the relay; after it ends, it reaches no job. Steer, continue or cancel a Workflow
+job by its job id with the companion (`steer`, `continue`, `cancel`). The `relay:jobs` skill has the rules, and the section
 [What the relay depends on in Claude Code](#what-the-relay-depends-on-in-claude-code) says what a
 Claude Code update can break.
 
@@ -291,7 +294,7 @@ headers and wakes a waiting relay: delivery runs on command hooks and the transc
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-pre.2. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.10. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash

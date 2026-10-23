@@ -183,6 +183,76 @@ test("the jobs skill covers the header, SendMessage and the companion commands",
   }
 });
 
+// The release gate (docs/mods/release-3.0.md): no text promises for a Workflow relay what holds for one the Agent
+// tool started (D48, D53), and each says how to control a Workflow job instead.
+test("the docs separate relays the Agent tool started from Workflow relays, and control a Workflow job by job id", () => {
+  const skill = read("skills/jobs/SKILL.md").replace(/\s+/g, " ");
+  assert.ok(skill.includes("For a relay you started with the Agent tool: | You do | While the job runs | After it ended |"));
+  assert.ok(skill.includes("A relay that a Workflow script started takes messages to its agent id differently (measured on Claude Code 2.1.308)"));
+  assert.ok(skill.includes("A line typed into its view: not measured."));
+  assert.ok(skill.includes("So control a Workflow job by its job id (the block's `job:` line, or `C status --workflow <run>`): `C steer <job> --message-file F`, `C continue <job> --message-file F`, `C cancel <job>`."));
+  assert.ok(skill.includes("To cancel one agent's job, have a Claude agent run `C cancel <job>`"));
+  assert.doesNotMatch(skill, /send its agent id the message `cancel`/);
+  assert.ok(read("skills/jobs/internals.md").includes("All of this holds for a relay the Agent tool started."));
+  const agent = read("agents/job.md");
+  assert.match(agent, /^description: .*Started with the Agent tool, SendMessage steers it while it runs \(Kimi takes the message as the job's next turn\).*Started by a Workflow script, a message to its agent id starts a second loop of it while it runs and reaches no job once it has ended, so steer, continue and cancel that job by its job id/m);
+  const design = fs.readFileSync(path.join(ROOT, "docs/design.md"), "utf8").replace(/\s+/g, " ");
+  assert.ok(design.includes("The rows on `SendMessage`, a typed line, `TaskStop` and the message `cancel` hold for a relay the Agent tool started."));
+  assert.ok(design.includes("**A message to a Workflow relay's agent id is not a sure way to its job.**"));
+  assert.ok(design.includes("A line typed into a Workflow relay's view: not measured"));
+  assert.ok(design.includes("**Workflow relays.** A message to a running Workflow relay's agent id starts a second loop of it"));
+  const changelog = read("CHANGELOG.md").replace(/\s+/g, " ");
+  assert.ok(changelog.includes("now reaches the job of a relay the Agent tool started, while it runs and after it ended."));
+  assert.doesNotMatch(changelog, /it is also how to cancel one Workflow agent's job/);
+});
+
+// The wake brings a message to the job; a steer the worker claims before it sent the turn waits for that turn
+// (worker.mjs: accept() queues a steer while turnActive is false).
+test("the jobs skill and design.md say a message that arrives while a turn is starting waits for that turn", () => {
+  const skill = read("skills/jobs/SKILL.md").replace(/\s+/g, " ");
+  assert.ok(skill.includes("a message that reaches it while a turn is starting (the job's first turn, or a continue the job has accepted, before the backend began that turn) runs as the next turn, after that whole turn (`queued-next-turn`)"));
+  const design = fs.readFileSync(path.join(ROOT, "docs/design.md"), "utf8").replace(/\s+/g, " ");
+  assert.ok(design.includes("is queued as the next turn (`queued-next-turn`, \"no turn is running\") and waits for that whole turn"));
+  const worker = read("scripts/lib/worker/worker.mjs");
+  assert.match(worker, /if \(message\.kind === "steer" && turnActive\) \{/);
+  assert.ok(worker.includes('message.kind === "steer" ? "no turn is running" : "a turn is running"'));
+});
+
+test("the jobs skill defines dead and exit 3 as view.mjs computes them, and gives the whole continue recipe", () => {
+  const skill = read("skills/jobs/SKILL.md").replace(/\s+/g, " ");
+  assert.ok(skill.includes("`dead` (the job has not ended, but its worker is gone, or none started within 60 s of the launch; whether a recovery was tried is another matter, shown by `automatic-resume:`)"));
+  assert.ok(skill.includes("`3` ended with no answer to take, which is `failed` or `dead` (even with a report), `completed` with no report, or messages not yet run (`undelivered:`)"));
+  assert.ok(skill.includes("if (!r.report || r.report === 'none') return"));
+  assert.ok(skill.includes("`completed` is only the first gate"));
+  assert.ok(skill.includes("### Continue a job by its id"));
+  for (const step of ["1. Send once: `C continue <job> --message-file F`.", "2. Wait for the job to end:", "3. Read its state and its open messages:", "4. Collect the new report:"]) {
+    assert.ok(skill.includes(step), step);
+  }
+  assert.ok(skill.includes("Exit `4`: the message was posted, but no outcome came within the acknowledgement window (60 s)"));
+  const view = read("scripts/lib/jobs/view.mjs");
+  assert.match(view, /const WORKER_START_GRACE_MS = 60 \* 1000;/);
+});
+
+test("the relay hands back a failed start at once; result-handling reads the state first and keeps reviews review-only", () => {
+  const agent = read("agents/job.md");
+  assert.ok(agent.includes("If the output has a line `job: <id>`, remember the id and go to 2. Otherwise the start failed: hand back the start output at once, every line, nothing before it and nothing after it, and run nothing else."));
+  const resultHandling = read("skills/result-handling/SKILL.md");
+  assert.match(resultHandling, /^description: Read and present a relay job's result\. Load it when a `relay:job` agent's completion notice, a Workflow step's state block, the output of `C result` or `C wait`, a failed, dead or cancelled job, or a job's report file/m);
+  assert.match(resultHandling, /Read the state before any finding/);
+  assert.match(resultHandling, /`\/relay:review` and `\/relay:adversarial-review` are review-only/);
+  assert.match(resultHandling, /go on with the work the user already authorized/);
+  assert.match(read("skills/jobs/SKILL.md"), /load the `result-handling` skill/);
+  const prompting = read("skills/codex-prompting/SKILL.md");
+  assert.match(prompting, /A `relay:job` job has no way to ask its caller a question in this release/);
+  assert.match(read("skills/codex-prompting/references/prompt-blocks.md"), /end with a blocked report/);
+});
+
+test("setup shows each backend's binary path and prints a block's detail below the table", () => {
+  const setup = read("commands/setup.md").replace(/\s+/g, " ");
+  assert.ok(setup.includes("Under the table, give each installed backend's resolved `binary` path, once per backend, on one short line"));
+  assert.ok(setup.includes("print its `detail` and the command it names below the table, never in a cell: a fenced command cannot go in a table cell."));
+});
+
 test("packaging keeps the public install names and attribution", () => {
   const plugin = JSON.parse(read(".claude-plugin/plugin.json"));
   const marketplace = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "marketplace.json"), "utf8"));
