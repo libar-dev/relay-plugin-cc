@@ -15,7 +15,8 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { admit, admissionHome, releaseSlot, DEFAULTS } from "./admission.mjs";
+import { admit, admissionHome, releaseSlot, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded } from "./admission.mjs";
+import { readUserConfig } from "../jobs/config.mjs";
 import { backendFor } from "../backends/index.mjs";
 import { truncateCodePoints } from "../util/text.mjs";
 import { acquireWorkerLease, releaseWorkerLease, readLease } from "../jobs/lease.mjs";
@@ -177,6 +178,7 @@ async function runWorkerRound(jobDir, options, held) {
   const admissionDeps = { env: options.env ?? process.env, ...options.admission };
   const home = admissionHome(admissionDeps.env);
   let slot = null;
+  const guardOn = admissionEnabled(admissionDeps.env, readUserConfig(admissionDeps.env));
   let lastEventAt = job.lastEventAt ?? null;
   const save = (patch = {}) => {
     job = { ...job, ...patch, lastEventAt, heartbeatAt: nowIso() };
@@ -485,7 +487,15 @@ async function runWorkerRound(jobDir, options, held) {
 
   let current = beginAttempt(queue.shift(), me_record);
 
-  const heartbeat = setInterval(() => save({}), config.heartbeatMs);
+  const completeProbe = () => {
+    if (slot?.probe && probeSucceeded(home, backend.name, job.id, admissionDeps, slot.probeGeneration)) {
+      slot = { ...slot, probe: false, probeGeneration: null, probeAt: null };
+    }
+  };
+  const heartbeat = setInterval(() => {
+    save({});
+    if (slot?.probeAt && (admissionDeps.now ?? Date.now)() - Date.parse(slot.probeAt) >= DEFAULTS.probeMs) completeProbe();
+  }, config.heartbeatMs);
   heartbeat.unref?.();
   const poller = setInterval(() => {
     try {
@@ -653,11 +663,17 @@ async function runWorkerRound(jobDir, options, held) {
                   }
                 });
               } catch (error) {
-                result = { turnStatus: "failed", error: { message: error.message }, finalMessage: "" };
+                result = { turnStatus: "failed", error: { ...error.data, message: error.message, data: error.data }, finalMessage: "" };
+              }
+              const refusal = guardOn && result.turnStatus === "failed" ? classifyRefusal(backend.name, result.error) : null;
+              if (refusal) {
+                const pause = recordRefusal(home, backend.name, refusal, job.id, admissionDeps);
+                save({ refusal: { backend: backend.name, kind: refusal.kind, code: refusal.code,
+                  message: refusal.message, at: nowIso(), pausedUntil: pause?.until ?? null } });
               }
               // A backend that retries model calls itself marks its failures `retryable: false`.
               // Commentary does not stop a retry; work done decides how the retry is sent.
-              const capacity = result.turnStatus === "failed" && result.retryable !== false && (result.capacity || isCapacityError(result.error));
+              const capacity = result.turnStatus === "failed" && (!refusal || refusal.kind === "rate") && result.retryable !== false && (result.capacity || isCapacityError(result.error));
               if (!capacity || retry >= config.capacityDelaysMs.length || cancelRequested) {
                 break;
               }
@@ -700,6 +716,7 @@ async function runWorkerRound(jobDir, options, held) {
             let state;
             let errorMessage = null;
             if (result.turnStatus === "completed") {
+              completeProbe();
               state = "completed";
             } else if (result.turnStatus === "interrupted" && cancelRequested) {
               state = "cancelled";

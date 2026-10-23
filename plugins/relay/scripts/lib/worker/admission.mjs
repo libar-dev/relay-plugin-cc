@@ -53,6 +53,7 @@ export function guardSettings(config = {}, machine = { totalBytes: os.totalmem()
 export function validModelClasses(entries) {
   return Array.isArray(entries) ? entries.filter(e => e && /^[0-9A-Za-z._:/*-]{1,100}$/.test(e.pattern) && Object.hasOwn(WEIGHTS, e.class)) : [];
 }
+/** @param {{ backend?: string, model?: string | null, effort?: string | null }} request */
 export function modelClass({ backend = "codex", model, effort } = {}, overrides = []) {
   const m = model === "default" ? "" : String(model ?? "").toLowerCase();
   const e = String(effort ?? "").toLowerCase();
@@ -96,7 +97,7 @@ function self(deps) {
 function dependencies(deps = {}) {
   const env = deps.env ?? process.env;
   const now = deps.now ?? Date.now;
-  return { env, now, random: Math.random, readUserConfig, readMachine: readMachineDefault,
+  return { env, now, random: Math.random, scanUnslotted: null, readUserConfig, readMachine: readMachineDefault,
     isAlive: identity => holderAlive(identity, { platform: deps.platform, now: now() }), ...deps };
 }
 function lock(home, deps, fn) {
@@ -200,6 +201,20 @@ function legacyJobs(home, current, slotted, deps) {
   return dirs.map(d => typeof d === "string" ? readJob(d) : d).filter(j => j?.id && j.id !== current && !slotted.some(s => s.jobId === j.id) && j.state !== "queued" &&
     ((!TERMINAL_STATES.has(j.state) && deps.isAlive(j.worker)) || serversAlive(j, deps)));
 }
+function pauseFile(home, backend) { if (!backends.includes(backend)) throw new Error("invalid backend"); return path.join(home, "pauses", `${backend}.json`); }
+function pauseRead(home, backend, deps, clean = false, retainProbe = false) {
+  const file = pauseFile(home, backend), p = readJsonOrNull(file), now = deps.now();
+  if (!p || p.v !== 1 || !Number.isFinite(Date.parse(p.until)) || !Number.isFinite(Date.parse(p.updatedAt)) || Date.parse(p.updatedAt) > now + DEFAULTS.clockSkewMs || now - Date.parse(p.updatedAt) >= DEFAULTS.pauseExpiryMs) {
+    if (clean) fs.rmSync(file, { force: true }); return null;
+  }
+  if (!retainProbe && p.probe && (!deps.isAlive(p.probe) || !age(now, p.probe.at, DEFAULTS.probeMs))) {
+    p.probe = null; if (clean) writeJsonAtomic(file, p);
+  }
+  return p;
+}
+function pauseWrite(home, backend, pause) { fs.mkdirSync(path.join(home, "pauses"), { recursive: true }); writeJsonAtomic(pauseFile(home, backend), pause); }
+const kindLabel = kind => ({ usage: "usage limit", rate: "rate limit", concurrency: "concurrent request limit" })[kind] ?? kind;
+function refusalReason(p) { return `${p.backend} paused: ${kindLabel(p.kind)}${p.code ? ` (${p.code})` : ""} until ${p.until}`; }
 function recordFor(slot, notes, reason = null, waitKind = null) {
   return { state: reason ? "waiting" : "admitted", reason, waitKind, since: reason ? slot.since : null, admittedAt: slot.admittedAt ?? null, class: slot.class, weight: slot.weight, probe: Boolean(slot.probe), notes };
 }
@@ -232,6 +247,9 @@ export function admit(ctx, injected = {}) {
       const legacy = legacyJobs(home, ctx.jobId, all, deps);
       const used = running.reduce((n, s) => n + s.weight, 0) + legacy.length * WEIGHTS.medium;
       const pending = running.filter(s => age(now, s.admittedAt, DEFAULTS.reserveMs)).reduce((n, s) => n + s.weight * DEFAULTS.reserveGiBPerWeight * GiB, 0);
+      const pause = pauseRead(home, mine.backend, deps, true);
+      if (pause && now < Date.parse(pause.until)) return wait(refusalReason(pause), "pause", existing);
+      if (pause?.probe && (pause.probe.jobId !== ctx.jobId || pause.probe.pid !== ctx.me.pid || pause.probe.startTime !== ctx.me.startTime)) return wait(`${mine.backend} paused: waiting for probe job ${pause.probe.jobId}`, "probe", existing);
       const state = machineState(machine, pending);
       if (state.state === "critical") return wait(state.detail, "critical", existing);
       const effective = machine.availableBytes === null ? null : machine.availableBytes - pending - w * DEFAULTS.reserveGiBPerWeight * GiB;
@@ -250,6 +268,10 @@ export function admit(ctx, injected = {}) {
         const weightOf = b => running.filter(s => s.backend === b).reduce((n, s) => n + s.weight, 0) + legacy.filter(j => (j.request?.backend ?? "codex") === b).length * WEIGHTS.medium;
         const other = all.find(s => s.jobId !== ctx.jobId && s.state === "waiting" && s.backend !== mine.backend && ["weight", "spacing", "stagger", "fair-share"].includes(s.waitKind) && weightOf(s.backend) < weightOf(mine.backend));
         if (limit - (used + w) < WEIGHTS.medium && other) return wait(`fair share: the last free weight is held for a waiting ${other.backend} job`, "fair-share");
+      }
+      if (pause) {
+        if (!pause.probe) { pause.probe = { jobId: ctx.jobId, ...ctx.me, at: iso(now), generation: randomUUID() }; pauseWrite(home, mine.backend, pause); }
+        mine.probe = true; mine.probeGeneration = pause.probe.generation; mine.probeAt = pause.probe.at;
       }
       const slot = { ...mine, spawnAt: all.find(s => s.jobId === ctx.jobId)?.spawnAt ?? null, state: "running", admittedAt: iso(now), aboveMin };
       writeSlot(home, slot);
@@ -277,17 +299,71 @@ export function releaseSlot(home, jobId, me, injected = {}) {
       // A failed close or a dead predecessor with a live server stays counted.
       if (serversAlive(readJob(s.jobDir), deps)) return false;
       fs.rmSync(file, { force: true });
+      const p = pauseRead(home, s.backend, deps, true);
+      if (p?.probe?.jobId === jobId && p.probe.pid === me.pid && p.probe.startTime === me.startTime) { p.probe = null; pauseWrite(home, s.backend, p); }
       return true;
     }).value ?? false;
   } catch { return false; }
 }
 
+export function classifyRefusal(backend, error) {
+  try {
+    const text = [error?.message, error?.data?.message, error?.data?.data?.message].filter(s => typeof s === "string").join("\n").slice(0, 4000);
+    let kind, code;
+    if (backend === "codex") {
+      const info = error?.codexErrorInfo ?? error?.data?.codexErrorInfo;
+      code = typeof info === "string" ? info : info && Object.keys(info)[0];
+      kind = ({ usageLimitExceeded: "usage", rateLimitExceeded: "rate" })[code];
+    } else if (backend === "kimi") {
+      kind = /reached your (?:5-hour|weekly|monthly)\b[^.\n]*usage limit/i.test(text) ? "usage" : /reached your concurrent request limit/i.test(text) ? "concurrency" : /too many requests/i.test(text) ? "rate" : null;
+      const status = Number(error?.data?.details?.statusCode ?? error?.data?.statusCode ?? error?.data?.data?.details?.statusCode);
+      code = Number.isFinite(status) ? String(status) : kind === "rate" ? "429" : "403";
+    } else if (backend === "zcode") {
+      code = /^\d{4}$/.test(String(error?.data?.code)) ? String(error.data.code) : /\[(\d{4})\]|\bcode (\d{4})\b/.exec(text)?.slice(1).find(Boolean);
+      kind = ["1113", "1308", "1310", "1316", "1317", "1318", "1319", "1320", "1321"].includes(code) ? "usage" : code === "1302" ? "rate" : null;
+    }
+    if (!kind) return null;
+    const instant = /\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2}))\b/.exec(text)?.[1];
+    return { kind, code, message: String(error?.message ?? "").split(/\r?\n/)[0].slice(0, 300), resetAt: instant && Number.isFinite(Date.parse(instant)) ? instant : null };
+  } catch { return null; }
+}
+export function recordRefusal(home, backend, refusal, jobId, injected = {}) {
+  const deps = dependencies(injected);
+  try {
+    if (!admissionEnabled(deps.env, deps.readUserConfig(deps.env))) return null;
+    return lock(home, deps, () => {
+      const now = deps.now(), old = pauseRead(home, backend, deps, true);
+      const same = old?.kind === refusal.kind;
+      const strikes = same ? old.strikes + ((now >= Date.parse(old.until) || old.lastJobId !== jobId) ? 1 : 0) : 1;
+      const reset = Date.parse(refusal.resetAt);
+      const provider = refusal.kind === "usage" && reset > now && reset <= now + DEFAULTS.pauseExpiryMs;
+      const duration = refusal.kind === "usage" ? DEFAULTS.usagePauseMs : refusal.kind === "concurrency" ? DEFAULTS.concurrencyPauseMs : Math.min(DEFAULTS.ratePauseMs * 2 ** Math.min(strikes - 1, 20), DEFAULTS.maxRatePauseMs);
+      const p = { v: 1, backend, ...refusal, since: same ? old.since : iso(now), updatedAt: iso(now), until: iso(provider ? reset : now + Math.min(duration, DEFAULTS.pauseExpiryMs)), strikes, resetSource: provider ? "provider" : "default", lastJobId: jobId, probe: null };
+      pauseWrite(home, backend, p); return p;
+    }).value ?? null;
+  } catch { return null; }
+}
+export function probeSucceeded(home, backend, jobId, injected = {}, generation = null) {
+  const deps = dependencies(injected);
+  try { return lock(home, deps, () => {
+    const p = pauseRead(home, backend, deps, false, true);
+    if (!p?.probe || p.probe.jobId !== jobId || !generation || p.probe.generation !== generation) return false;
+    fs.rmSync(pauseFile(home, backend), { force: true }); return true;
+  }).value ?? false; } catch { return false; }
+}
+export function listPauses(env = process.env, injected = {}) {
+  const deps = dependencies({ ...injected, env });
+  try {
+    if (!admissionEnabled(env, deps.readUserConfig(env))) return [];
+    return backends.map(b => pauseRead(admissionHome(env), b, deps)).filter(Boolean).map(p => ({ backend: p.backend, kind: p.kind, code: p.code, until: p.until, strikes: p.strikes, probing: Boolean(p.probe) }));
+  } catch { return []; }
+}
 export function describeGuard(env = process.env, { readSensors = true } = {}, injected = {}) {
   const deps = dependencies({ ...injected, env });
   try {
     const enabled = admissionEnabled(env, deps.readUserConfig(env));
     if (!enabled) return { enabled, reason: String(env.RELAY_ADMISSION).toLowerCase() === "off" ? "RELAY_ADMISSION=off" : "setup", pauses: [] };
-    const home = admissionHome(env), pauses = [];
+    const home = admissionHome(env), pauses = listPauses(env, deps);
     if (!readSensors) return { enabled, pauses };
     const machine = machineReading(home, deps), all = slots(home, deps, false);
     const running = all.filter(s => s.state === "running");
@@ -301,7 +377,7 @@ export function renderGuard(snapshot) {
   if (snapshot.error) return [`load-guard: on (state unreadable: ${snapshot.error})`];
   const memory = snapshot.availableBytes === null ? "memory not read" : `memory ${(snapshot.availableBytes / GiB).toFixed(1)} of ${(snapshot.totalBytes / GiB).toFixed(1)} GiB available`;
   return [`load-guard: on · ${snapshot.state} · weight ${snapshot.usedWeight} of ${snapshot.minWeight} minimum, ceiling ${snapshot.maxWeight} · very heavy ${snapshot.veryHeavy} of ${snapshot.maxVeryHeavy} · ${memory} · load ${snapshot.load5 ?? "not read"} on ${snapshot.cores} cores`,
-    ...(snapshot.notes ?? []).map(n => `note: load guard: ${n}`), ];
+    ...(snapshot.notes ?? []).map(n => `note: load guard: ${n}`), ...(snapshot.pauses ?? []).map(p => `paused: ${refusalReason(p)}; strike ${p.strikes}`)];
 }
 
 // Reserve a waiting-worker place and spawn while holding the admission lock. The

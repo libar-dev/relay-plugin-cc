@@ -92,3 +92,45 @@ test("critical pressure before a warm turn queues without double charging the sl
   s.unblock(); await running;
   assert.equal(turns, 2);
 });
+
+test("structured turn/start refusal is preserved, pauses the backend and never retries usage", async t => {
+  const s = seed(t); s.unblock();
+  const backend = backendNamed("codex"), connect = backend.connect;
+  let runs = 0, retries = 0;
+  s.options.sleep = async () => retries++;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args);
+    t.mock.method(connection, "run", async () => {
+      runs++;
+      const error = new Error("synthetic usage limit at turn/start");
+      error.data = { codexErrorInfo: "usageLimitExceeded" };
+      throw error;
+    });
+    return connection;
+  });
+  await runWorker(s.dir, s.options);
+  assert.equal(runs, 1);
+  assert.equal(retries, 0);
+  const job = readJob(s.dir);
+  assert.equal(job.state, "failed");
+  assert.equal(job.refusal.kind, "usage");
+  assert.equal(job.refusal.code, "usageLimitExceeded");
+  assert.equal(fs.existsSync(path.join(s.ctx.env.RELAY_ADMISSION_HOME, "pauses", "codex.json")), true);
+});
+
+test("capacity retries check critical pressure before sending another turn", async t => {
+  const s = seed(t); s.unblock();
+  const backend = backendNamed("codex"), connect = backend.connect;
+  let runs = 0;
+  s.options.sleep = async () => s.block();
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args);
+    t.mock.method(connection, "run", async () => { runs++; return { turnStatus: "failed", error: { message: "synthetic capacity" }, finalMessage: "", capacity: true }; });
+    return connection;
+  });
+  const running = runWorker(s.dir, s.options);
+  await waitFor(() => readJob(s.dir).state === "queued" && runs === 1);
+  postInboxMessage(s.dir, { kind: "cancel" }); await running;
+  assert.equal(runs, 1);
+  assert.equal(readJob(s.dir).state, "cancelled");
+});
