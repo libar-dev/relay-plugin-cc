@@ -27,8 +27,8 @@ import { isTerminalView, JobViewBusy, loadJobView } from "../jobs/view.mjs";
 import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
 import { classifyHarnessEntry, isInterruptMarker, unframeComputedTask, WORKFLOW_SYSTEM_NOTES } from "./workflow.mjs";
 
-// The wake (the hooks module's session.send hook) ends a wait when a message is sent to the relay,
-// so the bound only caps a tool call. 600 s is the Bash tool's maximum.
+// session.send wakes a wait; a message typed into the relay's view has no wake and reaches
+// the job at the relay's next call. 600 s is the Bash tool's maximum.
 export const RELAY_WAIT_SECONDS = 540;
 export const RELAY_BASH_TIMEOUT_MS = 600000;
 // The guard lets a relay go, with a recorded violation, only after this many consecutive blocks.
@@ -36,6 +36,9 @@ export const RELAY_BLOCK_BUDGET = 8;
 
 const COORDINATOR_PREFIX = "The coordinator sent a message while you were working:\n";
 const COORDINATOR_SUFFIX = "\n\nAddress this before completing your current task.";
+// Claude Code 2.1.308 wraps a typed message that resumes the relay.
+const HUMAN_PREFIX = "The user sent a new message while you were working:\n";
+const HUMAN_SUFFIX = "\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.";
 
 function envNumber(env, name, fallback) {
   const raw = env[name];
@@ -141,6 +144,15 @@ function unwrapCoordinator(text) {
   return text;
 }
 
+function humanText(content, where, problems) {
+  if (!Array.isArray(content)) return textOfContent(content);
+  const nonText = content.filter((block) => block?.type !== "text").length;
+  if (nonText) {
+    problems.push(`${where} is a typed message with ${nonText} block(s) that are not text; the job gets its text only`);
+  }
+  return textOfContent(content.filter((block) => block?.type === "text"));
+}
+
 export function relayToolBoundary(entries, toolUseId) {
   const index = toolUseId ? entries.findIndex((entry) =>
     Array.isArray(entry.message?.content) && entry.message.content.some((block) => block?.type === "tool_use" && block.id === toolUseId)
@@ -164,9 +176,9 @@ export function relayToolBoundary(entries, toolUseId) {
 
 // The relay's first prompt and every message it received after it, in order. A message is
 // recognised by its entry type and origin, never by its text:
-// - an `attachment` entry of type `queued_command` whose origin is the coordinator or a peer
-//   (SendMessage while the relay works, from the main thread or from another agent);
-// - a `user` entry whose origin is the coordinator or a peer (a message that resumes a relay
+// - an `attachment` entry of type `queued_command` whose origin is coordinator, peer or human
+//   (a message received while the relay works);
+// - a `user` entry whose origin is coordinator, peer or human (a message that resumes a relay
 //   that has handed back), unwrapped from the harness's fixed wrapper when it has one; a
 //   peer's text is its origin's `body`;
 // - a plain `user` turn that is not metadata (`isMeta`), not a tool result and not Claude Code's
@@ -185,6 +197,7 @@ export function parseRelayTranscript(text, toolUseId = null) {
   let stringReturnNote = false;
   let framedPrompt = false;
   const messages = [];
+  const received = [];
   const problems = [];
   const seen = new Set();
   const entries = [];
@@ -220,27 +233,33 @@ export function parseRelayTranscript(text, toolUseId = null) {
       messages.push({ uuid: entry.uuid, text: messageText, shape });
     };
 
+    const receive = () => { if (entry.uuid) received.push(entry.uuid); };
     if (entry.type === "attachment" && entry.attachment?.type === "queued_command") {
+      receive();
       const originEntry = entry.attachment.origin ?? entry.origin ?? null;
-      const origin = originEntry?.kind ?? null;
-      if (origin !== "coordinator" && origin !== "peer") {
-        if (origin == null) {
-          problems.push(`${where} is a queued command with no origin`);
-        }
+      const origin = originEntry?.kind;
+      if (originEntry != null && typeof origin !== "string") {
+        problems.push(`${where} has an origin with no kind`);
+        return;
+      }
+      if (origin === "task-notification") return;
+      if (origin !== "coordinator" && origin !== "peer" && origin !== "human") {
+        problems.push(originEntry == null ? `${where} is a queued command with no origin`
+          : `${where} is a queued command of origin ${origin}, which the relay does not deliver`);
         return;
       }
       if (prompt == null) {
         problems.push(`${where} is a message that came before the prompt`);
         return;
       }
-      const messageText = origin === "peer"
-        ? peerBody(originEntry)
-        : typeof entry.attachment.prompt === "string" ? entry.attachment.prompt : textOfContent(entry.attachment.prompt);
+      const messageText = origin === "peer" ? peerBody(originEntry)
+        : origin === "human" ? humanText(entry.attachment.prompt, where, problems)
+        : textOfContent(entry.attachment.prompt);
       if (messageText == null) {
         problems.push(`${where} is a queued message whose text could not be read`);
         return;
       }
-      addMessage(messageText, origin === "peer" ? "peer" : "queued_command");
+      addMessage(messageText, origin === "coordinator" ? "queued_command" : origin);
       return;
     }
 
@@ -257,19 +276,37 @@ export function parseRelayTranscript(text, toolUseId = null) {
 
     const message = entry.message;
     const isUser = entry.type === "user" || (entry.type == null && message?.role === "user");
-    if (!isUser || !message) {
+    if (!isUser || (!message && entry.origin == null)) {
       return;
     }
-    if (isToolResult(message.content)) {
+    if (isToolResult(message?.content)) {
       return;
     }
-    const fromCoordinator = entry.origin?.kind === "coordinator";
-    const fromPeer = entry.origin?.kind === "peer";
+    const origin = entry.origin?.kind;
+    const fromCoordinator = origin === "coordinator";
+    const fromPeer = origin === "peer";
+    const fromHuman = origin === "human";
+    if (entry.origin != null && typeof origin !== "string") {
+      if (prompt != null) receive();
+      problems.push(`${where} has an origin with no kind`);
+      return;
+    }
+    if (origin === "task-notification") {
+      if (prompt != null) receive();
+      return;
+    }
+    if (entry.isMeta && entry.origin != null && !fromCoordinator && !fromPeer && !fromHuman) {
+      if (prompt != null) receive();
+      problems.push(`${where} is a user entry of origin ${origin}, which the relay does not deliver`);
+      return;
+    }
     if (prompt == null) {
-      if (entry.isMeta || fromCoordinator || fromPeer) {
+      if (fromCoordinator || fromPeer || fromHuman) {
+        problems.push(`${where} is a message that came before the prompt`);
         return;
       }
-      const promptText = textOfContent(message.content);
+      if (entry.isMeta) return;
+      const promptText = textOfContent(message?.content);
       if (promptText == null) {
         problems.push(`${where} is the prompt, but its text could not be read`);
         return;
@@ -288,10 +325,11 @@ export function parseRelayTranscript(text, toolUseId = null) {
       prompt = { uuid: entry.uuid ?? null, text: promptText, notes: [], framed: false };
       return;
     }
-    if (entry.isMeta && !fromCoordinator && !fromPeer) {
+    if (entry.isMeta && entry.origin == null) {
       return; // harness metadata, marked as such by the entry itself
     }
     if (fromPeer) {
+      receive();
       const body = peerBody(entry.origin);
       if (body == null) {
         problems.push(`${where} is a message from another agent whose text could not be read`);
@@ -300,8 +338,26 @@ export function parseRelayTranscript(text, toolUseId = null) {
       addMessage(body, "peer");
       return;
     }
-    const messageText = textOfContent(message.content);
+    if (fromHuman) {
+      receive();
+      let body = humanText(message?.content, where, problems);
+      if (body == null) {
+        problems.push(`${where} is a message whose text could not be read`);
+        return;
+      }
+      if (entry.isMeta) {
+        if (body.startsWith(HUMAN_PREFIX) && body.endsWith(HUMAN_SUFFIX) && body.length >= HUMAN_PREFIX.length + HUMAN_SUFFIX.length) {
+          body = body.slice(HUMAN_PREFIX.length, body.length - HUMAN_SUFFIX.length);
+        } else {
+          problems.push(`${where} is a typed message whose wrapper is not the one Claude Code 2.1.308 writes; delivered as it is`);
+        }
+      }
+      addMessage(body, "human");
+      return;
+    }
+    const messageText = textOfContent(message?.content);
     if (messageText == null) {
+      receive();
       problems.push(`${where} is a message whose text could not be read`);
       return;
     }
@@ -311,9 +367,10 @@ export function parseRelayTranscript(text, toolUseId = null) {
     if (entry.origin == null && isInterruptMarker(messageText)) {
       return; // Claude Code's note that it interrupted the relay, never a message; it carries no origin
     }
+    receive();
     addMessage(fromCoordinator ? unwrapCoordinator(messageText) : messageText, fromCoordinator ? "coordinator" : "user");
   });
-  return { prompt, messages, problems, structuredOutput, stringReturn: stringReturnNote || framedPrompt, wakeAfter: relayToolBoundary(entries, toolUseId) };
+  return { prompt, messages, received, problems, structuredOutput, stringReturn: stringReturnNote || framedPrompt, wakeAfter: relayToolBoundary(entries, toolUseId) };
 }
 
 export function readRelayTranscript(file, toolUseId = null) {
@@ -733,20 +790,20 @@ export async function syncRelayMessages(input, jobDir, options = {}) {
   } catch (error) {
     const why = file ? error.message : `the relay transcript was not found (looked at ${candidates.join(", ") || "no path"})`;
     appendRelayViolation(jobDir, { kind: "transcript", reason: `messages could not be checked: ${why}`, agentId: input.agent_id ?? null });
-    return { readable: false, messages: [], wakeAfter: nowIso(), busy: false, undelivered: [], delivered: [] };
+    return { readable: false, messages: [], received: [], wakeAfter: nowIso(), busy: false, undelivered: [], delivered: [] };
   }
   for (const problem of parsed.problems) {
     appendRelayViolation(jobDir, { kind: "transcript", reason: `messages could not be checked: ${problem}`, agentId: input.agent_id ?? null });
   }
   try {
     const delivery = await deliverRelayMessages(jobDir, parsed.messages, { env, wait: options.wait ?? true });
-    return { readable: true, messages: parsed.messages, wakeAfter: parsed.wakeAfter, ...delivery };
+    return { readable: true, messages: parsed.messages, received: parsed.received, wakeAfter: parsed.wakeAfter, ...delivery };
   } catch (error) {
     // Failed delivery leaves work owed: received but not delivered, or delivered but
     // not run. Hand-back and stop wait even on a completed job, within the block budget.
     // A cancel is checked against the job's terminal state and retried at the next
     // hook on failure, three tries in all, with a recorded relay-violation.
     appendRelayViolation(jobDir, { kind: "delivery", reason: `messages could not be delivered: ${error instanceof Error ? error.message : String(error)}`, agentId: input.agent_id ?? null });
-    return { readable: true, messages: parsed.messages, wakeAfter: parsed.wakeAfter, busy: false, delivered: [], undelivered: undeliveredMessages(jobDir, parsed.messages) };
+    return { readable: true, messages: parsed.messages, received: parsed.received, wakeAfter: parsed.wakeAfter, busy: false, delivered: [], undelivered: undeliveredMessages(jobDir, parsed.messages) };
   }
 }

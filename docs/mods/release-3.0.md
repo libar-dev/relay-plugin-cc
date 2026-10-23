@@ -250,3 +250,29 @@ What worked in Phase 1:
 - A module's `$.session.send` always sends as the main conversation, from any loop.
 - The guard reads the transcript a job recorded at start. After a Workflow agent forks, Claude Code can write
   later entries to `subagents/agent-<id>.jsonl` instead.
+
+## What the typed-message fix learned about the tools
+
+- A line typed into an agent's own view (↓ in the footer, Enter, the prompt `Message @<agent>…`) raises no
+  `session.send`, `prompt.submit`, `UserPromptSubmit` or `session.receive`. Only `prompt.edit` (a paste) and
+  `prompt.change {kind: "clear"}` fire, and they name neither the view nor the agent. The line reaches the agent's
+  transcript when its tool call returns, as origin `human`; typed after the agent ended, it resumes the agent at
+  once (`SubagentStart`; the main thread's queue gets "Agent X was resumed by the user").
+- The view in force reaches a module through a drawn site. The 2.1.308 declarations give `e.props.view.agentId` to
+  the `AbovePrompt` band and to a `Pane`, and none to `$.ui.status`. Measured for the band: opening an agent's view
+  and going back re-run its hook with the agent's id and with none, and a hook that passes draws nothing.
+- The footer's agent list shows five agent rows under `main`, then `↓ N more`; the list scrolls as the cursor moves.
+  A finished agent leaves the list unless its view is open, where it stays as `idle` (2.1.308); on 2.1.309 it leaves
+  within about 15 s unless its view is open, and a view held open through the hand-back still takes a line. Under load (several sessions
+  and their jobs) a key's effect can take more than 250 ms to draw: a script polls the screen for it and never
+  sends a key twice.
+- Keys in the terminal: from the main prompt, `Down` moves into the agent list and `Up` from `main` gives the prompt
+  back; `Enter` on a row opens that agent's view, and `Up` as many times as `Down` reaches its prompt. Esc in a
+  running agent's view stops the agent, and `x` on its row in the list stops it too; both end its turn with
+  `turn.complete {reason: "aborted"}`, list it as `killed`, and fire no `SubagentStop`. Esc in the main view
+  interrupts the main turn. Drive the view without Esc.
+- The Desktop app's Code tab (Claude for Mac 3.6556.1, checked on the M3) shows an agent's view with no input: Back,
+  Move, Expand and Close only, and `@` in the main prompt offers files, not agents. Esc in that view does nothing; the
+  Background tasks panel's Stop button ends the relay as `x to stop` does, and the job runs on.
+- `$.ui.log` writes a line into the main transcript (kept as `system`/`informational`, not sent to the model);
+  `$.ui.toast` is drawn on the notification bar, also over an agent's view; `$.ui.notify` had no channel on Fedora.

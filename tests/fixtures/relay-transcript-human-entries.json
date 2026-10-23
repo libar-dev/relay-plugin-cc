@@ -1,0 +1,166 @@
+{
+  "_source": "cut from relay-typed-codex.jsonl, Claude Code 2.1.308, 2026-10-22, lines 27, 30 and 41; only the working directory replaced with a neutral one; interrupt entries cut from relay-interrupt-me.jsonl, Claude Code 2.1.308, 2026-10-22, lines 25-27 with only the working directory replaced",
+  "entries": {
+    "humanQueuedDuringRun": {
+      "why": "line 27: typed while the relay waited, a queued_command with origin human; the text is attachment.prompt",
+      "entry": {
+        "parentUuid": "defa8ac2-6a48-4c63-95a6-aa5880135448",
+        "isSidechain": true,
+        "agentId": "a2f2c9b77854a7db3",
+        "attachment": {
+          "type": "queued_command",
+          "prompt": "typed one: hello from the agent view",
+          "source_uuid": "557f1a00-4c4b-4b2c-a048-35dcecea6127",
+          "origin": {
+            "kind": "human"
+          },
+          "isMeta": true
+        },
+        "type": "attachment",
+        "uuid": "bbc8cc31-7071-4e64-8c5a-cd6218d5a866",
+        "timestamp": "2026-10-22T18:29:33.895Z",
+        "rendered": [
+          {
+            "content": "<system-reminder>\nThe user sent a new message while you were working:\ntyped one: hello from the agent view\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.\n</system-reminder>"
+          }
+        ],
+        "renderedRole": "system",
+        "userType": "external",
+        "entrypoint": "cli",
+        "cwd": "/home/example/dev-example/example-project",
+        "sessionId": "7cd1d3f6-95b3-4a62-a11d-c81f64b7f639",
+        "version": "2.1.308",
+        "gitBranch": "master"
+      }
+    },
+    "apiRequestBlob": {
+      "why": "line 30: an api-request-blob with system content, not a user entry or an inbound message",
+      "entry": {
+        "type": "api-request-blob",
+        "sessionId": "7cd1d3f6-95b3-4a62-a11d-c81f64b7f639",
+        "agentId": "a2f2c9b77854a7db3",
+        "hash": "744f08acd212a84fb5a374b1774b56788bee9ec1c44a98b1d09e2c68a6509ba8",
+        "message": {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "The user sent a new message while you were working:\ntyped one: hello from the agent view\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.\n\n<total_tokens>14992561 tokens left</total_tokens>"
+            }
+          ]
+        }
+      }
+    },
+    "humanAfterHandback": {
+      "why": "line 41: typed after the hand-back, a user entry with isMeta and origin human in the fixed typed-message wrapper",
+      "entry": {
+        "parentUuid": "eda2fb01-11ea-44e1-a5a8-24827c1546b2",
+        "isSidechain": true,
+        "promptId": "dec9dcb8-d604-483f-9086-992b8d58878c",
+        "agentId": "a2f2c9b77854a7db3",
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": "The user sent a new message while you were working:\ntyped two: after the hand-back\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn."
+        },
+        "isMeta": true,
+        "uuid": "72123b68-febc-4e9d-9323-61fceb668b14",
+        "timestamp": "2026-10-22T18:31:16.980Z",
+        "origin": {
+          "kind": "human"
+        },
+        "userType": "external",
+        "entrypoint": "cli",
+        "cwd": "/home/example/dev-example/example-project",
+        "sessionId": "7cd1d3f6-95b3-4a62-a11d-c81f64b7f639",
+        "version": "2.1.308",
+        "gitBranch": "master"
+      }
+    },
+    "interruptToolResult": {
+      "why": "relay-interrupt-me.jsonl line 25: rejected tool result, no origin",
+      "entry": {
+        "parentUuid": "1dddf605-e651-474e-809b-7407294847e6",
+        "isSidechain": true,
+        "promptId": "8a07e8b9-ee64-4dd6-b217-55ec7f26487d",
+        "agentId": "aaa04f3dae6e9d70b",
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "content": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
+              "is_error": true,
+              "tool_use_id": "toolu_018aNEDWZM9vZXEAfnNuAurA"
+            }
+          ]
+        },
+        "uuid": "d6a5d277-fefc-4913-9acd-fc7aaf0bc95f",
+        "timestamp": "2026-10-22T19:11:22.260Z",
+        "toolUseResult": "User rejected tool use",
+        "toolDenialKind": "user-rejected",
+        "sourceToolAssistantUUID": "1dddf605-e651-474e-809b-7407294847e6",
+        "userType": "external",
+        "entrypoint": "cli",
+        "cwd": "/home/example/dev-example/example-project",
+        "sessionId": "fc215bb2-e80b-444a-b441-5d2a1a117af4",
+        "version": "2.1.308",
+        "gitBranch": "master"
+      }
+    },
+    "interruptNote": {
+      "why": "relay-interrupt-me.jsonl line 26: interrupt note, no origin",
+      "entry": {
+        "parentUuid": "d6a5d277-fefc-4913-9acd-fc7aaf0bc95f",
+        "isSidechain": true,
+        "promptId": "8a07e8b9-ee64-4dd6-b217-55ec7f26487d",
+        "agentId": "aaa04f3dae6e9d70b",
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "[Request interrupted by user for tool use]"
+            }
+          ]
+        },
+        "uuid": "2513cd17-bd4a-4cbc-b392-762ad74fd2f9",
+        "timestamp": "2026-10-22T19:11:22.295Z",
+        "userType": "external",
+        "entrypoint": "cli",
+        "cwd": "/home/example/dev-example/example-project",
+        "sessionId": "fc215bb2-e80b-444a-b441-5d2a1a117af4",
+        "version": "2.1.308",
+        "gitBranch": "master"
+      }
+    },
+    "humanAfterInterrupt": {
+      "why": "relay-interrupt-me.jsonl line 27: typed after the interrupt, isMeta and origin human in the fixed typed-message wrapper",
+      "entry": {
+        "parentUuid": "2513cd17-bd4a-4cbc-b392-762ad74fd2f9",
+        "isSidechain": true,
+        "promptId": "415a3e92-2822-4dd9-b8a2-3b5fbcf63d91",
+        "agentId": "aaa04f3dae6e9d70b",
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": "The user sent a new message while you were working:\nafter the interrupt: redirect the job\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn."
+        },
+        "isMeta": true,
+        "uuid": "5f2ff98e-79b1-4fc2-b1d4-b9a1091bb9a8",
+        "timestamp": "2026-10-22T19:11:30.461Z",
+        "origin": {
+          "kind": "human"
+        },
+        "userType": "external",
+        "entrypoint": "cli",
+        "cwd": "/home/example/dev-example/example-project",
+        "sessionId": "fc215bb2-e80b-444a-b441-5d2a1a117af4",
+        "version": "2.1.308",
+        "gitBranch": "master"
+      }
+    }
+  }
+}

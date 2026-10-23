@@ -835,3 +835,91 @@ The owner is ready to start heavy production and waits for the pre.2 tag, which 
 What it changes: D97's 48-hour hold on heavy production ends; heavy production starts on pre.2. D98's survey stays,
 and is no longer a step before heavy production; the coordinating thread times its passes. D95's cuts go on after
 pre.2 as issues are found.
+
+### D100. A line the user types into a relay's own view is delivered (typed-messages lead)
+
+Claude Code lets a person open a running agent's view (↓ in the footer, Enter, ↑ to its prompt) and type at
+`Message @<agent>…`. The M3 pass found that for a `relay:job` agent the line never reached the job, nothing recorded
+it, and a relay the line resumed after its hand-back said it had passed it on. Measured on 2.1.308: while the relay
+waits, the line is written into its transcript only when its tool call returns, as a `queued_command` attachment of
+origin kind `human`, `isMeta: true`, the text as typed in `prompt`; after the hand-back, or right after Esc
+interrupted the relay in its view, the line resumes the relay at once as a `user` entry of origin `human`,
+`isMeta: true`, the text inside a fixed wrapper ("The user sent a new message while you were working: …"), with no
+field holding the raw text. The guard took only `coordinator` and `peer`, so it dropped the first at relay.mjs:226
+and the second as metadata.
+
+The guard now delivers origin `human` in both shapes, through the ledger like any message: a steer while the job
+runs, a continue once it has ended, and the text `cancel` cancels the job. So a person can interrupt a relay with Esc
+and redirect its job with the next line (measured: a steer 4.3 s after Enter). The resuming entry's text is
+unwrapped, prefix and suffix exactly, as the coordinator's is; a text not in that wrapper is delivered whole and
+recorded, since a wording change in Claude Code must not drop the person's words. A typed text with blocks that are
+not text (a pasted image) delivers its text and records the rest. A person's text never goes through the
+harness-marker checks, so typing the Workflow marker line or an interrupt note is heard. A relay that lives through
+the update delivers the lines it received before, as D11 did for peers. GPT-6.1 Sol and Opus 5.5 advised; both chose
+to deliver a text whose wrapper changed and record it. Reopen if Claude Code gives the raw text a field of its own.
+
+### D101. Origins the guard does not know are recorded, never dropped in silence (typed-messages lead)
+
+D100's defect is the second of its kind: D8 fixed the same silent drop for `peer`. Relay transcripts on the
+ThinkPad also hold origin `task-notification` (a lead's background command notice that reached Workflow relays),
+which is not a message for the job. Now `task-notification` is skipped, and any other origin kind on a queued command
+or on an `isMeta` user entry, an origin with no kind, or a message before the prompt is recorded as a relay violation
+and not delivered, so the next new kind shows on the job instead of vanishing. Delivering unknown kinds was rejected
+by both advisors: a delivery to a running job is a steer, and a harness notice must not steer a job (D48's lesson).
+A problem is found again at every hook call, and the violation log skipped only a record equal to the last one, so
+two problems alternated and grew every result; a `transcript` record now goes in once per entry and reason. Other
+kinds keep the old rule, since an operational failure may recur.
+
+### D102. What a relay's final message must be (typed-messages lead)
+
+Two defects, one rule: the relay's final message is the job's result, nothing of its own.
+
+- **A relay resumed after its hand-back hands back again.** At SubagentStop the guard let a relay that had handed
+  back through `SubagentHandback`, and made no tool call since, stop with any final text when nothing was owed. A
+  message the guard did not deliver, one whose continue had already finished, or a `cancel` on an ended job could
+  resume the relay and leave nothing owed, and the relay's words then reached the main thread as the agent's result:
+  how the M3 relay claimed a delivery the guard never made. Now the parser reports every inbound entry it saw,
+  delivered or not; the hand-back records them; and the exemption holds only while the transcript is readable and no
+  inbound entry arrived after the recorded hand-back. Otherwise the relay must end with exactly the result or hand
+  back again. A hand-back recorded by 3.0.0-dev.4 is compared on the messages it knew. Both advisors found D100
+  alone left this open.
+- **One code fence around the result is not a difference.** The e2e suite's first full run on dev.4 had a Haiku
+  relay without `SubagentHandback` end with the exact result inside a ```` ``` ```` fence nine times; the exact
+  compare blocked each, and the relay was let go after eight blocks with no hand-back recorded. The compare now
+  removes one fence wrapping the whole message, indented by at most three spaces, with no tag or one of
+  `text`, `txt`, `plaintext`, `plain`, `markdown`, `md`, `yaml`, `yml`, `ini`, `console` or `log`, in any case, after the opening backticks, so the
+  relay cannot hide words there; anything else still fails, and the block's text says "with no code fence around
+  it" on both paths. The Workflow path, which ignored every fence line, now takes the same one outer fence and no
+  other; its tag list is wide enough for the `yaml` or `Text` fence a small model puts around a state block.
+
+What still lets a relay go, as before and recorded or by design: the block budget (eight blocks), a hook that fails,
+and a relay whose start failed, which has no job and keeps its hand-back exemption.
+
+### D103. No wake for a typed line in 3.0's guard fix; the wake is a follow-up (typed-messages lead)
+
+No hook carries a typed line's recipient: at Enter, `session.send`, `prompt.submit`, `UserPromptSubmit` and
+`session.receive` do not fire; `prompt.change {clear}` does, naming neither the view nor the agent. So a line typed
+while the relay waits reaches the job at the relay's next tool call: when its wait returns, at most 540 s, or when
+the job ends, and then as a continue. One typed after the hand-back or after an interrupt arrives at once. The docs
+say so. Claude Code 2.1.309 (23 October) drops a finished agent from the footer's list within about 15 s unless its
+view is open; a line typed in a view held open through the hand-back still continues the job (measured on
+2.1.309), and once the agent has left the list a continue goes through `SendMessage` or `C continue`. A prototype measured the follow-up once: a pass-through `ui.render` hook on the `AbovePrompt` band reads the
+view in force (`e.props.view.agentId`) and re-runs on every switch, and a `prompt.change {clear}` hook that woke the
+viewed relay ended its wait 0.19 s after Enter, with the typed entry in the transcript before the relay's next call.
+It changes `register.js`, so it comes after Phase 4's PR 2, with measurements of stale views, rapid switches and
+several surfaces first. Waking every relay on every clear was rejected: each main-thread prompt would cost every
+running relay a model call. Both advisors agreed.
+
+### D104. The live check `typed` drives the agent view in the terminal (typed-messages lead)
+
+T3 draws no agent view, and the Desktop app's Code tab draws one with no input (the M3 lead's check on Claude for
+Mac 3.6556.1), so typing to a relay is a terminal route and the check runs in the terminal only. It overrides `runTerminal`, as `session-end` does,
+and leaves the runner alone. Per backend it types into three relays' views: B, then the check runs `companion wake`
+itself, labelled as such, to prove the real `human` entry reaches the steer path; C, interrupted with one Esc at the
+view's prompt and redirected by the next line; A last, typed while its job runs and again after its hand-back, in a
+view held open throughout, since Claude Code drops a finished agent from the footer's list unless its view is open.
+Each A's job is sized by its backend's place, so it still runs when the check reaches it. Where Claude Code
+offers no route after the hand-back, A2 is recorded as a limit with the version, not judged; on 2.1.309 the
+held view still took A2. The check judges by the
+ledger, the inbox and the job's attempts, never by the report's wording, counts each task notification once, and
+uses no Esc but C's: Esc at a running relay's prompt stops it, and Esc in the main view interrupts the lead.

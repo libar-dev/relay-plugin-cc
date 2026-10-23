@@ -139,7 +139,11 @@ of up to nine minutes, so Claude Code's stall timer never fires on a long job. A
 ends the current step, and its hook delivers the message at the next. Send the agent "Also check the retry path in
 src/net/client.mjs." with `SendMessage` while the job runs, and Codex gets it inside the running
 turn. Sent after the job has ended, the same message starts a new turn on the same session, and the
-agent returns the new report. The message `cancel` cancels the job.
+agent returns the new report. The message `cancel` cancels the job. In the terminal, a line you type into the agent's
+own view (↓ in the footer, Enter, then ↑ to its prompt) reaches the job too, at the relay's next step: up
+to nine minutes later, or as a new turn once the job has ended. Esc at that prompt, or `x` in the agent
+list, stops the relay agent and leaves the job running; a line typed right after Esc resumes the relay
+and reaches the job at once, steering it while it runs. `/relay:cancel <job>` cancels the job.
 
 **In a workflow.** A Workflow script runs a job with `agent(prompt, { agentType: 'relay:job' })` and
 gets the state block back as a string. The `relay:jobs` skill has the rules, and the section
