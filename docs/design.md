@@ -503,8 +503,8 @@ allows (a grace above 280 s outlasts it), and 180 for `transfer`, which gives Co
 to run instead, never a partial list. That command passes the companion the module's own arguments: the plugin's path
 and the typed text are single-quoted, one shell word each, and the typed text goes whole, for the companion to split
 as it splits `$ARGUMENTS`. When the typed text holds a line break, the command is shown in a fenced block, since a line
-break would end an inline code span and let Markdown read the rest (a carriage return still becomes a line feed
-there). Run it from the session's directory; `transfer` also needs the session's id in `RELAY_COMPANION_SESSION_ID`,
+break would end an inline code span and let Markdown read the rest; a carriage return, which Markdown turns into a
+line feed, is written as `printf`'s `\r` outside the quotes. Run it from the session's directory; `transfer` also needs the session's id in `RELAY_COMPANION_SESSION_ID`,
 which Claude's own Bash has. The markdown files keep
 the names, descriptions and argument hints for the command picker, and their body only says that the module
 answers the command: Claude Code runs it when the module did not load. Claude does not call these four itself. A

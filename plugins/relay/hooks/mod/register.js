@@ -91,9 +91,10 @@ function fenceFor(text, least) {
   return "`".repeat(Math.max(least, longest + 1));
 }
 
-// One POSIX shell word that the shell takes as written: nothing in single quotes runs.
+// One POSIX shell word that the shell takes as written: nothing in single quotes runs. Markdown
+// turns a carriage return into a line feed, so one is written as printf's `\r` outside the quotes.
 function shellWord(text) {
-  return "'" + text.replace(/'/g, "'\\''") + "'";
+  return "'" + text.replace(/'/g, "'\\''").replace(/\r/g, "'\"$(printf '\\r')\"'") + "'";
 }
 
 // How a person runs the same command by hand, named in every error text: the sentence that names

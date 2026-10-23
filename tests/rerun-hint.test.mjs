@@ -29,7 +29,9 @@ function commands(root) {
 }
 
 // The line as a reader sees it: an inline code span, or the fenced `sh` block a line break needs.
-function shownLine(text) {
+// A Markdown renderer turns every CR and CRLF into LF first.
+function shownLine(raw) {
+  const text = raw.replace(/\r\n?/g, "\n");
   const block = /\n\n(`{3,})sh\n([\s\S]*)\n\1$/.exec(text);
   if (block) return block[2];
   const span = /Run (`+)([\s\S]*?)\1 in a shell/.exec(text);
@@ -40,11 +42,11 @@ function shownLine(text) {
   return span[2];
 }
 
-const ROOTS = ["plain", "with space", "it's", "$(touch root-ran)", "back`touch tick`tick", "bang!x"];
+const ROOTS = ["plain", "with space", "it's", "$(touch root-ran)", "back`touch tick`tick", "bang!x", "car\rroot"];
 const TYPED = [
   "j-1", "", " \t ", "j-1 --all", "$(touch typed-ran)", "`touch typed-ran`", "a''b", "x'\\''y", "trailing\\",
   "!!", "%1", "$HOME ${HOME} ~ * ; | < > #", "-n", "--source \"/tmp/it's here.jsonl\"", "``double`` and ```triple```",
-  "x\n\n&#39;; touch typed-ran; printf &#39;\n\n:", "line\nbreak", " nbsp sep",
+  "x\n\n&#39;; touch typed-ran; printf &#39;\n\n:", "line\nbreak", " nbsp sep", "car\rreturn", "crlf\r\nline", "\r",
 ];
 
 for (const shell of ["sh", "bash"]) {
