@@ -1,0 +1,60 @@
+[48;5;237m  [38;5;231mexport const meta = { name: 'live-board', description: 'Board Workflow relays' }[39m                            [38;5;153m[48;5;235m│[39m                                                                                       [38;5;246m✕[39m
+[48;5;237m  [38;5;231mreturn await parallel([[39m                                                                                     [38;5;153m[48;5;235m│[39m  job-mvjzvk54-e28caae7 · kimi · running · attempt 1
+[48;5;237m  [38;5;231m  () => agent("model: gpt-6.1-sol\neffort: low\n---\nRun the shell command `sleep 120` exactly once and [39m    [38;5;153m[48;5;235m│[39m  job-mvjzvk0h-865c63b2 · codex · running · attempt 1
+[48;5;237m  [38;5;231mwait for it. Do not shorten, interrupt or restart it when messages arrive. Then reply with one line: board [39m [38;5;153m[48;5;235m│[39m  job-mvjzvjw9-f67b61c4 · grok · running · attempt 1
+[48;5;237m  [38;5;231mdone codex. If a queued message arrives as a later turn, reply with one line without sleeping again.", { [39m   [38;5;153m[48;5;235m│[39m  job-mvjzvije-98b7c3a2 · zcode · running · attempt 1
+[48;5;237m  [38;5;231magentType: 'relay:job', label: 'board-wf-codex' }),[39m                                                         [38;5;153m[48;5;235m│[39m  job-mvjzvgga-5f1f7705 · kimi · running · attempt 1
+[48;5;237m  [38;5;231m  () => agent("backend: grok\nmodel: grok-4.7\neffort: low\n---\nRun the shell command `sleep 120` exactly [39m [38;5;153m[48;5;235m│[39m  job-mvjzve4n-0a158d0c · zcode · running · attempt 1
+[48;5;237m  [38;5;231monce and wait for it. Do not shorten, interrupt or restart it when messages arrive. Then reply with one [39m    [38;5;153m[48;5;235m│[39m  job-mvjzvdps-836a9862 · grok · running · attempt 1
+[48;5;237m  [38;5;231mline: board done grok. If a queued message arrives as a later turn, reply with one line without sleeping [39m   [38;5;153m[48;5;235m│[39m  job-mvjzvdlw-de4193aa · codex · running · attempt 1
+[48;5;237m  [38;5;231magain.", { agentType: 'relay:job', label: 'board-wf-grok' }),[39m                                               [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231m  () => agent("backend: zcode\nmodel: glm-5.3-flash\neffort: low\n---\nRun the shell command `sleep 120` [39m   [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231mexactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. Then reply with[39m [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231mone line: board done zcode. If a queued message arrives as a later turn, reply with one line without [39m       [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231msleeping again.", { agentType: 'relay:job', label: 'board-wf-zcode' }),[39m                                     [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231m  () => agent("backend: kimi\nmodel: kimi-code/kimi-for-coding\neffort: low\n---\nRun the shell command [39m    [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231m`sleep 120` exactly once and wait for it. Do not shorten, interrupt or restart it when messages arrive. [39m    [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231mThen reply with one line: board done kimi. If a queued message arrives as a later turn, reply with one line[39m [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231mwithout sleeping again.", { agentType: 'relay:job', label: 'board-wf-kimi' })[39m                               [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231m])[39m                                                                                                          [38;5;153m[48;5;235m│[39m
+[48;5;237m                                                                                                              [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231mWait until ALL 8 jobs are actually running, not merely async_launched. Use Bash to read each [39m               [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231m${RELAY_JOBS_HOME:-$HOME/.relay-jobs}/relays/<agentId>.json pointer (including the board-wf labels and [39m     [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231magentIds in the Workflow journal) and its jobDir/job.json. Poll with sleep 2 inside one Bash loop until [39m    [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231mevery job has state "running" and an attempt. If any job fails to start, report the failure and stop [39m       [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231mwithout the completion marker. Do not spawn replacements.[39m                                                   [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231mSend no messages yourself. Do not steer, continue, cancel or respawn any job. Print LIVE-BOARD-READY on its[39m [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231mown line as your final answer and end your turn immediately. Leave the background relays and the Workflow [39m  [38;5;153m[48;5;235m│[39m
+[48;5;237m  [38;5;231mrunning. Do not wait for their completion or for a file, and print no second marker.[39m                        [38;5;153m[48;5;235m│[39m
+[49m                                                                                                              [38;5;153m[48;5;235m│[39m
+[38;5;114m[49m●[39m [1m4[0m background agents launched [38;5;246m(↓ to manage)[39m                                                                  [38;5;153m[48;5;235m│[39m
+[49m   [38;5;246m├[39m [1mboard-agent-codex[0m[38;5;246m: board-agent-codex[39m                                                                     [38;5;153m[48;5;235m│[39m
+[49m   [38;5;246m├[39m [1mboard-agent-grok[0m[38;5;246m: board-agent-grok[39m                                                                       [38;5;153m[48;5;235m│[39m
+[49m   [38;5;246m├[39m [1mboard-agent-zcode[0m[38;5;246m: board-agent-zcode[39m                                                                     [38;5;153m[48;5;235m│[39m
+[49m   [38;5;246m└[39m [1mboard-agent-kimi[0m[38;5;246m: board-agent-kimi[39m                                                                       [38;5;153m[48;5;235m│[39m
+[49m                                                                                                              [38;5;153m[48;5;235m│[39m
+[38;5;114m[49m●[39m [1mWorkflow[0m(Board Workflow relays)                                                                             [38;5;153m[48;5;235m│[39m
+[38;5;246m[49m  ⎿  Running in background · [38;5;153m/workflows[38;5;246m to monitor and save · medium size ([38;5;153m/config[38;5;246m)[39m                           [38;5;153m[48;5;235m│[39m
+[49m                                                                                                              [38;5;153m[48;5;235m│[39m
+[49m  [38;5;246mRan [1m2[0m[38;5;246m shell commands [39m                                                                                       [38;5;153m[48;5;235m│[39m
+[49m                                                                                                              [38;5;153m[48;5;235m│[39m
+[38;5;231m[49m●[39m LIVE-BOARD-READY                                                                                            [38;5;153m[48;5;235m│[39m
+[49m                                                                                                              [38;5;153m[48;5;235m│[39m
+[38;5;246m[49m✻[39m [38;5;246mWaiting for [1m4[0m[38;5;246m background agents and [1m1[0m[38;5;246m dynamic workflow to finish[39m                                            [38;5;153m[48;5;235m│[39m
+[49m                                                                                                              [38;5;153m[48;5;235m│[39m
+[38;5;246m[48;5;237m❯[39m [38;5;231m/relay-board[39m [49m                                                                                               [38;5;153m[48;5;235m│[39m
+[38;5;246m[49m  ⎿  [39mrelay: Opened the relay board.                                                                           [38;5;153m[48;5;235m│[39m
+[49m                                                                                                              [38;5;153m[48;5;235m│[39m
+[38;5;244m[49m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m❯ 
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;220m⚠ relay: 8 running[39m
+  [2m[35mrelay-live-work-uQn44m[0m[38;5;246m [2m|[0m[38;5;246m [2m[36mSonnet 5.5[0m[38;5;246m [2m.[0m[38;5;246m [2m[36mmedium[0m[38;5;246m [2m|[0m[38;5;246m [2m[32m[█░░░░░░░░░][0m[38;5;246m [2m56.7k/1.0M (6%)[0m                                                                                                                    [38;5;220mDebug[39m
+  [38;5;211m⏵⏵ bypass permissions on[38;5;246m (shift+tab to cycle)[39m
+
+[1m  ● main[0m
+[38;5;246m  ◯ [39mboard-agent-codex  [38;5;246mStarting relay job via companion.mjs[39m                                                                                                                        [38;5;246m38s · ↓ 7.4k tokens[39m
+[38;5;246m  ◯ [39mboard-agent-grok   [38;5;246mStarting relay companion job[39m                                                                                                                                [38;5;246m37s · ↓ 7.3k tokens[39m
+[38;5;246m  ◯ [39mboard-agent-zcode  [38;5;246mStarting the relay companion job[39m                                                                                                                            [38;5;246m36s · ↓ 7.3k tokens[39m
+[38;5;246m  ◯ [39mboard-agent-kimi   [38;5;246mStarting companion.mjs relay job[39m                                                                                                                            [38;5;246m35s · ↓ 7.3k tokens[39m
+[38;5;246m  ◯ live-board[39m         [38;5;246m▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱[39m  [38;5;246m0/4 · 32s · ↓ 29.8k tokens[39m

@@ -533,6 +533,52 @@ model's Skill call expands a command's markdown body and never reaches `command.
 
 `transfer` gets the session id from `$.session.id()` and finds the session's file by it ([Transfer](#transfer)).
 
+### The status line
+
+The module pins one line under the prompt for the session's repository, `2 running · 1 dead · 3 owed`, which
+Claude Code draws as `⚠ relay: 2 running · 1 dead · 3 owed`. Running counts `starting` and `running` jobs, dead
+counts `dead` ones (`resume` continues them), owed is the sum of the rows' `undeliveredCount`, the messages a job
+acknowledged and has not run. A part at 0 is left out; with nothing to count the line is cleared.
+
+It comes from `companion status --json --active --limit 200` in the session's directory ([JSON for
+programs](#json-for-programs)), run by argv with a 10 s timeout and one read at a time. When more pages exist the
+counts carry a `+`: each is then a lower bound, and an older running job may sit on a later page. A busy answer keeps the line as it was; a failed read, a timeout, cut output or an
+answer that is not `relay.status/1` shows `status unavailable` until the next good answer.
+
+A timer ticks every five seconds from `session.start`, once per load of the module. A tick reads only while
+`$.session.surfaces()` is not empty, so where nothing draws the session (an Agent SDK host such as T3 Code) no
+process runs. While a count shows, every tick reads. While the line is cleared, a tick reads every thirty seconds,
+and on every tick for thirty seconds after a relay event the module saw: a `relay:job` spawn, a send that woke a
+relay, one of the four commands above, or a busy answer. A job a `relay:job` agent of this session starts shows within
+about five seconds; a review, a start the model runs in Bash, or another session's job within thirty (D63).
+
+### The board
+
+`/relay-board` opens a pane, `Relay jobs`, docked beside the transcript in the fullscreen layout from 110 columns and
+above the prompt otherwise. It lists the repository's jobs from `companion status --json`, newest first, 20 a page
+with a `More` row up to 200, then `Older jobs` and `Newest jobs` to page with the cursor: one row each with its id, backend, state and attempt, and its flags: owed messages,
+`not handed back`, `relay lost` (a running job whose relay has not called for 15 minutes, D59) and violations.
+Selecting a row shows the job from `result --json`: model and effort, its relay and Workflow run, each message with
+how the backend took it, and the report as Markdown.
+
+- **Steer** (a starting or running job; `Queue next turn` on Kimi) and **Continue** (an ended or dead job) send the
+  field's text by one route, chosen from the job as it is read at the press (D61): by the relay, as the lead's
+  `SendMessage`, for an Agent-tool relay of this session that is alive, and for a continue of an ended job of this
+  session by its finished relay; to the job directly with `companion steer` or `continue` otherwise. A send the relay refuses offers `Send to the job directly`; nothing is sent twice. Each message
+  in the job's view says which route carried it.
+- **Cancel** asks again, naming the job and its attempt, and `Yes` runs `companion cancel <job> --attempt <N> --json`
+  with the bound `/relay:cancel` uses, so it never stops a newer attempt ([Cancel](#cancel)).
+
+The pane draws from `$.state` alone. From `/relay-board` until the pane closes, while it is placed, shown (not behind
+another pane's tab) and a surface draws, the list is read every three seconds, one read at a time; where nothing draws
+yet, the reads start when a surface attaches. The selected job is read when it is selected, when its
+state, attempts, open or owed messages, report or relay's last call change, and every 30 seconds while it is live, for a
+message taken between two reads. State is written, and the pane drawn again, only when what it shows or what decides
+those reads changed. A busy answer keeps the last data, marked as such. Nothing runs while the pane is closed, hidden
+behind another pane's tab, or not drawn. A press says what it is doing at once (`Reading the job…`, `Cancelling attempt
+N…`), and another press on the same job waits for it. Its keys and clicks follow Claude Code's rules for panes (D65): the keyboard
+between turns, the mouse in the fullscreen layout.
+
 ### The report
 
 PreToolUse on `SubagentHandback` denies the hand-back while the job is not terminal or a message is
@@ -1008,6 +1054,9 @@ After a Claude Code update:
 
 **Processes.**
 
+- The board's Steer and Continue read the job, then send: a job that begins another attempt in the moment between
+  the two gets the text in that attempt, as a `companion steer` from a shell would. `steer` and `continue` take no
+  expected attempt as `cancel --attempt` does (D61).
 - `cancel` of a dead job signals the recorded worker pid without checking its start time, and its
   process-group kill can reach a nested job that kept the worker's group.
 - A tool that the backend starts as the turn is interrupted, and that leaves the server's process tree before

@@ -132,6 +132,37 @@ Phase 4, the companion's JSON, changed in place (the status line and the board r
 - The stop-time review gate reads the new JSON. `check-header` keeps its text answer.
 - The live suite's `stop` check requires the hand-back record.
 
+Phase 4, the status line:
+
+- The terminal shows a status line under the prompt while the repository has jobs to tell about:
+  `relay: 2 running · 1 dead · 3 owed`. Running counts starting and running jobs, dead counts jobs whose worker
+  died (`resume` continues them), owed counts messages a job acknowledged and has not run. The hooks module reads
+  `status --json --active` every five seconds while a count shows, every thirty while the line is cleared, and every
+  five for thirty seconds after it sees a relay start, a wake, one of its commands or a busy read. A busy read keeps
+  the line; a failed one shows `status unavailable`. Where nothing draws the session (an Agent SDK host such as T3
+  Code), it runs no process.
+- The live suite has a `status-line` check (terminal only): the line shows one running job per backend, then clears
+  after the cancel. The runner answers the folder trust dialog in two steps (Down, then Enter once "Yes" is
+  selected) and again when a key was lost, presses Enter again while the lead's pasted prompt sits unsent, and
+  refuses a run where an installed copy of the plugin loaded its hooks module beside the build under test.
+- A recovery test that took up to 219 s on a loaded machine shortens its cleanup's cancel grace.
+
+Phase 4, the board:
+
+- `/relay-board` opens a pane of the repository's jobs in the terminal: each job's backend, state, attempt, owed
+  messages and flags (`not handed back`, `relay lost`, violations), and for the selected job its model, relay,
+  messages with how the backend took each, and report. **Steer** (`Queue next turn` on Kimi) and **Continue** go by
+  the relay, as the lead's `SendMessage`, for an Agent-tool relay of this session that is alive (and a continue of
+  its ended job by its finished relay), and to the job directly otherwise (a Workflow job, another session's job, a
+  job with no relay or a silent relay). **Cancel** asks
+  again and cancels the attempt it named. The command has no colon: Claude Code refuses one in a command a module
+  registers.
+- In the terminal the pane takes keys only between the lead's turns; in the fullscreen layout
+  (`CLAUDE_CODE_NO_FLICKER=1`) it takes clicks at any time.
+- The live suite has a `board` check (terminal only): in a wide fullscreen session it steers, continues and cancels
+  Agent-tool and Workflow jobs on every backend by clicks, and in a narrow one it selects a job by keys; every action
+  is judged by the job's files.
+
 Phase 5, the live suite (development tooling; the plugin itself does not change):
 
 - `scripts/live/suite.mjs` runs live checks against the real backends, in the terminal and in T3 Code, and

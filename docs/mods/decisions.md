@@ -591,6 +591,89 @@ The parts:
 12. **Public assets later.** Screenshots of Desktop and the CLI for users, taken in a clean demo setup, when the
     owner decides.
 
+### D61. The board's Steer and Continue go by the relay only for an Agent-tool relay of this session (Phase 4 thread)
+
+One route per press, chosen from the job as `companion status <job> --json` reads it at the press, never from the
+list on screen. **By the relay** when the job's current relay binding has an agent id and is not a Workflow relay's
+(no `relay.workflowRunId`, no `stringReturn`), and the job's `claudeSessionId` is `$.session.id()` read at the press:
+for a starting or running job, only while `$.agent.list()` lists the relay as a live `relay:job` agent and it has
+called within 15 minutes (`relay.lastToolAt`, D59); for an ended or dead job, always, since D17's Continue resumes the
+finished relay that the list has dropped. The board then sends `$.session.send({ to: { agentId }, text })`, the lead's
+`SendMessage` (D17); the relay delivers it, and after a continue hands the new report back to the lead. **To the job
+directly** for every other job: a Workflow relay's (a send by id forks a running Workflow relay and reaches no job after
+it ended, D53), another session's or one from before `/clear` (not this session's relay to message), a live job whose
+relay is not listed or has been silent for more than 15 minutes, and a job with no relay. The board runs
+`companion steer|continue <job> --message <text> --json`, bounded by the companion's acknowledgement wait
+(`RELAY_JOBS_ACK_TIMEOUT_MS`, 60 s by default) plus 15 s, at most ten minutes.
+
+The read at the press and the companion's enqueue are two steps, and `steer` and `continue` take no expected attempt
+as `cancel --attempt` does (D57): a job that begins another attempt in the moment between them gets the text in that
+attempt, as a `companion steer` from a shell would. Nothing is sent twice, and the message reaches the job it was
+meant for; an attempt check in the worker for messages is left for after 3.0.
+
+"This session" is the session id. Claude Code 2.1.309's `← for agents` moves the conversation to a new id, so the
+jobs it launched before go to the job directly afterwards: nothing is sent twice and no relay loop is forked, but a
+continue of such an ended job runs an attempt nobody hands back to the lead, which the board then shows with its report.
+
+A send the relay refuses shows its reason and offers **Send to the job directly**, pressed by the person; that press
+reads the job again and sends nothing if the job moved on to another kind or attempt. A press while a send runs does
+nothing. The board never falls back by itself and never sends again after an accepted or unclear send: the guard delivers what reached the
+relay's transcript, so a second route could deliver the message twice. The pane names the route each send took, and the
+result comes from the job's `messages` on its next read (the outcome, never the send's `isDelivered` alone); a send by
+the relay reads as delivered only once a message with the sent text's preview, carried by the relay since the send,
+shows there. The board
+records no hand-back: a continue sent to the job directly runs an attempt nobody hands back, so that attempt stays
+`not handed back`, and the board shows its report. A steer sent directly to a job whose relay still waits comes back in
+that relay's block, to the Workflow script or the other session.
+
+Decided with GPT-6.1 Sol and Opus 5.5 as advisors. They rejected routing by `$.agent.list()` alone (it holds no Workflow
+agent and drops a subagent once it finishes, when Continue is wanted), sending by id to a Workflow relay (D53), no
+buttons for Workflow jobs (`companion steer` and `continue` reach them safely), and sending everything through the
+companion (an Agent-tool relay's continue would begin an attempt its lead never hears of).
+
+### D62. The board is `/relay-board`, answered at once (Phase 4 thread)
+
+Claude Code 2.1.308 refuses a colon in the name of a command a hooks module registers with `$.command.register`, so
+the board's command is `/relay-board`, not `/relay:board` as the plugin's markdown commands are named. It is
+`immediate`: it opens the pane while a turn runs. Where nothing draws (an Agent SDK host such as T3 Code, where
+`$.ui.open` answers `no-surface`), it answers one line saying the board draws in the terminal and the desktop app, and
+names `/relay:status`.
+
+### D63. The status line: what it counts, where it reads, and how often (Phase 4 thread)
+
+The hooks module pins one line for the session's repository with `$.ui.status`: `2 running · 1 dead · 3 owed`, which
+Claude Code draws as `⚠ relay: 2 running · 1 dead · 3 owed` (it puts the plugin's name before a plugin's status line,
+so the text leaves `relay: ` out). Running is `starting` and `running`, dead is `dead`, owed is the sum of the rows'
+`undeliveredCount`; a part at 0 is left out, and with all three at 0 the line is cleared. It reads
+`companion status --json --active --limit 200` in the session's directory, by argv with a 10 s timeout, one read at a
+time. More pages put a `+` on every count shown, each then a lower bound; a busy answer keeps the line; any other failure shows
+`status unavailable` until the next good answer.
+
+It reads only while `$.session.surfaces()` is not empty, so in an Agent SDK host such as T3 Code, where nothing
+draws, the status line runs no process. The live check runs in the terminal only, for the same reason.
+
+The timer ticks every five seconds. While a count shows, every tick reads. While the line is cleared, a job can only
+appear through a start, which the module sees only when a `relay:job` agent spawns in this session. So a cleared line
+reads every thirty seconds, and on every tick for thirty seconds after a relay event the module saw: a `relay:job`
+spawn, a send that woke a relay, one of its `/relay:*` commands, or a busy answer (a job's record was being written).
+An idle session then runs `node` twice a minute, not twelve times. A job a `relay:job` agent of this session starts
+shows within about five seconds of its start, if the start comes within thirty seconds of the spawn. Any other start
+shows within thirty seconds: a review, a `companion start` the model runs in Bash, a relay whose start waited on a
+permission prompt, or a start from another session or a shell. A `tool.call` hook on Bash would catch the first three,
+at a worker hop on every command of every session; the line does not take that cost.
+
+### D65. The board in the terminal: keys between turns, clicks in the fullscreen layout (Phase 4 thread)
+
+Measured in Claude Code 2.1.308 under tmux, and Claude Code's behaviour, not relay's. `/relay-board` opens the pane
+with the keyboard, its focus ring on the selected row or the first (`autoFocus`; without it the ring started on
+nothing, and a ctrl+x Tab then handed the keys back). Tab walks the ring, Enter presses, Esc returns the keys to the
+prompt, and ctrl+x Tab takes them again. The keyboard reaches the pane only while the lead has no running turn and no
+background agent: "Waiting for N background agents" counts as busy, and keys then go to the prompt. A mouse click
+reaches the pane at any time in the fullscreen layout (`CLAUDE_CODE_NO_FLICKER=1`, where the pane docks beside the
+transcript from 110 columns). On the main screen, the default, the inline pane takes no clicks. So while relays run in
+the background, which is when the board is most useful, it is driven by the mouse in the fullscreen layout, or by keys
+once the lead is idle. The docs say so; the live check drives the wide session by clicks and the narrow one by keys.
+
 ### D70. Pre-release cuts: version numbers, the cut PR and the tag (release lead)
 
 How D95's cuts are made.

@@ -285,7 +285,7 @@ The later phases, in this light:
   `completed(entries, run)`. TaskStop's `PostToolUse` hook runs `companion cancel` in a command hook, where
   `RELAY_JOBS_CANCEL_GRACE_MS` sets the wait as it does for `/relay:cancel`.
 - **Phase 4.** The board's Cancel runs the same `companion cancel` as `/relay:cancel` and should take its timeout
-  the same way (twice the grace and 40 s). `/relay:board` is a command the module registers itself, so it can be
+  the same way (twice the grace and 40 s). `/relay:board` (it became `/relay-board`, D62) is a command the module registers itself, so it can be
   `immediate` in the terminal; its live check can use the commands phase (type `/relay:board` after the marker),
   but a command that opens a pane may record no `local_command` answer, which the phase waits for, so Phase 4 must
   check what the transcript holds for it. The status line and the board read the companion's JSON, not the table.
@@ -461,16 +461,17 @@ The later work, in this light:
 
 ## Phase 4: the terminal and Desktop board (separate PRs)
 
-1. **Status line.** `$.ui.status` shows "2 running · 1 owed" for this repository. The module polls only while
-   `$.session.surfaces()` is non-empty, with one read in flight.
-2. **Board pane** `/relay:board`. It lists the jobs, their backend, state, attempt, owed messages and hand-back
-   state, and shows the selected job's report in a `Markdown` element. Its actions are:
+1. **Status line** (done, below). `$.ui.status` shows "2 running · 1 owed" for this repository. The module polls
+   only while `$.session.surfaces()` is non-empty, with one read in flight.
+2. **Board pane** (done, below; `/relay-board`, D62). It lists the jobs, their backend, state, attempt, owed messages
+   and hand-back state, and shows the selected job's report in a `Markdown` element. Its actions are:
    - **Steer** and **Continue** call `$.session.send({ to: { agentId } })` with the agent id the job records,
      the same path as the lead's `SendMessage`. A refused send shows its `reason`. `$.agent.list()` does not
      decide whether they are offered: it holds no Workflow agent. The label follows the backend:
      "Queue next turn" for Kimi. This holds for a relay the Agent tool started. For a Workflow job, a send by id
      forks the relay or reaches nothing ([After Phase 6](#after-phase-6-what-held-and-what-changed), D53), and
-     Phase 4 decides what the buttons do.
+     Phase 4 decides what the buttons do. As built (D61), the relay route is for this session's Agent-tool relay
+     while it lives, and for a continue of its ended job; every other job is sent to directly.
    - **Cancel** runs the same `companion cancel` as `/relay:cancel`, and names the job and attempt again when
      pressed.
 3. **Companion JSON, changed in place** (done, below). The stop gate, `setup.md` and the jobs skill change in the same PR:
@@ -557,6 +558,85 @@ The later PRs, in this light:
   the decision, and its live check judges both routes by the job's ledger and attempts.
 - **The release.** The CHANGELOG's JSON lines name the breaking parts (errors on stdout, slim rows, `backend` always).
   The `stop` check now requires the hand-back record; `run all` covers it.
+
+### The status line (done, on `release/3.0`)
+
+What shipped (D63): `2 running · 1 dead · 3 owed` for the session's repository, from `status --json --active
+--limit 200`, cleared when all three are 0, `+` on every count when more pages exist, kept on a busy answer,
+`status unavailable` on any other failure. A five-second timer from `session.start`, one per load of the module; a
+tick reads only while a surface draws, one read at a time; a cleared line reads every thirty seconds, and every five
+for thirty seconds after a relay event the module saw or a busy answer. Two review rounds by GPT-6.1 Sol and Opus 5.5
+and their fixes; the `status-line` live check in the terminal, whose runner now answers the trust dialog in two steps,
+presses Enter again on an unsent paste, and refuses an installed copy's hooks module beside the build.
+
+Live results (the Fedora machine, Claude Code 2.1.309, Sonnet 5.5 lead, all four backends, on f6205e4; records in
+`docs/live/records/`): the line read `4 running` 29.7 s after the check started one job per backend with the
+companion, a start the module does not see, so the cleared line's thirty-second read found them (before D63 it took
+4 s). It cleared 9.5 s after the cancel began, timed from the first capture without it.
+
+### After the status line: what held and what changed
+
+Assumptions that held:
+
+- `surfaces()` keeps the poll out of hosts that draw nothing, and one timer per load survives a reload: the fresh copy
+  gets `session.start` again after the old copy's timers end.
+- The `--active` slim rows carry all the line needs, and read in well under a second.
+
+What changed, and where:
+
+- **Claude Code names the plugin before its status line.** It draws `⚠ relay: <text>`, so the text leaves `relay: `
+  out, and the live check reads the line pinned under the prompt, not any `relay:` text on the screen.
+- **Dead jobs count.** A dead job is one `resume` continues, so the line shows it beside running and owed.
+- **A cleared line reads less often** (D63). A read every five seconds runs `node` twelve times a minute in every
+  session with nothing to show. A `relay:job` spawn in this session is an event the module sees, so it reads at once
+  after one, and every thirty seconds otherwise; a review or a start the model runs in Bash shows within thirty, since a
+  hook on every Bash call would cost every session more than the line saves.
+- **The live runner answers the folder trust dialog again** when a key was lost while the dialog drew, selecting
+  "Yes" by what the screen shows, never by a count of keys.
+
+For the board: it reads the same JSON, and its pane is drawn by the same surfaces, so its live check is terminal only
+too, with the Desktop pass on the M3 (D54).
+
+### The board (done, on `release/3.0`)
+
+What shipped (D61, D62, D65): `/relay-board` opens a pane of the repository's jobs, 20 a page, `More` up to 200, then
+`Older` and `Newest`, with their flags; the selected job's model, relay, messages (each with its route and outcome) and
+report. Steer and Continue choose one route from the job as read at the press: by the relay, as the lead's
+`SendMessage`, for a live Agent-tool relay of this session (an ended job's continue included), and to the job directly
+with `companion steer` or `continue` for every other job. Cancel asks again and cancels the attempt it named. The pane
+draws from state; one read at a time, every three seconds while it is open, placed and drawn. A review round by GPT-6.1
+Sol and Opus 5.5 and its fixes; the `board` live check in the terminal.
+
+Live results (the Fedora machine, Claude Code 2.1.309, Sonnet 5.5 lead, all four backends, on 79d3c98; records in
+`docs/live/records/`): in a 200-column fullscreen session, by clicks while eight relays ran, a steer of each Agent-tool
+job reached it by the relay in 3.3–4.1 s and of each Workflow job directly in 0.2–0.3 s; each continue started a new
+attempt in 1.9–2.3 s (by the relay, then handed back to the lead) and 0.2–0.3 s (directly); each Cancel stopped the
+attempt it named in 1.0–3.5 s. A 100-column main-screen session listed every job and showed one by keys. Grok takes a
+steer into its turn only once the running command ends, so the check bounds a steer's delivery, not the backend's
+taking it, as the Phase 1 steer checks do; its analysis was re-run with that rule after the run.
+
+### After the board: what held and what changed
+
+Assumptions that held:
+
+- The job's files carry everything the board shows and routes by: the launching session (`launchedBy`), the relay's
+  binding and last call, each message's outcome, the attempts.
+- `cancel --attempt` (D57) was enough for a Cancel that cannot stop a newer attempt.
+- A Workflow job steered and continued directly (`companion steer` and `continue`) is reached safely; its relay still
+  returns the steered report to the script.
+
+What changed, and where:
+
+- **The command has no colon** (D62). Claude Code refuses one in a command a module registers.
+- **Routing reads the job at the press** (D61). A route chosen from the list on screen could send by a relay the job
+  had left; the press reads the job and the session id then. A live job also needs its relay in `$.agent.list()`, which
+  the plan had rejected for every job: it is exact for live Agent-tool agents, and it drops finished ones, so it decides
+  nothing for Continue.
+- **The terminal's keyboard and mouse decide when the board works** (D65). Keys reach the pane only between the
+  lead's turns; clicks reach it at any time in the fullscreen layout, and never on the main screen's inline pane. The
+  pane opens with the keys, its ring on a row (`autoFocus`).
+- **Redraws cost input.** A pane drawn again every three seconds lost clicks and Enters in the live check; the board now
+  writes state only when what it shows changed.
 
 ## Phase 5: a scripted live suite
 
