@@ -221,8 +221,18 @@ export function readMachineDefault({ home = admissionHome(), platform = process.
         if (r.error || r.status !== 0) throw new Error(`${path.basename(bin)} failed`);
         return String(r.stdout ?? "");
       };
-      availableBytes = read("memory", () => parseVmStat(command("/usr/bin/vm_stat", [])));
-      source = "vm_stat free+inactive"; quality = "heuristic";
+      availableBytes = read("memory", () => {
+        const value = command("/usr/sbin/sysctl", ["-n", "kern.memorystatus_level"]).trim();
+        if (!/^\d+$/.test(value) || Number(value) > 100) throw new Error("invalid memory percentage");
+        if (totalBytes === null) throw new Error("total memory unavailable");
+        return totalBytes * Number(value) / 100;
+      });
+      source = "kern.memorystatus_level"; quality = "estimate";
+      if (availableBytes === null) {
+        availableBytes = read("memory fallback", () => parseVmStat(command("/usr/bin/vm_stat", [])));
+        source = "vm_stat free+inactive fallback"; quality = "heuristic";
+        notes.push(availableBytes === null ? "vm_stat free+inactive fallback also failed" : "using vm_stat free+inactive fallback");
+      }
       pressure = read("memory pressure", () => {
         const value = command("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]).trim();
         if (!/^[124]$/.test(value) && !/^[3567]$/.test(value)) throw new Error("invalid pressure bits");

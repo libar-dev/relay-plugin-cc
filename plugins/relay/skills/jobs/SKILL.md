@@ -256,7 +256,7 @@ replacement backends. Critical host memory or critical pressure holds next turns
 with the reason shown in their queued block.
 The very-heavy-model quota is 2 total (Astra, Kimi K3, identified max/ultra effort), independent
 of memory. Eligible backends with fewer active seats go first. Unknown defaults remain a quota
-coverage limit. Linux uses MemAvailable; macOS uses vm_stat free+inactive and separate pressure.
+coverage limit. Linux uses MemAvailable; macOS uses its free percentage (kern.memorystatus_level) times total memory, falling back to vm_stat free+inactive, and separate pressure.
 
 Memory used later by running tools/tests, native Claude agents, other harness sessions, other
 users and native Windows are outside admission control. Windows visibly bypasses admission;

@@ -45,8 +45,9 @@ Pre-release cuts:
     - A backend pauses after its provider refuses work for a usage limit, rate limit or concurrency limit.
 
     A job that has to wait shows `queued` with the reason. Running turns are never stopped.
-    `RELAY_ADMISSION=off` or `/relay:setup --admission off` turns the guard off. Kimi jobs retry each step at most
-    3 times unless you set `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP`. Restart Claude sessions after upgrading: a session
+    `RELAY_ADMISSION=off` or `/relay:setup --admission off` turns the guard off. Only while the guard is on,
+    Kimi defaults to 3 total attempts per step unless you set `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP`; this default
+    does not apply with the guard off or on native Windows. Restart Claude sessions after upgrading: a session
     still on pre.2 doesn't know the `queued` state.
   - **The status line and the board** (Phase 4). One line under the prompt counts the repository's running and
     dead jobs and owed messages, and the board lists jobs with their actions.
@@ -204,19 +205,23 @@ Phase 6, an investigation (the plugin does not change):
 
 Load guard:
 
+- `3.0.0-dev.16`: on macOS, available bytes now use the `kern.memorystatus_level` percentage of total memory,
+  so reclaimable memory counts toward admission. `vm_stat` free plus inactive pages remains a labelled fallback
+  when that reading fails. The separate pressure veto, reserve, holds, pacing and quota are unchanged.
 - Before a job starts, and before each later turn, relay checks the machine it runs on. It covers every session
   and jobs home of the user. The README's "Load guard" section has the rules and their defaults.
   - Memory: a job starts only while enough memory stays free after it starts. The test is
     `available − recent starts' holds − this job's hold ≥ max(2 GiB, 15% of RAM)`, where a hold is 0.5 GiB for
     Codex or Grok and 1 GiB for Kimi, ZCode or an unknown backend, for 30 s. Finite Linux cgroup limits are tested
-    separately. On macOS, available memory is `vm_stat` free plus inactive pages, and a pressure warning holds new
-    jobs.
+    separately. On macOS, available memory is the `kern.memorystatus_level` percentage of total memory, with
+    `vm_stat` free plus inactive pages as a fallback, and a pressure warning holds new jobs.
   - Pacing: one start or turn every 5 s across all sessions. There is no fixed job ceiling on a healthy machine.
     When the 5-minute load is high or memory can't be read, new jobs stop at `min(16, max(2, CPUs − 2))`.
   - Quota: at most 2 very heavy models (Astra, Kimi K3, or any `max`/`ultra` effort) run at once. This is a quota
     limit, not a memory one.
   - Provider refusals: a usage limit, rate limit or concurrency refusal pauses that backend. After the pause, one
-    probe job goes first. Kimi jobs retry a step at most 3 times unless `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP` is set.
+    probe job goes first. Only while the guard is on, Kimi defaults to 3 total attempts per step unless
+    `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP` is set; this default does not apply with the guard off or on native Windows.
 - A job that waits shows `queued` with its reason in status, `--json`, the status line and the board, and can be
   cancelled. High load and a macOS pressure warning hold only new jobs. Critical memory and critical macOS
   pressure also hold next turns. A turn that is running is never stopped. Foreground reviews pass the same check.

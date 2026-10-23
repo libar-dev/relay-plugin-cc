@@ -199,20 +199,32 @@ test("sensor and guard failures degrade visibly; corrupt slots do not crash", t 
   assert.equal(bypass.record.state, "bypassed");
 });
 
-test("macOS uses free+inactive, actual page size, pressure bits and cached zero", t => {
+test("macOS uses its memory percentage despite low free+inactive, pressure bits and cached zero", t => {
   const s = setup(t), total = 40 * GiB;
   const sensor = { totalmem: () => total, availableParallelism: () => 12, loadavg: () => [0, 0, 0], freemem() { throw new Error("must not read raw free pages"); } };
-  let free = 123, inactive = 456, pressure = 1, calls = 0;
+  let level = 65, pressure = 1, calls = 0, vmCalls = 0;
   const sysctl = (bin, args, options) => {
     calls++;
     assert.equal(options.timeout, 1000); assert.equal(options.maxBuffer, 64 * 1024);
-    if (bin === "/usr/bin/vm_stat") return { status: 0, stdout: `Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: ${free}.\nPages inactive: ${inactive}.\nPages speculative: 999999.\n` };
+    if (bin === "/usr/bin/vm_stat") {
+      vmCalls++;
+      return { status: 0, stdout: "page size of 16384 bytes\nPages free: 123.\nPages inactive: 456.\n" };
+    }
+    assert.equal(bin, "/usr/sbin/sysctl");
+    if (args[1] === "kern.memorystatus_level") return { status: 0, stdout: `${level}\n` };
     assert.deepEqual(args, ["-n", "kern.memorystatus_vm_pressure_level"]);
     return { status: 0, stdout: String(pressure) };
   };
   const read = now => readMachineDefault({ home: s.home, env: {}, platform: "darwin", sensor, now, sysctl });
-  assert.equal(read(1).availableBytes, (free + inactive) * 16384);
-  free = inactive = 0; pressure = 2;
+  const healthy = read(1);
+  assert.equal(healthy.availableBytes, total * 0.65);
+  assert.equal(healthy.source, "kern.memorystatus_level");
+  assert.equal(healthy.quality, "estimate");
+  assert.deepEqual(healthy.notes, []);
+  assert.equal(machineState(healthy, 2 * GiB).state, "healthy");
+  assert.equal(admit(s.ctx(), { ...s.deps, readMachine: () => healthy }).admit, true);
+  assert.equal(vmCalls, 0, "successful sysctl avoids the fallback probe");
+  level = 0; pressure = 2;
   const zero = read(D.sensorCacheMs + 2);
   assert.equal(zero.availableBytes, 0);
   const count = calls; assert.equal(read(D.sensorCacheMs + 3).availableBytes, 0); assert.equal(calls, count);
@@ -220,6 +232,27 @@ test("macOS uses free+inactive, actual page size, pressure bits and cached zero"
   assert.equal(machineState({ ...zero, availableBytes: null, load5: null, pressure: 4 }).state, "critical");
   const failed = readMachineDefault({ home: s.home, env: {}, platform: "darwin", sensor, now: D.sensorCacheMs * 2 + 3, sysctl: () => ({ status: 1 }) });
   assert.equal(failed.availableBytes, null); assert.match(failed.notes.join(" "), /memory not read/);
+});
+
+for (const level of [null, "101", "-1", "65junk", ""]) test(`macOS falls back to labelled free+inactive when memory percentage fails: ${JSON.stringify(level)}`, t => {
+  const s = setup(t), total = 40 * GiB;
+  const sensor = { totalmem: () => total, availableParallelism: () => 12, loadavg: () => [0, 0, 0] };
+  const sysctl = (bin, args, options) => {
+    assert.equal(options.timeout, 1000); assert.equal(options.maxBuffer, 64 * 1024);
+    if (bin === "/usr/bin/vm_stat") return { status: 0, stdout: "page size of 16384 bytes\nPages free: 123.\nPages inactive: 456.\nPages speculative: 999999.\n" };
+    if (args[1] === "kern.memorystatus_level") return level === null ? { status: 1 } : { status: 0, stdout: level };
+    assert.deepEqual(args, ["-n", "kern.memorystatus_vm_pressure_level"]);
+    return { status: 0, stdout: "2" };
+  };
+  const reading = readMachineDefault({ home: s.home, env: {}, platform: "darwin", sensor, now: 1, sysctl });
+  assert.equal(reading.availableBytes, (123 + 456) * 16384);
+  assert.equal(reading.source, "vm_stat free+inactive fallback");
+  assert.equal(reading.quality, "heuristic");
+  assert.match(reading.notes.join(" "), /using vm_stat free\+inactive fallback/);
+  assert.equal(reading.pressure, 2, "pressure is still probed when the memory percentage fails");
+  const cached = readMachineDefault({ home: s.home, env: {}, platform: "darwin", sensor, now: 2, sysctl() { throw new Error("must use cache"); } });
+  assert.deepEqual(cached.notes, reading.notes);
+  assert.equal(cached.availableBytes, reading.availableBytes);
 });
 
 test("domain ignores custom jobs homes; spawn reservations bound waiting workers and critical starts", t => {
@@ -456,7 +489,7 @@ for (const signal of [{ availableBytes: 0 }, { pressure: 4, load5: 40.9 }, { pre
 test("busy sensor refresh keeps recent low-memory samples or waits without unknown-byte admission", t => {
   const s = setup(t);
   const sensor = { totalmem: () => 64 * GiB, availableParallelism: () => 10, loadavg: () => [0, 0, 0] };
-  const sysctl = bin => ({ status: 0, stdout: bin.endsWith("vm_stat") ? "page size of 16384 bytes\nPages free: 0.\nPages inactive: 0.\n" : "4" });
+  const sysctl = (bin, args) => ({ status: 0, stdout: args[1] === "kern.memorystatus_level" ? "0" : "4" });
   const first = readMachineDefault({ home: s.home, env: {}, platform: "darwin", sensor, sysctl, now: 1 });
   assert.equal(first.availableBytes, 0);
   const owner = path.join(s.home, "machine-darwin.lock");
@@ -529,7 +562,7 @@ test("spawn retries a busy sensor refresh and launches without writing queued", 
   acquireOwnership(file, { pid: process.pid, startTime: null }); t.after(() => releaseOwnership(file));
   const sleeps = [], writes = [];
   const sensor = { totalmem: () => 64 * GiB, availableParallelism: () => 10, loadavg: () => [0, 0, 0] };
-  const sysctl = bin => ({ status: 0, stdout: bin.endsWith("vm_stat") ? "page size of 16384 bytes\nPages free: 2000000.\nPages inactive: 0.\n" : "1" });
+  const sysctl = (bin, args) => ({ status: 0, stdout: args[1] === "kern.memorystatus_level" ? "65" : "1" });
   const rename = fs.renameSync;
   t.mock.method(fs, "renameSync", (from, to) => {
     if (to === path.join(c.jobDir, "job.json")) writes.push(JSON.parse(fs.readFileSync(from, "utf8")).state);
