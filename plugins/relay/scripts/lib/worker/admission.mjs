@@ -68,6 +68,9 @@ export function modelClass({ backend = "codex", model, effort } = {}, overrides 
 // Admission alone uses this bounded batch cache, including ownership and legacy reads.
 const processCaches = new Map();
 export function holderAlive(identity, { platform = process.platform, now = Date.now(), ps = spawnSync } = {}) {
+  // Windows has no ps identity reading. Unknown holders stay counted; no
+  // unsupported command or negative identity inference can free their slots.
+  if (platform === "win32") return Number.isInteger(identity?.pid) && identity.pid > 0;
   if (platform === "linux") return isProcessIdentityAlive({ pid: identity?.pid, startTime: identity?.startTime ?? identity?.processStart });
   if (!identity?.pid || !isProcessAlive(identity.pid)) return false;
   let cache = processCaches.get(platform);
@@ -114,7 +117,7 @@ export function readMachineDefault({ home = admissionHome(), platform = process.
     if (!fixture) throw new Error("invalid admission readings");
     return { notes: [], ...fixture };
   }
-  const notes = [];
+  const notes = platform === "win32" ? ["process identity not read (not available on this system); slots retained"] : [];
   const read = (name, fn, positiveOnly = false) => {
     try { const n = fn(); if (!Number.isFinite(n) || n < 0 || (positiveOnly && n === 0)) throw new Error("invalid reading"); return n; }
     catch (e) { notes.push(`${name} not read (${e.message})`); return null; }

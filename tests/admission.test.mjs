@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULTS as D, WEIGHTS, admissionHome, guardSettings, modelClass, machineState, readMachineDefault, admit, releaseSlot, spawnWithAdmission } from "../plugins/relay/scripts/lib/worker/admission.mjs";
+import { DEFAULTS as D, WEIGHTS, admissionHome, guardSettings, modelClass, machineState, readMachineDefault, holderAlive, admit, releaseSlot, spawnWithAdmission } from "../plugins/relay/scripts/lib/worker/admission.mjs";
 import { acquireOwnership, releaseOwnership } from "../plugins/relay/scripts/lib/util/ownership.mjs";
 import { writeJob, readJob, writeJsonAtomic } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 const GiB = 2 ** 30;
@@ -208,4 +208,24 @@ test("fifty synthetic mixed submissions obey caps and spacing until all finish",
     s.tick(1000);
   }
   assert.equal(admitted, 50);
+});
+
+test("win32 skips unavailable load and process identities, uses free memory and retains unknown slots", t => {
+  const s = setup(t);
+  let loadReads = 0, psCalls = 0;
+  const sensor = { totalmem: () => 128 * GiB, availableParallelism: () => 64,
+    freemem: () => 100 * GiB, loadavg() { loadReads++; return [0, 0, 0]; } };
+  const machine = readMachineDefault({ home: s.home, env: {}, platform: "win32", sensor });
+  assert.equal(machine.availableBytes, sensor.freemem());
+  assert.equal(machine.load5, null);
+  assert.match(machine.notes.join(" "), /load not read/);
+  assert.equal(loadReads, 0);
+  const alive = identity => holderAlive(identity, { platform: "win32", ps() { psCalls++; throw new Error("ps unavailable"); } });
+  const deps = { ...s.deps, platform: "win32", isAlive: alive, readMachine: () => machine };
+  const first = s.ctx(); assert.equal(admit(first, deps).admit, true);
+  s.live.delete(first.me.pid); s.tick();
+  assert.equal(admit(s.ctx(), deps).admit, true);
+  assert.equal(fs.existsSync(path.join(s.home, "slots", `${first.jobId}.json`)), true);
+  assert.equal(alive({ pid: 2147483647, startTime: "unreadable" }), true);
+  assert.equal(psCalls, 0);
 });
