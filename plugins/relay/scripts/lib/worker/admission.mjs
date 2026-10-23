@@ -231,7 +231,7 @@ export function readMachineDefault({ home = admissionHome(), platform = process.
       if (availableBytes === null) {
         availableBytes = read("memory fallback", () => parseVmStat(command("/usr/bin/vm_stat", [])));
         source = "vm_stat free+inactive fallback"; quality = "heuristic";
-        notes.push("using vm_stat free+inactive fallback");
+        notes.push(availableBytes === null ? "vm_stat free+inactive fallback also failed" : "using vm_stat free+inactive fallback");
       }
       pressure = read("memory pressure", () => {
         const value = command("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]).trim();
