@@ -123,6 +123,20 @@ Phase 6, an investigation (the plugin does not change):
   Kimi allow for a job that sends a message to the agent that started it, or to a peer, and how such a message
   and its reply would travel. Messages from a job are not part of 3.0.
 
+Fixes from the pre-releases:
+
+- When `/relay:status`, `/relay:result`, `/relay:cancel` or `/relay:transfer` fails, the shell command its answer
+  names single-quotes the plugin's path and what you typed, one shell word each, so it passes the companion the
+  same arguments as the hooks module's own call. A job id or `--source` path with backticks, `$(...)` or quotes now
+  runs nothing when the line is pasted into a shell; with a line break in what you typed, the command is shown in a
+  fenced block, which Markdown leaves as written.
+- `/relay:setup` asks Grok's `grok models` a second time, a second apart, before it says a home is signed out: a
+  signed-in home once answered "You are not authenticated" and then signed in.
+- `/relay:setup` shows Kimi as `steer (next turn)`, not as having no steering: a message to a running Kimi job is
+  taken as its next turn. The command tells Claude so, and `companion setup`'s text says it in Kimi's `can:` line.
+  The JSON's `can.steer` is unchanged, and still means steering the running turn.
+- `/relay:status`'s argument hint names `--workflow <run>`.
+
 Docs:
 
 - [docs/desktop.md](../../docs/desktop.md): relay in the Code tab of the Claude desktop app. It covers what runs
