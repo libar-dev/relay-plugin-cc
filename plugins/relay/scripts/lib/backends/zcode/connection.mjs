@@ -501,7 +501,7 @@ class ZcodeConnection {
       for (let resend = 0; ; resend += 1) {
         // Each discarded answer is immediate, and suffixes an earlier process used
         // are unknown here, so the bound is generous.
-        if (z.cancelRequested) return { turnId, turnStatus: "interrupted", finalMessage: "", ...receipts() };
+        if (z.cancelRequested || options.isCancelled?.()) return { turnId, turnStatus: "interrupted", finalMessage: "", ...receipts() };
         z.outstanding.add(commandId);
         const ack = await sendText(this, commandId, options.prompt, "startNow");
         if (ack.status === "accepted") break;

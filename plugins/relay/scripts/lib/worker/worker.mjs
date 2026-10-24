@@ -766,6 +766,7 @@ async function runWorkerRound(jobDir, options, held) {
               try {
                 let providerAnswered = false;
                 const running = connection.run({
+                  isCancelled: () => cancelRequested,
                   onProviderResponse() {
                     if (!providerAnswered) { providerAnswered = true; completeProbe(); }
                   },

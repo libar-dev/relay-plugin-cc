@@ -381,7 +381,7 @@ These pauses gate new starts and later turns on other jobs while a running turn 
 | Backend | Paused on | When |
 |---|---|---|
 | Codex | usage or rate | at first retry, including subagent signals |
-| Grok | weekly credits or rate | at first retry, unverified against a live quota fixture |
+| Grok | weekly credits or rate | at first retry, unverified with a live exhausted account |
 | Kimi | usage, rate or concurrency | at first retry |
 | ZCode | usage or rate | when the turn fails; runtime retries are not exposed |
 

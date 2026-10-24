@@ -596,22 +596,51 @@ for (const [name, error] of [["codex", { codexErrorInfo: { usageLimitExceeded: {
   });
 }
 
-test("two unanswered watchdog pings close the server and use the one-recovery path", async t => {
-  const { TransportTimeout } = await import("../plugins/relay/scripts/lib/backends/transport/stdio-rpc.mjs");
+test("two unanswered watchdog pings bound a stubborn server's close and recover exactly once", async t => {
+  const { writeExecutable } = await import("./support/helpers.mjs");
+  const { installFakeCodex } = await import("./fakes/codex.mjs");
   const s = seed(t); s.unblock();
-  let now = 0, connections = 0;
+  // A real RPC peer: its first ping answers, later pings and the turn stay silent. EOF
+  // and TERM leave it running, so recovery must wait for the transport's bounded KILL.
+  writeExecutable(path.join(s.ctx.bin, "codex"), `#!/usr/bin/env node
+const readline = require('node:readline');
+process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);
+let pings = 0;
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const m = JSON.parse(line); if (m.id == null) return;
+  const reply = result => process.stdout.write(JSON.stringify({ id: m.id, result }) + '\\n');
+  if (m.method === 'account/read') { if (++pings === 1) reply({}); return; }
+  if (m.method === 'turn/start') { reply({ turn: { id: 'silent', status: 'inProgress', items: [] } }); return; }
+  if (m.method === 'thread/start' || m.method === 'thread/resume') { reply({ thread: { id: 'thr_silent' } }); return; }
+  reply({});
+});
+`);
+  const setTimer = globalThis.setTimeout;
+  let pingDeadlines = 0;
+  let deadlineTimer;
+  let now = 0, connections = 0, closeMs;
   s.options.now = () => now; s.options.env.RELAY_JOBS_HEARTBEAT_MS = "10";
   const backend = backendNamed("codex"), connect = backend.connect;
   t.mock.method(backend, "connect", async (...args) => {
     const connection = await connect(...args); connections++;
     if (connections === 1) {
-      let pings = 0;
-      t.mock.method(connection, "ping", async () => { if (pings++ > 0) throw new TransportTimeout("codex", "account/read", 30000); });
+      const run = connection.run.bind(connection), close = connection.close.bind(connection);
       t.mock.method(connection, "run", async turn => {
-        turn.onPending(); turn.onTurnId("silent"); now = 10 * 60000;
+        assert.equal(readJob(s.dir).backendLiveness.enabled, true, "the real open-time ping answered");
+        deadlineTimer = t.mock.method(globalThis, "setTimeout", (callback, ms, ...args) => {
+          if (ms === 30000) { pingDeadlines++; return setTimer(callback, 20, ...args); }
+          return setTimer(callback, ms, ...args);
+        });
+        const running = run(turn); now = 10 * 60000;
         await waitFor(() => readJob(s.dir).backendLiveness.misses === 1);
         now += 5 * 60000;
-        return new Promise(() => {});
+        return running;
+      });
+      t.mock.method(connection, "close", async () => {
+        if (closeMs != null) return close();
+        const started = Date.now(); await close(); closeMs = Date.now() - started;
+        deadlineTimer.mock.restore();
+        installFakeCodex(s.ctx.bin, "job", { turnMs: 30 });
       });
     }
     return connection;
@@ -621,7 +650,9 @@ test("two unanswered watchdog pings close the server and use the one-recovery pa
   assert.equal(job.state, "completed"); assert.equal(connections, 2);
   assert.equal(job.automaticResumes.length, 1); assert.equal(job.automaticResumes[0].reason, "app-server");
   assert.match(job.attempts[0].transportErrors[0], /codex stopped answering \(account\/read, 30 s\)/);
-  assert.ok(job.attempts[0].servers[0].endedAt);
+  assert.equal(job.attempts[0].servers[0].signal, "SIGKILL");
+  assert.ok(closeMs >= 4500 && closeMs < 12000, `bounded close took ${closeMs} ms`);
+  assert.equal(pingDeadlines, 2, "both missed pings use the real 30-second request deadline");
 });
 
 test("initialize with no reply fails the job at its control deadline", async t => {
@@ -707,4 +738,55 @@ test("a worker leaves a silent 25-minute sleep alive while the backend answers p
   await runWorker(s.dir, s.options);
   assert.equal(readJob(s.dir).state, "completed"); assert.equal(turns, 1); assert.equal(pings, 5);
   assert.equal(readJob(s.dir).automaticResumes?.length ?? 0, 0);
+});
+
+
+test("an inbox cancel claimed during ZCode's initial acknowledgement prevents discarded-input resend", async t => {
+  const { installFakeZcode } = await import("./fakes/zcode.mjs");
+  const s = seed(t); s.unblock(); s.ctx.env.ZCODE_BINARY = installFakeZcode(s.ctx.bin).binary;
+  writeJob(s.dir, { ...readJob(s.dir), request: buildLaunchRequest({ backend: "zcode", model: "default", effort: "default", cd: s.ctx.work }, { baseDir: s.ctx.work, env: s.ctx.env }) });
+  const backend = backendNamed("zcode"), connect = backend.connect;
+  let resolveAck, params, sends = 0;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args), request = connection.client.request.bind(connection.client);
+    t.mock.method(connection.client, "request", (method, input, options) => {
+      if (method === "v4/command" && input.type === "sendText") {
+        sends++; params = input;
+        if (sends === 1) return new Promise(resolve => { resolveAck = resolve; });
+      }
+      return request(method, input, options);
+    });
+    return connection;
+  });
+  const running = runWorker(s.dir, s.options);
+  await waitFor(() => resolveAck);
+  const cancel = postInboxMessage(s.dir, { kind: "cancel" });
+  await waitFor(() => fs.existsSync(path.join(s.dir, "inbox", "claimed", `${cancel.id}.json`)));
+  resolveAck({ commandId: params.commandId, status: "failed", reasonCode: "fault.command.inputDiscardedOnRestart" });
+  await running;
+  assert.equal(readJob(s.dir).state, "cancelled"); assert.equal(sends, 1);
+  assert.equal(readOutcome(s.dir, cancel.id).action, "cancelled");
+});
+
+test("an in-turn retry preserves probe ownership until a later provider answer restores service", async t => {
+  const { recordRefusal, admit, listPauses } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const s = seed(t); s.unblock();
+  const home = s.ctx.env.RELAY_ADMISSION_HOME, deps = { ...s.options.admission, env: s.ctx.env };
+  recordRefusal(home, "codex", { kind: "rate" }, "previous", deps); s.tick(D.ratePauseMs);
+  const backend = backendNamed("codex"), connect = backend.connect;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args);
+    t.mock.method(connection, "run", async turn => {
+      turn.onPending(); turn.onTurnId("probe-retrying");
+      const file = path.join(home, "pauses", "codex.json"), before = JSON.parse(fs.readFileSync(file)).probe;
+      turn.onProviderLimit({ codexErrorInfo: { rateLimitExceeded: {} }, message: "Rate limit, retrying" });
+      assert.deepEqual(JSON.parse(fs.readFileSync(file)).probe, before);
+      s.tick(D.maxRatePauseMs + D.probeMs);
+      assert.equal(admit({ home, jobId: "second-probe", request: readJob(s.dir).request, me: readJob(s.dir).worker }, deps).waitKind, "probe");
+      turn.onProviderResponse(); assert.equal(listPauses(s.ctx.env, deps).length, 0);
+      return { turnStatus: "completed", finalMessage: "Recovered" };
+    });
+    return connection;
+  });
+  await runWorker(s.dir, s.options); assert.equal(readJob(s.dir).state, "completed");
 });

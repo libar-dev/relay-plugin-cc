@@ -250,6 +250,8 @@ export interface InboxMessage {
 }
 
 export interface TurnInput {
+  /** Cancellation the worker has claimed, including while an initial acknowledgement waits. */
+  isCancelled?(): boolean;
   /** Evidence of model output, never a local acknowledgement or replay. */
   onProviderResponse?(): void;
   /** A provider refusal while the harness continues its own retries. */

@@ -69,7 +69,7 @@ Backend loss and job completion stop owned processes with TERM/CONT, then KILL, 
 slot release. An unresolved survivor prevents reconnect; at job end it preserves the terminal state,
 records `cleanup: unresolved`, and keeps its seat. The backend close itself
 sends TERM after 50 ms, KILL at 5 seconds and returns within 10 seconds, recording `closeTimedOut`
-if process end remains unobserved. Control RPC and turn deadlines are unchanged.
+if process end remains unobserved. Control-request deadlines and the silent-turn watchdog are described below.
 
 Heartbeats write `treeBytes` to the job and running slot: Linux scope `memory.current`, otherwise
 summed member RSS. Active-job text shows this live measurement; terminal result text omits it so
@@ -145,8 +145,9 @@ disables the watchdog for that connection with an event note, keeping control de
 `checking the backend`, or `watchdog disabled`, and name the ping method.
 
 After a pause, one job probes the provider; the pause ends only when that job gets an actual answer
-from the provider, not when it merely starts. A live probe retains its claim through slow startup and
-silent turns. A turn ending without model evidence releases the claim without clearing the pause.
+from the provider, not when it merely starts. A live probe retains its claim through slow startup,
+silent turns, and provider retries. A turn ending without model evidence releases the claim without
+clearing the pause.
 A start grant older than 10 seconds is checked again before sending. Codex and Grok retry notifications
 and Kimi's `turn.step.retrying` record pause new starts immediately while the active attempt retries.
 ZCode exposes no runtime retry signal, so its coverage is terminal failures only. Pauses follow the

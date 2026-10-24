@@ -690,7 +690,9 @@ function applyRefusal(old, refusal, jobId, now, backend, account) {
   const keepOld = Number.isFinite(kept) && kept > fresh;
   const until = keepOld ? kept : fresh;
   const resetSource = keepOld && !old.damaged ? old.resetSource ?? "default" : provider ? "provider" : "default";
-  return { v: 1, backend, account, ...refusal, since: same ? old.since : iso(now), updatedAt: iso(now), until: iso(until), strikes, resetSource, lastJobId: jobId, probe: null };
+  // pauseRead already discarded a dead owner. A refusal never releases a live probe;
+  // its owner keeps the same generation through inner retries until evidence or release.
+  return { v: 1, backend, account, ...refusal, since: same ? old.since : iso(now), updatedAt: iso(now), until: iso(until), strikes, resetSource, lastJobId: jobId, probe: old?.probe ?? null };
 }
 function foldPending(home, backend, account, deps) {
   const dir = path.join(home, "pauses", "pending"), now = deps.now();
@@ -751,6 +753,9 @@ export function probeSucceeded(home, backend, jobId, injected = {}, generation =
     if (!admissionEnabled(deps.env, undefined, deps.platform)) return false;
     const account = jobAccount(home, jobId, deps);
     return retryLock(home, deps, () => {
+      // Apply older refusals before the answer, so a deferred retry cannot resurrect the
+      // pause after this fenced owner succeeds. Damaged pending records still hold.
+      if (foldPending(home, backend, account, deps)) return false;
       const p = pauseRead(home, backend, deps, false, true, account);
       if (!p?.probe || p.probe.jobId !== jobId || !generation || p.probe.generation !== generation) return false;
       fs.rmSync(pauseFile(home, backend, account), { force: true }); return true;

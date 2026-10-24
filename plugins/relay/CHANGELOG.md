@@ -27,6 +27,9 @@ Changed:
 
 Fixed:
 
+- Provider retry refusals preserve a live probe’s claim and generation, including deferred refusals
+  replayed before a healthy answer clears the pause.
+
 - RPC input coalesces tiny fragments so per-fragment object overhead cannot escape the line-memory bound.
 
 - ZCode duplicate waits cancel promptly and report uncertain starts accurately. Duplicate steer
