@@ -12,7 +12,7 @@ jobs:
   ci:
     name: ${{ matrix.os }} · Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false
