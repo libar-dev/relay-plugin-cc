@@ -497,14 +497,16 @@ test("setup before posting on the adoption start path records one violation", as
   fs.writeFileSync(inbox, "obstruct inbox setup");
   try {
     const { started } = await relayStart(retry);
-    assert.notEqual(started.status, 0);
+    assert.notEqual(started.status, 0, started.stdout + started.stderr);
+    const { listJobDirs } = await import("../plugins/relay/scripts/lib/jobs/store.mjs");
+    assert.deepEqual(listJobDirs({ env: retry.env }), [dir], "uncertain adoption must never submit a duplicate job");
     assert.equal(readRelayViolations(dir).length, 1);
-    assert.match(readRelayViolations(dir)[0].reason, /messages could not be delivered: EEXIST/);
+    assert.match(readRelayViolations(dir)[0].reason, /messages could not be delivered: Message storage uncertain:.*ENOTDIR/);
   } finally {
     fs.unlinkSync(inbox);
     fs.renameSync(saved, inbox);
   }
-  assert.match(companion(first, ["result", jobId]).stdout, /^relay-violation: delivery: .*EEXIST/m);
+  assert.match(companion(first, ["result", jobId]).stdout, /^relay-violation: delivery: .*storage uncertain:.*ENOTDIR/m);
 });
 
 test("wait false reports no consumer on timeout", async () => {

@@ -299,9 +299,12 @@ async function runWorkerRound(jobDir, options, held) {
     if (!message) {
       return;
     }
+    const reset = !message.automatic && ["steered", "turn-started", "delivered-before"].includes(result.action);
+    // A visible delivery receipt must already carry its durable recovery allowance.
+    // The caller can stop this worker immediately after observing the receipt.
+    if (reset && job.recoveryEpoch !== message.id) save({ recoveryEpoch: message.id });
     writeOutcome(jobDir, message.id, result);
     const log = Array.isArray(job.messages) ? job.messages : [];
-    const reset = !message.automatic && ["steered", "turn-started", "delivered-before"].includes(result.action);
     save({ messages: [...log, { id: message.id, kind: message.kind, at: nowIso(), ...result }],
       ...(reset ? { recoveryEpoch: message.id } : {}) });
   };
