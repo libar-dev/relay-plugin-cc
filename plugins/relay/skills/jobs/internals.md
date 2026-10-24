@@ -85,6 +85,13 @@ Small hosts where `R + J > total` still fail the permanent-fit test.
 Very heavy means GPT-6 Astra and Kimi K3 at any effort; other models at max/ultra stay outside it.
 An unresolved default model is a coverage limit. Eligible backends with fewer active seats go first.
 Starts and replacement backends are paced 5 s apart.
-Native Windows visibly bypasses admission; missing sensors and errors show degraded/bypass notes.
+Native Windows visibly bypasses admission; missing sensors show degraded notes.
+If the guard itself fails (its files can't be read or written), new starts wait and the job's state
+names the error; `RELAY_ADMISSION=off` or `/relay:setup --admission off` lets work start without the guard.
+A damaged guard record counts as busy until it is set aside. Damaged slots retain a startup hold for
+30 seconds and count as active seats for 10 minutes before quarantine. Damaged pauses hold their
+backend account for 15 minutes before quarantine. Refusals received during lock contention are
+saved for the next admission check. Future startup times remain reserved across clock corrections.
+Only a currently held seat can be reused; earlier completed admissions do not reserve a place.
 Memory later used by tools/tests, native Claude agents, other harnesses and other users is outside
 admission control. Recognized provider pauses and recovery are described in [orchestration.md](orchestration.md).

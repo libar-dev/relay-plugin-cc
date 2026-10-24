@@ -351,13 +351,18 @@ fallback using its reported page size, and separately checks
 `kern.memorystatus_vm_pressure_level`. Samples are cached for two seconds per cgroup, with
 bounded probes. A busy refresh reuses a sample less than ten seconds old or waits for the
 refresh to finish. Missing sensors show a degraded note while other gates remain effective;
-missing host bytes applies F. Guard/storage errors visibly bypass the guard. A live admission
+missing host bytes applies F. If the guard itself fails (its files can't be read or written), new starts
+wait and the job's state names the error; `RELAY_ADMISSION=off` or `/relay:setup --admission off` lets work start
+without the guard. A damaged guard record counts as busy until it is set aside. A live admission
 lock stays queued and cancellable; a stuck-lock diagnostic identifies the holder and off switch.
 
-Recognized usage refusals pause Codex, Kimi or ZCode for 30 minutes, or a definite reset within
+Recognized usage refusals pause Codex, Grok, Kimi or ZCode for 30 minutes, or a definite reset within
 six hours. Rate pauses start at 60 seconds and double to 15 minutes; Kimi concurrency refusals
 pause for 10 minutes. After a pause, one generation-fenced probe runs; its success clears the
-pause. Refused jobs remain failed for explicit resume. Grok has no refusal classification.
+pause. Refused jobs remain failed for explicit resume. Pauses follow the selected backend account home; default homes retain the existing pause files.
+Grok recognizes explicit weekly/usage/credit exhaustion, rate-limit text and provider 429 errors;
+its usage classifier has not been verified against a live exhausted account. A live probe is never replaced by age.
+These pauses gate new starts, not requests or retries inside running turns.
 With the guard effective, Kimi's internal retry default is 3 unless explicitly configured.
 
 Turn it off for an invocation with `RELAY_ADMISSION=off`, or domain-wide with
@@ -369,7 +374,7 @@ homes. A custom jobs home cannot disable the guard. Old weight/class controls ar
 other harness sessions; other users; native Windows and other unsupported platforms, where
 admission is a visible no-op. External processes affect live readings but have no managed seats.
 Setup/account/status probes and transfer metadata are outside the gate. Startup admission
-cannot guarantee against later allocations, missing readings, guard failures or explicit bypass.
+cannot guarantee against later allocations, missing readings or explicit bypass.
 On small hosts where `R + J > T` (below 2.5 GiB for Codex/Grok or 3 GiB for Kimi/ZCode),
 jobs fail permanently because the reserve and startup allowance cannot fit. `RELAY_ADMISSION=off`
 bypasses the guard when needed.
@@ -418,7 +423,7 @@ and its status line counts the repository's running and dead jobs and owed messa
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.21. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.22. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash

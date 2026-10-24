@@ -51,11 +51,14 @@ Formulas and sensor/fit limits are in [internals.md](internals.md).
 ## Limits and recovery
 
 Relay pauses a backend after **recognized provider refusals**: Codex's named usage/rate errors,
-Kimi's recognized usage/concurrency/rate messages, and ZCode's enumerated usage/rate codes.
-The current classifier has no Grok refusal coverage or universal concurrency detection.
+Kimi's recognized usage/concurrency/rate messages, ZCode's enumerated usage/rate codes, and Grok's
+explicit weekly/usage/credit exhaustion, rate-limit text or provider 429 errors. Grok's usage
+classifier is not verified against a live exhausted account. Pauses follow the selected account
+home, with the default home using the original backend pause. There is no universal concurrency
+detection or request budget; retries inside running turns are outside this admission check.
 Defaults: usage waits until a supplied reset within 6 hours, otherwise 30 minutes; rate waits start
 at 60 seconds and double to 15 minutes; recognized concurrency waits 10 minutes. After a pause one
-probe goes first. These are backend admission pauses, not automatic recovery of the job that failed.
+probe goes first; a live probe is never replaced because of its age. These are backend admission pauses, not automatic recovery of the job that failed.
 That job may finish `failed`; inspect its report and use same-job recovery where appropriate. Newly
 queued work keeps waiting. Acknowledgement of a message is not evidence its next turn ran.
 

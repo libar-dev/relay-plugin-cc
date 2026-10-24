@@ -1,4 +1,6 @@
-import { requestRules } from "./request.mjs";
+import path from "node:path";
+import os from "node:os";
+import { requestRules, codexDefaultHome } from "./request.mjs";
 import { setupProbe } from "./setup.mjs";
 import { REVIEW_GATE_NEXT_STEP } from "./setup.mjs";
 import { reviewSupport } from "./review.mjs";
@@ -6,6 +8,12 @@ import { transfer } from "./transfer.mjs";
 import { getCodexAvailabilityWithin } from "./account.mjs";
 import { serverEndMessage } from "./client.mjs";
 import { connect } from "./connection.mjs";
+
+export function accountHome(_request, env = process.env) {
+  const home = codexDefaultHome(env);
+  return home === path.resolve(env.HOME || env.USERPROFILE || os.homedir(), ".codex") ? null : home;
+}
+
 
 
 // Codex sends `turn/diff/updated` with the turn's whole diff so far after every change, and those
@@ -52,6 +60,7 @@ export const codexBackend = {
   },
   capabilityNotes: {},
   request: requestRules,
+  accountHome,
   view: {
     settingLines(request) {
       const mcpOff = /** @type {string[] | undefined} */ (request.mcpOff);
