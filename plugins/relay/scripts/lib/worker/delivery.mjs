@@ -153,7 +153,11 @@ export async function deliverMessage(jobDir, kind, text, extra = {}, options = {
 export function retryQueuedWorker(jobDir, env = process.env) {
   const job = readJob(jobDir);
   if (job?.state === "queued" && job.admission?.waitKind === "worker" && !hasLiveWorker(jobDir)) {
-    return spawnWorker(jobDir, job.request?.cwd ?? process.cwd(), env);
+    try { return spawnWorker(jobDir, job.request?.cwd ?? process.cwd(), env); }
+    catch (error) {
+      process.stderr.write(`relay load guard: deferred worker spawn failed (${error.message}); work remains queued for retry\n`);
+      return null;
+    }
   }
   return null;
 }

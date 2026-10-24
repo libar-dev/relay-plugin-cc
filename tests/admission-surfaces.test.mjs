@@ -35,7 +35,7 @@ test("corrupt stored settings normalize; JSON listing reads no sensors or lock",
   fs.mkdirSync(path.dirname(admissionConfigPath(ctx.env)), { recursive: true });
   fs.writeFileSync(admissionConfigPath(ctx.env), JSON.stringify({ admission: "invalid", maxVeryHeavy: 100 }));
   assert.deepEqual(readAdmissionConfig(ctx.env), { admission: "on", maxVeryHeavy: 2 });
-  const env = { ...ctx.env, RELAY_ADMISSION: "on", RELAY_ADMISSION_HOME: path.join(ctx.root, "admission"), RELAY_ADMISSION_READINGS: path.join(ctx.root, "missing.json") };
+  const env = { ...ctx.env, RELAY_ADMISSION: "on", RELAY_ADMISSION_HOME: path.join(ctx.root, "admission"), RELAY_TEST_ADMISSION_READINGS: path.join(ctx.root, "missing.json") };
   const snapshot = describeGuard(env, { readSensors: false }, { readMachine() { throw new Error("must not read"); } });
   assert.deepEqual(snapshot, { enabled: true, pauses: [] });
   const listing = companion(ctx, ["status", "--json", "--all"], env);
@@ -63,4 +63,68 @@ test("jobs homes share one guard config and old custom-home off cannot disable a
   assert.equal(describeGuard(second, { readSensors: false }).enabled, false);
   assert.equal(readAdmissionConfig(second).maxVeryHeavy, 1);
   assert.equal(describeGuard({ ...second, RELAY_ADMISSION: "off" }, { readSensors: false }).enabled, false);
+});
+
+test("recovering corrupt admission settings saves only normalized config", async t => {
+  const { setAdmissionConfig } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const ctx = setup(t); ctx.env.RELAY_ADMISSION_HOME = path.join(ctx.root, "domain");
+  fs.mkdirSync(ctx.env.RELAY_ADMISSION_HOME);
+  const file = admissionConfigPath(ctx.env);
+  fs.writeFileSync(file, "{");
+  assert.ok(readAdmissionConfig(ctx.env).notes);
+  setAdmissionConfig("maxVeryHeavy", 1, ctx.env);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { admission: "on", maxVeryHeavy: 1 });
+  assert.equal(readAdmissionConfig(ctx.env).notes, undefined);
+});
+
+test("setup sizes the busy allowance and worker cap from its guard reading", { skip: !["linux", "darwin"].includes(process.platform) }, t => {
+  const ctx = setup(t), fixture = path.join(ctx.root, "machine.json");
+  fs.writeFileSync(fixture, JSON.stringify({ totalBytes: 32 * 2 ** 30, availableBytes: 24 * 2 ** 30, cores: 4, load5: 0 }));
+  const result = companion(ctx, ["setup", "--json"], { RELAY_ADMISSION: "on", RELAY_ADMISSION_HOME: path.join(ctx.root, "domain"), RELAY_TEST_ADMISSION_READINGS: fixture });
+  assert.equal(result.status, 0, result.stderr);
+  const page = JSON.parse(result.stdout);
+  assert.equal(page.settings.loadGuard.busySeats, 2);
+  assert.equal(page.settings.loadGuard.maxWaitingWorkers, 8);
+  assert.equal(page.settings.loadGuard.headroomBytes, page.loadGuard.headroomBytes);
+});
+
+test("deferred spawn errors remain retryable without aborting callers", async t => {
+  const { createJobDir, writeJob, readJob, jobPaths } = await import("../plugins/relay/scripts/lib/jobs/store.mjs");
+  const { retryQueuedWorker } = await import("../plugins/relay/scripts/lib/worker/delivery.mjs");
+  const ctx = setup(t), { jobDir } = createJobDir(ctx.work, "queued-failure", ctx.env);
+  writeJob(jobDir, { id: "queued-failure", state: "queued", request: { cwd: ctx.work }, admission: { waitKind: "worker", reason: "memory low" } });
+  const open = fs.openSync, notes = [];
+  t.mock.method(fs, "openSync", (file, ...args) => {
+    if (file === jobPaths(jobDir).stderr) throw new Error("synthetic spawn error");
+    return open(file, ...args);
+  });
+  t.mock.method(process.stderr, "write", chunk => { notes.push(String(chunk)); return true; });
+  assert.equal(retryQueuedWorker(jobDir, ctx.env), null);
+  assert.equal(readJob(jobDir).state, "queued");
+  assert.match(notes.join(""), /deferred worker spawn failed .*synthetic spawn error.*queued for retry/);
+});
+
+test("status shows both the completed queue duration and its cause", async t => {
+  const { createJobDir, writeJob } = await import("../plugins/relay/scripts/lib/jobs/store.mjs");
+  const ctx = setup(t), { jobDir } = createJobDir(ctx.work, "waited-cause", ctx.env);
+  writeJob(jobDir, { id: "waited-cause", state: "completed", createdAt: "2025-01-01T00:00:00Z", request: {},
+    admission: { state: "admitted", since: "2025-01-01T00:00:00Z", admittedAt: "2025-01-01T00:08:17.100Z", reason: "host memory low", waitKind: "memory" } });
+  const text = companion(ctx, ["status", "waited-cause"]);
+  assert.match(text.stdout, /waited 497\.1s before admission \(memory: host memory low\)/);
+  const json = JSON.parse(companion(ctx, ["status", "waited-cause", "--json"]).stdout);
+  assert.equal(json.admission.reason, "host memory low"); assert.equal(json.admission.waitKind, "memory");
+});
+
+for (const state of ["completed", "failed", "cancelled", "dead"]) test(`JSON closes a legacy admission wait on ${state} jobs without rewriting it`, async t => {
+  const { createJobDir, jobPaths, writeJsonAtomic, readJob } = await import("../plugins/relay/scripts/lib/jobs/store.mjs");
+  const ctx = setup(t), id = `ended-${state}`, { jobDir } = createJobDir(ctx.work, id, ctx.env);
+  const admission = { state: "waiting", reason: "memory low", waitKind: "worker", since: "2025-01-01T00:00:00Z" };
+  writeJsonAtomic(jobPaths(jobDir).job, { id, state: state === "dead" ? "starting" : state, request: {}, createdAt: "2025-01-01T00:00:00Z", admission });
+  const result = JSON.parse(companion(ctx, ["status", id, "--json"]).stdout);
+  assert.equal(result.state, state);
+  assert.equal(result.admission.state, state === "cancelled" ? "cancelled" : "ended");
+  assert.equal(result.admission.reason, admission.reason); assert.equal(result.admission.since, admission.since);
+  const listing = JSON.parse(companion(ctx, ["status", "--json", "--all"]).stdout);
+  assert.equal(listing.jobs[0].admission.state, result.admission.state);
+  assert.deepEqual(readJob(jobDir).admission, admission, "status stays read-only");
 });

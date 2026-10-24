@@ -110,3 +110,20 @@ test("provider pauses and probe completion survive momentary admission-lock cont
   assert.equal(probeSucceeded(s.root, "codex", "job-1", deps, probe.slot.probeGeneration), true);
   assert.equal(retries, 2); assert.equal(listPauses(s.env, s.deps).length, 0);
 });
+
+test("abandoning an unfinished probe retains strikes and cannot release a newer generation", async t => {
+  const { releaseProbe } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const s = setup(t);
+  recordRefusal(s.root, "codex", { kind: "rate" }, "old", s.deps);
+  recordRefusal(s.root, "codex", { kind: "rate" }, "other", s.deps);
+  s.tick(D.ratePauseMs * 2);
+  const first = admit(s.ctx(1), s.deps);
+  s.tick(D.probeMs);
+  assert.equal(releaseProbe(s.root, "codex", "job-1", s.deps, first.slot.probeGeneration), true);
+  const pause = listPauses(s.env, s.deps)[0];
+  assert.equal(pause.strikes, 2); assert.equal(pause.probing, false);
+  const next = admit(s.ctx(2), s.deps);
+  assert.equal(next.slot.probe, true);
+  assert.equal(releaseProbe(s.root, "codex", "job-1", s.deps, first.slot.probeGeneration), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(s.root, "pauses", "codex.json"))).probe.generation, next.slot.probeGeneration);
+});

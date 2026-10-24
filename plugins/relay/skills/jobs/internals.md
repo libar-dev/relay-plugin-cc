@@ -67,12 +67,15 @@ Host admission requires `available − otherHolds − J ≥ R`, where `R = max(2
 effort multiplier. Each finite cgroup ancestor has its own `min(0.5 GiB, 10% × limit)` margin.
 Busy seats apply at five-minute load ≥ `1.5C` or unknown host bytes; healthy hosts have no fixed
 active ceiling. Load > `3C`, critical host memory or macOS warning/critical pressure can hold even
-the first start. Load/warning pressure holds new jobs; critical memory/pressure holds next turns too.
+the first start. Load/warning pressure holds new jobs; admitted jobs continue turns, retries and
+replacement backends, subject to the same memory headroom test. Critical memory/pressure holds next
+turns too, with the queued reason shown.
 Linux uses MemAvailable. macOS uses `kern.memorystatus_level` free percentage times total memory,
 falling back to `vm_stat` free+inactive, plus a separate memory-pressure reading.
 
 One shared very-heavy quota is 2: GPT-6 Astra and Kimi K3 at any effort. Other models at max/ultra
-stay outside it; an unresolved default model is a coverage limit. Starts and turns are paced 5 s apart.
+stay outside it; an unresolved default model is a coverage limit. Eligible backends with fewer active
+seats go first. Starts and turns are paced 5 s apart.
 Native Windows visibly bypasses admission; missing sensors and errors show degraded/bypass notes.
 Memory later used by tools/tests, native Claude agents, other harnesses and other users is outside
 admission control. Recognized provider pauses and recovery are described in [orchestration.md](orchestration.md).

@@ -85,18 +85,19 @@ function nextStepsFor(blocks, settings, cwd, env) {
   return steps;
 }
 
-function readSettings(cwd, env = process.env) {
+function readSettings(cwd, env = process.env, machine = undefined) {
   const user = readUserConfig(env);
-  return { loadGuard: { ...readAdmissionConfig(env), configPath: admissionConfigPath(env), ...guardSettings(readAdmissionConfig(env)) }, fastTier: user.fastTier, mcpOff: user.mcpOff, reviewGate: Boolean(readRepoConfig(cwd, env).stopReviewGate) };
+  return { loadGuard: { ...readAdmissionConfig(env), configPath: admissionConfigPath(env), ...guardSettings(readAdmissionConfig(env), machine) }, fastTier: user.fastTier, mcpOff: user.mcpOff, reviewGate: Boolean(readRepoConfig(cwd, env).stopReviewGate) };
 }
 
 export async function buildSetupPage(cwd, { env = process.env, only = null, actionsTaken = [] } = {}) {
   const backends = await checkBackends(cwd, { env, only });
-  const settings = readSettings(cwd, env);
+  const loadGuard = describeGuard(env, { readSensors: true });
+  const settings = readSettings(cwd, env, loadGuard.enabled && !loadGuard.error ? loadGuard : undefined);
   return {
     ready: only ? backends[0].ready : backends.some(block => block.ready),
     jobsHome: resolveJobsHome(env),
-    loadGuard: describeGuard(env, { readSensors: true }),
+    loadGuard,
     settings,
     backends,
     actionsTaken,

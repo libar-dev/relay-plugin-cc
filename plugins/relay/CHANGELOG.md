@@ -64,6 +64,15 @@ Pre-release cuts:
     and jobs waited 76 s at the median. Available memory is now macOS's own free percentage times total memory,
     with free and inactive pages as a labelled fallback. The pressure check is unchanged: a warning holds new
     jobs, critical also holds next turns. Linux is unchanged.
+- `3.0.0-pre.5` (2026-10-23, tag `v3.0.0-pre.5`): what it changes over pre.4. The details are in "Load guard".
+  - **Only Astra and the Kimi K3 family count toward the very-heavy quota,** at any effort. `max` effort on other
+    models (Sol, Luna, Kimi K2.x, GLM, Grok) no longer does.
+  - **The guard holds its lock briefly however many old jobs there are,** and an unreadable job record no longer
+    turns the guard off.
+  - **A probe whose lease times out no longer counts as provider success,** so the pause and its strikes stay.
+  - **A macOS pressure warning reads as a warning,** not "critical", in status and in the waited line.
+  - **An admitted job keeps the reason it waited,** and a job cancelled while queued closes its admission record
+    in `status --json`.
 
 Phase 1, steer wake:
 
@@ -213,6 +222,22 @@ Phase 6, an investigation (the plugin does not change):
 
 Load guard:
 
+- `3.0.0-dev.17`: macOS pressure warning reads as `warning`; critical stays `critical`. Warning and load above
+  `3C` still hold only new jobs, and shared pacing stays 5 seconds.
+- Only Astra and the Kimi K3 family count toward the very-heavy quota; max effort on other models no longer does.
+- Admission history keeps its last queue cause and shows it beside the completed wait duration. Cancellation
+  closes waiting records; JSON views also close stale waiting records for ended jobs without changing stored history.
+- Historical job records are parsed outside the admission lock and cached until their file changes. Potentially
+  live jobs and unended servers are rechecked under the lock, preserving seats and quota accounting.
+- Probe startup timeouts release only the fenced claim, retaining the provider pause and strike history. An
+  active turn still uses the existing probe window; a completed turn can clear its matching pause.
+- Deferred spawn failures leave work queued and report a retry note instead of aborting wait or relay hooks.
+  Short-lived spawn callers now report a persisted stuck admission lock with its holder and off switch.
+- Background tasks report their actual queued state. Setup sizes its busy allowance and worker cap from the
+  same machine reading as the guard. Recovered settings omit transient diagnostics from saved config.
+- Synthetic readings require a test process and the explicitly named test override; admission fixtures isolate
+  inherited guard settings and skip unsupported-platform foreground queue cases. The README documents small-host
+  impossible fits and the off switch; the jobs skill clarifies the state list.
 - `3.0.0-dev.16`: on macOS, available bytes now use the `kern.memorystatus_level` percentage of total memory,
   so reclaimable memory counts toward admission. `vm_stat` free plus inactive pages remains a labelled fallback
   when that reading fails. The separate pressure veto, reserve, holds, pacing and quota are unchanged.
@@ -354,7 +379,9 @@ Docs:
 - The installed jobs skill now includes a light orchestration guide and a dated model/benchmark/price snapshot
   with public sources, cache-write costs, distinct benchmark task bases, and a minor-release refresh procedure.
   It describes one shared quota of two very heavy jobs (GPT-6 Astra and Kimi K3, any effort); effort alone on
-  other models does not enter the pool. This text is merge-ordered after the model-only admission update.
+  other models does not enter the pool.
+- The skill/guide quota agreement checks now run against model-only admission, including max/ultra effort
+  on other models; the shared quota remains two Astra/Kimi K3 jobs at any effort.
 - The user guide covers queued work, conditional stop notices, Workflow job-id control and direct continuation,
   queued status-line/board controls, and both sandbox storage paths. Relay requires no external search or
   scraping service; optional services are the user's configuration.

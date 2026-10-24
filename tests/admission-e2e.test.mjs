@@ -10,9 +10,9 @@ const GiB = 2 ** 30;
 function readings(env, root) {
   env.RELAY_ADMISSION = "on";
   env.RELAY_ADMISSION_HOME = path.join(root, "domain");
-  env.RELAY_ADMISSION_READINGS = path.join(root, "readings.json");
+  env.RELAY_TEST_ADMISSION_READINGS = path.join(root, "readings.json");
   env.RELAY_ADMISSION_POLL_MS = "25";
-  const write = availableBytes => fs.writeFileSync(env.RELAY_ADMISSION_READINGS, JSON.stringify({ availableBytes, totalBytes: 128 * GiB, cores: 64, load5: 0 }));
+  const write = availableBytes => fs.writeFileSync(env.RELAY_TEST_ADMISSION_READINGS, JSON.stringify({ availableBytes, totalBytes: 128 * GiB, cores: 64, load5: 0 }));
   write(0); return write;
 }
 
@@ -37,6 +37,9 @@ test("start defers a worker at critical pressure; continue is durable, wait owns
   const cancelled = companion(ctx, ["cancel", second.id, "--json"]);
   assert.equal(cancelled.status, 0, cancelled.stdout + cancelled.stderr);
   assert.equal(JSON.parse(cancelled.stdout).state, "cancelled");
+  const ended = JSON.parse(companion(ctx, ["status", second.id, "--json"]).stdout);
+  assert.equal(ended.admission.state, "cancelled");
+  assert.ok(ended.admission.since); assert.match(ended.admission.reason, /memory/);
 });
 
 for (const workflow of [false, true]) test(`relay ${workflow ? "Workflow" : "Agent"} queued result never finishes before admission`, async () => {
@@ -54,4 +57,12 @@ for (const workflow of [false, true]) test(`relay ${workflow ? "Workflow" : "Age
   const done = companion({ work: ctx.work, env: ctx.env }, ["wait", id, "--timeout-seconds", String(D.spacingMs / 1000 + 10), "--json"]);
   assert.equal(done.status, 0, done.stdout + done.stderr);
   assert.equal(JSON.parse(done.stdout).state, "completed");
+});
+
+for (const json of [false, true]) test(`background task reports deferred state (${json ? "JSON" : "text"})`, { skip: !["linux", "darwin"].includes(process.platform) }, t => {
+  const ctx = setup(t); readings(ctx.env, ctx.root);
+  const result = companion(ctx, ["task", "--background", ...(json ? ["--json"] : []), "[quick] Deferred task."]);
+  assert.equal(result.status, 0, result.stderr);
+  if (json) assert.equal(JSON.parse(result.stdout).state, "queued");
+  else assert.match(result.stdout, /state: queued/);
 });

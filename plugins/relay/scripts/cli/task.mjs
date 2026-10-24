@@ -52,8 +52,8 @@ export async function handleTask(argv) {
   if (options.background) {
     spawnWorker(jobDir, request.cwd);
     const job = readJob(jobDir);
-    if (options.json) printJson("task", { jobId: job.id, state: "starting", jobDir, backend: backendFor(request).name });
-    else process.stdout.write(`job: ${job.id}\nstate: starting\ndir: ${jobDir}\n`);
+    if (options.json) printJson("task", { jobId: job.id, state: job.state, jobDir, backend: backendFor(request).name });
+    else process.stdout.write(`job: ${job.id}\nstate: ${job.state}\ndir: ${jobDir}\n`);
     return;
   }
   await runWorker(jobDir);

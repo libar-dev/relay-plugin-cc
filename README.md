@@ -326,7 +326,7 @@ Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
 - All starts and turns share 5-second spacing. The busy-load allowance is
   `F = min(16, max(2, C−2))` seats, applied only when five-minute load is at least `1.5C` or
   host bytes are unknown, for new jobs only. Load above `3C` and macOS warning pressure
-  hold new jobs; admitted jobs can continue turns, retries and replacement backends.
+  hold new jobs; admitted jobs can continue turns, retries and replacement backends, subject to the same memory headroom test.
   Host bytes after holds below `max(0.75 GiB, 0.05T)` or macOS critical pressure hold
   those next turns too, with a visible reason. Host load is skipped with a note when its
   CPU scope differs from available CPUs.
@@ -370,6 +370,9 @@ other harness sessions; other users; native Windows and other unsupported platfo
 admission is a visible no-op. External processes affect live readings but have no managed seats.
 Setup/account/status probes and transfer metadata are outside the gate. Startup admission
 cannot guarantee against later allocations, missing readings, guard failures or explicit bypass.
+On small hosts where `R + J > T` (below 2.5 GiB for Codex/Grok or 3 GiB for Kimi/ZCode),
+jobs fail permanently because the reserve and startup allowance cannot fit. `RELAY_ADMISSION=off`
+bypasses the guard when needed.
 
 ### Codex configuration
 
@@ -415,7 +418,7 @@ and its status line counts the repository's running and dead jobs and owed messa
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.17. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.19. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash

@@ -45,6 +45,9 @@ test("orchestration references attribute every data row and date the snapshot", 
 test("documented guard defaults agree with local runtime exports", () => {
   assert.equal(DEFAULTS.maxVeryHeavy, 2);
   assert.equal(DEFAULTS.spacingMs, 5000);
+  const guide = fs.readFileSync(path.join(root, "docs/guide.md"), "utf8").replace(/\s+/g, " ");
+  assert.match(guide, /quota of 2 very heavy jobs \(GPT-6 Astra and Kimi K3 at every effort\)/);
+  assert.match(guide, /Max\/ultra effort on other models does not enter that pool/);
   for (const f of ["SKILL.md", "orchestration.md", "models.md"]) {
     const source = read(`skills/jobs/${f}`);
     assert.match(source, /(?:quota.{0,20}2|2 very heavy)/);
@@ -53,7 +56,7 @@ test("documented guard defaults agree with local runtime exports", () => {
     const source = fs.readFileSync(file, 'utf8');
     assert.doesNotMatch(source, /Astra, (?:the Kimi K3 family|Kimi K3), or (?:effective|any) `max`/);
   }
-  for (const effort of ["low", "default", "high"]) {
+  for (const effort of ["low", "default", "high", "max", "ultra"]) {
     assert.equal(modelClass({ backend: "codex", model: "gpt-6-astra", effort }), "very-heavy");
     for (const model of ["kimi-code/k3", "kimi-code/k3-highspeed"]) {
       assert.equal(modelClass({ backend: "kimi", model, effort }), "very-heavy");
@@ -61,10 +64,7 @@ test("documented guard defaults agree with local runtime exports", () => {
   }
 });
 
-test("effort alone never puts non-Astra/non-K3 models in the very-heavy quota", t => {
-  // The text change is merge-ordered after the runtime policy update. Keep this dependency visible
-  // on an intermediate branch; after that update lands, every synthetic case below must execute.
-  if (DEFAULTS.heavyEfforts?.length) return t.skip("Pending model-only admission hardening base");
+test("effort alone never puts non-Astra/non-K3 models in the very-heavy quota", () => {
   for (const [backend, model] of [["codex", "gpt-6.1-sol"], ["codex", "gpt-6-luna"],
     ["zcode", "glm-5.3"], ["kimi", "kimi-code/kimi-for-coding"], ["grok", "grok-4.7-build"]]) {
     for (const effort of ["max", "ultra"]) assert.notEqual(modelClass({ backend, model, effort }), "very-heavy");
