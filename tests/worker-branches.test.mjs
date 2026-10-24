@@ -141,7 +141,7 @@ test("a steer ZCode accepted but lost with its server is requeued by the worker 
   const dir = jobDir(ctx, id);
   await waitFor(() => readJob(ctx, id).turnId);
   const steer = postInboxMessage(dir, { kind: "steer", text: "[quick] Lost steer." });
-  await waitFor(() => readOutcome(dir, steer.id)?.action === "steered");
+  await waitFor(() => readOutcome(dir, steer.id)?.action === "interject-queued");
   assert.deepEqual(fake.state().turns.map(turn => turn.text), ["[long] First turn."]);
   process.kill(fake.state().starts[0].pid, "SIGKILL");
   await finishJob(ctx, id);
@@ -149,7 +149,7 @@ test("a steer ZCode accepted but lost with its server is requeued by the worker 
   const job = readJob(ctx, id);
   const messages = job.messages.filter(message => message.id === steer.id);
   assert.equal(job.state, "completed");
-  assert.deepEqual(messages.map(message => message.action), ["steered", "queued-next-turn", "accepted-next-turn", "turn-started"]);
+  assert.deepEqual(messages.map(message => message.action), ["interject-queued", "queued-next-turn", "accepted-next-turn", "turn-started"]);
   assert.equal(messages[1].reason, "the backend accepted the steer but lost it before a turn took it");
   const attempt = job.attempts.at(-1);
   assert.equal(attempt.source, "steer");
