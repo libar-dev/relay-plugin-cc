@@ -323,6 +323,23 @@ import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finis
     assert.deepEqual(owedMessages(ctx.jobDir).map((entry) => entry.id), [ctx.message.id]);
   });
 
+  test("an unreadable predecessor identity stays open, receives no signal and prevents startup", async t => {
+    const { identity } = await oldServer(t);
+    const ctx = sweepJob({ server: identity, servers: [identity] });
+    const signals = [];
+    const job = await ctx.run({
+      listProcesses: () => [{ pid: identity.pid, ppid: 1, pgid: identity.pid, startTime: null }],
+      killImpl: (pid, signal) => signals.push([pid, signal]), graceMs: 0
+    });
+    assert.equal(job.state, "failed");
+    assert.match(job.errorMessage, /process identities could not be read/);
+    assert.equal(isWorkerAlive(identity), true);
+    assert.deepEqual(signals, []);
+    assert.equal(job.attempts[0].servers[0].endedAt, undefined);
+    assert.equal(job.server.pid, identity.pid);
+    assert.equal(fs.existsSync(path.join(ctx.binDir, "fake-codex-state.json")), false);
+  });
+
   test("a readable process table omitting a live server still prevents startup", async t => {
     const { identity } = await oldServer(t);
     const ctx = sweepJob({ server: identity, servers: [identity] });

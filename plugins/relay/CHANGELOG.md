@@ -286,8 +286,8 @@ Load guard:
 Fixes from the pre-releases:
 
 - Cancelling a dead job leaves a reused worker pid alone. Surviving members of its original process group
-  are stopped by their saved identities; live-worker termination rechecks the worker identity before signalling.
-
+  are stopped by their saved identities after the group is tied to a heartbeat or recorded backend; live-worker
+  termination rechecks the worker identity before signalling. Unreadable process identities leave cleanup incomplete.
 - When a relay retypes a job's block with a changed line, the hand-back guard names the first differing line before
   repeating the exact result. This helps correct a `dir:` line copied from `report:`; the result format, matching
   rules and eight-block budget are unchanged. Not yet checked live: whether a Haiku relay corrects the line when told.

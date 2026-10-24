@@ -1,4 +1,4 @@
-/** @typedef {Array<{ pid: number, startTime: string | null }> & { cause?: string }} ProcessSnapshot */
+/** @typedef {Array<{ pid: number, startTime: string | null, identityUnknown?: boolean }> & { cause?: string, unverified?: number }} ProcessSnapshot */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import process from "node:process";
@@ -98,7 +98,7 @@ export function terminateProcessTree(pid, options = {}) {
 
   const signal = options.signal ?? "SIGTERM";
   try {
-    killImpl(-pid, signal);
+    killImpl(-(options.identity?.pgid ?? pid), signal);
     return { attempted: true, delivered: true, method: "process-group" };
   } catch {
     // The group kill fails with ESRCH when the pid is alive but does not lead its own
@@ -215,21 +215,23 @@ export function listProcesses(options = {}) {
     // Use the same identity format as worker records. On Linux, ticks also avoid
     // confusing two processes started within the same second of ps's lstart.
     const info = (options.platform ?? process.platform) === "linux" ? readProcessInfo(pid, options) : null;
-    const startTime = (options.platform ?? process.platform) === "linux" ? info?.startTime : `ps:${parts.slice(4, 9).join(" ")}`;
-    if (!startTime) continue;
-    rows.push({ pid, ppid: info?.ppid ?? ppid, pgid: info?.pgid ?? pgid, zombie: info?.zombie ?? parts[3].startsWith("Z"), startTime });
+    const startTime = (options.platform ?? process.platform) === "linux" ? (info?.startTime ?? null) : `ps:${parts.slice(4, 9).join(" ")}`;
+    // A failed identity read does not prove exit. Retain a live, unreadable row
+    // as unknown so cleanup can report it without ever signalling it blindly.
+    if (!startTime && !isProcessAlive(pid, options)) continue;
+    rows.push({ startedAtMs: Date.parse(`${parts.slice(4, 9).join(" ")} UTC`), pid, ppid: info?.ppid ?? ppid, pgid: info?.pgid ?? pgid, zombie: info?.zombie ?? parts[3].startsWith("Z"), startTime });
   }
   return rows;
 }
 
-// A detached worker's original group cannot outlive reuse of its leader pid.
-// Discover leftovers by group membership, never by the stale leader's parent link.
+// A numeric group can be reused after its original members exit. Require a
+// member known to predate the last heartbeat, or a recorded backend identity.
 /** @returns {ProcessSnapshot} */
-export function groupSurvivors(leader, table) {
+export function groupSurvivors(leader, table, { aliveUntil = null, servers = [] } = {}) {
   if (!table) return Object.assign([], { cause: "the process table could not be read" });
   if (!Number.isInteger(leader?.pid) || leader.pid <= 0 || !leader.startTime) return [];
   const current = table.find(row => row.pid === leader.pid);
-  if (current && current.startTime !== leader.startTime) return [];
+  if (current?.startTime && current.startTime !== leader.startTime) return [];
   const startedAt = (value) => {
     if (value?.startsWith("linux:")) {
       const ticks = value.slice(6);
@@ -243,11 +245,20 @@ export function groupSurvivors(leader, table) {
   };
   const start = startedAt(leader.startTime);
   if (start === null) return [];
-  return table.filter(row => {
+  const group = table.filter(row => row.pgid === (leader.pgid ?? leader.pid) && row.pid !== process.pid && !row.zombie);
+  const members = group.filter(row => {
     const at = startedAt(row.startTime);
-    return row.pgid === leader.pid && row.pid !== process.pid && !row.zombie &&
-      row.startTime?.split(":", 1)[0] === leader.startTime.split(":", 1)[0] && at !== null && at >= start;
-  }).map(({ pid, startTime }) => ({ pid, startTime }));
+    return row.startTime?.split(":", 1)[0] === leader.startTime.split(":", 1)[0] && at !== null && at >= start;
+  });
+  const bound = aliveUntil == null ? NaN : Date.parse(aliveUntil);
+  const verified = members.some(row => {
+    const ms = row.startedAtMs ?? (row.startTime?.startsWith("ps:") ? startedAt(row.startTime) : NaN);
+    return (Number.isFinite(bound) && Number.isFinite(ms) && ms <= bound - 1000) ||
+      servers.some(server => server?.startTime && server.pid === row.pid && server.startTime === row.startTime);
+  });
+  const unknown = group.filter(row => !row.startTime);
+  const snapshot = (verified ? [...members, ...unknown] : unknown).map(({ pid, startTime }) => ({ pid, startTime }));
+  return verified || members.length === 0 ? snapshot : Object.assign(snapshot, { unverified: members.length });
 }
 
 // The given roots and all their descendants, each with its start time, so a later kill
@@ -293,10 +304,14 @@ export function liveSnapshotMembers(snapshot, options = {}) {
     return [...snapshot];
   }
   const byPid = new Map(table.map((row) => [row.pid, row]));
-  return snapshot.filter((entry) => {
+  const remaining = snapshot.flatMap((entry) => {
     const row = byPid.get(entry.pid);
-    return row && !row.zombie && (!entry.startTime || row.startTime === entry.startTime);
+    if (!row || row.zombie) return [];
+    if (!entry.startTime || !row.startTime) return [{ ...entry, identityUnknown: true }];
+    return row.startTime === entry.startTime ? [entry] : [];
   });
+  if (remaining.some(entry => entry.identityUnknown)) remaining.cause = "process identities could not be read";
+  return remaining;
 }
 
 // Stop every live member of a snapshot: SIGTERM, then SIGKILL after `graceMs`.
@@ -324,16 +339,16 @@ export async function stopProcessSnapshot(snapshot, options = {}) {
   const signalAll = (signal) => {
     const live = members();
     for (const entry of live) {
-      // Pid-only fallback is allowed only for an entry with no saved identity.
-      if (tableUnreadable && entry.startTime) continue;
+      if (tableUnreadable || entry.identityUnknown || !entry.startTime) continue;
       try { killImpl(entry.pid, signal); } catch { /* gone already */ }
     }
   };
   const waitGone = async (ms) => {
     const deadline = Date.now() + ms;
     while (Date.now() < deadline) {
-      if (members().length === 0) return true;
-      if (tableUnreadable) return false;
+      const live = members();
+      if (live.length === 0) return true;
+      if (tableUnreadable || live.every(entry => entry.identityUnknown)) return false;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     return members().length === 0;
