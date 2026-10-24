@@ -395,6 +395,11 @@ const bootState = loadState();
 bootState.appServerStarts = (bootState.appServerStarts || 0) + 1;
 bootState.spawnHomes = [...(bootState.spawnHomes || []), process.env.CODEX_HOME ?? null];
 bootState.spawnArgs = [...(bootState.spawnArgs || []), args];
+if (process.env.FAKE_CODEX_TREE_FILE && fs.existsSync(process.env.FAKE_CODEX_TREE_FILE)) {
+  const old = JSON.parse(fs.readFileSync(process.env.FAKE_CODEX_TREE_FILE, "utf8"));
+  const stat = require("node:child_process").spawnSync("ps", ["-o", "stat=", "-p", String(old.grandchild)], { encoding: "utf8" }).stdout.trim();
+  bootState.survivorRunningAtStart = Boolean(stat && !stat.startsWith("Z"));
+}
 bootState.spawnPids = [...(bootState.spawnPids || []), process.pid];
 saveState(bootState);
 
@@ -421,9 +426,11 @@ const rl = readline.createInterface({ input: process.stdin });
 // runs, which a loaded machine can cause. An idle server, with no turn or timer pending, exits 0
 // either way, through process.exit: a natural exit drops the SIGTERM handler before it ends. A
 // server with work pending keeps running when stdin ends, and SIGTERM kills it, as before.
+if (process.env.FAKE_CODEX_IGNORE_CLOSE) setInterval(() => {}, 1000);
 const idle = () => !process.getActiveResourcesInfo().some((type) => type === "Timeout" || type === "Immediate");
 process.stdin.on("end", () => { if (idle()) process.exit(0); });
 const onTerm = () => {
+  if (process.env.FAKE_CODEX_IGNORE_CLOSE) return;
   if (idle()) process.exit(0);
   process.off("SIGTERM", onTerm);
   process.kill(process.pid, "SIGTERM");
@@ -701,6 +708,10 @@ rl.on("line", (line) => {
 	        saveState(state);
 	        record("turnStarts", { threadId: message.params.threadId, turnId, model: message.params.model ?? null, effort: message.params.effort ?? null, ...(Object.hasOwn(message.params, "serviceTier") ? { serviceTier: message.params.serviceTier } : {}), sandboxPolicy: message.params.sandboxPolicy ?? null, approvalPolicy: message.params.approvalPolicy ?? null, clientUserMessageId: message.params.clientUserMessageId ?? null, prompt });
 	        recordDelivered(message.params.threadId, message.params.clientUserMessageId);
+        if (process.env.FAKE_CODEX_TREE_FILE && loadState().appServerStarts === 1 && !fs.existsSync(process.env.FAKE_CODEX_TREE_FILE)) {
+          const code = 'const fs = require("node:fs"); const c = require("node:child_process").spawn("sleep", ["300"], { detached: process.env.FAKE_CODEX_TREE_MODE === "detached", stdio: "ignore" }); fs.writeFileSync(process.env.FAKE_CODEX_TREE_FILE, JSON.stringify({ parent: process.pid, grandchild: c.pid })); setInterval(() => {}, 1000);';
+          require("node:child_process").spawn(process.execPath, ["-e", code], { stdio: "ignore" }).unref();
+        }
 	        if (BEHAVIOR === "job-child" || BEHAVIOR === "job-hang-child") {
 	          spawnDescendant(turnId);
 	        }

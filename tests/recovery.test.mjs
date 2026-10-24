@@ -11,11 +11,22 @@ import { acquireWorkerLease, isWorkerAlive, readLease, releaseWorkerLease } from
 import { createJobDir, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { owedMessages, postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
-import { DEFAULT_RESUME_MESSAGE, resumeDeadJobOnce } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
+import { DEFAULT_RESUME_MESSAGE, resumeDeadJobOnce, sweptAppServersPatch } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
 import { loadJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { ownershipDir } from "../plugins/relay/scripts/lib/util/ownership.mjs";
 import { readProcessStartTime, listProcesses } from "../plugins/relay/scripts/lib/util/process.mjs";
 import { awaitOutcome } from "../plugins/relay/scripts/lib/worker/delivery.mjs";
+
+test("repeated cleanup preserves the predecessor's first observed death", () => {
+  const server = { pid: 100, startTime: "linux:1000" };
+  const sweep = { servers: [server], survivors: [] };
+  const firstAt = "2026-10-01T00:00:00.000Z";
+  let job = { server, serverPid: server.pid, attempts: [{ servers: [server] }] };
+  job = { ...job, ...sweptAppServersPatch(job, sweep, firstAt) };
+  const later = sweptAppServersPatch(job, sweep, "2026-10-01T00:01:00.000Z");
+  assert.equal(later.attempts[0].servers[0].deathObservedAt, firstAt);
+  assert.equal(job.server, null);
+});
 import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 import { COMPANION, RELAY_CMD, companion, decision, jobDirOf, pre, readJobJson, relayContext, relayStart, updated, waitFor } from "./support/relay-fixture.mjs";
 import { installFakeGrok } from "./fakes/grok.mjs";
@@ -269,12 +280,13 @@ for (const persisted of [false, true]) {
       assert.equal(sent.status, 0, sent.stderr + sent.stdout);
       assert.equal(companion(ctx, ["wait", id, "--timeout-seconds", "10"]).status, 0);
       assert.equal(isWorkerAlive(old.server), false, "the replacement swept the old server");
+      await waitFor(() => !isWorkerAlive(readJobJson(ctx, id).worker));
       const job = readJobJson(ctx, id);
       const swept = job.attempts[0].servers[0];
       const replacement = job.attempts.at(-1).servers[0];
       assert.equal(swept.pid, old.server.pid);
-      assert.ok(swept.endedAt, "the sweep records endedAt");
-      assert.ok(Date.parse(swept.endedAt) <= Date.parse(replacement.startedAt), "swept before the new server started");
+      assert.ok(swept.deathObservedAt, "the sweep records when death was observed");
+      assert.ok(Date.parse(swept.deathObservedAt) <= Date.parse(replacement.startedAt), "swept before the new server started");
     });
   }
 
@@ -396,13 +408,13 @@ for (const persisted of [false, true]) {
     assert.equal(job.attempts[0].servers[0].endedAt, undefined);
   });
 
-  test("the sweep skips an already-ended record of a live identity", async (t) => {
+  test("the sweep stops a live owned identity even if a record says it ended", async (t) => {
     const { identity } = await oldServer(t);
     const ended = { ...identity, endedAt: new Date().toISOString(), code: 0 };
     const ctx = sweepJob({ servers: [ended] });
     const job = await ctx.run();
     assert.equal(job.state, "completed");
-    assert.equal(isWorkerAlive(identity), true);
+    assert.equal(isWorkerAlive(identity), false);
   });
 
   test("the sweep stops a predecessor recorded only in attempts[].servers", async (t) => {
@@ -411,7 +423,7 @@ for (const persisted of [false, true]) {
     const job = await ctx.run();
     assert.equal(job.state, "completed");
     assert.equal(isWorkerAlive(identity), false);
-    assert.ok(job.attempts[0].servers[0].endedAt, "the swept server's record is ended");
+    assert.ok(job.attempts[0].servers[0].deathObservedAt, "the swept server's record is ended");
     assert.equal(ctx.fakeState().turnStarts.length, 1);
   });
 
@@ -700,7 +712,10 @@ for (const persisted of [false, true]) {
       const job = JSON.parse(fs.readFileSync(path.join(ctx.jobDir, "job.json"), "utf8"));
       const ours = [job.worker, job.server, ...(job.workers ?? []), ...(job.attempts ?? []).flatMap(attempt => attempt.servers ?? [])];
       for (const identity of ours) {
-        if (identity && isWorkerAlive(identity)) process.kill(identity.pid, "SIGKILL");
+        if (identity && isWorkerAlive(identity)) {
+          try { process.kill(identity.pid, "SIGKILL"); }
+          catch (error) { if (error.code !== "ESRCH") throw error; }
+        }
       }
       await waitFor(() => ours.every(identity => !identity || !isWorkerAlive(identity)));
     });
@@ -748,7 +763,7 @@ for (const persisted of [false, true]) {
   const waitFor = waitForJob;
 
   for (const backend of ['codex', 'grok', 'zcode', 'kimi']) {
-    test(`${backend}: recovery preserves a nested companion job sharing its process group`, async t => {
+    test(`${backend}: recovery preserves a nested companion job in its own execution group`, async t => {
       const outer = setup(t, { turnMs: 3000 });
       const inner = setup(t, { turnMs: 6000 });
       let binary = path.join(outer.bin, 'codex');
@@ -768,10 +783,12 @@ for (const persisted of [false, true]) {
       }
       const script = new URL('../plugins/relay/scripts/companion.mjs', import.meta.url).pathname;
       const marker = path.join(outer.root, 'nested-started');
-      const overrides = { HOME: inner.user, USERPROFILE: inner.user, RELAY_JOBS_HOME: inner.jobs, PATH: inner.env.PATH };
+      const innerRelease = path.join(inner.root, 'release-nested-turn');
+      const overrides = { HOME: inner.user, USERPROFILE: inner.user, RELAY_JOBS_HOME: inner.jobs, PATH: inner.env.PATH,
+        FAKE_CODEX_RELEASE_FILE: innerRelease };
       // Model a tool shell launching a foreground companion in the background, then exiting.
-      // Both shells use captured output, but the companion retains the outer worker's group.
-      const launch = `require('node:child_process').spawn(process.execPath, ${JSON.stringify([script, 'task', '--model', 'gpt-test', '--effort', 'low', 'Nested task'])}, {
+      // The task caller shares the outer group; its worker launches outside it.
+      const launch = `require('node:child_process').spawn(process.execPath, ${JSON.stringify([script, 'task', '--model', 'gpt-test', '--effort', 'low', '[held] Nested task'])}, {
         cwd: ${JSON.stringify(inner.work)}, env: { ...process.env, ...${JSON.stringify(overrides)} }, stdio: 'ignore'
       }).unref();`;
       const inject = `if (!require('node:fs').existsSync(${JSON.stringify(marker)})) {
@@ -783,7 +800,7 @@ for (const persisted of [false, true]) {
       // when the nested job starts slowly, and a server killed after its turn needs no recovery.
       // The resumed turn takes the fake's 3 s.
       const { id } = startJob(outer, header, '[long] Outer task');
-      const innerDir = await waitFor(() => jobDirs(inner).find(dir => JSON.parse(fs.readFileSync(path.join(dir, 'job.json'))).state === 'running'));
+      const innerDir = await waitFor(() => jobDirs(inner).find(dir => JSON.parse(fs.readFileSync(path.join(dir, 'job.json'))).state === 'running'), 30000);
       const innerId = path.basename(innerDir);
       const before = readJob(inner, innerId);
       const outerBefore = readJob(outer, id);
@@ -798,12 +815,13 @@ for (const persisted of [false, true]) {
       });
       const table = listProcesses();
       const identities = [before.worker.pid, before.serverPid].map(pid => table.find(row => row.pid === pid));
-      assert.ok(identities.every(row => row && row.pgid === outerBefore.worker.pid));
+      assert.ok(identities.every(row => row && row.pgid === before.worker.pid));
       process.kill(outerBefore.serverPid, 'SIGKILL');
       await waitFor(() => readJob(outer, id).automaticResumes?.length === 1);
       const afterTable = listProcesses();
       assert.ok(identities.every(identity => afterTable.some(row => row.pid === identity.pid && row.startTime === identity.startTime && !row.zombie)),
         'recovery killed the inner worker or server');
+      fs.writeFileSync(innerRelease, 'release');
       await finishJob(inner, innerId);
       assert.equal(readJob(inner, innerId).state, 'completed');
       await finishJob(outer, id);

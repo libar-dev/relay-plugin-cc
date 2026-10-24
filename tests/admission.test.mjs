@@ -1,5 +1,7 @@
 import "./support/isolate-env.mjs";
 import fs from "node:fs";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -962,11 +964,13 @@ test("an unwritable admission home holds worker creation and records its reason"
   assert.match(job.admission.reason, /load guard error:.*RELAY_ADMISSION=off/);
   assert.equal(computeJobView(job, { now: s.deps.now() + 60001 }).state, "queued");
   fs.chmodSync(s.home, 0o700);
-  const open = fs.openSync; let retries = 0;
-  t.mock.method(fs, "openSync", (file, ...args) => {
-    if (file === path.join(c.jobDir, "stderr.log")) { retries++; throw new Error("synthetic spawn reached"); }
-    return open(file, ...args);
+  const spawn = childProcess.spawnSync; let retries = 0;
+  t.mock.method(childProcess, "spawnSync", (command, args, ...rest) => {
+    if (args?.[0]?.endsWith("/launcher.mjs")) { retries++; throw new Error("synthetic spawn reached"); }
+    return spawn(command, args, ...rest);
   });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   t.mock.method(process.stderr, "write", () => true);
   assert.equal(retryQueuedWorker(c.jobDir, { ...s.env, RELAY_ADMISSION: "off" }), null);
   assert.equal(retries, 1);
@@ -1106,4 +1110,25 @@ test("a damaged own slot cannot reuse a busy seat or retain the damaged placehol
   assert.equal(admit({ ...c, turn: true }, s.deps).waitKind, "seats");
   const slot = JSON.parse(fs.readFileSync(file));
   assert.equal(slot.state, "waiting"); assert.equal(slot.damaged, undefined);
+});
+
+test("a burst can reserve other seats while the first launch handshake is still running", t => {
+  const s = setup(t);
+  const jobs = Array.from({ length: 8 }, () => {
+    const c = s.ctx();
+    writeJob(c.jobDir, { id: c.jobId, state: "starting", request: c.request });
+    return c;
+  });
+  let launches = 0, sleeps = 0;
+  const deps = { ...s.deps, lockSleep() { sleeps++; } };
+  const launch = index => spawnWithAdmission(jobs[index].jobDir, s.env, () => {
+    launches++;
+    assert.equal(JSON.parse(fs.readFileSync(path.join(s.home, "slots", `${jobs[index].jobId}.json`))).state, "spawning");
+    if (index + 1 < jobs.length) assert.equal(launch(index + 1), index + 2);
+    return index + 1;
+  }, deps);
+  assert.equal(launch(0), 1);
+  assert.equal(launches, jobs.length);
+  assert.equal(sleeps, 0);
+  assert.ok(jobs.every(c => readJob(c.jobDir).admission?.causeKind !== "lock"));
 });

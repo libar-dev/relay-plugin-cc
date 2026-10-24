@@ -189,16 +189,20 @@ because jobs belong to no session; a `SessionEnd` hook that killed a session's j
 module, the hooks, the worker launcher and scripts (the skill's "Direct use"). While a worker
 lives, the companion never writes `job.json`; it talks to the worker through the inbox.
 
-**The worker.** A detached process (a new session, its output in `stderr.log`), one per job at a
-time, holding the job's lease. It starts the backend server, runs turns, acts on inbox messages,
-writes the report, and alone writes `job.json` while it lives, recording its pid and process start
-time, a heartbeat every 10 seconds and the last event's time. Detached, it outlives the agent and the
-Claude session. On Linux a new session is not enough: stopping a systemd unit kills every process in
-its cgroup, and T3 Code's server runs as `t3code.service`, so its restart killed the workers it had
-started. A worker started from a unit of the user's systemd runs in a scope of its own
-(`systemd-run --user --scope`, same pid). On macOS, quitting T3 Code has killed workers too; that
-cause is not known. With the start time in its identity, a dead worker and a pid with a different
-recorded start time read as dead (openai/codex-plugin-cc#704: a dead worker shown as running forever).
+**The worker.** A detached process (a new session, output in `stderr.log`), one per job at a
+time, holding the job's lease. A short-lived launcher exits and the worker acknowledges after
+reparenting, so dispatch from `wait`, hooks and recovery leaves the caller's descendant tree.
+The caller waits for acknowledgement; a Stop racing handoff may prevent dispatch and a later
+waiter can retry it. Launch provenance records caller and worker identities and parent/group IDs.
+
+The worker starts the backend, runs turns, handles the inbox and writes the report and `job.json`.
+It records a process identity, a heartbeat every 10 seconds and the last event time. Linux workers
+use their own user systemd scope under `relay-jobs.slice` whenever a user manager is available
+(`RELAY_WORKER_SCOPE=off` disables it), and set inheritable OOM score 500 before backend spawn.
+Other hosts use process groups plus a sampled descendant registry. A job retains the last 20
+execution identities, cleans them before reconnect and at completion, and keeps its seat if
+cleanup remains unresolved. Heartbeats expose scope memory or summed member RSS in job and guard
+status. Process start identities distinguish a dead worker from a reused PID.
 
 **The backend server.** A worker starts its own `codex app-server`, `grok agent... stdio`,
 `zcode app-server` or `kimi acp` in the job's working directory, a new one after a server end, and stops it when
@@ -353,7 +357,7 @@ jobs started within one second, one failed on a request-rate limit after Codex's
   lease (from a resume, a continue or recovery), the cancel goes to it as an inbox message, and if
   that worker has not ended the job within 10 seconds, `cancel` exits 4 and names the holder's role,
   so a relay tries again.
-- **An ended job** gets a no-op receipt, so every cancel is recorded as handled.
+- **An ended job** gets a no-op receipt once its execution group is empty; cancel also cleans owned leftovers.
 - **An expected attempt.** `cancel --attempt N` cancels the job only while attempt N is its current attempt (a
   starting job's first attempt counts as 1), so a cancel pressed on one attempt never stops a newer one that a
   continue or an automatic recovery started meanwhile. It checks before it posts its message, which carries N; the
@@ -1106,8 +1110,6 @@ After a Claude Code update:
 - The board's Steer and Continue read the job, then send: a job that begins another attempt in the moment between
   the two gets the text in that attempt, as a `companion steer` from a shell would. `steer` and `continue` take no
   expected attempt as `cancel --attempt` does.
-- `cancel` of a dead job signals the recorded worker pid without checking its start time, and its
-  process-group kill can reach a nested job that kept the worker's group.
 - A tool that the backend starts as the turn is interrupted, and that leaves the server's process tree before
   `cancel` reads the tree again after the grace (a daemon whose server has already exited), is not stopped. A tool
   whose server still runs then is stopped.
@@ -1118,10 +1120,10 @@ After a Claude Code update:
 - A `cancel` whose read of the process table fails after the grace period signals only the
   worker's process group, or its bare pid; a descendant outside that group, such as a tool
   command the server started in a session of its own, keeps running.
-- Recovery treats a process whose start time cannot be read as the same process.
-- A process a dead server left behind that is no longer its descendant is out of reach of recovery
-  and of a later cancel. The fake-server tests reproduce this when a child inherits stdout. The plugin does not
-  record every descendant while a server runs.
+- An unreadable owned process identity keeps cleanup unresolved and capacity counted; it is not signalled blindly.
+- Without a Linux scope, a detached child that orphans before a descendant sample can escape
+  tracking. Samples run every 10 seconds, with a process table cached for 5 seconds; backend exit
+  takes another fresh sample. Recorded identities remain available after their parent dies.
 - A `zcode app-server` can leave a file lock under `~/.zcode/v2` after it ends. A later
   ZCode start may report that lock before recovering it.
 
@@ -1177,8 +1179,8 @@ would need `grok agent`.
   not UTF-8) and exclusive creates on its own filesystem. A tool that writes another way, such as
   a plugin's stdio MCP server, is not covered; in Kimi's default mode an MCP call asks and is
   rejected, unless the home's `[[permission.rules]]` allow it.
-- Kimi runs each shell command in a session of its own. After a server SIGKILL the command
-  outlives it, out of reach of recovery, as above.
+- Kimi runs shell commands in their own sessions. Linux scopes and the sampled registry keep
+  them owned across backend death, subject to the sampling limitation above.
 - No isolation per job in one home: sessions, MCP servers, plugins and their session-start skills,
   hooks and the sign-in are the home's. A home for jobs without MCP servers or plugins is the
   skill's `kimi-home.md`.

@@ -154,6 +154,15 @@ For a supported surfaced Agent-tool relay, a notice says the relay was stopped a
 running, when that job can be found. Workflow agents and hosts with no surface get no notice. Use `/relay:status`
 and `/relay:result <job>` if none appears. Stopping a relay does not ask Claude to cancel its job.
 
+When a job ends, is cancelled or loses its backend, relay stops every process the job started,
+including test runners and builds that outlived their parent. A job that must leave a service
+running should start it outside relay. A replacement backend waits for cleanup; unresolved
+processes keep their capacity counted and appear as `cleanup: unresolved` on the job.
+
+Every worker leaves its caller's process tree before starting a backend, including workers dispatched
+by a long-running `wait` or recovery. Stopping that caller after dispatch leaves the job running.
+A Stop during the launch handoff may prevent dispatch; a later waiter can retry it.
+
 ## When a job waits
 
 A job's block can show `state: queued` and a `queued:` line explaining why it is waiting. This is pending work,
@@ -176,6 +185,13 @@ If the guard itself fails, new starts wait with the error as their queue reason.
 records count as busy until set aside. Provider pauses apply to the selected account home.
 Use `RELAY_ADMISSION=off` or `/relay:setup --admission off` to start without the guard, and
 `/relay:setup --admission on` to restore the saved setting.
+
+Job status shows memory used by the worker, backend and tools. On Linux, an available user systemd
+manager gives each job a scope under `relay-jobs.slice`, and children inherit OOM score 500 so the
+kernel preferentially stops them under global memory exhaustion. There is no static memory cap.
+On macOS, tracking and cleanup use process groups plus sampled descendants; memory is visible but
+running tools are not paused or limited. A detached child that orphans between samples can escape
+tracking on systems without scopes.
 
 A queued job still occupies its Claude agent and, in a Workflow, one of that run's agent slots. A Workflow can
 run up to 16 agents at once, fewer with fewer CPUs; `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` changes that

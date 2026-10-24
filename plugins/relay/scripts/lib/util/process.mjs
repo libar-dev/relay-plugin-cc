@@ -2,38 +2,29 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import process from "node:process";
+import path from "node:path";
+import { acquireOwnership, releaseOwnership } from "./ownership.mjs";
+import { readJsonOrNull, writeJsonAtomic } from "./fs.mjs";
 
-// On Linux a process stays in its systemd unit's cgroup whatever its session or process group,
-// and stopping the unit kills everything in that cgroup: T3 Code runs as `t3code.service` with
-// KillMode=mixed, so its restart killed every job worker it had started, setsid or not. A process
-// started from a unit of the user's manager goes through `systemd-run --user --scope`, which gives
-// it a scope of its own in the same pid. The answer is the command and arguments to spawn.
-// RELAY_WORKER_SCOPE=off turns it off.
+// A dedicated user scope contains all tools, including children that change sessions.
+// Scope availability is cached; hosts without a user manager use identity-based tracking.
 /** @type {boolean | null} */
 let userScopeWorks = null;
 
 export function inOwnUserScope(command, args, { env = process.env, platform = process.platform, cgroup = null, probe = null, description = null } = {}) {
   if (platform !== "linux" || env.RELAY_WORKER_SCOPE === "off") return { command, args };
-  let text = cgroup;
-  if (text == null) {
-    try { text = fs.readFileSync("/proc/self/cgroup", "utf8"); } catch { return { command, args }; }
-  }
-  // cgroup v2 is one line `0::<path>`; under a user's manager a service's path holds
-  // `/user@<uid>.service/` and ends in `.service`.
-  const unified = text.split("\n").find((line) => line.startsWith("0::"))?.slice(3).trim() ?? "";
-  if (!/\/user@\d+\.service\//.test(unified) || !/\.service$/.test(unified)) return { command, args };
   if (probe) {
     if (!probe()) return { command, args };
   } else {
     if (userScopeWorks === null) {
-      const result = spawnSync("systemd-run", ["--user", "--scope", "--quiet", "--collect", "--", "true"], { env, stdio: "ignore", timeout: 5000 });
+      const result = spawnSync("systemd-run", ["--user", "--scope", "--quiet", "--collect", "--slice=relay-jobs.slice", "--", "true"], { env, stdio: "ignore", timeout: 5000 });
       userScopeWorks = !result.error && result.status === 0;
     }
     if (!userScopeWorks) return { command, args };
   }
   return {
     command: "systemd-run",
-    args: ["--user", "--scope", "--quiet", "--collect", ...(description ? [`--description=${description}`] : []), "--", command, ...args]
+    args: ["--user", "--scope", "--quiet", "--collect", "--slice=relay-jobs.slice", ...(description ? [`--description=${description}`] : []), "--", command, ...args]
   };
 }
 
@@ -198,30 +189,32 @@ export function formatCommandFailure(result) {
 // Every process with its parent, process group and start time, or null where `ps` is
 // unavailable or the table cannot be read.
 export function listProcesses(options = {}) {
-  const result = runCommand("ps", ["-A", "-o", "pid=,ppid=,pgid=,stat=,lstart="], { env: { ...process.env, LC_ALL: "C", TZ: "UTC" } });
+  const result = spawnSync("ps", ["-A", "-o", "pid=,ppid=,pgid=,stat=,rss=,lstart="], { encoding: "utf8", env: { ...process.env, LC_ALL: "C", TZ: "UTC" } });
   if (result.error || result.status !== 0) {
     return null;
   }
   const rows = [];
   for (const line of result.stdout.split(/\r?\n/)) {
     const parts = line.trim().split(/\s+/);
-    if (parts.length < 9) {
+    if (parts.length < 10) {
       continue;
     }
     const pid = Number(parts[0]);
     const ppid = Number(parts[1]);
     const pgid = Number(parts[2]);
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid)) {
+    // ps includes itself in its output. On macOS there is no later /proc identity read
+    // to discard that already-exited helper; retaining it invents a survivor on every sweep.
+    if (pid === result.pid || !Number.isInteger(pid) || !Number.isInteger(ppid)) {
       continue;
     }
     // Use the same identity format as worker records. On Linux, ticks also avoid
     // confusing two processes started within the same second of ps's lstart.
     const info = (options.platform ?? process.platform) === "linux" ? readProcessInfo(pid, options) : null;
-    const startTime = (options.platform ?? process.platform) === "linux" ? (info?.startTime ?? null) : `ps:${parts.slice(4, 9).join(" ")}`;
+    const startTime = (options.platform ?? process.platform) === "linux" ? (info?.startTime ?? null) : `ps:${parts.slice(5, 10).join(" ")}`;
     // A failed identity read does not prove exit. Retain a live, unreadable row
     // as unknown so cleanup can report it without ever signalling it blindly.
     if (!startTime && !isProcessAlive(pid, options)) continue;
-    rows.push({ startedAtMs: Date.parse(`${parts.slice(4, 9).join(" ")} UTC`), pid, ppid: info?.ppid ?? ppid, pgid: info?.pgid ?? pgid, zombie: info?.zombie ?? parts[3].startsWith("Z"), startTime });
+    rows.push({ rss: Number(parts[4]) * 1024, startedAtMs: Date.parse(`${parts.slice(5, 10).join(" ")} UTC`), pid, ppid: info?.ppid ?? ppid, pgid: info?.pgid ?? pgid, zombie: info?.zombie ?? parts[3].startsWith("Z"), startTime });
   }
   return rows;
 }
@@ -253,14 +246,14 @@ export function groupSurvivors(leader, table, { aliveUntil = null, servers = [] 
     return row.startTime?.split(":", 1)[0] === leader.startTime.split(":", 1)[0] && at !== null && at >= start;
   });
   const bound = aliveUntil == null ? NaN : Date.parse(aliveUntil);
-  const verified = members.some(row => {
+  const verified = (current && !current.zombie && current.startTime === leader.startTime) || members.some(row => {
     const ms = row.startedAtMs ?? (row.startTime?.startsWith("ps:") ? startedAt(row.startTime) : NaN);
     return (Number.isFinite(bound) && Number.isFinite(ms) && ms <= bound - 1000) ||
       servers.some(server => server?.startTime && server.pid === row.pid && server.startTime === row.startTime);
   });
   const unknown = group.filter(row => !row.startTime);
-  const snapshot = (verified ? [...members, ...unknown] : unknown).map(({ pid, startTime }) => ({ pid, startTime }));
-  return verified || members.length === 0 ? snapshot : Object.assign(snapshot, { unverified: members.length });
+  const snapshot = (verified ? [...members, ...unknown] : []).map(({ pid, startTime }) => ({ pid, startTime }));
+  return verified || group.length === 0 ? snapshot : Object.assign(snapshot, { unverified: members.length + unknown.length });
 }
 
 // The given roots and all their descendants, each with its start time, so a later kill
@@ -287,7 +280,7 @@ export function snapshotProcessTree(rootPids, options = {}) {
   const stack = rootPids.filter((pid) => byPid.has(pid)).map((pid) => byPid.get(pid));
   while (stack.length > 0) {
     const row = stack.pop();
-    if (seen.has(row.pid) || row.pid === process.pid) {
+    if (seen.has(row.pid) || row.pid === process.pid || options.excludePids?.has(row.pid)) {
       continue;
     }
     seen.set(row.pid, { pid: row.pid, startTime: row.startTime });
@@ -306,11 +299,14 @@ export function liveSnapshotMembers(snapshot, options = {}) {
     return [...snapshot];
   }
   const byPid = new Map(table.map((row) => [row.pid, row]));
-  const remaining = snapshot.flatMap((entry) => {
+  const knownPids = new Set(snapshot.filter(entry => entry.startTime).map(entry => entry.pid));
+  const remaining = snapshot.filter(entry => entry.startTime || !knownPids.has(entry.pid)).flatMap((entry) => {
     const row = byPid.get(entry.pid);
     if (!row || row.zombie) return [];
     if (!entry.startTime || !row.startTime) return [{ ...entry, identityUnknown: true }];
-    return row.startTime === entry.startTime ? [entry] : [];
+    if (row.startTime !== entry.startTime) return [];
+    const { identityUnknown, ...verified } = entry;
+    return [verified];
   });
   if (remaining.some(entry => entry.identityUnknown)) remaining.cause = "process identities could not be read";
   return remaining;
@@ -342,9 +338,12 @@ export async function stopProcessSnapshot(snapshot, options = {}) {
     const live = members();
     for (const entry of live) {
       if (tableUnreadable || entry.identityUnknown || !entry.startTime) continue;
-      options.beforeSignal?.(entry, signal);
+      if (options.beforeSignal?.(entry, signal) === false) continue;
       try { killImpl(entry.pid, signal); } catch { continue; /* gone already */ }
       options.onSignal?.(entry, signal);
+      if (signal === "SIGTERM" && members().some(live => live.pid === entry.pid && live.startTime === entry.startTime && !live.identityUnknown)) {
+        try { killImpl(entry.pid, "SIGCONT"); } catch {}
+      }
     }
   };
   const waitGone = async (ms) => {
@@ -352,7 +351,7 @@ export async function stopProcessSnapshot(snapshot, options = {}) {
     while (Date.now() < deadline) {
       const live = members();
       if (live.length === 0) return true;
-      if (tableUnreadable || live.every(entry => entry.identityUnknown)) return false;
+      if (tableUnreadable) return false;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     return members().length === 0;
@@ -424,4 +423,188 @@ export function runLimited(command, args, { cwd, env, timeoutMs }) {
       release({ status: null, signal: "SIGKILL", error: null });
     }, timeoutMs);
   });
+}
+
+// The process table is shared across workers. A busy cache lock never gets stolen.
+export function readProcessTableCached({ home = null, maxAgeMs = 5000, now = Date.now(), list = listProcesses } = {}) {
+  if (!home) return list();
+  fs.mkdirSync(home, { recursive: true });
+  const file = path.join(home, ".ps-table.json");
+  const cached = readJsonOrNull(file);
+  if (cached && now >= cached.at && now - cached.at < maxAgeMs) return cached.rows;
+  const lock = `${file}.lock`;
+  if (!acquireOwnership(lock)) return cached?.rows ?? null;
+  try {
+    const rows = list();
+    if (rows) writeJsonAtomic(file, { at: now, rows });
+    return rows;
+  } finally { releaseOwnership(lock); }
+}
+
+export function ownExecution(me, { platform = process.platform, workerRegistry = null } = {}) {
+  let cgroup = null, cgroupId = null, bootId = null;
+  if (platform === "linux") {
+    try {
+      const unified = fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3).trim();
+      if (unified?.includes("/relay-jobs.slice/") && unified.endsWith(".scope")) {
+        cgroupId = fs.statSync(path.join("/sys/fs/cgroup", unified)).ino;
+        bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+        cgroup = unified;
+      }
+    } catch {}
+  }
+  return { pgid: me.pid, leader: { pid: me.pid, startTime: me.startTime }, platform, cgroup, cgroupId, bootId, workerRegistry, startedAt: me.startedAt ?? new Date().toISOString() };
+}
+
+function executions(job) {
+  const entries = [...(job?.executions ?? []), job?.execution].filter(Boolean);
+  if (!entries.length && job?.worker) entries.push({ leader: job.worker, pgid: job.worker.pgid ?? job.worker.pid });
+  return [...new Map(entries.map(e => [`${e.leader?.pid}:${e.leader?.startTime}`, e])).values()];
+}
+function roots(job) {
+  return [job?.server, ...(job?.attempts ?? []).flatMap(a => a.servers ?? [])].filter(Boolean);
+}
+function cgroupFile(execution, name) {
+  const group = execution.cgroup;
+  // Only relay scopes, never an ancestor or a caller-supplied arbitrary filesystem path.
+  if (!group?.startsWith("/") || group.split("/").includes("..") || !group.includes("/relay-jobs.slice/") || !/^run-[a-zA-Z0-9_-]+\.scope$/.test(group.split("/").at(-1))) return null;
+  try {
+    if (!execution.bootId || !execution.cgroupId ||
+        execution.bootId !== fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() ||
+        execution.cgroupId !== fs.statSync(path.join("/sys/fs/cgroup", group)).ino) return null;
+  } catch { return null; }
+  return path.join("/sys/fs/cgroup", group, name);
+}
+
+function scopeMemberStarted(row, execution) {
+  // Linux identities have tick precision; ps's wall-clock time is rounded to a second.
+  const leader = execution.leader?.startTime;
+  if (/^linux:\d+$/.test(leader ?? "") && /^linux:\d+$/.test(row.startTime ?? ""))
+    return BigInt(row.startTime.slice(6)) >= BigInt(leader.slice(6));
+  const start = Date.parse(execution.startedAt);
+  return !row.startTime || !Number.isFinite(start) || row.startedAtMs >= Math.floor(start / 1000) * 1000;
+}
+
+// Published workers form ownership boundaries, including during a nested launch handoff.
+function foreignWorkerPids(job, table) {
+  const excluded = new Set();
+  for (const directory of new Set(executions(job).map(e => e.workerRegistry).filter(Boolean))) {
+    let names;
+    try { names = fs.readdirSync(directory); } catch { continue; }
+    for (const name of names) {
+      const worker = readJsonOrNull(path.join(directory, name));
+      if (worker?.jobDir !== job.jobDir && worker?.startTime && table.some(row =>
+        row.pid === worker.pid && row.startTime === worker.startTime && !row.zombie)) excluded.add(worker.pid);
+    }
+  }
+  // Never walk through another job's worker to capture its backend or tools either.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const row of table) if (excluded.has(row.ppid) && !excluded.has(row.pid)) { excluded.add(row.pid); changed = true; }
+  }
+  return excluded;
+}
+
+function verifiedRoots(entries, table, excluded) {
+  return entries.filter(root => root.startTime && !excluded.has(root.pid) && table.some(row =>
+    row.pid === root.pid && row.startTime === root.startTime && !row.zombie));
+}
+
+// Cancellation also snapshots the worker tree. Apply the same identity and nested-job
+// boundaries as registry sampling, rather than authorizing traversal by a numeric root alone.
+export function snapshotExecutionTree(job, rootPids, table = listProcesses()) {
+  if (!table) return Object.assign([], { cause: "the process table could not be read" });
+  const excluded = foreignWorkerPids(job, table);
+  const valid = verifiedRoots([job.worker, ...roots(job)].filter(root => root && rootPids.includes(root.pid)), table, excluded);
+  return snapshotProcessTree(valid.map(root => root.pid), { table, excludePids: excluded });
+}
+
+// Prune dead identities on every sample, retaining escaped descendants by identity.
+export function sampleExecution(job, jobDir, table) {
+  if (!table) return readJsonOrNull(path.join(jobDir, "processes.json"))?.members ?? [];
+  if (job.execution?.platform && !["linux", "darwin"].includes(job.execution.platform)) return [];
+  const file = path.join(jobDir, "processes.json");
+  const old = readJsonOrNull(file)?.members ?? [];
+  const excluded = foreignWorkerPids(job, table);
+  const validRoots = verifiedRoots([...roots(job), ...old], table, excluded);
+  const candidates = [...old, ...snapshotProcessTree(validRoots.map(r => r.pid), { table, excludePids: excluded })];
+  const byPid = new Map(table.map(row => [row.pid, row]));
+  const members = [...new Map(candidates.filter(entry => {
+    const row = byPid.get(entry.pid);
+    return !excluded.has(entry.pid) && row && !row.zombie && entry.startTime && (!row.startTime || row.startTime === entry.startTime);
+  }).map(entry => [`${entry.pid}:${entry.startTime}`, { pid: entry.pid, startTime: entry.startTime, firstSeenAt: entry.firstSeenAt ?? new Date().toISOString() }])).values()];
+  writeJsonAtomic(file, { members });
+  return members;
+}
+
+/** @returns {ProcessSnapshot} */
+export function executionMembers(job, table, { jobDir = job?.jobDir, excludeSelf = true } = {}) {
+  if (job.execution?.platform && !["linux", "darwin"].includes(job.execution.platform)) return [];
+  if (!table) return Object.assign([], { cause: "the process table could not be read" });
+  const entries = [];
+  const excluded = foreignWorkerPids(job, table);
+  let cause;
+  for (const execution of executions(job)) {
+    const file = cgroupFile(execution, "cgroup.procs");
+    if (file) {
+      try {
+        const pids = new Set(fs.readFileSync(file, "utf8").trim().split(/\s+/).map(Number));
+        entries.push(...table.filter(row => pids.has(row.pid) && !row.zombie &&
+          scopeMemberStarted(row, execution)));
+      } catch (error) { if (error.code !== "ENOENT") cause = "the execution scope could not be read"; }
+    }
+    const leader = table.find(row => row.pid === execution.leader?.pid && row.startTime === execution.leader.startTime && !row.zombie);
+    if (leader) entries.push(leader);
+    entries.push(...groupSurvivors({ ...execution.leader, pgid: execution.pgid }, table, {
+      aliveUntil: execution.aliveUntil ?? job.heartbeatAt ?? job.lastEventAt ?? job.startedAt, servers: roots(job)
+    }));
+  }
+  const recorded = jobDir ? readJsonOrNull(path.join(jobDir, "processes.json"))?.members ?? [] : [];
+  const knownRoots = verifiedRoots([...roots(job), ...recorded], table, excluded);
+  entries.push(...roots(job), ...recorded, ...snapshotProcessTree(knownRoots.map(root => root.pid), { table, excludePids: excluded }));
+  const live = liveSnapshotMembers(entries, { table });
+  const result = [...new Map(live.filter(entry => !excluded.has(entry.pid) && (!excludeSelf || entry.pid !== process.pid)).map(entry => [`${entry.pid}:${entry.startTime}`, entry])).values()];
+  if (cause) Object.assign(result, { cause });
+  return result;
+}
+
+export function executionBytes(job, table, options = {}) {
+  const group = cgroupFile(job.execution ?? {}, "memory.current");
+  if (group) { try { return Number(fs.readFileSync(group, "utf8").trim()); } catch {} }
+  const members = executionMembers(job, table, { ...options, excludeSelf: false });
+  const pids = new Set(members.map(entry => entry.pid));
+  return table ? table.filter(row => pids.has(row.pid)).reduce((sum, row) => sum + (row.rss ?? 0), 0) : null;
+}
+
+export async function stopExecution(job, options = {}) {
+  if (job.execution?.platform && !["linux", "darwin"].includes(job.execution.platform)) return { servers: roots(job), survivors: [] };
+  const table = (options.listProcesses ?? listProcesses)();
+  const members = executionMembers(job, table, options);
+  if (members.cause) return { servers: roots(job), survivors: members.length ? members : roots(job).filter(root => root.pid !== process.pid && isProcessIdentityAlive(root)), cause: members.cause };
+  // A nested worker can deliberately inherit this scope when its own scopes are off.
+  // In that case only signal verified members individually, preserving the ownership boundary.
+  const foreign = foreignWorkerPids(job, table);
+  for (const execution of executions(job)) {
+    const file = cgroupFile(execution, "cgroup.kill");
+    if (file && !isProcessIdentityAlive(execution.leader)) {
+      try {
+        const pids = fs.readFileSync(cgroupFile(execution, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number);
+        if (pids.filter(pid => pid > 0).every(pid => {
+          const row = table.find(row => row.pid === pid);
+          return row?.startTime && scopeMemberStarted(row, execution) && !foreign.has(pid);
+        })) fs.writeFileSync(file, "1");
+      } catch {}
+    }
+  }
+  const stopped = await stopProcessSnapshot(members, options);
+  // Tools may fork while TERM is being handled. Verify the execution itself again,
+  // rather than declaring it empty just because the original snapshot is gone.
+  const remaining = executionMembers(job, (options.listProcesses ?? listProcesses)(), options);
+  /** @type {ProcessSnapshot} */
+  const survivors = [...new Map([...stopped, ...remaining].map(entry => [`${entry.pid}:${entry.startTime}`, entry])).values()];
+  if (stopped.cause || remaining.cause) survivors.cause = stopped.cause ?? remaining.cause;
+  for (const server of roots(job)) {
+    if (server.pid !== process.pid && isProcessIdentityAlive(server) && !survivors.some(p => p.pid === server.pid)) survivors.push(server);
+  }
+  return { servers: roots(job), survivors, ...(survivors.cause ? { cause: survivors.cause } : {}) };
 }

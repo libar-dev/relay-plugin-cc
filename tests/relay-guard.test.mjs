@@ -37,6 +37,7 @@ import {
 import { handleRelayHook, parseCompanionCommand } from "../plugins/relay/scripts/hooks/relay-guard.mjs";
 import { findRelayJob, parseRelayTranscript, promptSha256, readGuardState, readRelayPointer, relayAgentTypes, RELAY_BLOCK_BUDGET, stripRetrySuffix, transcriptCandidates, writeGuardState } from "../plugins/relay/scripts/lib/harness/relay.mjs";
 import { busyViews } from "./support/busy-view.mjs";
+import { readLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 import { parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { classifyHarnessEntry, SCHEMA_SENTENCE } from "../plugins/relay/scripts/lib/harness/workflow.mjs";
 
@@ -457,6 +458,36 @@ test("without SubagentHandback, SubagentStop still checks the final text", async
   assert.ok(blocked.reason.endsWith(resultOf(ctx, jobId)));
   assert.ok(!blocked.reason.includes(WORKFLOW_NOTE));
   assert.equal(await stop(ctx, resultOf(ctx, jobId)), null);
+});
+
+test("late unresolved cleanup preserves the copied result and stays visible in status", async () => {
+  const preload = path.join(makeTempDir(), "fail-launch.mjs");
+  fs.writeFileSync(preload, "if (process.argv[1]?.endsWith('/launcher.mjs')) process.exit(1);\n");
+  const ctx = relayContext("job", { turnMs: 50, env: { NODE_OPTIONS: `--import=${preload}` } });
+  const jobId = await startedRelay(ctx, QUICK);
+  assert.equal(readJobJson(ctx, jobId).state, "queued");
+  const { runWorker } = await import("../plugins/relay/scripts/lib/worker/worker.mjs");
+  const { listProcesses } = await import("../plugins/relay/scripts/lib/util/process.mjs");
+  let copied;
+  await runWorker(jobDirOf(ctx, jobId), {
+    env: ctx.env,
+    predecessorCleanup: { listProcesses() {
+      if (readJobJson(ctx, jobId).state === "completed") {
+        copied ??= resultOf(ctx, jobId);
+        return null; // The final sweep cannot verify that the execution is empty.
+      }
+      return listProcesses();
+    } }
+  });
+  assert.match(copied, /^state: completed$/m);
+  const cleanup = readJobJson(ctx, jobId).cleanup;
+  assert.equal(cleanup.state, "unresolved");
+  assert.match(cleanup.cause, /process table/);
+  assert.equal(resultOf(ctx, jobId), copied, "completion freezes the copied block");
+  assert.equal(await stop(ctx, copied), null, "SubagentStop accepts the original copy");
+  assert.match(companion(ctx, ["status", jobId]).stdout, /^cleanup: unresolved .*process table/m);
+  const status = JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout);
+  assert.deepEqual(status.cleanup, cleanup);
 });
 
 for (const workflow of [false, true]) {
@@ -1497,6 +1528,7 @@ test("a relay that never runs start gets its job and session recorded by the hoo
     assert.equal(readJobJson(ctx, jobId).launchedBy.claudeSessionId, ctx.sessionId, what);
     assert.equal(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).claudeSessionId, ctx.sessionId, what);
     assert.equal(waitJob(ctx, jobId).status, 0, what);
+    await waitFor(() => !readLease(jobDirOf(ctx, jobId)));
     const handback = await pre(ctx, "SubagentHandback", { message: "Hi." });
     assert.equal(decision(handback), "allow", what);
     assert.equal(updated(handback).message, resultOf(ctx, jobId), `${what}: the hand-back is the job's result`);
@@ -1521,6 +1553,7 @@ test("a queued Workflow stays pending through repeated hand-back and stop attemp
   assert.ok(jobId);
   assert.equal(waitJob(ctx, jobId).status, 0);
   const dir = jobDirOf(ctx, jobId);
+  await waitFor(() => !readLease(dir));
   const file = path.join(dir, "job.json");
   const job = JSON.parse(fs.readFileSync(file, "utf8"));
   ctx.env.RELAY_ADMISSION = "on";

@@ -55,7 +55,9 @@ state lines. Nothing in `backends/` imports from `jobs/`, `worker/` or `harness/
 
 ```
 $RELAY_JOBS_HOME (default ~/.relay-jobs) / <repo-slug> / <job-id> /
-  job.json                the job record
+  job.json                the job record, execution identities and recent launch provenance
+  processes.json          live sampled descendants, pruned by identity
+  launch-<id>.json         a worker launch handoff and reparenting acknowledgement
   brief.md                the first turn's brief, byte for byte
   report.md               the final message of the current attempt
   events.jsonl            the backend's notifications, one JSON object per line

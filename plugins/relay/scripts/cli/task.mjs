@@ -1,20 +1,20 @@
 import { backendFor, backendNamed, backendWith } from "../lib/backends/index.mjs";
-import { parseCommandInput, resolveCommandCwd, createTaskJob, printJson } from "./shared.mjs";
+import { parseCommandInput, resolveCommandCwd, createTaskJob, printJson, sleep } from "./shared.mjs";
 import { default as fs } from "node:fs";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
 import { readStdinIfPiped } from "../lib/util/fs.mjs";
-import { spawnWorker } from "../lib/worker/delivery.mjs";
+import { spawnWorker, retryQueuedWorker, hasLiveWorker } from "../lib/worker/delivery.mjs";
 import { requireJobDirInHome, jobPaths, readJob } from "../lib/jobs/store.mjs";
 import { buildLaunchRequest, UsageError } from "../lib/jobs/request.mjs";
-import { loadJobViewSettled as loadJobView, renderJobWithReport } from "../lib/jobs/view.mjs";
+import { loadJobViewSettled as loadJobView, renderJobWithReport, isTerminalView } from "../lib/jobs/view.mjs";
 import { runWorker } from "../lib/worker/worker.mjs";
 
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
 
 // ---------------------------------------------------------------------------------------
-// Foreground task: one job, run in this process. The stop review gate uses it.
+// Foreground task: one detached job, with this process waiting for its result. The stop review gate uses it.
 
 export async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
@@ -56,7 +56,13 @@ export async function handleTask(argv) {
     else process.stdout.write(`job: ${job.id}\nstate: ${job.state}\ndir: ${jobDir}\n`);
     return;
   }
-  await runWorker(jobDir);
+  spawnWorker(jobDir, request.cwd);
+  for (;;) {
+    retryQueuedWorker(jobDir);
+    const current = loadJobView(jobDir);
+    if (isTerminalView(current) && !hasLiveWorker(jobDir)) break;
+    await sleep(50);
+  }
   const view = loadJobView(jobDir);
   const rawOutput = view.hasReport ? view.report : "";
   if (options.json) {

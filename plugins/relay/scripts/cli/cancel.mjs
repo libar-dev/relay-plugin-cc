@@ -2,7 +2,7 @@ import { sleep, envNumber, parseCommandInput, resolveJobReference, printJson } f
 import fs from "node:fs";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
-import { groupSurvivors, listProcesses, readProcessStartTime, snapshotProcessTree, stopProcessSnapshot, terminateProcessTree } from "../lib/util/process.mjs";
+import { executionMembers, groupSurvivors, listProcesses, readProcessStartTime, snapshotExecutionTree, stopProcessSnapshot, terminateProcessTree } from "../lib/util/process.mjs";
 import { releaseLeaseToConsumer } from "../lib/worker/delivery.mjs";
 import { acquireWorkerLease, isWorkerAlive, isWorkerLease, readLease } from "../lib/jobs/lease.mjs";
 import { claimInboxMessages, owedMessages, readOutcome, writeOutcome, postInboxMessage, recordReceipt } from "../lib/jobs/messages.mjs";
@@ -136,7 +136,7 @@ function finishKilledCancel(jobDir, message, attempt) {
   if (!message) return;
   const outcome = readOutcome(jobDir, message.id);
   if (!outcome || ["interrupt-sent", "interrupt-failed", "no-op"].includes(outcome.action)) {
-    writeOutcome(jobDir, message.id, { action: "cancelled", reason: `the cancel stopped attempt ${attempt}'s worker` });
+    writeOutcome(jobDir, message.id, { action: "cancelled", reason: `the cancel stopped attempt ${attempt}'s processes` });
   }
 }
 
@@ -210,13 +210,17 @@ export async function handleCancel(argv) {
     let view = loadJobView(jobDir);
     if (!isTerminalView(view) || view.state === "dead") checkAttempt(view.job, attempt);
     const actions = [];
-    let tree = snapshotProcessTree(processRoots(view.job));
+    const initialTable = listProcesses();
+    const terminal = isTerminalView(view) && view.state !== "dead";
+    const initialRoots = terminal ? processRoots({ ...view.job, worker: null }) : processRoots(view.job);
+    let tree = mergeSnapshots(snapshotExecutionTree(view.job, initialRoots, initialTable), executionMembers(view.job, initialTable, { jobDir }));
+    if (terminal) tree = Object.assign(tree.filter(p => p.pid !== view.job.worker?.pid), tree.cause ? { cause: tree.cause } : {});
     if (tree.cause) throw new Error(`Could not cancel job ${view.job.id}: ${tree.cause}.`);
-    if (isTerminalView(view) && view.state !== "dead") {
+    if (isTerminalView(view) && view.state !== "dead" && tree.length === 0) {
       // Nothing to interrupt. The request is still recorded as handled: a no-op receipt.
       recordReceipt(jobDir, { kind: "cancel", text: "" }, { action: "no-op", reason: `the job had already ${view.state === "completed" ? "completed" : `ended (${view.state})`}` });
       actions.push(`already ${view.state}`);
-    } else if (view.state === "dead" || (view.state === "queued" && !view.job.worker?.pid && view.job.admission?.waitKind === "worker")) {
+    } else if (isTerminalView(view) || (view.state === "queued" && !view.job.worker?.pid && view.job.admission?.waitKind === "worker")) {
       checkAttempt(readJob(jobDir), attempt);
       let reusedPid = false;
       let unverified = 0;
@@ -228,22 +232,34 @@ export async function handleCancel(argv) {
         });
         unverified = group.unverified ?? 0;
         tree = mergeSnapshots(tree, group);
+        if (terminal) tree = Object.assign(tree.filter(p => p.pid !== view.job.worker.pid), tree.cause ? { cause: tree.cause } : {});
         if (tree.cause) throw new Error(`Could not cancel job ${view.job.id}: ${tree.cause}.`);
         reusedPid = Boolean(view.job.worker.startTime) && table.some(row => row.pid === view.job.worker.pid &&
           !row.zombie && row.startTime && row.startTime !== view.job.worker.startTime);
       }
-      const survivors = await stopProcessSnapshot(tree);
+      let sweepStarted = false;
+      let killed = false;
+      const survivors = await stopProcessSnapshot(tree, {
+        beforeSignal: () => {
+          if (!sweepStarted) checkAttempt(readJob(jobDir), attempt);
+          sweepStarted = true;
+        },
+        onSignal: () => { killed = true; }
+      });
       if (survivors.length > 0 || survivors.cause || tree.cause) {
         throw new Error(`Could not stop processes ${survivors.map((entry) => entry.pid).join(", ")} of job ${view.job.id}${(survivors.cause || tree.cause) ? `: ${survivors.cause || tree.cause}` : ""}.`);
       }
-      const result = markCancelledAfterKill(jobDir, "Cancelled after the worker had died.", attempt);
+      const result = markCancelledAfterKill(jobDir, "Cancelled after the worker had died.", attempt, killed);
       if (result.wrote) {
         recordReceipt(jobDir, { kind: "cancel", text: "" }, { action: "cancelled", reason: "the worker had died; the job was marked cancelled" });
-        if (unverified) actions.push(`${unverified} processes in the dead worker's old process group could not be tied to the job; ${tree.length === 0 ? "nothing was signalled" : "they were left alone"}`);
+        if (unverified) actions.push(`${unverified} ${unverified === 1 ? "process" : "processes"} in the dead worker's old process group could not be tied to the job; ${tree.length === 0 ? "nothing was signalled" : "they were left alone"}`);
         actions.push(reusedPid && tree.length === 0
           ? "the worker was already gone and its process id now belongs to another process; nothing was signalled"
           : "worker was already gone; marked cancelled");
       } else {
+        if (result.ended) recordReceipt(jobDir, { kind: "cancel", text: "" }, {
+          action: killed ? "cancelled" : "no-op", reason: killed ? "owned processes were stopped after the job ended" : `the job had already ended (${result.ended})`
+        });
         reportCancelHandOff(jobDir, result, actions, options.json, attempt);
       }
     } else {
@@ -285,12 +301,12 @@ export async function handleCancel(argv) {
         // The worker answered and may begin a newer attempt, so it is never signalled. Its tree is read
         // again for what attempt N left (a tool started while the turn was interrupted): a newer attempt is
         // recorded before its server starts, so a read after which the count is still N holds none of it.
-        const later = worker?.pid && isWorkerAlive(worker) ? snapshotProcessTree([worker.pid]) : [];
+        const later = worker?.pid && isWorkerAlive(worker) ? snapshotExecutionTree(view.job, [worker.pid]) : [];
         const current = readJob(jobDir)?.attempts?.length ?? 0;
         const merged = current === attempt || (attempt === 1 && current === 0) ? mergeSnapshots(tree, later) : tree;
         tree = Object.assign(merged.filter(entry => entry.pid !== worker?.pid), merged.cause ? { cause: merged.cause } : {});
       } else {
-        tree = mergeSnapshots(tree, snapshotProcessTree(processRoots(view.job)));
+        tree = mergeSnapshots(tree, snapshotExecutionTree(view.job, processRoots(view.job)));
       }
       if (!advanced()) {
         checkAttempt(view.job, attempt);
@@ -298,8 +314,6 @@ export async function handleCancel(argv) {
         if (!cooperative && (!stopped || view.state === "dead")) {
           checkAttempt(readJob(jobDir), attempt);
           if (worker?.pid && isWorkerAlive(worker)) {
-            const unknown = tree.filter(entry => !entry.startTime);
-            if (unknown.length) throw new Error(`Could not stop processes ${unknown.map(entry => entry.pid).join(", ")} of job ${view.job.id}: process identities could not be read.`);
             const kill = terminateProcessTree(worker.pid, { identity: worker, beforeSignal });
             if (kill.delivered) recordKill(kill.method);
           }
@@ -313,12 +327,19 @@ export async function handleCancel(argv) {
           }
         }
       }
+      let sweepStarted = false;
       const survivors = await stopProcessSnapshot(tree, {
-        beforeSignal,
+        beforeSignal: (entry) => {
+          if (!sweepStarted) beforeSignal();
+          // A worker can run attempt N+1 in-process; an old tool cannot.
+          if (sweepStarted && entry.pid === worker?.pid && attempt !== null && (readJob(jobDir).attempts?.length ?? 0) > attempt) return false;
+          sweepStarted = true;
+        },
         // The group signal may have failed verification or delivery. A later sweep
         // can still stop the verified original worker; retain that fact at once.
         onSignal: (entry) => {
           if (entry.pid === worker?.pid && entry.startTime === worker.startTime) recordKill("process");
+          else if (!killed) { killed = true; actions.push(`stopped attempt ${attempt ?? view.job.attempts.length}'s processes`); }
         }
       });
       if (survivors.length > 0 || survivors.cause || tree.cause) {

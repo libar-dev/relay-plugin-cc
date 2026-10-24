@@ -14,6 +14,17 @@ with a state block that says what happened.
 1.0.6. [NOTICE](NOTICE) keeps the attribution and license terms. [docs/guide.md](docs/guide.md)
 walks through using relay, and [docs/design.md](docs/design.md) explains the design.
 
+## How a job runs
+
+Every worker launches through a short-lived parent and acknowledges after it has left the caller's
+process tree. Workers dispatched by `wait`, a hook or recovery therefore survive stopping that caller.
+Launch records retain the trigger, caller identity and worker parent/group identities.
+
+When a job ends, is cancelled or loses its backend, relay stops every process the job started,
+including test runners and builds that outlived their parent. A job that must leave a service
+running should start it outside relay. Cleanup finishes before a replacement backend starts or
+capacity is released; unresolved processes remain counted and appear in the job’s cleanup status.
+
 ## Backends
 
 A backend is named by its harness. The model family goes in `model:`.
@@ -373,7 +384,14 @@ Turn it off for an invocation with `RELAY_ADMISSION=off`, or domain-wide with
 `~/.relay-jobs/admission/config.json` (or `RELAY_ADMISSION_HOME/config.json`), shared across jobs
 homes. A custom jobs home cannot disable the guard. Old weight/class controls are ignored.
 
-**Not covered:** memory used later by running tools, tests and builds; native Claude agents;
+After a job starts, relay samples memory used by the job and its tools. Job status shows `memory:`,
+and guard status shows `relay jobs use`. On Linux, when a user systemd manager is available, every
+worker runs in its own scope under `relay-jobs.slice`; its tools inherit `oom_score_adj=500`, making
+them preferred kernel OOM victims. `RELAY_WORKER_SCOPE=off` disables scopes. No static memory limit
+is applied. On macOS, relay provides memory visibility and process cleanup; it does not pause tools
+or enforce a memory ceiling. Relay cannot limit how many tools a backend starts inside a running job.
+
+**Not covered:** admission for later allocations by running tools, tests and builds; native Claude agents;
 other harness sessions; other users; native Windows and other unsupported platforms, where
 admission is a visible no-op. External processes affect live readings but have no managed seats.
 Setup/account/status probes and transfer metadata are outside the gate. Startup admission
@@ -426,7 +444,7 @@ and its status line counts the repository's running and dead jobs and owed messa
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.23. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.24. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash

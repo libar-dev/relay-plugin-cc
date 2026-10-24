@@ -6,7 +6,7 @@ import test from "node:test";
 import { setup, waitFor } from "./support/job-helpers.mjs";
 import { createJobDir, jobPaths, readJob, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
-import { loadJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
+import { loadJobView, renderJobBlock, renderJobStatus } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 import { backendNamed } from "../plugins/relay/scripts/lib/backends/index.mjs";
@@ -71,6 +71,27 @@ test("the backend remains counted until close finishes", async t => {
   });
   await runWorker(s.dir, s.options);
   assert.equal(observed, true);
+});
+
+test("terminal relay results stay verbatim while close changes live memory accounting", async t => {
+  const s = seed(t); s.unblock();
+  const backend = backendNamed("codex"), connect = backend.connect;
+  let resultAtClose;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args), close = connection.close.bind(connection);
+    t.mock.method(connection, "close", async () => {
+      const view = loadJobView(s.dir);
+      assert.equal(view.state, "completed");
+      // An accounting sample at backend end must not change a result already returned.
+      resultAtClose = renderJobBlock({ ...view, job: { ...view.job, treeBytes: GiB } });
+      assert.equal(renderJobBlock({ ...view, job: { ...view.job, treeBytes: 0 } }), resultAtClose);
+      await close();
+    });
+    return connection;
+  });
+  await runWorker(s.dir, s.options);
+  assert.equal(renderJobBlock(loadJobView(s.dir)), resultAtClose);
+  assert.doesNotMatch(resultAtClose, /^memory:/m);
 });
 
 test("critical pressure before a warm turn queues without double charging the slot", async t => {
@@ -140,10 +161,19 @@ test("capacity retries check critical pressure before sending another turn", asy
 });
 
 test("inherited guard off survives a partial worker environment and creates no admission files", async t => {
-  const s = seed(t);
+  const s = seed(t, "[held] Wait for a heartbeat with the guard off.");
   delete s.options.env.RELAY_ADMISSION;
   assert.equal(process.env.RELAY_ADMISSION, "off");
-  await runWorker(s.dir, s.options);
+  const release = path.join(s.ctx.root, "release-guard-off");
+  s.options.env.FAKE_CODEX_RELEASE_FILE = release;
+  const running = runWorker(s.dir, s.options);
+  try {
+    await waitFor(() => readJob(s.dir).treeBytes > 0);
+    assert.equal(fs.existsSync(s.ctx.env.RELAY_ADMISSION_HOME), false, "a heartbeat must not create the disabled guard's cache");
+  } finally {
+    fs.writeFileSync(release, "release");
+    await running;
+  }
   assert.equal(readJob(s.dir).state, "completed");
   assert.equal(fs.existsSync(s.ctx.env.RELAY_ADMISSION_HOME), false);
 });
@@ -374,4 +404,100 @@ for (const [name, variable] of [["codex", "CODEX_HOME"], ["zcode", "ZCODE_DATA_B
   assert.equal(job.request.account, current.account);
   assert.equal(JSON.parse(fs.readFileSync(pauseFile)).account, current.account);
   assert.equal(fs.existsSync(path.join(home, "pauses", `${name}-${first.account}.json`)), false);
+});
+
+test("heartbeat memory is visible in the job, slot and aggregate guard status", async t => {
+  const { describeGuard, renderGuard } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const { renderJobBlock } = await import("../plugins/relay/scripts/lib/jobs/view.mjs");
+  const s = seed(t, "[held] Sample memory."); s.unblock();
+  s.options.env.RELAY_JOBS_HEARTBEAT_MS = "20";
+  const running = runWorker(s.dir, s.options);
+  await waitFor(() => readJob(s.dir).treeBytes > 0);
+  const slot = JSON.parse(fs.readFileSync(path.join(s.ctx.env.RELAY_ADMISSION_HOME, "slots", "job-admission-worker.json")));
+  assert.ok(slot.treeBytes > 0);
+  const guard = describeGuard(s.ctx.env, {}, s.options.admission);
+  assert.ok(guard.relayBytes > 0);
+  assert.match(renderGuard(guard).join("\n"), /relay jobs use [\d.]+ GiB/);
+  assert.match(renderJobBlock(loadJobView(s.dir)), /memory: [\d.]+ GiB \(job and its processes\)/);
+  postInboxMessage(s.dir, { kind: "cancel" });
+  await running;
+});
+
+test("unresolved owned tools preserve completion and retain the running seat", async t => {
+  const { spawn } = await import("node:child_process");
+  const { readProcessStartTime } = await import("../plugins/relay/scripts/lib/util/process.mjs");
+  const s = seed(t); s.unblock();
+  s.options.predecessorCleanup = { killImpl() {}, graceMs: 0 };
+  const backend = backendNamed("codex"), connect = backend.connect;
+  let child;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args), run = connection.run.bind(connection);
+    t.mock.method(connection, "run", async (...turn) => {
+      const result = await run(...turn);
+      child = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
+      await waitFor(() => readProcessStartTime(child.pid));
+      fs.writeFileSync(path.join(s.dir, "processes.json"), JSON.stringify({ members: [{ pid: child.pid, startTime: readProcessStartTime(child.pid) }] }));
+      return result;
+    });
+    return connection;
+  });
+  t.after(() => { try { child?.kill("SIGKILL"); } catch {} });
+  await runWorker(s.dir, s.options);
+  const job = readJob(s.dir);
+  assert.equal(job.state, "completed");
+  assert.equal(job.cleanup.state, "unresolved");
+  assert.ok(job.cleanup.pids.includes(child.pid));
+  assert.doesNotMatch(renderJobBlock(loadJobView(s.dir)), /cleanup: unresolved/);
+  assert.match(renderJobStatus(loadJobView(s.dir)), /cleanup: unresolved/);
+  assert.equal(fs.existsSync(path.join(s.ctx.env.RELAY_ADMISSION_HOME, "slots", "job-admission-worker.json")), true);
+});
+
+test("native Windows acknowledges without a process table and runs with groups bypassed", async t => {
+  const s = seed(t); s.unblock();
+  const launch = path.join(s.dir, "launch-windows.json");
+  fs.writeFileSync(launch, JSON.stringify({ state: "pending", caller: { pid: 999999999, startTime: "gone" } }));
+  const running = runWorker(s.dir, { ...s.options, platform: "win32", env: { ...s.ctx.env, RELAY_WORKER_LAUNCH: launch },
+    admission: { ...s.options.admission, platform: "win32" } });
+  const ack = JSON.parse(fs.readFileSync(launch));
+  assert.equal(ack.state, "acknowledged");
+  assert.equal(ack.reparenting, "unverified");
+  await running;
+  const job = readJob(s.dir);
+  assert.equal(job.state, "completed");
+  assert.match(job.admission.notes.join(" "), /unsupported on win32/);
+  assert.match(renderJobBlock(loadJobView(s.dir)), /execution groups unsupported on win32/);
+});
+
+test("sampling failures preserve heartbeat liveness and the backend end record", async t => {
+  const s = seed(t, "[long] Wait for accounting trouble."); s.unblock();
+  const running = runWorker(s.dir, s.options);
+  await waitFor(() => readJob(s.dir).server?.pid);
+  const mkdir = fs.mkdirSync, rename = fs.renameSync;
+  let failedSamples = 0;
+  t.mock.method(fs, "mkdirSync", (directory, ...args) => {
+    if (directory === s.ctx.env.RELAY_ADMISSION_HOME) { failedSamples++; throw new Error("synthetic sample failure"); }
+    return mkdir(directory, ...args);
+  });
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === path.join(s.dir, "processes.json")) { failedSamples++; throw new Error("synthetic registry failure"); }
+    return rename(from, to);
+  });
+  await waitFor(() => failedSamples > 0);
+  postInboxMessage(s.dir, { kind: "cancel" });
+  await running;
+  assert.equal(readJob(s.dir).state, "cancelled");
+  assert.ok(readJob(s.dir).attempts.at(-1).servers.at(-1).endedAt);
+  assert.ok(failedSamples >= 2);
+});
+
+test("a reparented worker acknowledges even after its caller has gone", async t => {
+  const s = seed(t); s.unblock();
+  const launch = path.join(s.dir, "launch-caller-gone.json");
+  fs.writeFileSync(launch, JSON.stringify({ state: "pending", caller: { pid: 999999998, startTime: "gone" }, launcher: { pid: 999999999, startTime: "gone" } }));
+  // Model the outside-caller ancestry check independently of this test runner’s PPID.
+  await runWorker(s.dir, { ...s.options, platform: "linux", env: { ...s.ctx.env, RELAY_WORKER_LAUNCH: launch } });
+  const ack = JSON.parse(fs.readFileSync(launch));
+  assert.equal(ack.state, "acknowledged");
+  assert.ok(ack.callerGoneAt);
+  assert.equal(readJob(s.dir).state, "completed");
 });

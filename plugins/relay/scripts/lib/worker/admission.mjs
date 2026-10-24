@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { listJobDirs, readJob, readJsonOrNull, writeJsonAtomic, writeJob, TERMINAL_STATES } from "../jobs/store.mjs";
 import { pendingInboxMessages } from "../jobs/messages.mjs";
 import { acquireOwnership, releaseOwnership, readOwnership } from "../util/ownership.mjs";
-import { isProcessAlive, isProcessIdentityAlive, readProcessStartTime } from "../util/process.mjs";
+import { executionMembers, readProcessTableCached, isProcessAlive, isProcessIdentityAlive, readProcessStartTime } from "../util/process.mjs";
 
 const GiB = 2 ** 30;
 // Seats and startup bytes are independent of remote model reasoning cost.
@@ -315,7 +315,11 @@ export function machineState(machine, pendingBytes = 0) {
 function files(dir) { try { return fs.readdirSync(dir); } catch (e) { if (e.code === "ENOENT") return []; throw e; } }
 function slotFile(home, id) { if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error("invalid job id"); return path.join(home, "slots", `${id}.json`); }
 function writeSlot(home, slot) { fs.mkdirSync(path.join(home, "slots"), { recursive: true }); writeJsonAtomic(slotFile(home, slot.jobId), slot); }
-function serversAlive(job, deps) {
+export function executionAlive(job, deps) {
+  if (job?.execution || job?.worker) {
+    const members = executionMembers(job, readProcessTableCached({ home: admissionHome(deps.env), maxAgeMs: deps.freshExecution ? 0 : 5000 }), { jobDir: job.jobDir });
+    if (members.cause || members.some(p => p.pid !== job.worker?.pid)) return true;
+  }
   return [job?.server, ...(job?.attempts ?? []).flatMap(a => a.servers ?? [])].some(s => s?.pid && !s.endedAt && deps.isAlive(s));
 }
 function quarantine(file, now, note, deps) {
@@ -360,7 +364,7 @@ function slots(home, deps, clean = true) {
     const job = readJob(s.jobDir);
     s.quotaHeavy = isVeryHeavy({ backend: s.backend, model: s.model, effort: s.effort }) || isVeryHeavy(job?.request);
     s.weight = WEIGHTS[s.class];
-    const backendLive = serversAlive(job, deps);
+    const backendLive = executionAlive({ ...job, jobDir: s.jobDir }, deps);
     if (live || backendLive) result.push(!live && backendLive ? { ...s, state: "running" } : s);
     else if (clean) fs.rmSync(file, { force: true });
   }
@@ -395,7 +399,7 @@ function legacyCandidates(deps) {
       // Cache only the decision: candidates are reread under the lock.
       const job = readJob(dir);
       entry = { signature, candidate: Boolean(job && job.state !== "queued" && (!TERMINAL_STATES.has(job.state) ||
-        [job.server, ...(job.attempts ?? []).flatMap(a => a.servers ?? [])].some(s => s?.pid && !s.endedAt))) };
+        job.cleanup?.state === "unresolved" || [job.server, ...(job.attempts ?? []).flatMap(a => a.servers ?? [])].some(s => s?.pid && !s.endedAt))) };
       cache.set(dir, entry);
     }
     return entry.candidate;
@@ -403,8 +407,8 @@ function legacyCandidates(deps) {
 }
 function legacyJobs(current, slotted, candidates, deps) {
   const ids = new Set(slotted.map(s => s.jobId));
-  return candidates.map(d => typeof d === "string" ? readJob(d) : d).filter(j => j?.id && j.id !== current && !ids.has(j.id) && j.state !== "queued" &&
-    ((!TERMINAL_STATES.has(j.state) && deps.isAlive(j.worker)) || serversAlive(j, deps)));
+  return candidates.map(d => typeof d === "string" ? { ...readJob(d), jobDir: d } : d).filter(j => j?.id && j.id !== current && !ids.has(j.id) && j.state !== "queued" &&
+    ((!TERMINAL_STATES.has(j.state) && deps.isAlive(j.worker)) || executionAlive(j, deps)));
 }
 function pauseFile(home, backend, account = null) {
   if (!backends.includes(backend) || (account !== null && !/^[a-f0-9]{12}$/.test(account))) throw new Error("invalid pause key");
@@ -451,7 +455,7 @@ function jobAccount(home, jobId, deps) {
   if (deps.request) return deps.request.account ?? null;
   const slot = readJsonOrNull(slotFile(home, jobId));
   if (slot && typeof slot.jobDir === "string") return slot.account ?? readJob(slot.jobDir)?.request?.account ?? null;
-  const job = legacyCandidates(deps).map(d => typeof d === "string" ? readJob(d) : d).find(j => j?.id === jobId);
+  const job = legacyCandidates(deps).map(d => typeof d === "string" ? { ...readJob(d), jobDir: d } : d).find(j => j?.id === jobId);
   return job?.request?.account ?? null;
 }
 const kindLabel = kind => ({ usage: "usage limit", rate: "rate limit", concurrency: "concurrent request limit" })[kind] ?? kind;
@@ -619,6 +623,18 @@ export function admit(ctx, injected = {}) {
 // Replacements reuse only a currently held seat; only retained turns skip startup checks and holds.
 export const checkBackend = admit;
 
+export function updateSlotMemory(home, jobId, me, treeBytes, injected = {}) {
+  const deps = dependencies(injected);
+  try {
+    return lock(home, deps, () => {
+      const slot = readJsonOrNull(slotFile(home, jobId));
+      if (!slot || slot.pid !== me.pid || slot.processStart !== me.startTime) return false;
+      deps.writeSlot(home, { ...slot, treeBytes });
+      return true;
+    }).value ?? false;
+  } catch { return false; }
+}
+
 export function releaseSlot(home, jobId, me, injected = {}) {
   const deps = dependencies(injected);
   try {
@@ -627,7 +643,7 @@ export function releaseSlot(home, jobId, me, injected = {}) {
       const file = slotFile(home, jobId), s = readJsonOrNull(file);
       if (!s || s.pid !== me.pid || s.processStart !== me.startTime) return false;
       // A failed close or a dead predecessor with a live server stays counted.
-      if (serversAlive(readJob(s.jobDir), deps)) return false;
+      if (executionAlive({ ...readJob(s.jobDir), jobDir: s.jobDir }, { ...deps, freshExecution: true })) return false;
       fs.rmSync(file, { force: true });
       const p = pauseRead(home, s.backend, deps, true, false, s.account ?? null);
       if (p?.probe?.jobId === jobId && p.probe.pid === me.pid && p.probe.startTime === me.startTime) { p.probe = null; pauseWrite(home, s.backend, p, s.account ?? null); }
@@ -777,7 +793,7 @@ export function describeGuard(env = process.env, { readSensors = true } = {}, in
     const machine = machineReading(home, deps), candidates = legacyCandidates(deps), all = slots(home, deps, false);
     const running = all.filter(s => s.state === "running");
     const legacy = legacyJobs(null, all, candidates, deps);
-    return { enabled, ...machine, notes: [...machine.notes, ...(deps.readAdmissionConfig(env).notes ?? []), ...warningNotes(machine), ...deps.notes], state: machineState(machine).state, ...guardSettings(deps.readAdmissionConfig(env), machine), activeSeats: running.length + legacy.length, pendingBytes: holds(all, null, deps.now()).reduce((n, s) => n + s.holdBytes, 0),
+    return { enabled, ...machine, notes: [...machine.notes, ...(deps.readAdmissionConfig(env).notes ?? []), ...warningNotes(machine), ...deps.notes], state: machineState(machine).state, ...guardSettings(deps.readAdmissionConfig(env), machine), relayBytes: [...running, ...legacy].reduce((n, s) => n + (s.treeBytes ?? 0), 0), activeSeats: running.length + legacy.length, pendingBytes: holds(all, null, deps.now()).reduce((n, s) => n + s.holdBytes, 0),
       veryHeavy: running.filter(s => s.quotaHeavy).length + legacy.filter(j => isVeryHeavy(j.request)).length, waiting: all.filter(s => s.state !== "running").length, pauses };
   } catch (e) { return { enabled: true, error: e.message, pauses: [] }; }
 }
@@ -786,7 +802,7 @@ export function renderGuard(snapshot) {
   if (snapshot.error) return [`load-guard: on (state unreadable: ${snapshot.error})`];
   const state = snapshot.refreshing ? "sensor refresh in progress" : (snapshot.notes ?? []).some(n => n.includes("readings unavailable")) ? `readings unavailable (${snapshot.state})` : snapshot.state;
   const memory = snapshot.availableBytes === null ? "memory not read" : `memory ${(snapshot.availableBytes / GiB).toFixed(1)} of ${(snapshot.totalBytes / GiB).toFixed(1)} GiB available`;
-  return [`load-guard: on · ${state} · seats ${snapshot.activeSeats}, no fixed ceiling, busy allowance ${snapshot.busySeats} · very heavy ${snapshot.veryHeavy} running (${snapshot.guaranteedVeryHeavy} guaranteed, no maximum) · minimum guarantee ${snapshot.guaranteedVeryHeavy} very heavy + ${snapshot.guaranteedOther} other · host ${memory} (${snapshot.source ?? "source unknown"}; ${snapshot.quality ?? "unknown quality"}) · pending holds ${((snapshot.pendingBytes ?? 0) / GiB).toFixed(2)} GiB · finite scopes ${(snapshot.scopes ?? []).map(s => `${s.id}: ${(s.remainingBytes / GiB).toFixed(2)} GiB remaining`).join(", ") || "none known"} · 5-minute load ${snapshot.load5 ?? "not read"} on ${snapshot.cores} cores`,
+  return [`load-guard: on · ${state} · seats ${snapshot.activeSeats}, no fixed ceiling, busy allowance ${snapshot.busySeats} · very heavy ${snapshot.veryHeavy} running (${snapshot.guaranteedVeryHeavy} guaranteed, no maximum) · minimum guarantee ${snapshot.guaranteedVeryHeavy} very heavy + ${snapshot.guaranteedOther} other · host ${memory} (${snapshot.source ?? "source unknown"}; ${snapshot.quality ?? "unknown quality"}) · relay jobs use ${((snapshot.relayBytes ?? 0) / GiB).toFixed(1)} GiB · pending holds ${((snapshot.pendingBytes ?? 0) / GiB).toFixed(2)} GiB · finite scopes ${(snapshot.scopes ?? []).map(s => `${s.id}: ${(s.remainingBytes / GiB).toFixed(2)} GiB remaining`).join(", ") || "none known"} · 5-minute load ${snapshot.load5 ?? "not read"} on ${snapshot.cores} cores`,
     ...(snapshot.notes ?? []).map(n => `note: load guard: ${n}`), ...(snapshot.pauses ?? []).map(p => `paused: ${refusalReason(p)}; strike ${p.strikes}`)];
 }
 
@@ -794,7 +810,6 @@ export function renderGuard(snapshot) {
 // caller owns retries; completing workers never launch another session's jobs.
 export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
   const deps = dependencies({ ...injected, env });
-  let spawned = null;
   let spawnAttempted = false;
   const launch = () => { spawnAttempted = true; return spawn(); };
   try {
@@ -828,15 +843,10 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
       }
       const slot = { v: 1, jobId: job.id, jobDir, pid: null, processStart: null, backend: job.request.backend ?? "codex", account: job.request.account ?? null, class: cls, weight: WEIGHTS[cls], state: "spawning", spawnAt: iso(deps.now()), since: iso(deps.now()), holdAt: iso(deps.now()), holdBytes: DEFAULTS.workerBytes, holdGroup: machine.group, scopes: machine.scopes };
       deps.writeSlot(home, slot);
-      try {
-        spawned = launch();
-        const cur = readJob(jobDir);
-        if (cur?.state === "queued" && cur.admission?.waitKind === "worker")
-          writeJob(jobDir, { ...cur, state: "starting", worker: null, launchPendingAt: iso(deps.now()),
-            admission: { ...cur.admission, waitKind: "spawned" } });
-        return spawned;
-      }
-      catch (e) { fs.rmSync(slotFile(home, job.id), { force: true }); throw e; }
+      if (job.state === "queued" && job.admission?.waitKind === "worker")
+        writeJob(jobDir, { ...job, state: "starting", worker: null, launchPendingAt: iso(deps.now()),
+          admission: { ...job.admission, waitKind: "spawned" } });
+      return slot;
     });
     if (!decision.locked) {
       const previousLock = job.admission?.waitKind === "worker" && /admission lock (busy|stuck)/.test(job.admission.reason);
@@ -847,7 +857,17 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
       return null;
     }
     lockWaits.delete(`${home}:${job.id}`);
-    return decision.value;
+    if (!decision.value) return null;
+    // The spawning reservation fences contenders while the handshake runs outside the lock.
+    try { return launch(); }
+    catch (e) {
+      retryLock(home, deps, () => {
+        const current = readJsonOrNull(slotFile(home, job.id));
+        if (current?.state === "spawning" && current.spawnAt === decision.value.spawnAt)
+          fs.rmSync(slotFile(home, job.id), { force: true });
+      });
+      throw e;
+    }
   } catch (e) {
     if (spawnAttempted) throw e;
     const job = readJob(jobDir);

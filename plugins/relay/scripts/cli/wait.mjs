@@ -45,7 +45,10 @@ export async function handleWait(argv) {
   };
   let view = read();
   for (;;) {
-    if (view?.state === "queued" && Date.now() < deadline) retryQueuedWorker(jobDir);
+    if (view && ["queued", "starting", "dead"].includes(view.state) && Date.now() < deadline) {
+      retryQueuedWorker(jobDir);
+      view = read();
+    }
     if (view && options["auto-resume"] && view.state === "dead" && Date.now() < deadline) {
       const recovery = await resumeDeadJobOnce(jobDir);
       if (recovery === "busy") {

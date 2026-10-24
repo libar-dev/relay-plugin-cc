@@ -321,11 +321,11 @@ fs.renameSync = function(from, to) {
     t.after(() => { try { process.kill(descendant.childPid, "SIGKILL"); } catch {} });
     const closeMarker = path.join(ctx.root, "closing");
     const cancelEnv = closing ? preload(ctx, "observe-closing", `
-const read = fs.readFileSync;
-fs.readFileSync = function(file, ...args) {
+const kill = process.kill;
+process.kill = function(pid, signal) {
   const stack = new Error().stack;
-  if (String(file).startsWith("/proc/") && /waitUntil/.test(stack) && !/cancelStopped/.test(stack)) fs.writeFileSync(${JSON.stringify(closeMarker)}, "");
-  return read.call(this, file, ...args);
+  if (pid === ${worker.pid} && signal === 0 && /waitUntil/.test(stack) && !/cancelStopped/.test(stack)) fs.writeFileSync(${JSON.stringify(closeMarker)}, "");
+  return kill.apply(this, arguments);
 };`) : {};
     const cancelled = asyncCompanion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...cancelEnv, RELAY_JOBS_CANCEL_GRACE_MS: "20000" });
     let resumedAt;
@@ -433,7 +433,7 @@ fs.readFileSync = function(file, ...args) {
     assert.equal(isWorkerAlive({ pid: descendant.childPid }), false, "the killed attempt's detached child must be swept");
     assert.equal(cancels(dir).length, 1);
     assert.equal(cancels(dir)[0].outcome.action, "cancelled");
-    assert.equal(cancels(dir)[0].outcome.reason, "the cancel stopped attempt 1's worker");
+    assert.equal(cancels(dir)[0].outcome.reason, "the cancel stopped attempt 1's processes");
   });
 }
 
@@ -530,7 +530,7 @@ fs.readFileSync = function(file, ...args) {
   assert.equal(cancels(dir)[0].outcome.action, "cancelled");
 });
 
-test("a worker dying by itself followed by a continue is refused rather than reported stopped by this cancel", async t => {
+test("a sweep that stops only tools reports its signals while a continue runs on", async t => {
   const { ctx, id, dir } = await running(t);
   const worker = readJob(ctx, id).worker;
   process.kill(worker.pid, "SIGSTOP");
@@ -547,8 +547,8 @@ test("a worker dying by itself followed by a continue is refused rather than rep
   await waitFor(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
   pause.release();
   const result = await cancelling;
-  assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.equal(JSON.parse(result.stdout).error.kind, "attempt-changed");
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(JSON.parse(result.stdout).actions.some(action => action === "stopped attempt 1's processes"));
   assert.equal(readJob(ctx, id).state, "running");
   assert.equal(isWorkerAlive(readJob(ctx, id).worker), true);
 });
@@ -768,7 +768,7 @@ fs.readFileSync = function(file, ...args) {
   const [name] = pendingInboxMessages(dir);
   const message = JSON.parse(fs.readFileSync(path.join(jobPaths(dir).inbox, name), "utf8"));
   assert.equal(readOutcome(dir, message.id).action, "cancelled");
-  assert.equal(readOutcome(dir, message.id).reason, "the cancel stopped attempt 1's worker");
+  assert.equal(readOutcome(dir, message.id).reason, "the cancel stopped attempt 1's processes");
 });
 
 for (const state of ["cancelled"]) {
@@ -937,6 +937,9 @@ fs.renameSync = function(from, to) {
       const continued = companion(ctx, ["continue", id, "--message", "[long] Next."]);
       assert.equal(continued.status, 0, continued.stdout + continued.stderr);
       await waitFor(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
+    } else {
+      // Hold the decision boundary until the resumed worker has actually settled its cancel.
+      await waitFor(() => cancels(dir)[0]?.outcome?.action === "cancelled");
     }
     pause.release();
     const result = await cancelling;
@@ -972,20 +975,17 @@ fs.renameSync = function(from, to) {
   }
   return result;
 };
-const read = fs.readFileSync;
-fs.readFileSync = function(file, ...args) {
-  if (ended && String(file).startsWith("/proc/") && /waitUntil/.test(new Error().stack) && !/cancelStopped/.test(new Error().stack)) {
+const kill = process.kill;
+process.kill = function(pid, signal) {
+  const stack = new Error().stack;
+  if (ended && pid === ${worker.pid} && signal === 0 && /waitUntil/.test(stack) && !/cancelStopped/.test(stack)) {
     ended = false;
     const file = ${JSON.stringify(jobPaths(dir).job)};
-    const job = JSON.parse(read.call(this, file, "utf8"));
+    const job = JSON.parse(fs.readFileSync(file, "utf8"));
     job.state = "running";
     job.attempts.push({ attempt: 2, state: "running" });
     fs.writeFileSync(file, JSON.stringify(job));
   }
-  return read.call(this, file, ...args);
-};
-const kill = process.kill;
-process.kill = function(pid, signal) {
   if (Math.abs(pid) === ${worker.pid} && signal !== 0) fs.appendFileSync(${JSON.stringify(signals)}, String(signal));
   return kill.apply(this, arguments);
 };`);
@@ -1007,7 +1007,7 @@ const spawnSync = childProcess.spawnSync;
 let snapshots = 0;
 childProcess.spawnSync = function(...args) {
   const result = spawnSync.apply(this, args);
-  if (/snapshotProcessTree/.test(new Error().stack) && ++snapshots === 2) {
+  if (/snapshotExecutionTree/.test(new Error().stack) && ++snapshots === 1) {
     const file = ${JSON.stringify(jobPaths(dir).job)};
     const job = JSON.parse(fs.readFileSync(file, "utf8"));
     job.attempts.push({ attempt: 2, state: "running" });
@@ -1139,7 +1139,7 @@ syncBuiltinESMExports();`);
       assert.ok(actions.some(action => action.startsWith("killed the worker process")));
       assert.ok(actions.includes("attempt 1 was stopped; attempt 2 started since, for a message, and runs on"));
       assert.equal(readOutcome(dir, message.id).action, "cancelled");
-      assert.equal(readOutcome(dir, message.id).reason, "the cancel stopped attempt 1's worker");
+      assert.equal(readOutcome(dir, message.id).reason, "the cancel stopped attempt 1's processes");
     } else {
       assert.equal(JSON.parse(result.stdout).error.kind, "attempt-changed");
       assert.equal(readOutcome(dir, message.id), null);
