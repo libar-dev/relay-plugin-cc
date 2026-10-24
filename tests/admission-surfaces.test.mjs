@@ -15,15 +15,27 @@ test("setup validates guard flags and writes only the shared admission domain", 
     assert.equal(result.status, 1, result.stdout + result.stderr);
     assert.equal(fs.existsSync(path.join(ctx.jobs, "config.json")), false);
   }
-  const result = companion(ctx, ["setup", "--admission", "off", "--max-very-heavy", "1", "--json"]);
+  const result = companion(ctx, ["setup", "--admission", "off", "--json"]);
   assert.equal(result.status, 0, result.stderr);
   const page = JSON.parse(result.stdout);
-  assert.equal(page.settings.loadGuard.maxVeryHeavy, 1);
+  assert.equal(page.settings.loadGuard.guaranteedVeryHeavy, 2);
+  assert.equal(page.settings.loadGuard.guaranteedOther, 3);
+  assert.equal("maxVeryHeavy" in page.settings.loadGuard, false);
   assert.equal(page.settings.loadGuard.maxActive, null);
   assert.equal(page.loadGuard.enabled, false);
   assert.equal(readAdmissionConfig(ctx.env).admission, "off");
   assert.match(page.actionsTaken.join(" "), /domain-wide/);
   assert.equal(fs.existsSync(path.join(ctx.jobs, "config.json")), false);
+});
+
+test("removed maximum flag fails explicitly before any setting mutation", t => {
+  const ctx = setup(t); ctx.env.RELAY_ADMISSION_HOME = path.join(ctx.root, "domain");
+  for (const removed of [["--max-very-heavy", "1"], ["--max-very-heavy", "2"], ["--max-very-heavy", "default"], ["--max-very-heavy", "100"], ["--max-very-heavy"], ["--max-very-heavy=1"], ["--max-very-heavy=false"]]) {
+    const result = companion(ctx, ["setup", "--admission", "off", "--fast-tier", "allowed", "--enable-review-gate", ...removed]);
+    assert.equal(result.status, 1); assert.match(result.stdout + result.stderr, /removed: very heavy jobs have a guaranteed 2 and no maximum/);
+    assert.equal(fs.existsSync(admissionConfigPath(ctx.env)), false);
+    assert.equal(fs.existsSync(path.join(ctx.jobs, "config.json")), false);
+  }
 });
 
 test("corrupt stored settings normalize; JSON listing reads no sensors or lock", t => {
@@ -34,7 +46,7 @@ test("corrupt stored settings normalize; JSON listing reads no sensors or lock",
   assert.equal(config.admission, undefined); assert.equal(config.minWeight, undefined);
   fs.mkdirSync(path.dirname(admissionConfigPath(ctx.env)), { recursive: true });
   fs.writeFileSync(admissionConfigPath(ctx.env), JSON.stringify({ admission: "invalid", maxVeryHeavy: 100 }));
-  assert.deepEqual(readAdmissionConfig(ctx.env), { admission: "on", maxVeryHeavy: 2 });
+  assert.deepEqual(readAdmissionConfig(ctx.env), { admission: "on", notes: ["maxVeryHeavy is ignored: very heavy jobs have no maximum"] });
   const env = { ...ctx.env, RELAY_ADMISSION: "on", RELAY_ADMISSION_HOME: path.join(ctx.root, "admission"), RELAY_TEST_ADMISSION_READINGS: path.join(ctx.root, "missing.json") };
   const snapshot = describeGuard(env, { readSensors: false }, { readMachine() { throw new Error("must not read"); } });
   assert.deepEqual(snapshot, { enabled: true, pauses: [] });
@@ -58,10 +70,10 @@ test("jobs homes share one guard config and old custom-home off cannot disable a
   fs.writeFileSync(path.join(ctx.jobs, "config.json"), JSON.stringify({ admission: "off", maxVeryHeavy: 100 }));
   assert.equal(describeGuard(env, { readSensors: false }).enabled, true);
   const second = { ...env, RELAY_JOBS_HOME: path.join(ctx.root, "other-jobs") };
-  const off = companion(ctx, ["setup", "--admission", "off", "--max-very-heavy", "1", "--json"], env);
+  const off = companion(ctx, ["setup", "--admission", "off", "--json"], env);
   assert.equal(off.status, 0, off.stderr);
   assert.equal(describeGuard(second, { readSensors: false }).enabled, false);
-  assert.equal(readAdmissionConfig(second).maxVeryHeavy, 1);
+  assert.equal("maxVeryHeavy" in readAdmissionConfig(second), false);
   assert.equal(describeGuard({ ...second, RELAY_ADMISSION: "off" }, { readSensors: false }).enabled, false);
 });
 
@@ -72,8 +84,8 @@ test("recovering corrupt admission settings saves only normalized config", async
   const file = admissionConfigPath(ctx.env);
   fs.writeFileSync(file, "{");
   assert.ok(readAdmissionConfig(ctx.env).notes);
-  setAdmissionConfig("maxVeryHeavy", 1, ctx.env);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { admission: "on", maxVeryHeavy: 1 });
+  setAdmissionConfig("admission", "off", ctx.env);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { admission: "off" });
   assert.equal(readAdmissionConfig(ctx.env).notes, undefined);
 });
 
@@ -127,4 +139,17 @@ for (const state of ["completed", "failed", "cancelled", "dead"]) test(`JSON clo
   const listing = JSON.parse(companion(ctx, ["status", "--json", "--all"]).stdout);
   assert.equal(listing.jobs[0].admission.state, result.admission.state);
   assert.deepEqual(readJob(jobDir).admission, admission, "status stays read-only");
+});
+
+test("stored maximum values are ignored with a note and never enter effective settings", t => {
+  const ctx = setup(t); ctx.env.RELAY_ADMISSION_HOME = path.join(ctx.root, "domain");
+  fs.mkdirSync(ctx.env.RELAY_ADMISSION_HOME);
+  for (const maxVeryHeavy of [null, 1, 2, 100, "bad", {}]) {
+    fs.writeFileSync(admissionConfigPath(ctx.env), JSON.stringify({ maxVeryHeavy }));
+    const config = readAdmissionConfig(ctx.env);
+    assert.equal("maxVeryHeavy" in config, false);
+    assert.ok(config.notes.includes("maxVeryHeavy is ignored: very heavy jobs have no maximum"));
+    assert.equal("maxVeryHeavy" in guardSettings(config), false);
+    assert.equal(guardSettings(config).guaranteedVeryHeavy, 2);
+  }
 });

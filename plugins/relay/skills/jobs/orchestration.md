@@ -38,13 +38,15 @@ Observed in Claude Code 2.1.309, rather than a documented API contract: the Work
 `min(16, max(2, CPUs − 2))`, and the slot includes waits. Recheck these external harness facts
 manually after a Claude Code update; relay tests cannot detect a scheduler change in that binary.
 
-Relay's load guard covers this user's sessions across the machine. Backend starts and turns are
-paced at least 5 seconds apart: forty grants span at least `(40−1) × 5 = 195 seconds`, before other
-waits. One shared quota allows 2 very heavy jobs: GPT-6 Astra and the Kimi K3 family at every effort.
-Effort alone never enters that pool: other models at max/ultra stay outside it. Unresolved default
-models are a coverage limit. Memory/load can also queue work; healthy machines have no fixed active
-ceiling. A run with all slots held by queued relays waits for capacity. Change the guard only when
-the user asks. Formulas and sensor limits are in [internals.md](internals.md).
+Relay's load guard covers this user's sessions across the machine. New backend starts and replacements
+are paced at least 5 seconds apart; turns on a running backend are not paced and wait only for critical
+memory/pressure or provider pauses/probes. A macOS pressure warning is shown but holds nothing.
+The first two identified very-heavy and first three other active jobs skip the host reserve and the busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits, provider protection, ordering and start pacing. There is no very-heavy maximum.
+Very heavy means GPT-6 Astra and the Kimi K3 family at every effort. Effort alone never enters that pool:
+other models at max/ultra stay outside it. Unresolved default models are a coverage limit.
+Memory/load can also queue new starts; healthy machines have no fixed active ceiling. A run with all
+slots held by queued relays waits for capacity. Change the guard only when the user asks.
+Formulas and sensor/fit limits are in [internals.md](internals.md).
 
 ## Limits and recovery
 

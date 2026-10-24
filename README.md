@@ -307,7 +307,7 @@ Each review is a Codex job and costs usage. Turn the gate on for sessions you wa
 ### Load guard
 
 On Linux and macOS, jobs, backend replacements, turns and foreground reviews share a per-user
-admission guard. New work waits as `queued` for memory, pacing, load, quota or a provider pause;
+admission guard. New work waits as `queued` for memory, pacing, load or a provider pause;
 running turns continue. Status, JSON and the board show the reason and completed wait duration.
 Each live backend job counts as one active seat, retained through warm waits and backend cleanup.
 Eligible waiting backends with the fewest active seats go first, then queue age and job ID.
@@ -315,7 +315,7 @@ Eligible waiting backends with the fewest active seats go first, then queue age 
 Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
 `C = max(1, os.availableParallelism())`:
 
-- There is no default active ceiling on a healthy machine. Every start/turn needs
+- There is no default active ceiling on a healthy machine. Every new backend start (a job's start, replacement backend or foreground review) outside the minimum needs
   `hostAvailable − otherHolds − J ≥ R`, where `R = max(2 GiB, 0.15T)` and `J` is
   `0.5 GiB` for Codex/Grok or `1 GiB` for Kimi/ZCode/unknown backends. Model and effort have
   a `1.0` multiplier. Startup holds last 30 seconds and replace the job's own previous hold.
@@ -323,17 +323,18 @@ Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
   `max(0, memory.max − memory.current) − otherHoldsInScope − J ≥ min(0.5 GiB, 0.10 × memory.max)`.
   Sibling private limits are separate; common ancestors include both. A job that can never fit
   fails with an actionable reason rather than waiting forever.
-- All starts and turns share 5-second spacing. The busy-load allowance is
-  `F = min(16, max(2, C−2))` seats, applied only when five-minute load is at least `1.5C` or
-  host bytes are unknown, for new jobs only. Load above `3C` and macOS warning pressure
-  hold new jobs; admitted jobs can continue turns, retries and replacement backends, subject to the same memory headroom test.
-  Host bytes after holds below `max(0.75 GiB, 0.05T)` or macOS critical pressure hold
-  those next turns too, with a visible reason. Host load is skipped with a note when its
-  CPU scope differs from available CPUs.
-- The very-heavy-model **quota** is two concurrent participating jobs total across backends:
-  GPT-6 Astra and the Kimi K3 family at any effort. This is a quota/token limit, independent
-  of RAM. Effort alone, including `max`/`ultra` on other models, never enters this pool. Opaque default selections
-  remain unknown, so only identified selections are covered.
+- Starts and replacement backends share 5-second spacing; turns on a running backend are not paced.
+  The busy-load allowance is `F = min(16, max(2, C−2))` seats, applied at five-minute load
+  at least `1.5C` or unknown host bytes, for new seats outside the minimum only.
+  Load above `3C` holds all new starts, including replacements. A macOS pressure warning is
+  shown but holds nothing. A turn on a running backend takes no new startup hold and waits only for
+  critical memory (host bytes after other holds below `max(0.75 GiB, 0.05T)`), macOS critical pressure
+  or provider protection (pauses and probes). Host load is skipped with a note when its CPU scope differs from available CPUs.
+- The first two identified very-heavy and first three other active jobs skip the host reserve and the busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits, provider protection, ordering and start pacing. There is no very-heavy maximum.
+  Guaranteed starts must leave `max(0.75 GiB, 0.05T)` after other holds and their own `J`.
+  Very heavy means GPT-6 Astra and the Kimi K3 family at any effort. Effort alone, including
+  `max`/`ultra` on other models, never enters this pool. Opaque defaults remain unknown;
+  only identified selections are covered.
 - At most `Q = max(8, 2F)` resident waiting workers, including workers being spawned, are kept.
   Worker creation holds `64 MiB` for 30 seconds against the same host/scope budget. A full
   worker budget or insufficient memory leaves durable work without a worker and returns its
@@ -360,8 +361,7 @@ pause. Refused jobs remain failed for explicit resume. Grok has no refusal class
 With the guard effective, Kimi's internal retry default is 3 unless explicitly configured.
 
 Turn it off for an invocation with `RELAY_ADMISSION=off`, or domain-wide with
-`/relay:setup --admission off`. `/relay:setup --admission on` restores it;
-`--max-very-heavy 1|2|default` can lower/reset the quota. Settings live in
+`/relay:setup --admission off`. `/relay:setup --admission on` restores it. Settings live in
 `~/.relay-jobs/admission/config.json` (or `RELAY_ADMISSION_HOME/config.json`), shared across jobs
 homes. A custom jobs home cannot disable the guard. Old weight/class controls are ignored.
 
@@ -418,7 +418,7 @@ and its status line counts the repository's running and dead jobs and owed messa
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.19. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.20. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash

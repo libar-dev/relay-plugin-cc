@@ -282,7 +282,7 @@ test("setup --json golden page, backend, settings, sign-in, capability and model
   for (const args of [["setup"], ["setup", "--backend", "codex"]]) {
     const value = json(ctx, args, ["ready", "jobsHome", "loadGuard", "settings", "backends", "actionsTaken", "nextSteps"]);
     keys(value.settings, ["loadGuard", "fastTier", "mcpOff", "reviewGate"], "setup.settings");
-    keys(value.settings.loadGuard, ["admission", "maxVeryHeavy", "configPath", "maxActive", "busySeats", "headroomBytes", "maxWaitingWorkers"], "setup.settings.loadGuard");
+    keys(value.settings.loadGuard, ["admission", "guaranteedOther", "guaranteedVeryHeavy", "configPath", "maxActive", "busySeats", "headroomBytes", "maxWaitingWorkers"], "setup.settings.loadGuard");
     keys(value.loadGuard, ["enabled", "reason", "pauses"], "setup.loadGuard");
     assert.ok(value.backends.length > 0);
     for (const [i, block] of value.backends.entries()) {

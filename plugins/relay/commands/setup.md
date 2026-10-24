@@ -1,6 +1,6 @@
 ---
 description: Check every backend the relay can run (Codex, Grok, ZCode, Kimi): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier, job MCP servers or the load guard
-argument-hint: '[--backend codex|grok|zcode|kimi] [--grok-home H|--kimi-home H] [--enable-review-gate|--disable-review-gate] [--fast-tier allowed|off] [--job-mcp-off names|none] [--admission on|off] [--max-very-heavy 1|2|default]'
+argument-hint: '[--backend codex|grok|zcode|kimi] [--grok-home H|--kimi-home H] [--enable-review-gate|--disable-review-gate] [--fast-tier allowed|off] [--job-mcp-off names|none] [--admission on|off]'
 allowed-tools: Read, Write, Bash(node:*), Bash(npm:*), AskUserQuestion
 ---
 
@@ -98,11 +98,11 @@ task, a Workflow or a job of this repository runs, while a stop-hook continuatio
 in progress, and when Codex is unavailable or the review fails. Grok, ZCode and Kimi do not run
 it; use `/relay:review` on those.
 
-The switches (`--enable-review-gate`, `--disable-review-gate`, `--fast-tier`, `--job-mcp-off`, `--admission`, `--max-very-heavy`)
+The switches (`--enable-review-gate`, `--disable-review-gate`, `--fast-tier`, `--job-mcp-off`, `--admission`)
 work with the overview, which applies them first; with `--backend` they are a usage error.
 
 `--admission on|off` changes the load guard for every session of this user; change it only when
-the user asks. `--max-very-heavy 1|2|default` lowers or resets the shared quota (default 2).
+the user asks. Very heavy jobs have no maximum; the minimum is two very heavy plus three other jobs.
 The configured guard path is independent of `RELAY_JOBS_HOME`.
 
 If `Next steps` says to install Codex with npm:

@@ -434,7 +434,8 @@ test("setup command can offer Codex install and still points users to codex logi
   const hint = /^argument-hint: (.*)$/m.exec(setup)[1];
   for (const flag of ["--backend codex|grok|zcode|kimi", "--grok-home H|--kimi-home H",
     "--enable-review-gate|--disable-review-gate", "--fast-tier allowed|off", "--job-mcp-off names|none",
-    "--admission on|off", "--max-very-heavy 1|2|default"]) assert.ok(hint.includes(flag), flag);
+    "--admission on|off"]) assert.ok(hint.includes(flag), flag);
+  assert.doesNotMatch(setup, /--max-very-heavy/);
   assert.match(setup, /^description: Check every backend.*load guard$/m);
   assert.match(setup, /AskUserQuestion/);
   assert.match(setup, /npm install -g @openai\/codex/);

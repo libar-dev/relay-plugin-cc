@@ -44,14 +44,17 @@ test("orchestration references attribute every data row and date the snapshot", 
 });
 
 test("documented guard defaults agree with local runtime exports", () => {
-  assert.equal(DEFAULTS.maxVeryHeavy, 2);
+  assert.equal(DEFAULTS.guaranteedVeryHeavy, 2);
+  assert.equal(DEFAULTS.guaranteedOther, 3);
+  assert.equal("maxVeryHeavy" in DEFAULTS, false);
   assert.equal(DEFAULTS.spacingMs, 5000);
   const guide = fs.readFileSync(path.join(root, "docs/guide.md"), "utf8").replace(/\s+/g, " ");
-  assert.match(guide, /quota of 2 very heavy jobs \(GPT-6 Astra and Kimi K3 at every effort\)/);
+  assert.match(guide, /Very heavy means GPT-6 Astra and Kimi K3 at every effort/);
   assert.match(guide, /Max\/ultra effort on other models does not enter that pool/);
   for (const f of ["SKILL.md", "orchestration.md", "models.md"]) {
     const source = read(`skills/jobs/${f}`);
-    assert.match(source, /(?:quota.{0,20}2|2 very heavy)/);
+    assert.match(source, /first two identified very-heavy and first three other active jobs/);
+    assert.match(source, /no very-heavy maximum/);
   }
   for (const file of [path.join(root, 'README.md'), path.join(plugin, 'CHANGELOG.md')]) {
     const source = fs.readFileSync(file, 'utf8');
@@ -65,7 +68,23 @@ test("documented guard defaults agree with local runtime exports", () => {
   }
 });
 
-test("effort alone never puts non-Astra/non-K3 models in the very-heavy quota", () => {
+const obsoleteGuardText = /\bquota\b|--max-very-heavy|(?:starts?(?:\/| and | or )turns?|starts?[^.\n]{0,30}and turns?)[^.\n]{0,50}(?:pac|spac|5)|(?:pac|spac)[^.\n]{0,50}(?:starts? and turns?|turns? (?:every|5))|turns? (?:are )?(?:paced|spaced)|(?:pace|space)(?:s|d)? (?:backend )?turns?/i;
+test("current guard instructions reject obsolete quota and turn-pacing claims", () => {
+  for (const file of ["skills/jobs/SKILL.md", "skills/jobs/orchestration.md", "skills/jobs/models.md", "skills/jobs/internals.md", "commands/setup.md"]) {
+    assert.doesNotMatch(read(file), obsoleteGuardText, file);
+  }
+  for (const file of ["README.md", "docs/guide.md"]) {
+    assert.doesNotMatch(fs.readFileSync(path.join(root, file), "utf8"), obsoleteGuardText, file);
+  }
+  const changelog = read("CHANGELOG.md");
+  assert.doesNotMatch(changelog.slice(changelog.indexOf("- Before a job starts"), changelog.indexOf("- When too many workers")), obsoleteGuardText);
+  assert.doesNotMatch(changelog.slice(changelog.indexOf("Docs:"), changelog.indexOf("## 2.2.0")), obsoleteGuardText);
+  for (const source of ["Turns are paced 5 seconds apart", "paces backend turns", "One shared quota allows 2 very heavy jobs", "Starts and turns are paced 5 s apart", "paces backend starts and turns 5 seconds apart", "one start or turn every 5 s", "--max-very-heavy 1"]) {
+    assert.match(source, obsoleteGuardText, source);
+  }
+});
+
+test("effort alone never puts non-Astra/non-K3 models in the very-heavy class", () => {
   for (const [backend, model] of [["codex", "gpt-6.1-sol"], ["codex", "gpt-6-luna"],
     ["zcode", "glm-5.3"], ["kimi", "kimi-code/kimi-for-coding"], ["grok", "grok-4.7-build"]]) {
     for (const effort of ["max", "ultra"]) assert.notEqual(modelClass({ backend, model, effort }), "very-heavy");
@@ -75,7 +94,7 @@ test("effort alone never puts non-Astra/non-K3 models in the very-heavy quota", 
 
 test("setup's captured-snapshot formatter preserves configured versus effective guard state", () => {
   const page = { jobsHome: "/tmp/example-jobs", settings: { fastTier: "off", mcpOff: [], reviewGate: false,
-    loadGuard: { admission: "on", busySeats: 4, maxVeryHeavy: 2, maxWaitingWorkers: 8, configPath: "/tmp/example-admission/config.json" } },
+    loadGuard: { admission: "on", busySeats: 4, guaranteedVeryHeavy: 2, guaranteedOther: 3, maxWaitingWorkers: 8, configPath: "/tmp/example-admission/config.json" } },
     loadGuard: { enabled: false, reason: "unsupported platform" }, backends: [], actionsTaken: [], nextSteps: [] };
   const off = renderSetupPage(page);
   assert.match(off, /load guard: on/);

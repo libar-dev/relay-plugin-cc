@@ -258,3 +258,74 @@ test("a heartbeat during slow probe startup releases the claim without provider 
   assert.equal(readJob(s.dir).state, "completed");
   assert.equal(listPauses(s.ctx.env, deps)[0].strikes, 1, "completion of a released generation cannot clear the pause");
 });
+
+test("server-death replacement waits for critical states, scope, provider pause and pacing before reconnecting", async t => {
+  const { recordRefusal } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const s = seed(t); s.unblock();
+  s.options.env.FAKE_CODEX_DEATH_KIND = "zero";
+  const home = s.ctx.env.RELAY_ADMISSION_HOME, slotFile = path.join(home, "slots", "job-admission-worker.json");
+  const timingFile = path.join(home, "timing.json");
+  let connections = 0, stage = 0, original, timing;
+  const states = [{ load5: 200 }, { availableBytes: 0 }, { pressure: 4 },
+    { group: "/finite", scopes: [{ id: "/finite", limitBytes: 2 * GiB, remainingBytes: 0 }] }, {}, {}];
+  const kinds = ["critical", "critical", "critical", "scope", "pause", "stagger"];
+  s.options.admission.readMachine = () => ({ totalBytes: 128 * GiB, availableBytes: 100 * GiB, cores: 64, load5: 0, notes: [],
+    ...(connections === 1 ? states[stage] : {}) });
+  s.options.admissionSleep = async () => {
+    assert.equal(connections, 1, "second connect must wait for every launch gate");
+    assert.equal(readJob(s.dir).admission.waitKind, kinds[stage]);
+    const slot = JSON.parse(fs.readFileSync(slotFile));
+    assert.equal(slot.state, "running"); assert.equal(slot.holdAt, original.holdAt); assert.equal(slot.holdBytes, original.holdBytes);
+    assert.equal(fs.readFileSync(timingFile, "utf8"), timing);
+    stage++;
+    if (stage === 4) recordRefusal(home, "codex", { kind: "rate" }, "previous", { ...s.options.admission, env: s.options.env });
+    if (stage === 5) fs.rmSync(path.join(home, "pauses", "codex.json"));
+    if (stage === 6) s.tick(D.spacingMs);
+  };
+  const backend = backendNamed("codex"), connect = backend.connect;
+  t.mock.method(backend, "connect", async (...args) => {
+    connections++;
+    const slot = JSON.parse(fs.readFileSync(slotFile));
+    if (connections === 1) { original = slot; timing = fs.readFileSync(timingFile, "utf8"); }
+    else {
+      assert.equal(stage, 6);
+      assert.equal(Date.parse(slot.holdAt) - Date.parse(original.holdAt), D.spacingMs);
+      assert.equal(slot.holdBytes, D.startupBytes.codex);
+      assert.notEqual(fs.readFileSync(timingFile, "utf8"), timing);
+      assert.equal(fs.readdirSync(path.join(home, "slots")).length, 1);
+    }
+    return connect(...args);
+  });
+  await runWorker(s.dir, s.options);
+  assert.equal(readJob(s.dir).state, "completed"); assert.equal(connections, 2); assert.equal(stage, 6);
+  assert.equal(readJob(s.dir).attempts[0].servers.length, 2);
+});
+
+test("turns on the same connection ignore critical load and pacing without refreshing holds", async t => {
+  const s = seed(t); s.unblock();
+  const home = s.ctx.env.RELAY_ADMISSION_HOME, slotFile = path.join(home, "slots", "job-admission-worker.json"), timingFile = path.join(home, "timing.json");
+  const backend = backendNamed("codex"), connect = backend.connect;
+  let connections = 0, turns = 0, original, timing;
+  s.options.admissionSleep = async () => assert.fail("retained connection must not wait on load or pacing");
+  t.mock.method(backend, "connect", async (...args) => {
+    connections++; const connection = await connect(...args), run = connection.run.bind(connection);
+    original = JSON.parse(fs.readFileSync(slotFile)); timing = fs.readFileSync(timingFile, "utf8");
+    t.mock.method(connection, "run", async (...turn) => {
+      turns++;
+      if (turns === 2) {
+        const slot = JSON.parse(fs.readFileSync(slotFile));
+        assert.equal(slot.holdAt, original.holdAt); assert.equal(slot.holdBytes, original.holdBytes);
+        assert.equal(fs.readFileSync(timingFile, "utf8"), timing);
+      }
+      const result = await run(...turn);
+      if (turns === 1) {
+        postInboxMessage(s.dir, { kind: "continue", text: "[quick] Second turn." });
+        s.options.admission.readMachine = () => ({ totalBytes: 128 * GiB, availableBytes: 100 * GiB, cores: 64, load5: 200, notes: [] });
+      }
+      return result;
+    });
+    return connection;
+  });
+  await runWorker(s.dir, s.options);
+  assert.equal(readJob(s.dir).state, "completed"); assert.equal(turns, 2); assert.equal(connections, 1);
+});

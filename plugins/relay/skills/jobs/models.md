@@ -6,10 +6,10 @@ policy. Prices are standard API USD per million tokens; subscriptions have separ
 
 ## Header choices and API list prices
 
-One shared quota allows 2 very heavy jobs: GPT-6 Astra and Kimi K3 at **any** effort. Effort alone
-never enters it; other models at max/ultra are outside the pool. The quota looks only at the model alias
-in the request, never the model behind that alias. A request using `default` is outside this quota unless
-the backend resolves it to an explicit model id before admission. Native Claude models below are for harness
+The first two identified very-heavy and first three other active jobs skip the host reserve and the busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits, provider protection, ordering and start pacing. There is no very-heavy maximum.
+Very heavy means GPT-6 Astra and Kimi K3 at **any** effort. Effort alone never enters that pool.
+Classification looks only at the model alias in the request, never the model behind that alias.
+A request using `default` is not identified as very heavy unless the backend resolves it to an explicit model id before admission. Native Claude models below are for harness
 comparison, not relay job models. Relay requires no external search or scraping service.
 
 ### Codex prices (≤272K-token prompts)
@@ -40,10 +40,10 @@ These are Grok API prices, not a Grok Build subscription bill; tool and context 
 | Model / header alias | Efforts | Very heavy | Input / cache read / output | Cache write 5m / 1h | Source |
 |---|---|---|---|---|---|
 | Kimi K3 / `kimi-code/k3` (K3 family) | low, high, max where served | yes, any effort | 3 / 0.30 / 15 | 3 / 6 | [vendor][kimi] |
-| Kimi K2.8 Preview / `kimi-code/kimi-for-coding` | inspect setup; alias can change | no: the quota matches the alias, not the model it serves | not verified for this preview | not verified | [availability][kimi-code] |
+| Kimi K2.8 Preview / `kimi-code/kimi-for-coding` | inspect setup; alias can change | no: classification matches the alias, not the model it serves | not verified for this preview | not verified | [availability][kimi-code] |
 
 On Kimi, aliases containing `k3` as a separate token, including `k3-256k` and `k3.1-pro`, count as very
-heavy at every effort. `kimi-code/kimi-for-coding` stays outside the quota even if it serves a K3 model.
+heavy at every effort. `kimi-code/kimi-for-coding` is not very heavy even if it serves a K3 model.
 As checked on 2026-10-24, the [benchmark source][kimi-k3] marks Kimi K3 deprecated in favour of Kimi K3.1 Pro.
 K3.1 Pro has no price or benchmark row in this dated snapshot; the existing numbers are unchanged.
 
