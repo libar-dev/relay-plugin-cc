@@ -545,11 +545,11 @@ async function runWorkerRound(jobDir, options, held) {
 
   let granted = false;
   let admitted = wasAdmitted(job);
-  const waitForAdmission = async () => {
+  const waitForAdmission = async (turn = false) => {
     for (;;) {
       if (cancelRequested) return false;
       const decision = admit({ home, jobId: job.id, jobDir, me, request: { ...job.request, backend: backend.name },
-        admitted, admission: job.admission, waitingSince: job.admission?.state === "waiting" ? job.admission.since : null }, admissionDeps);
+        admitted, turn, admission: job.admission, waitingSince: job.admission?.state === "waiting" ? job.admission.since : null }, admissionDeps);
       if (decision.slot) slot = decision.slot;
       if (decision.permanent) {
         save({ admission: decision.record });
@@ -654,7 +654,7 @@ async function runWorkerRound(jobDir, options, held) {
                 result = { ...result, turnStatus: "interrupted" };
                 break;
               }
-              if (!granted && !(await waitForAdmission())) {
+              if (!granted && !(await waitForAdmission(true))) {
                 result = { ...result, turnStatus: "interrupted" };
                 break;
               }

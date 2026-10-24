@@ -166,7 +166,7 @@ export function renderSetupPage(page, env = process.env) {
     `settings: fast tier ${settings.fastTier} · job MCP servers off: ${settings.mcpOff.join(", ") || "none"} · review gate ${settings.reviewGate ? "on" : "off"} (this repository)`
   ];
   const g = settings.loadGuard;
-  if (g) lines.push(`load guard: ${g.admission} · no fixed active ceiling · busy allowance ${g.busySeats} seats · very-heavy quota ${g.maxVeryHeavy} · waiting worker limit ${g.maxWaitingWorkers} · domain settings: ${g.configPath}`, "note: old weight/class settings in jobs-home configs are ignored; use setup --admission and --max-very-heavy for the admission domain.");
+  if (g) lines.push(`load guard: ${g.admission} · no fixed active ceiling · busy allowance ${g.busySeats} seats · minimum guarantee ${g.guaranteedVeryHeavy} very heavy + ${g.guaranteedOther} other, no very-heavy maximum · waiting worker limit ${g.maxWaitingWorkers} · domain settings: ${g.configPath}`, "note: old weight/class settings in jobs-home configs are ignored; use setup --admission for the admission domain.");
   if (page.loadGuard) lines.push(...renderGuard(page.loadGuard));
   for (const block of page.backends) lines.push("", ...renderBlock(block, env));
   lines.push("");

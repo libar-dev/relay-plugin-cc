@@ -17,7 +17,7 @@ export const DEFAULTS = Object.freeze({
   headroomGiB: 2, headroomFraction: 0.15, reserveMs: 30000,
   startupBytes: Object.freeze({ codex: 0.5 * GiB, grok: 0.5 * GiB, kimi: GiB, zcode: GiB }),
   unknownStartupBytes: GiB, workerBytes: 64 * 2 ** 20,
-  maxActive: null, minBusySeats: 2, maxBusySeats: 16, spareCores: 2, maxVeryHeavy: 2,
+  maxActive: null, minBusySeats: 2, maxBusySeats: 16, spareCores: 2, guaranteedVeryHeavy: 2, guaranteedOther: 3,
   spacingMs: 5000, scopeMarginGiB: 0.5, scopeMarginFraction: 0.10,
   criticalGiB: 0.75, criticalFraction: 0.05, criticalLoadPerCore: 3, busyLoadPerCore: 1.5,
   minWaitingWorkers: 8, waitingPerBusySeat: 2,
@@ -36,7 +36,6 @@ export const startupBytes = backend => DEFAULTS.startupBytes[backend] ?? DEFAULT
 const backends = ["codex", "grok", "zcode", "kimi"];
 const iso = n => new Date(n).toISOString();
 const age = (now, at, duration) => now >= Date.parse(at) && now - Date.parse(at) < duration;
-const positive = (value, max, fallback) => Number.isInteger(value) && value > 0 && value <= max ? value : fallback;
 export function admissionHome(env = process.env) {
   return path.resolve(env.RELAY_ADMISSION_HOME || path.join(os.homedir(), ".relay-jobs", "admission"));
 }
@@ -48,7 +47,8 @@ export function readAdmissionConfig(env = process.env) {
     stored = JSON.parse(fs.readFileSync(admissionConfigPath(env), "utf8"));
     if (!stored || typeof stored !== "object" || Array.isArray(stored)) throw new Error("invalid config");
   } catch (e) { if (e.code !== "ENOENT") notes.push(`admission settings unreadable; using defaults (${e.code ?? e.message})`); }
-  return { admission: stored?.admission === "off" ? "off" : "on", maxVeryHeavy: positive(stored?.maxVeryHeavy, DEFAULTS.maxVeryHeavy, DEFAULTS.maxVeryHeavy), ...(notes.length ? { notes } : {}) };
+  if (stored && Object.hasOwn(stored, "maxVeryHeavy")) notes.push("maxVeryHeavy is ignored: very heavy jobs have no maximum");
+  return { admission: stored?.admission === "off" ? "off" : "on", ...(notes.length ? { notes } : {}) };
 }
 export function setAdmissionConfig(key, value, env = process.env) {
   const file = admissionConfigPath(env);
@@ -64,7 +64,7 @@ export function admissionEnabled(env = process.env, config = undefined, platform
 export function guardSettings(config = {}, machine = { totalBytes: os.totalmem(), cores: os.availableParallelism() }) {
   const busySeats = Math.min(DEFAULTS.maxBusySeats, Math.max(DEFAULTS.minBusySeats, machine.cores - DEFAULTS.spareCores));
   return { maxActive: DEFAULTS.maxActive, busySeats,
-    maxVeryHeavy: positive(config.maxVeryHeavy, DEFAULTS.maxVeryHeavy, DEFAULTS.maxVeryHeavy),
+    guaranteedVeryHeavy: DEFAULTS.guaranteedVeryHeavy, guaranteedOther: DEFAULTS.guaranteedOther,
     headroomBytes: Math.max(DEFAULTS.headroomGiB * GiB, machine.totalBytes * DEFAULTS.headroomFraction),
     maxWaitingWorkers: Math.max(DEFAULTS.minWaitingWorkers, DEFAULTS.waitingPerBusySeat * busySeats) };
 }
@@ -306,7 +306,7 @@ export function machineState(machine, pendingBytes = 0) {
   if (effective !== null && effective < Math.max(DEFAULTS.criticalGiB * GiB, t * DEFAULTS.criticalFraction)) return { state: "critical", detail: "machine critical: memory low", holdsTurns: true };
   if (machine.pressure & 4) return { state: "critical", detail: "memory pressure critical: waiting for pressure to recover", holdsTurns: true };
   if (l !== null && l > DEFAULTS.criticalLoadPerCore * c) return { state: "critical", detail: `machine critical: 5-minute load ${l.toFixed(1)} on ${c} cores`, holdsTurns: false };
-  if (machine.pressure & 2) return { state: "warning", detail: "memory pressure warning: waiting for normal pressure", holdsTurns: false };
+  if (machine.pressure & 2) return { state: "warning", detail: "memory pressure warning (not holding)", holdsTurns: false };
   if (a === null && l === null) return { state: "unknown", detail: "machine readings unavailable" };
   const busy = l !== null && l >= DEFAULTS.busyLoadPerCore * c;
   return { state: busy ? "busy" : a === null ? "unknown" : "healthy", detail: null };
@@ -423,7 +423,7 @@ function holds(all, id, now) {
   return all.filter(s => s.jobId !== id && age(now, s.holdAt ?? s.admittedAt ?? s.spawnAt, DEFAULTS.reserveMs))
     .map(s => ({ ...s, holdBytes: Number.isFinite(s.holdBytes) ? s.holdBytes : s.state === "running" ? startupBytes(s.backend) : DEFAULTS.workerBytes }));
 }
-function memoryCheck(machine, settings, pending, bytes, warm = false) {
+function memoryCheck(machine, settings, pending, bytes, guaranteed = false) {
   if (machine.refreshing) return { kind: "sensor", reason: "sensor refresh in progress" };
   if (settings.headroomBytes + bytes > machine.totalBytes) return { permanent: true, kind: "memory", reason: "job cannot fit host memory: reduce startup demand or use an executor with more memory; RELAY_ADMISSION=off bypasses" };
   for (const scope of machine.scopes ?? []) {
@@ -432,8 +432,9 @@ function memoryCheck(machine, settings, pending, bytes, warm = false) {
   }
   const pendingBytes = pending.reduce((n, s) => n + s.holdBytes, 0);
   const state = machineState(machine, pendingBytes);
-  if (["critical", "warning"].includes(state.state) && (!warm || state.holdsTurns)) return { kind: state.state, reason: state.detail };
-  if (machine.availableBytes !== null && machine.availableBytes - pendingBytes - bytes < settings.headroomBytes) return { kind: "memory", reason: `host memory low: ${(machine.availableBytes / GiB).toFixed(1)} GiB available; ${(pendingBytes / GiB).toFixed(2)} GiB pending holds; ${(settings.headroomBytes / GiB).toFixed(1)} GiB reserve required after startup allowance` };
+  if (state.state === "critical") return { kind: "critical", reason: state.detail };
+  if (guaranteed && machine.availableBytes !== null && machine.availableBytes - pendingBytes - bytes < Math.max(DEFAULTS.criticalGiB * GiB, machine.totalBytes * DEFAULTS.criticalFraction)) return { kind: "critical", reason: "machine critical: memory low after startup allowance" };
+  if (!guaranteed && machine.availableBytes !== null && machine.availableBytes - pendingBytes - bytes < settings.headroomBytes) return { kind: "memory", reason: `host memory low: ${(machine.availableBytes / GiB).toFixed(1)} GiB available; ${(pendingBytes / GiB).toFixed(2)} GiB pending holds; ${(settings.headroomBytes / GiB).toFixed(1)} GiB reserve required after startup allowance` };
   for (const scope of machine.scopes ?? []) {
     const margin = Math.min(DEFAULTS.scopeMarginGiB * GiB, DEFAULTS.scopeMarginFraction * scope.limitBytes);
     const reserved = pending.filter(h => inScope(h, scope)).reduce((n, h) => n + h.holdBytes, 0);
@@ -441,6 +442,12 @@ function memoryCheck(machine, settings, pending, bytes, warm = false) {
   }
   return null;
 }
+// Count identified active jobs, never descriptive legacy class labels or waiters.
+function inMinimum(candidate, active, settings) {
+  const count = active.filter(s => s.jobId !== candidate.jobId && Boolean(s.quotaHeavy) === Boolean(candidate.quotaHeavy)).length;
+  return count < (candidate.quotaHeavy ? settings.guaranteedVeryHeavy : settings.guaranteedOther);
+}
+const warningNotes = machine => machine.pressure & 2 ? ["memory pressure warning (not holding)"] : [];
 export function admit(ctx, injected = {}) {
   const deps = dependencies(injected), home = ctx.home ?? admissionHome(deps.env), now = deps.now();
   try {
@@ -455,8 +462,8 @@ export function admit(ctx, injected = {}) {
       backend: ctx.request.backend ?? "codex", model: ctx.request.model, effort: ctx.request.effort, class: cls, weight: w, quotaHeavy: cls === "very-heavy",
       since: iso(now), waitingSince: ctx.waitingSince ?? null, checkedAt: iso(now), probe: false, probeGeneration: null,
       holdGroup: machine.group, scopes: machine.scopes, hostTotalBytes: machine.totalBytes };
-    const notes = [...machine.notes, ...(config.notes ?? [])];
-    if (!ctx.request.model || ctx.request.model === "default" || !ctx.request.effort || ctx.request.effort === "default") notes.push("effective default model/effort unknown: quota covers identified selections");
+    const notes = [...machine.notes, ...(config.notes ?? []), ...warningNotes(machine)];
+    if (!ctx.request.model || ctx.request.model === "default" || !ctx.request.effort || ctx.request.effort === "default") notes.push("effective default model/effort unknown: minimum guarantee covers identified selections");
     const wait = (reason, waitKind, existing = null) => {
       mine.waitingSince ??= iso(now);
       const old = readJsonOrNull(slotFile(home, ctx.jobId));
@@ -468,29 +475,36 @@ export function admit(ctx, injected = {}) {
     const decision = lock(home, deps, () => {
       const all = slots(home, deps), own = all.find(s => s.jobId === ctx.jobId), existing = own?.state === "running" ? own : null;
       const warm = Boolean(existing || ctx.admitted || wasAdmitted(readJob(ctx.jobDir)));
+      const retainedTurn = Boolean(ctx.turn && existing);
       mine.since = own?.since ?? mine.since;
       mine.waitingSince ??= own?.state === "waiting" ? own.waitingSince : null;
       const running = all.filter(s => s.jobId !== ctx.jobId && s.state === "running");
       const legacy = legacyJobs(ctx.jobId, all, candidates, deps);
-      const active = [...running, ...legacy.map(j => ({ backend: j.request?.backend ?? "codex", quotaHeavy: isVeryHeavy(j.request) }))];
-      const eligible = (candidate, candidateMachine, pending, warm = false) => {
+      const active = [...running, ...legacy.map(j => ({ jobId: j.id, backend: j.request?.backend ?? "codex", quotaHeavy: isVeryHeavy(j.request) }))];
+      const eligible = (candidate, candidateMachine, pending, reuseSeat = false, retained = false) => {
         const pause = pauseRead(home, candidate.backend, deps, true);
         if (pause && now < Date.parse(pause.until)) return { reason: refusalReason(pause), kind: "pause" };
         if (pause?.probe && (pause.probe.jobId !== candidate.jobId || pause.probe.pid !== candidate.pid || pause.probe.startTime !== candidate.processStart)) return { reason: `${candidate.backend} paused: waiting for probe job ${pause.probe.jobId}`, kind: "probe" };
-        if (candidate.quotaHeavy && active.filter(s => s.quotaHeavy).length >= settings.maxVeryHeavy) return { reason: `very-heavy quota: ${settings.maxVeryHeavy} participating jobs already running`, kind: "very-heavy" };
-        const memory = memoryCheck(candidateMachine, guardSettings(config, candidateMachine), pending, startupBytes(candidate.backend), warm);
+        if (retained) {
+          const pendingBytes = pending.reduce((n, s) => n + s.holdBytes, 0);
+          const state = machineState(candidateMachine, pendingBytes);
+          return state.state === "critical" && state.holdsTurns ? { kind: "critical", reason: state.detail } : null;
+        }
+        const candidateSettings = guardSettings(config, candidateMachine);
+        const guaranteed = inMinimum(candidate, active, candidateSettings);
+        const memory = memoryCheck(candidateMachine, candidateSettings, pending, startupBytes(candidate.backend), guaranteed);
         if (memory) return memory;
-        const state = machineState(candidateMachine);
-        if (!warm && (state.state === "busy" || candidateMachine.availableBytes === null) && active.length >= settings.busySeats) return { reason: `busy-load allowance: ${active.length} of ${settings.busySeats} seats in use`, kind: "seats" };
+        const busy = candidateMachine.load5 !== null && candidateMachine.load5 >= DEFAULTS.busyLoadPerCore * candidateMachine.cores;
+        if (!reuseSeat && !guaranteed && (busy || candidateMachine.availableBytes === null) && active.length >= candidateSettings.busySeats) return { reason: `busy-load allowance: ${active.length} of ${settings.busySeats} seats in use`, kind: "seats" };
         return null;
       };
-      // Structural impossibility is permanent even while a provider/quota is paused.
-      const fit = memoryCheck(machine, settings, [], startupBytes(mine.backend));
-      const blocked = fit?.permanent ? fit : eligible(mine, machine, holds(all, ctx.jobId, now), warm);
+      // Structural impossibility is permanent even while a provider is paused.
+      const fit = retainedTurn ? null : memoryCheck(machine, settings, [], startupBytes(mine.backend));
+      const blocked = fit?.permanent ? fit : eligible(mine, machine, holds(all, ctx.jobId, now), warm, retainedTurn);
       if (blocked?.permanent) return { admit: false, permanent: true, reason: blocked.reason, record: { ...recordFor(mine, notes, blocked.reason, blocked.kind), state: "failed" } };
       if (blocked) return wait(blocked.reason, blocked.kind, existing);
       const timing = readJsonOrNull(path.join(home, "timing.json")) ?? {};
-      if (age(now, timing.lastStart, DEFAULTS.spacingMs)) return wait("staggering starts: another job or turn just started", "stagger", existing);
+      if (!retainedTurn && age(now, timing.lastStart, DEFAULTS.spacingMs)) return wait("staggering starts: another backend just started", "stagger", existing);
       if (!warm) {
         const candidateMachine = s => {
           // Refresh finite sibling scopes on demand; do not use an old wait reason
@@ -513,9 +527,9 @@ export function admit(ctx, injected = {}) {
       const slot = { ...mine, waitingSince: ctx.waitingSince ?? previousWait?.since ?? null,
         waitReason: ctx.admission?.reason ?? own?.waitReason ?? null, waitKind: ctx.admission?.waitKind ?? own?.waitKind ?? null,
         spawnAt: own?.spawnAt ?? null, state: "running", admittedAt: ctx.waitingSince ? iso(now) : previousWait?.admittedAt ?? iso(now),
-        holdAt: iso(now), holdBytes: startupBytes(mine.backend) };
+        holdAt: retainedTurn ? existing.holdAt : iso(now), holdBytes: retainedTurn ? existing.holdBytes : startupBytes(mine.backend) };
       writeSlot(home, slot);
-      writeJsonAtomic(path.join(home, "timing.json"), { lastStart: iso(now) });
+      if (!retainedTurn) writeJsonAtomic(path.join(home, "timing.json"), { lastStart: iso(now) });
       return { admit: true, slot, record: recordFor(slot, notes) };
     });
     const key = `${home}:${ctx.jobId}`;
@@ -525,7 +539,7 @@ export function admit(ctx, injected = {}) {
     return { admit: false, reason, waitKind: "lock", retryMs: DEFAULTS.pollMs, slot: null, record: recordFor(mine, notes, reason, "lock") };
   } catch (e) { return bypass(ctx, e); }
 }
-// Warm work retains its seat and refreshes its own startup hold once per grant.
+// Replacements retain their seat; only retained turns skip startup checks and holds.
 export const checkBackend = admit;
 
 export function releaseSlot(home, jobId, me, injected = {}) {
@@ -624,7 +638,7 @@ export function describeGuard(env = process.env, { readSensors = true } = {}, in
     const machine = machineReading(home, deps), candidates = legacyCandidates(deps), all = slots(home, deps, false);
     const running = all.filter(s => s.state === "running");
     const legacy = legacyJobs(null, all, candidates, deps);
-    return { enabled, ...machine, notes: [...machine.notes, ...(deps.readAdmissionConfig(env).notes ?? [])], state: machineState(machine).state, ...guardSettings(deps.readAdmissionConfig(env), machine), activeSeats: running.length + legacy.length, pendingBytes: holds(all, null, deps.now()).reduce((n, s) => n + s.holdBytes, 0),
+    return { enabled, ...machine, notes: [...machine.notes, ...(deps.readAdmissionConfig(env).notes ?? []), ...warningNotes(machine)], state: machineState(machine).state, ...guardSettings(deps.readAdmissionConfig(env), machine), activeSeats: running.length + legacy.length, pendingBytes: holds(all, null, deps.now()).reduce((n, s) => n + s.holdBytes, 0),
       veryHeavy: running.filter(s => s.quotaHeavy).length + legacy.filter(j => isVeryHeavy(j.request)).length, waiting: all.filter(s => s.state !== "running").length, pauses };
   } catch (e) { return { enabled: true, error: e.message, pauses: [] }; }
 }
@@ -633,7 +647,7 @@ export function renderGuard(snapshot) {
   if (snapshot.error) return [`load-guard: on (state unreadable: ${snapshot.error})`];
   const state = snapshot.refreshing ? "sensor refresh in progress" : (snapshot.notes ?? []).some(n => n.includes("readings unavailable")) ? `readings unavailable (${snapshot.state})` : snapshot.state;
   const memory = snapshot.availableBytes === null ? "memory not read" : `memory ${(snapshot.availableBytes / GiB).toFixed(1)} of ${(snapshot.totalBytes / GiB).toFixed(1)} GiB available`;
-  return [`load-guard: on · ${state} · seats ${snapshot.activeSeats}, no fixed ceiling, busy allowance ${snapshot.busySeats} · very-heavy quota ${snapshot.veryHeavy} of ${snapshot.maxVeryHeavy} · host ${memory} (${snapshot.source ?? "source unknown"}; ${snapshot.quality ?? "unknown quality"}) · pending holds ${((snapshot.pendingBytes ?? 0) / GiB).toFixed(2)} GiB · finite scopes ${(snapshot.scopes ?? []).map(s => `${s.id}: ${(s.remainingBytes / GiB).toFixed(2)} GiB remaining`).join(", ") || "none known"} · 5-minute load ${snapshot.load5 ?? "not read"} on ${snapshot.cores} cores`,
+  return [`load-guard: on · ${state} · seats ${snapshot.activeSeats}, no fixed ceiling, busy allowance ${snapshot.busySeats} · very heavy ${snapshot.veryHeavy} running (${snapshot.guaranteedVeryHeavy} guaranteed, no maximum) · minimum guarantee ${snapshot.guaranteedVeryHeavy} very heavy + ${snapshot.guaranteedOther} other · host ${memory} (${snapshot.source ?? "source unknown"}; ${snapshot.quality ?? "unknown quality"}) · pending holds ${((snapshot.pendingBytes ?? 0) / GiB).toFixed(2)} GiB · finite scopes ${(snapshot.scopes ?? []).map(s => `${s.id}: ${(s.remainingBytes / GiB).toFixed(2)} GiB remaining`).join(", ") || "none known"} · 5-minute load ${snapshot.load5 ?? "not read"} on ${snapshot.cores} cores`,
     ...(snapshot.notes ?? []).map(n => `note: load guard: ${n}`), ...(snapshot.pauses ?? []).map(p => `paused: ${refusalReason(p)}; strike ${p.strikes}`)];
 }
 
@@ -662,9 +676,11 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
       const all = slots(home, deps), existing = all.find(s => s.jobId === job.id);
       if (existing && ((existing.state === "spawning" && age(deps.now(), existing.since, DEFAULTS.spawnGraceMs)) || deps.isAlive({ pid: existing.pid, startTime: existing.processStart }))) return null;
       const waiting = all.filter(s => s.state !== "running").length;
-      const check = memoryCheck(machine, settings, holds(all, job.id, deps.now()), DEFAULTS.workerBytes, wasAdmitted(job));
-      const reason = check?.reason ?? (waiting >= settings.maxWaitingWorkers ? `waiting worker limit: ${waiting} of ${settings.maxWaitingWorkers}` : null);
       const cls = modelClass(job.request);
+      const candidate = { jobId: job.id, quotaHeavy: isVeryHeavy(job.request) };
+      const guaranteed = inMinimum(candidate, all.filter(s => s.state === "running"), settings);
+      const check = memoryCheck(machine, settings, holds(all, job.id, deps.now()), DEFAULTS.workerBytes, guaranteed);
+      const reason = check?.reason ?? (waiting >= settings.maxWaitingWorkers ? `waiting worker limit: ${waiting} of ${settings.maxWaitingWorkers}` : null);
       if (reason) {
         writeJob(jobDir, { ...job, state: check?.permanent ? "failed" : "queued", ...(check?.permanent ? { completedAt: iso(deps.now()), errorMessage: reason } : {}), worker: null,
           admission: { state: check?.permanent ? "failed" : "waiting", reason, waitKind: "worker", since: job.admission?.state === "waiting" ? job.admission.since : iso(deps.now()), class: cls, weight: WEIGHTS[cls], notes: machine.notes } });

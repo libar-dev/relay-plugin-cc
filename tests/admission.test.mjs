@@ -30,7 +30,14 @@ function setup(t, config = {}) {
   return { home, root, env, deps, ctx, live, tick: (ms = D.spacingMs) => now += ms, setMachine: m => machine = { ...machine, ...m }, setLegacy: jobs => legacy = jobs };
 }
 
-test("defaults use exact RAM, seats and backend bytes; mandatory quota cannot be demoted", () => {
+function fillOtherMinimum(s) {
+  const active = Array.from({ length: D.guaranteedOther }, () => s.ctx({ model: "ordinary" }));
+  for (const c of active) { assert.equal(admit(c, s.deps).admit, true); s.tick(); }
+  s.tick(D.reserveMs);
+  return active;
+}
+
+test("defaults use exact RAM, seats and backend bytes; minimum classification cannot be demoted", () => {
   for (const total of [7.3, 19.7, 37.2, 95.4]) {
     const settings = guardSettings({}, { totalBytes: total * GiB, cores: 10 });
     assert.equal(settings.headroomBytes, Math.max(2 * GiB, total * GiB * 0.15));
@@ -38,26 +45,27 @@ test("defaults use exact RAM, seats and backend bytes; mandatory quota cannot be
     assert.equal(settings.maxActive, null);
     assert.equal(settings.maxWaitingWorkers, 16);
   }
-  assert.equal(guardSettings({ maxVeryHeavy: 100 }).maxVeryHeavy, 2);
-  assert.equal(guardSettings({ maxVeryHeavy: 1 }).maxVeryHeavy, 1);
+  assert.equal(guardSettings({ maxVeryHeavy: 100 }).guaranteedVeryHeavy, 2);
+  assert.equal(guardSettings({ maxVeryHeavy: 1 }).guaranteedOther, 3);
+  assert.equal("maxVeryHeavy" in guardSettings({ maxVeryHeavy: 1 }), false);
   for (const effort of ["high", "xhigh", "max", "ultra", "default"]) assert.notEqual(modelClass({ model: "ordinary", effort }), "very-heavy");
   for (const request of [{ model: "astra", effort: "low" }, { backend: "kimi", model: "kimi-k3-preview", effort: "low" }]) {
     assert.equal(modelClass(request, [{ pattern: "*", class: "light" }]), "very-heavy");
   }
 });
 
-test("critical memory and load block even the first job; headroom applies inside the minimum", t => {
+test("critical memory and load block even the first job; startup allowance applies inside the minimum", t => {
   const s = setup(t), c = s.ctx();
   const total = 128 * GiB;
   s.setMachine({ availableBytes: Math.max(D.criticalGiB * GiB, total * D.criticalFraction) - 1 });
   assert.equal(admit(c, s.deps).waitKind, "critical");
   s.setMachine({ availableBytes: 100 * GiB, load5: D.criticalLoadPerCore * 64 + 1 });
   assert.equal(admit(c, s.deps).waitKind, "critical");
-  s.setMachine({ load5: 0, availableBytes: guardSettings({}, { totalBytes: total, cores: 64 }).headroomBytes + D.startupBytes.codex - 1 });
-  assert.equal(admit(c, s.deps).waitKind, "memory");
+  s.setMachine({ load5: 0, availableBytes: total * D.criticalFraction + D.startupBytes.codex - 1 });
+  assert.equal(admit(c, s.deps).waitKind, "critical");
 });
 
-test("global pacing survives quick completion; turns reuse weight and refresh reserve", t => {
+test("global pacing survives quick completion; replacements reuse weight and refresh reserve", t => {
   const s = setup(t), first = s.ctx();
   assert.equal(admit(first, s.deps).admit, true);
   const second = s.ctx({ backend: "kimi" });
@@ -74,6 +82,7 @@ test("global pacing survives quick completion; turns reuse weight and refresh re
 
 test("pending reservations include the new job and expire; delayed growth still blocks", t => {
   const s = setup(t), c = s.ctx();
+  fillOtherMinimum(s);
   const headroom = guardSettings({}, { totalBytes: 128 * GiB, cores: 64 }).headroomBytes;
   s.setMachine({ availableBytes: headroom + 2 * D.startupBytes.codex - 1 });
   assert.equal(admit(c, s.deps).admit, true);
@@ -108,23 +117,16 @@ for (const cores of [8, 12]) for (const unknown of [false, true]) test(`busy all
   assert.equal(admit(next, s.deps).admit, true);
 });
 
-test("quota includes legacy jobs and rechecks warm selections without blocking ordinary work", t => {
-  const s = setup(t), warm = s.ctx({ model: "ordinary", effort: "high" });
-  assert.equal(admit(warm, s.deps).admit, true); s.tick();
-  for (let n = 0; n < 2; n++) { assert.equal(admit(s.ctx({ model: "astra" }), s.deps).admit, true); s.tick(); }
-  assert.equal(admit({ ...warm, request: { ...warm.request, model: "astra" } }, s.deps).waitKind, "very-heavy");
-  assert.equal(admit({ ...warm, request: { ...warm.request, effort: "max" } }, s.deps).admit, true); s.tick();
-  assert.equal(admit(s.ctx({ model: "ordinary", effort: "high" }), s.deps).admit, true);
-  s.tick();
-  assert.equal(admit(s.ctx({ model: "default", effort: "default" }), s.deps).admit, true);
-  const legacy = setup(t), c = legacy.ctx();
-  legacy.setLegacy([1, 2].map(n => ({ id: `old-${n}`, state: "running", worker: c.me, request: { model: "astra" } })));
-  assert.equal(admit(legacy.ctx({ model: "astra" }), legacy.deps).waitKind, "very-heavy");
+test("three Astra and three K3 starts have no fixed maximum", t => {
+  const s = setup(t);
+  for (const request of [{ model: "astra" }, { backend: "kimi", model: "kimi-k3-preview" }]) {
+    for (let n = 0; n < 3; n++) { assert.equal(admit(s.ctx(request), s.deps).admit, true); s.tick(); }
+  }
 });
 
 test("fairness uses fewest active seats, then oldest eligible claimant", t => {
   const s = setup(t); s.setMachine({ cores: 4, load5: 6 });
-  const occupied = [s.ctx(), s.ctx()];
+  const occupied = [s.ctx(), s.ctx(), s.ctx()];
   for (const c of occupied) { assert.equal(admit(c, s.deps).admit, true); s.tick(); }
   const waiter = s.ctx({ backend: "kimi" });
   assert.equal(admit(waiter, s.deps).waitKind, "seats");
@@ -133,19 +135,18 @@ test("fairness uses fewest active seats, then oldest eligible claimant", t => {
   assert.equal(admit(waiter, s.deps).admit, true);
 });
 
-for (const blocked of ["stale", "memory", "pause", "quota"]) test(`fairness ignores ${blocked} claimants`, t => {
+for (const blocked of ["stale", "memory", "pause"]) test(`fairness ignores ${blocked} claimants`, t => {
   const s = setup(t); s.setMachine({ cores: 4, load5: 6 });
-  const occupied = [s.ctx(), s.ctx()];
+  const occupied = [s.ctx(), s.ctx(), s.ctx()];
   for (const c of occupied) { admit(c, s.deps); s.tick(); }
-  const waiter = s.ctx({ backend: "kimi", model: blocked === "quota" ? "kimi-k3-preview" : "ordinary", effort: "high" });
+  const waiter = s.ctx({ backend: "kimi", model: "ordinary", effort: "high" });
   admit(waiter, s.deps);
   if (blocked === "stale") s.tick(D.claimantPolls * D.pollMs);
   if (blocked === "pause") {
     fs.mkdirSync(path.join(s.home, "pauses"), { recursive: true });
     writeJsonAtomic(path.join(s.home, "pauses", "kimi.json"), { v: 1, backend: "kimi", kind: "usage", updatedAt: new Date(s.deps.now()).toISOString(), until: new Date(s.deps.now() + 100000).toISOString() });
   }
-  if (blocked === "memory") s.setMachine({ availableBytes: guardSettings({}, { totalBytes: 128 * GiB, cores: 4 }).headroomBytes + 0.75 * GiB });
-  if (blocked === "quota") { s.setMachine({ load5: 0 }); s.setLegacy([1, 2].map(n => ({ id: `heavy-${n}`, state: "running", worker: occupied[1].me, request: { model: "astra" } }))); }
+  if (blocked === "memory") s.setMachine({ availableBytes: 128 * GiB * D.criticalFraction + 0.75 * GiB });
   releaseSlot(s.home, occupied[0].jobId, occupied[0].me, s.deps);
   s.tick(D.reserveMs); // Expire holds; stale contender is refreshed in applicable cases.
   if (blocked !== "stale") admit(waiter, s.deps);
@@ -375,6 +376,7 @@ test("sibling holds spend only shared ancestors, with unknown membership charged
 
 test("worker and backend holds share host budget; admission replaces its own worker hold in actual scope", t => {
   const s = setup(t), first = s.ctx();
+  fillOtherMinimum(s);
   const reserve = guardSettings({}, { totalBytes: 128 * GiB, cores: 64 }).headroomBytes;
   s.setMachine({ availableBytes: reserve + D.startupBytes.codex + D.workerBytes - 1 });
   assert.equal(admit(first, s.deps).admit, true); s.tick();
@@ -416,6 +418,7 @@ test("Linux MemAvailable is independent of cgroup headroom; mismatched CPU load 
 
 test("unknown backends use the full startup allowance without provider-pause bypass", t => {
   const s = setup(t), c = s.ctx({ backend: "synthetic" });
+  fillOtherMinimum(s);
   const reserve = guardSettings({}, { totalBytes: 128 * GiB, cores: 64 }).headroomBytes;
   s.setMachine({ availableBytes: reserve + 0.75 * GiB });
   assert.equal(admit(c, s.deps).waitKind, "memory");
@@ -432,7 +435,7 @@ test("impossible fits fail permanently even behind an active provider pause", t 
   assert.equal(admit(s.ctx(), s.deps).permanent, true);
 });
 
-test("legacy descriptive classes cannot demote mandatory quota selections", t => {
+test("legacy descriptive classes cannot demote identified very-heavy selections", t => {
   const s = setup(t);
   const requests = [{ backend: "codex", model: "astra", effort: "high" }, { backend: "kimi", model: "kimi-k3-preview", effort: "low" }];
   for (const request of requests) {
@@ -444,11 +447,12 @@ test("legacy descriptive classes cannot demote mandatory quota selections", t =>
     delete slot.model; // Older slots may omit the model; the job still identifies it.
     writeJsonAtomic(file, { ...slot, class: "light", weight: 1, quotaHeavy: false });
   }
-  assert.equal(admit(s.ctx({ model: "astra" }), s.deps).waitKind, "very-heavy");
+  s.tick(D.reserveMs); s.setMachine({ availableBytes: 10 * GiB });
+  assert.equal(admit(s.ctx({ model: "astra" }), s.deps).waitKind, "memory");
   assert.equal(admit(s.ctx({ model: "ordinary", effort: "high" }), s.deps).admit, true);
 });
 
-test("legacy class labels cannot impose quota on ordinary or unknown selections", t => {
+test("legacy class labels cannot consume the heavy minimum for ordinary or unknown selections", t => {
   const s = setup(t);
   for (const request of [{ model: "gpt-6-sol", effort: "max" }, { model: "default", effort: "ultra" }]) {
     const c = s.ctx(request); assert.equal(admit(c, s.deps).admit, true); s.tick();
@@ -456,26 +460,29 @@ test("legacy class labels cannot impose quota on ordinary or unknown selections"
     writeJsonAtomic(file, { ...slot, class: "very-heavy", weight: 3, quotaHeavy: true });
   }
   for (let n = 0; n < 2; n++) { assert.equal(admit(s.ctx({ model: "astra" }), s.deps).admit, true); s.tick(); }
-  assert.equal(admit(s.ctx({ model: "astra", effort: "low" }), s.deps).waitKind, "very-heavy");
+  s.tick(D.reserveMs); s.setMachine({ availableBytes: 10 * GiB });
+  assert.equal(admit(s.ctx({ model: "astra", effort: "low" }), s.deps).waitKind, "memory");
   assert.equal(admit(s.ctx({ effort: "max" }), s.deps).admit, true);
 });
 
 for (const signal of [{ load5: 40.9 }, { pressure: 2 }, { load5: 40.9, pressure: 2 }]) {
-  test(`CPU critical/warning pressure holds only new jobs: ${JSON.stringify(signal)}`, t => {
+  test(`critical load holds replacements; warning alone holds nothing: ${JSON.stringify(signal)}`, t => {
     const s = setup(t), warm = s.ctx();
     s.setMachine({ totalBytes: 64 * GiB, availableBytes: 13.8 * GiB, cores: 10 });
     assert.equal(admit(warm, s.deps).admit, true); s.tick();
     s.setMachine(signal);
-    const held = admit(s.ctx(), s.deps);
-    assert.equal(held.waitKind, signal.load5 ? "critical" : "warning");
-    assert.match(held.reason, /load|pressure warning/);
-    assert.equal(admit(warm, s.deps).admit, true, "next turn/capacity retry retains its seat"); s.tick();
-    releaseSlot(s.home, warm.jobId, warm.me, s.deps);
+    const cold = admit(s.ctx(), s.deps);
+    assert.equal(signal.load5 ? cold.waitKind : cold.admit, signal.load5 ? "critical" : true);
+    assert.equal(admit({ ...warm, turn: true }, s.deps).admit, true);
+    s.tick();
+    assert.equal(signal.load5 ? admit(warm, s.deps).waitKind : admit(warm, s.deps).admit, signal.load5 ? "critical" : true);
+    releaseSlot(s.home, warm.jobId, warm.me, s.deps); s.tick();
     const replacement = { ...warm, admitted: true };
-    assert.equal(admit(replacement, s.deps).admit, true, "replacement backend stays admitted without a live slot"); s.tick();
-    releaseSlot(s.home, warm.jobId, warm.me, s.deps);
+    const result = admit(replacement, s.deps);
+    assert.equal(signal.load5 ? result.waitKind : result.admit, signal.load5 ? "critical" : true);
+    releaseSlot(s.home, warm.jobId, warm.me, s.deps); s.tick();
     writeJob(warm.jobDir, { id: warm.jobId, request: warm.request, state: "starting", firstAdmittedAt: new Date(s.deps.now()).toISOString() });
-    assert.equal(spawnWithAdmission(warm.jobDir, s.env, () => 123, s.deps), 123, "replacement worker also stays eligible");
+    assert.equal(spawnWithAdmission(warm.jobDir, s.env, () => 123, s.deps), signal.load5 ? null : 123);
   });
 }
 for (const signal of [{ availableBytes: 0 }, { pressure: 4, load5: 40.9 }, { pressure: 6 }]) {
@@ -483,7 +490,7 @@ for (const signal of [{ availableBytes: 0 }, { pressure: 4, load5: 40.9 }, { pre
     const s = setup(t), warm = s.ctx();
     s.setMachine({ totalBytes: 64 * GiB, availableBytes: 13.8 * GiB, cores: 10 });
     assert.equal(admit(warm, s.deps).admit, true); s.tick(); s.setMachine(signal);
-    const held = admit(warm, s.deps);
+    const held = admit({ ...warm, turn: true }, s.deps);
     assert.equal(held.waitKind, "critical"); assert.match(held.record.reason, /memory low|pressure critical/);
   });
 }
@@ -615,14 +622,16 @@ test("persistent admission-lock contention defers after a bounded short retry", 
   assert.equal(sleeps, 10); assert.ok(total <= 1000); assert.equal(readJob(c.jobDir).state, "queued");
 });
 
-test("warning pressure renders warning and keeps the new-job-only hold", t => {
+test("warning pressure is a nonblocking admission and status note", t => {
   const s = setup(t), c = s.ctx();
   assert.equal(admit(c, s.deps).admit, true); s.tick();
   s.setMachine({ pressure: 2 });
   assert.match(renderGuard(describeGuard(s.env, {}, s.deps))[0], /on · warning ·/);
   const held = admit(s.ctx(), s.deps);
-  assert.equal(held.waitKind, "warning");
-  assert.equal(admit(c, s.deps).admit, true);
+  assert.equal(held.admit, true); assert.equal(held.record.waitKind, null);
+  assert.ok(held.record.notes.includes("memory pressure warning (not holding)"));
+  assert.ok(describeGuard(s.env, {}, s.deps).notes.includes("memory pressure warning (not holding)"));
+  assert.equal(admit({ ...c, turn: true }, s.deps).admit, true);
   s.setMachine({ pressure: 4 });
   assert.match(renderGuard(describeGuard(s.env, {}, s.deps))[0], /on · critical ·/);
   assert.equal(admit(c, s.deps).admit, false);
@@ -655,7 +664,8 @@ test("historical job parsing stays outside the lock and cached records refresh o
   writeJob(dirs[1], { id: "old-1", state: "failed", server: c.me, request: { backend: "kimi", model: "kimi-k3-preview", effort: "low" } });
   s.tick();
   const heavy = s.ctx({ model: "astra" });
-  assert.equal(admit(heavy, deps).waitKind, "very-heavy");
+  s.setMachine({ availableBytes: 10 * GiB });
+  assert.equal(admit(heavy, deps).waitKind, "memory");
   assert.equal(lockedReads, 2, "live workers and unended servers are rechecked under the lock");
   writeJob(dirs[0], { id: "old-0", state: "completed", worker: c.me });
   fs.rmSync(dirs[1], { recursive: true });
@@ -733,17 +743,190 @@ test("only Astra and Kimi K3 models are very heavy, independently of effort", ()
   }
 });
 
-test("a full model quota admits other models at max and ultra effort", t => {
+test("heavy starts have no maximum and do not block other models at max and ultra effort", t => {
   const s = setup(t);
   for (const request of [{ model: "gpt-6-astra", effort: "low" }, { backend: "kimi", model: "kimi-k3-preview", effort: "low" }]) {
     assert.equal(admit(s.ctx(request), s.deps).admit, true); s.tick();
   }
-  assert.equal(admit(s.ctx({ backend: "kimi", model: "kimi-k3", effort: "low" }), s.deps).waitKind, "very-heavy");
+  assert.equal(admit(s.ctx({ backend: "kimi", model: "kimi-k3", effort: "low" }), s.deps).admit, true); s.tick();
   for (const request of ordinaryQuotaModels) for (const effort of ["max", "ultra"]) {
     const result = admit(s.ctx({ ...request, effort }), s.deps);
     assert.equal(result.admit, true, `${request.model}/${effort}: ${result.reason}`); s.tick();
   }
   const snapshot = describeGuard(s.env, {}, s.deps);
-  assert.equal(snapshot.veryHeavy, 2); assert.equal(snapshot.maxVeryHeavy, 2);
-  assert.match(renderGuard(snapshot)[0], /very-heavy quota 2 of 2/);
+  assert.equal(snapshot.veryHeavy, 3); assert.equal(snapshot.guaranteedVeryHeavy, 2); assert.equal("maxVeryHeavy" in snapshot, false);
+  assert.match(renderGuard(snapshot)[0], /very heavy 3 running \(2 guaranteed, no maximum\)/);
+});
+
+for (const heavy of [true, false]) test(`minimum skips reserve for only its first active jobs: heavy=${heavy}`, t => {
+  const s = setup(t), count = heavy ? D.guaranteedVeryHeavy : D.guaranteedOther;
+  s.setMachine({ availableBytes: 10 * GiB });
+  for (let n = 0; n < count; n++) {
+    assert.equal(admit(s.ctx({ model: heavy ? "astra" : "ordinary" }), s.deps).admit, true);
+    s.tick(D.reserveMs);
+  }
+  assert.equal(admit(s.ctx({ model: heavy ? "astra" : "ordinary" }), s.deps).waitKind, "memory");
+});
+
+for (const backend of ["codex", "kimi"]) for (const pending of [false, true]) {
+  test(`minimum critical floor includes startup allowance at exact boundary: ${backend}, pending=${pending}`, t => {
+    const s = setup(t), floor = 128 * GiB * D.criticalFraction;
+    if (pending) { assert.equal(admit(s.ctx(), s.deps).admit, true); s.tick(); }
+    const heldBytes = pending ? D.startupBytes.codex : 0;
+    const c = s.ctx({ backend, model: backend === "kimi" ? "kimi-k3" : "astra" });
+    s.setMachine({ availableBytes: floor + heldBytes + D.startupBytes[backend] - 1 });
+    const held = admit(c, s.deps);
+    assert.equal(held.waitKind, "critical"); assert.match(held.reason, /after startup allowance/);
+    s.setMachine({ availableBytes: floor + heldBytes + D.startupBytes[backend] });
+    assert.equal(admit(c, s.deps).admit, true, "equality passes, including pending holds and own J");
+  });
+}
+
+for (const heavy of [true, false]) test(`legacy jobs consume their minimum without duplicate or dead counts: heavy=${heavy}`, t => {
+  const s = setup(t), count = heavy ? D.guaranteedVeryHeavy : D.guaranteedOther;
+  const request = { model: heavy ? "astra" : "ordinary" };
+  const own = s.ctx(request); assert.equal(admit(own, s.deps).admit, true); s.tick(D.reserveMs);
+  const legacy = Array.from({ length: count - 1 }, (_, n) => ({ id: `legacy-${n}`, state: "running", worker: own.me, request }));
+  const duplicate = { id: own.jobId, state: "running", worker: own.me, request };
+  const dead = { id: "dead", state: "running", worker: { pid: 999 }, request };
+  const stale = { id: "stale", state: "completed", worker: own.me, request };
+  s.setMachine({ availableBytes: 10 * GiB });
+  s.setLegacy([...legacy, duplicate, dead, stale]);
+  assert.equal(admit({ ...own, admitted: true }, s.deps).admit, true, "reconnect excludes itself and its legacy duplicate");
+  s.tick(D.reserveMs);
+  const candidate = s.ctx(request);
+  assert.equal(admit(candidate, s.deps).waitKind, "memory", "slotted and legacy jobs together exhaust the minimum");
+  releaseSlot(s.home, own.jobId, own.me, s.deps);
+  s.setLegacy([...legacy, { ...duplicate, id: "unslotted" }, dead, stale]);
+  assert.equal(admit(candidate, s.deps).waitKind, "memory", "fully legacy count consumes the same minimum");
+  s.setLegacy([...legacy, dead, stale]);
+  assert.equal(admit(candidate, s.deps).admit, true, "dead and completed jobs do not consume the minimum");
+});
+
+test("warning cannot mask busy load, but minimum contenders skip busy seats", t => {
+  const s = setup(t); fillOtherMinimum(s);
+  s.setMachine({ cores: 4, load5: 6, pressure: 2 });
+  assert.equal(admit(s.ctx(), s.deps).waitKind, "seats");
+  for (let n = 0; n < D.guaranteedVeryHeavy; n++) {
+    const grant = admit(s.ctx({ model: "astra" }), s.deps);
+    assert.equal(grant.admit, true); assert.ok(grant.record.notes.some(n => n.includes("not holding"))); s.tick();
+  }
+  assert.equal(admit(s.ctx({ model: "astra" }), s.deps).waitKind, "seats");
+});
+
+test("retained turns preserve holds and timing, close critical waits, and leave start spacing intact", t => {
+  const s = setup(t), occupied = fillOtherMinimum(s), c = occupied[0];
+  const other = s.ctx({ model: "astra" }); assert.equal(admit(other, s.deps).admit, true);
+  const timing = () => fs.readFileSync(path.join(s.home, "timing.json"), "utf8");
+  const before = timing(), slot = JSON.parse(fs.readFileSync(path.join(s.home, "slots", `${c.jobId}.json`)));
+  s.tick(1000); s.setMachine({ availableBytes: 10 * GiB, load5: 999, scopes: [{ id: "/now-small", limitBytes: 1, remainingBytes: 0 }] });
+  const turn = admit({ ...c, turn: true }, s.deps);
+  assert.equal(turn.admit, true); assert.equal(turn.slot.holdAt, slot.holdAt); assert.equal(turn.slot.holdBytes, slot.holdBytes);
+  assert.equal(timing(), before);
+  s.setMachine({ load5: 0, scopes: [] });
+  const memoryWaiter = s.ctx();
+  assert.equal(admit(memoryWaiter, s.deps).waitKind, "memory", "new job outside its minimum still needs reserve");
+  releaseSlot(s.home, memoryWaiter.jobId, memoryWaiter.me, s.deps);
+  s.setMachine({ availableBytes: 100 * GiB });
+  const next = s.ctx({ model: "astra" }); assert.equal(admit(next, s.deps).waitKind, "stagger");
+  s.setMachine({ pressure: 4 });
+  const wait = admit({ ...c, turn: true, admission: turn.record }, s.deps);
+  assert.equal(wait.waitKind, "critical");
+  s.tick(2000); s.setMachine({ pressure: 0 });
+  const granted = admit({ ...c, turn: true, admission: wait.record, waitingSince: wait.record.since }, s.deps);
+  assert.equal(granted.admit, true); assert.equal(granted.record.since, wait.record.since);
+  assert.equal(Date.parse(granted.record.admittedAt) - Date.parse(wait.record.since), 2000);
+  assert.equal(granted.slot.holdAt, slot.holdAt); assert.equal(granted.slot.holdBytes, slot.holdBytes);
+  assert.equal(timing(), before);
+  assert.equal(describeGuard(s.env, {}, s.deps).activeSeats, 4);
+  assert.equal(admit(next, s.deps).waitKind, "stagger"); s.tick(2000);
+  assert.equal(admit(next, s.deps).admit, true);
+});
+
+test("turn true without its own running slot falls back to full admission", t => {
+  const s = setup(t), c = s.ctx(); assert.equal(admit(c, s.deps).admit, true);
+  releaseSlot(s.home, c.jobId, c.me, s.deps);
+  const absent = { ...c, admitted: true, turn: true };
+  assert.equal(admit(absent, s.deps).waitKind, "stagger");
+  s.tick(); s.setMachine({ load5: 999 });
+  assert.equal(admit(absent, s.deps).waitKind, "critical");
+  s.setMachine({ load5: 0, scopes: [{ id: "/finite", limitBytes: GiB, remainingBytes: 0 }] });
+  assert.equal(admit(absent, s.deps).waitKind, "scope");
+  s.setMachine({ scopes: [] });
+  const grant = admit(absent, s.deps); assert.equal(grant.admit, true); assert.equal(grant.slot.holdBytes, D.startupBytes.codex);
+});
+
+for (const blocked of ["scope", "pause"]) test(`fair share orders eligible guaranteed contenders and recalculates after a grant: ${blocked}`, t => {
+  const s = setup(t), c = s.ctx({ backend: "kimi", model: "kimi-k3" }), older = s.ctx({ model: "astra" }), later = s.ctx({ model: "astra" });
+  s.setMachine({ availableBytes: 0, group: "/blocked", scopes: [] }); admit(c, s.deps);
+  s.setMachine({ group: "/ready" }); s.tick(1); admit(older, s.deps); s.tick(1); admit(later, s.deps);
+  if (blocked === "pause") {
+    fs.mkdirSync(path.join(s.home, "pauses"), { recursive: true });
+    writeJsonAtomic(path.join(s.home, "pauses", "kimi.json"), { v: 1, backend: "kimi", kind: "rate", updatedAt: new Date(s.deps.now()).toISOString(), until: new Date(s.deps.now() + 100000).toISOString() });
+  }
+  const deps = { ...s.deps, readScopes: () => ({ scopes: blocked === "scope" ? [{ id: "/blocked", limitBytes: 2 * GiB, remainingBytes: 0 }] : [] }) };
+  s.setMachine({ availableBytes: 10 * GiB });
+  assert.equal(admit(later, deps).waitKind, "fair-share");
+  assert.equal(admit(older, deps).admit, true); s.tick();
+  assert.equal(admit(later, deps).admit, true); s.tick();
+  const third = admit(s.ctx({ model: "astra" }), deps);
+  assert.equal(third.waitKind, "memory", "preceding grants consume the heavy minimum");
+});
+
+for (const pressure of [2, 4]) test(`guaranteed worker admission under pressure ${pressure}`, t => {
+  const s = setup(t), c = s.ctx({ model: "astra" });
+  s.setMachine({ availableBytes: 10 * GiB, pressure });
+  writeJob(c.jobDir, { id: c.jobId, state: "starting", request: c.request });
+  let launches = 0;
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => ++launches, s.deps), pressure === 2 ? 1 : null);
+  assert.equal(launches, pressure === 2 ? 1 : 0);
+  if (pressure === 4) { assert.equal(readJob(c.jobDir).admission.waitKind, "worker"); assert.match(readJob(c.jobDir).admission.reason, /critical/); }
+});
+
+test("a guaranteed worker still waits for finite cgroup headroom and fails impossible fits", t => {
+  const s = setup(t), c = s.ctx({ model: "astra" });
+  writeJob(c.jobDir, { id: c.jobId, state: "starting", request: c.request });
+  s.setMachine({ group: "/finite", scopes: [{ id: "/finite", limitBytes: GiB, remainingBytes: D.workerBytes }] });
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => assert.fail("scope must hold worker"), s.deps), null);
+  assert.equal(readJob(c.jobDir).admission.waitKind, "worker"); assert.match(readJob(c.jobDir).admission.reason, /cgroup memory low/);
+  s.setMachine({ scopes: [{ id: "/finite", limitBytes: D.workerBytes, remainingBytes: D.workerBytes }] });
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => assert.fail("impossible scope must fail worker"), s.deps), null);
+  assert.equal(readJob(c.jobDir).state, "failed"); assert.match(readJob(c.jobDir).admission.reason, /cannot fit cgroup/);
+});
+
+test("simultaneous guaranteed starts serialize grants and retain global pacing", async t => {
+  const { spawn } = await import("node:child_process");
+  const s = setup(t), callers = [s.ctx({ model: "astra" }), s.ctx({ model: "astra" })];
+  const source = `
+    import fs from "node:fs";
+    import { admit } from ${JSON.stringify(new URL('../plugins/relay/scripts/lib/worker/admission.mjs', import.meta.url).href)};
+    const ctx = JSON.parse(process.argv[1]), root = process.argv[2];
+    fs.writeFileSync(root + "/ready-" + ctx.jobId, "");
+    while (!fs.existsSync(root + "/go")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    const result = admit(ctx, { env: { RELAY_ADMISSION: "on" }, now: () => Date.parse("2025-01-01T00:00:00Z"),
+      isAlive: () => true, readAdmissionConfig: () => ({}), scanUnslotted: () => [],
+      readMachine: () => ({ totalBytes: 128 * 2 ** 30, availableBytes: 100 * 2 ** 30, cores: 64, load5: 0, notes: [] }) });
+    process.stdout.write(JSON.stringify(result));
+  `;
+  const results = callers.map(c => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", source, JSON.stringify(c), s.root]);
+    t.after(() => child.kill());
+    let output = "", errors = "";
+    child.stdout.on("data", data => output += data); child.stderr.on("data", data => errors += data);
+    child.on("error", reject);
+    child.on("close", code => { try { assert.equal(code, 0, errors); resolve(JSON.parse(output)); } catch (e) { reject(e); } });
+  }));
+  const deadline = Date.now() + 5000;
+  while (!callers.every(c => fs.existsSync(path.join(s.root, `ready-${c.jobId}`)))) {
+    assert.ok(Date.now() < deadline, "both synthetic callers must reach barrier");
+    await new Promise(r => setTimeout(r, 10));
+  }
+  fs.writeFileSync(path.join(s.root, "go"), "");
+  const decisions = await Promise.all(results);
+  assert.equal(decisions.filter(d => d.admit).length, 1);
+  assert.ok(decisions.every(d => d.record.state !== "bypassed"));
+  const held = decisions.findIndex(d => !d.admit);
+  assert.ok(["lock", "stagger"].includes(decisions[held].waitKind));
+  assert.equal(admit(callers[held], s.deps).waitKind, "stagger");
+  s.tick(); assert.equal(admit(callers[held], s.deps).admit, true);
 });

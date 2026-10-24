@@ -162,13 +162,17 @@ starts by itself when the reason clears. Leave that call running; do not launch 
 job directly without an agent or a `wait` call, ask Claude to wait for that job by its id. `/relay:status` shows
 progress but does not start waiting jobs. You can still cancel the job or send it a message by its id.
 
-The load guard shares capacity across your sessions. By default, starts are spaced at least 5 seconds apart,
-with one shared quota of 2 very heavy jobs (GPT-6 Astra and Kimi K3 at every effort) running at once.
-Max/ultra effort on other models does not enter that pool. Low memory, high load or a backend's usage or rate
-limit can also delay a job; the queue reason tells you which. `/relay:setup` shows the saved settings and whether
-the guard is active.
-To turn it off, use `/relay:setup --admission off`; to limit very heavy jobs to one at a time, use
-`/relay:setup --max-very-heavy 1`. Use `--admission on` or `--max-very-heavy default` to restore those defaults.
+In Claude Code's Workflow panel a relay agent can look idle for minutes: it sits in relay's `wait`
+call, which returns within seconds of the job ending.
+
+The load guard shares capacity across your sessions. New backend starts and replacements are spaced
+at least 5 seconds apart; turns on a running backend are not paced.
+The first two identified very-heavy and first three other active jobs skip the host reserve and the busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits, provider protection, ordering and start pacing. There is no very-heavy maximum.
+Very heavy means GPT-6 Astra and Kimi K3 at every effort. Max/ultra effort on other models does not enter that pool.
+A macOS pressure warning is shown but holds nothing. Retained turns wait only for critical memory/pressure
+or provider pauses/probes. Low memory, high load or a backend's usage or rate limit can delay new starts;
+the queue reason tells you which. `/relay:setup` shows the saved settings and whether the guard is active.
+Use `/relay:setup --admission off` to turn it off and `--admission on` to restore it.
 
 A queued job still occupies its Claude agent and, in a Workflow, one of that run's agent slots. A Workflow can
 run up to 16 agents at once, fewer with fewer CPUs; `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` changes that

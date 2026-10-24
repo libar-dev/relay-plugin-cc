@@ -251,7 +251,6 @@ A person stopping a relay (`x`, Esc or the app's Stop) leaves its job running. S
 | `C setup --fast-tier allowed\|off` | with `off`, the default, jobs started from now on ignore `fast: true` and the Codex config sets their tier; with `allowed`, `fast: true` selects `priority` |
 | `C setup --job-mcp-off name,name...\|none` | Codex jobs and reviews pass `enabled=false` for each listed name that the Codex home's `config.toml` defines; undefined names are skipped with a note |
 | `C setup --admission on\|off` | turn the load guard on or off for every session of this user, only when the user asks; `RELAY_ADMISSION=off` also bypasses it |
-| `C setup --max-very-heavy 1\|2\|default` | lower/reset the shared very-heavy-model quota (default 2 total across backends) |
 | `C setup [--json]` | every backend home found (the Codex home, `~/.grok` and `~/.grok-*`, ZCode, `~/.kimi-code` and `~/.kimi-code-*`): binary and version, sign-in, default model and effort, models, `can`; exits 0 whatever it finds |
 | `C setup --backend codex\|grok\|zcode\|kimi [--grok-home H\|--kimi-home H] [--json]` | one backend home; exits 1 when it is not ready |
 
@@ -261,12 +260,14 @@ A job can wait as `queued` before it starts or between turns. Keep calling `wait
 remains pending and adoptable, including in a Workflow. Cancel, steer and continue still work.
 Jobs without a worker need a submitter/adopter's wait, message or relay hook to retry spawning;
 a bare `start` can stay dormant. `status` alone does not start deferred work: use `C wait <job>`.
-The guard paces backend starts and turns 5 seconds apart across this user's sessions and shares
-one quota of 2 very heavy jobs: GPT-6 Astra and the Kimi K3 family at any effort. Effort alone,
-including `max` or `ultra` on other models, never enters that pool. Unresolved default models
-remain a coverage limit. Memory and load can also make work wait; healthy machines have no fixed
-active ceiling. Turn the guard off only when the user asks. Sensor details and formulas are in
-[internals.md](internals.md).
+The guard paces new backend starts and replacements 5 seconds apart across this user's sessions.
+Turns on a running backend are not paced and wait only for critical memory/pressure or provider pauses/probes.
+The first two identified very-heavy and first three other active jobs skip the host reserve and the busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits, provider protection, ordering and start pacing. There is no very-heavy maximum.
+Very heavy means GPT-6 Astra and the Kimi K3 family at any effort. Effort alone, including `max` or `ultra`
+on other models, never enters that pool. Unresolved default models remain a coverage limit.
+A macOS pressure warning is shown but holds nothing. Memory and load can delay new starts;
+healthy machines have no fixed active ceiling. Turn the guard off only when the user asks.
+Sensor details, small-host fit limits and formulas are in [internals.md](internals.md).
 
 `--json` prints one object whose first fields are `schema` (`relay.<command>/1`), `relayVersion` and `relayBuild`. An error under `--json` is that header with `error: { kind, message }` on stdout, `kind` one of `busy` (exit 4: try again), `not-found`, `usage`, `attempt-changed` or `error`. `C status --json` lists slim rows, newest first, 50 a page (`--limit N`, up to 200), with `nextCursor` for `--cursor`; `--active` lists only jobs that are queued, run, died or owe messages. One job (`C status <job> --json`, `result`, `wait`, `cancel`) has every field, among them `attemptRecords` and `messages`, each message with how the job took it.
 

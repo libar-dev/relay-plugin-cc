@@ -62,20 +62,23 @@ retries its spawn at most once per admission poll, with a 64 MiB startup hold pe
 A workerless job with no spawn retry for 15 minutes stops deferring the stop-time review gate;
 that changes gate deferral, not queue validity.
 
-Host admission requires `available − otherHolds − J ≥ R`, where `R = max(2 GiB, 0.15 × total)`.
+Outside the minimum, new backend start admission requires `available − otherHolds − J ≥ R`, where `R = max(2 GiB, 0.15 × total)`.
 `J = 0.5 GiB` for Codex/Grok and `1 GiB` for Kimi/ZCode/unknown, held for 30 seconds without an
 effort multiplier. Each finite cgroup ancestor has its own `min(0.5 GiB, 10% × limit)` margin.
 Busy seats apply at five-minute load ≥ `1.5C` or unknown host bytes; healthy hosts have no fixed
-active ceiling. Load > `3C`, critical host memory or macOS warning/critical pressure can hold even
-the first start. Load/warning pressure holds new jobs; admitted jobs continue turns, retries and
-replacement backends, subject to the same memory headroom test. Critical memory/pressure holds next
-turns too, with the queued reason shown.
+active ceiling. Load > `3C`, critical host memory or macOS critical pressure can hold even
+first starts and replacement backends. A macOS warning is shown only; it holds nothing.
+Turns on a retained connection wait only for critical memory/pressure or provider pauses/probes;
+they take no new hold and are not paced.
 Linux uses MemAvailable. macOS uses `kern.memorystatus_level` free percentage times total memory,
 falling back to `vm_stat` free+inactive, plus a separate memory-pressure reading.
 
-One shared very-heavy quota is 2: GPT-6 Astra and Kimi K3 at any effort. Other models at max/ultra
-stay outside it; an unresolved default model is a coverage limit. Eligible backends with fewer active
-seats go first. Starts and turns are paced 5 s apart.
+The first two identified very-heavy and first three other active jobs skip the host reserve and the busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits, provider protection, ordering and start pacing. There is no very-heavy maximum.
+Guaranteed starts leave `max(0.75 GiB, 5% × total)` after pending holds and their own startup allowance.
+Small hosts where `R + J > total` still fail the permanent-fit test.
+Very heavy means GPT-6 Astra and Kimi K3 at any effort; other models at max/ultra stay outside it.
+An unresolved default model is a coverage limit. Eligible backends with fewer active seats go first.
+Starts and replacement backends are paced 5 s apart.
 Native Windows visibly bypasses admission; missing sensors and errors show degraded/bypass notes.
 Memory later used by tools/tests, native Claude agents, other harnesses and other users is outside
 admission control. Recognized provider pauses and recovery are described in [orchestration.md](orchestration.md).

@@ -14,8 +14,7 @@ import { ensureGitRepository } from "../lib/review/git.mjs";
 
 // `/relay:setup` checks every backend home, or one with `--backend`.
 // Flags are checked before settings are changed or backend checks run.
-const GUARD_FLAGS = { "max-very-heavy": ["maxVeryHeavy", 2] };
-const SETUP_SWITCHES = ["admission", ...Object.keys(GUARD_FLAGS), "enable-review-gate", "disable-review-gate", "fast-tier", "job-mcp-off"];
+const SETUP_SWITCHES = ["admission", "enable-review-gate", "disable-review-gate", "fast-tier", "job-mcp-off"];
 
 
 function setupSelection(options) {
@@ -38,9 +37,10 @@ function setupSelection(options) {
 export async function handleSetup(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     argsFile: true,
-    valueOptions: ["admission", ...Object.keys(GUARD_FLAGS), "cwd", "fast-tier", "job-mcp-off", ...BACKENDS.flatMap(backend => backend.setup.homeFlag ? [backend.setup.homeFlag] : []), "backend"],
-    booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
+    valueOptions: ["admission", "cwd", "fast-tier", "job-mcp-off", ...BACKENDS.flatMap(backend => backend.setup.homeFlag ? [backend.setup.homeFlag] : []), "backend"],
+    booleanOptions: ["max-very-heavy", "json", "enable-review-gate", "disable-review-gate"]
   });
+  if (options["max-very-heavy"] != null) throw new UsageError("--max-very-heavy removed: very heavy jobs have a guaranteed 2 and no maximum.");
   if (positionals.length) {
     throw new UsageError(`Unexpected setup argument: ${positionals[0]}`);
   }
@@ -55,12 +55,6 @@ export async function handleSetup(argv) {
   if (options.admission != null) {
     if (!["on", "off"].includes(options.admission)) throw new UsageError(`--admission must be on or off, not "${options.admission}".`);
     guardChanges.push(["admission", options.admission]);
-  }
-  for (const [flag, [key, max]] of Object.entries(GUARD_FLAGS)) {
-    if (options[flag] == null) continue;
-    const value = options[flag] === "default" ? null : Number(options[flag]);
-    if (value !== null && (!/^\d+$/.test(options[flag]) || !Number.isInteger(value) || value < 1 || value > Number(max))) throw new UsageError(`--${flag} must be an integer from 1 to ${max}, or default.`);
-    guardChanges.push([key, value]);
   }
   const cwd = resolveCommandCwd(options);
   const only = setupSelection(options);

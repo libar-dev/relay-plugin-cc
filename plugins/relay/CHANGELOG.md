@@ -8,6 +8,12 @@ its entries here.
 
 Pre-release cuts:
 
+- Planned for `3.0.0-pre.6`: correct the guaranteed minimum that was misread as a maximum.
+  The first two very-heavy and first three other active jobs skip host reserve and busy-seat gates,
+  with critical/startup/scope/fit/provider/order/pacing checks retained. There is no very-heavy maximum;
+  the old setup flag is removed and stored limits are ignored with a note. Pressure warnings hold
+  nothing. Retained turns keep their seat and hold, claim probes and close waits without start pacing.
+
 - `3.0.0-pre.1` (2026-10-22, tag `v3.0.0-pre.1`): Phases 1, 2, 3 and 5 and Phase 6's report, as below; Phase 4
   has not landed.
 - `3.0.0-pre.2` (2026-10-23, tag `v3.0.0-pre.2`): what it fixes and changes over pre.1. The details are in
@@ -243,22 +249,25 @@ Load guard:
   when that reading fails. The separate pressure veto, reserve, holds, pacing and quota are unchanged.
 - Before a job starts, and before each later turn, relay checks the machine it runs on. It covers every session
   and jobs home of the user. The README's "Load guard" section has the rules and their defaults.
-  - Memory: a job starts only while enough memory stays free after it starts. The test is
-    `available − recent starts' holds − this job's hold ≥ max(2 GiB, 15% of RAM)`, where a hold is 0.5 GiB for
-    Codex or Grok and 1 GiB for Kimi, ZCode or an unknown backend, for 30 s. Finite Linux cgroup limits are tested
-    separately. On macOS, available memory is the `kern.memorystatus_level` percentage of total memory, with
-    `vm_stat` free plus inactive pages as a fallback, and a pressure warning holds new jobs.
-  - Pacing: one start or turn every 5 s across all sessions. There is no fixed job ceiling on a healthy machine.
-    When the 5-minute load is high or memory can't be read, new jobs stop at `min(16, max(2, CPUs − 2))`.
-  - Quota: at most 2 very heavy jobs (GPT-6 Astra and Kimi K3, at any effort) run at once across backends.
-    Effort alone on other models never enters the pool. This quota is independent of memory.
+  - Memory: new backend starts and replacements outside the minimum need
+    `available − recent starts’ holds − this job’s hold ≥ max(2 GiB, 15% of RAM)`.
+    Holds are 0.5 GiB for Codex/Grok and 1 GiB for Kimi/ZCode/unknown, for 30 s.
+    Finite Linux cgroup limits are tested separately. macOS uses `kern.memorystatus_level`
+    times total memory, with `vm_stat` free plus inactive pages as a fallback.
+  - Pacing: one new backend start or replacement every 5 s across sessions. Retained turns
+    are not paced, take no new hold, and wait only for critical memory/pressure or provider pauses/probes.
+    Healthy hosts have no fixed ceiling; busy-load/unknown-byte seats use `min(16, max(2, CPUs − 2))`.
+  - Minimum: the first two identified very-heavy and first three other active jobs skip the host
+    reserve and busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits,
+    provider protection, ordering and start pacing. There is no very-heavy maximum. Astra and Kimi K3
+    are very heavy at any effort; effort alone on other models never enters that pool.
   - Provider refusals: recognized Codex/Kimi/ZCode usage or rate errors, and Kimi concurrency refusals,
     pause that backend; Grok has no classifier coverage. A pause does not resume the failed job. After the pause, one
     probe job goes first. Only while the guard is on, Kimi defaults to 3 total attempts per step unless
     `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP` is set; this default does not apply with the guard off or on native Windows.
 - A job that waits shows `queued` with its reason in status, `--json`, the status line and the board, and can be
-  cancelled. High load and a macOS pressure warning hold only new jobs. Critical memory and critical macOS
-  pressure also hold next turns. A turn that is running is never stopped. Foreground reviews pass the same check.
+  cancelled. Critical load holds new starts and replacements. A macOS pressure warning holds nothing. Critical memory
+  and critical macOS pressure also hold next turns. A turn that is running is never stopped. Foreground reviews pass the same check.
 - When too many workers already wait, a new job is recorded `queued` without a worker. The submitter's `wait` (a
   relay agent's or yours) starts it later; `status` only reads.
 - `RELAY_ADMISSION=off`, or `/relay:setup --admission off`, turns the guard off. On native Windows the guard does
@@ -381,10 +390,10 @@ Docs:
 
 - The installed jobs skill now includes a light orchestration guide and a dated model/benchmark/price snapshot
   with public sources, cache-write costs, distinct benchmark task bases, and a minor-release refresh procedure.
-  It describes one shared quota of two very heavy jobs (GPT-6 Astra and Kimi K3, any effort); effort alone on
-  other models does not enter the pool.
-- The skill/guide quota agreement checks now run against model-only admission, including max/ultra effort
-  on other models; the shared quota remains two Astra/Kimi K3 jobs at any effort.
+  It describes the two-very-heavy/three-other minimum, no very-heavy maximum, warning-only pressure
+  reporting and pacing for new backend starts and replacements.
+- Skill/guide agreement checks cover model-only classification, the minimum and retained turns;
+  obsolete maximum and turn-pacing wording fails validation.
 - The user guide covers queued work, conditional stop notices, Workflow job-id control and direct continuation,
   queued status-line/board controls, and both sandbox storage paths. Relay requires no external search or
   scraping service; optional services are the user's configuration.

@@ -80,7 +80,7 @@ test("failed locked probe completion can retry; warm worker adopts its probe", t
   admit(c, s.deps);
   const refusal = classifyRefusal("codex", { codexErrorInfo: "rateLimitExceeded" });
   recordRefusal(s.root, "codex", refusal, "job-other", s.deps); s.tick(D.ratePauseMs);
-  const warm = admit(c, s.deps); assert.equal(warm.slot.probe, true);
+  const warm = admit({ ...c, turn: true }, s.deps); assert.equal(warm.slot.probe, true);
   const file = path.join(s.root, "admission.lock"); acquireOwnership(file, { pid: process.pid, startTime: null });
   try { assert.equal(probeSucceeded(s.root, "codex", c.jobId, s.deps, warm.slot.probeGeneration), false); }
   finally { releaseOwnership(file); }
@@ -126,4 +126,31 @@ test("abandoning an unfinished probe retains strikes and cannot release a newer 
   assert.equal(next.slot.probe, true);
   assert.equal(releaseProbe(s.root, "codex", "job-1", s.deps, first.slot.probeGeneration), false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(s.root, "pauses", "codex.json"))).probe.generation, next.slot.probeGeneration);
+});
+
+test("retained turns claim, adopt and release fenced probes without changing startup holds or timing", async t => {
+  const { releaseProbe } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const s = setup(t), c = s.ctx(1), peer = s.ctx(2);
+  const first = admit(c, s.deps); s.tick(D.spacingMs); admit(peer, s.deps);
+  const timingFile = path.join(s.root, "timing.json"), timing = fs.readFileSync(timingFile, "utf8");
+  const turn = () => admit({ ...c, turn: true }, s.deps);
+  const assertPreserved = result => {
+    assert.equal(result.slot.holdAt, first.slot.holdAt); assert.equal(result.slot.holdBytes, first.slot.holdBytes);
+    assert.equal(fs.readFileSync(timingFile, "utf8"), timing);
+    assert.equal(fs.readdirSync(path.join(s.root, "slots")).length, 2);
+  };
+  recordRefusal(s.root, "codex", { kind: "rate" }, "old", s.deps);
+  const wait = turn(); assert.equal(wait.waitKind, "pause"); assertPreserved(wait);
+  s.tick(D.ratePauseMs);
+  const probe = admit({ ...c, turn: true, admission: wait.record, waitingSince: wait.record.since }, s.deps);
+  assertPreserved(probe); assert.equal(probe.slot.probe, true);
+  assert.equal(Date.parse(probe.record.admittedAt) - Date.parse(probe.record.since), D.ratePauseMs);
+  assert.equal(admit({ ...peer, turn: true }, s.deps).waitKind, "probe");
+  const adopted = turn(); assertPreserved(adopted); assert.equal(adopted.slot.probeGeneration, probe.slot.probeGeneration);
+  assert.equal(releaseProbe(s.root, "codex", c.jobId, s.deps, probe.slot.probeGeneration), true);
+  const next = turn(); assertPreserved(next); assert.notEqual(next.slot.probeGeneration, probe.slot.probeGeneration);
+  assert.equal(releaseProbe(s.root, "codex", c.jobId, s.deps, probe.slot.probeGeneration), false);
+  assert.equal(probeSucceeded(s.root, "codex", c.jobId, s.deps, probe.slot.probeGeneration), false);
+  assert.equal(probeSucceeded(s.root, "codex", c.jobId, s.deps, next.slot.probeGeneration), true);
+  assertPreserved(turn()); assert.equal(listPauses(s.env, s.deps).length, 0);
 });
