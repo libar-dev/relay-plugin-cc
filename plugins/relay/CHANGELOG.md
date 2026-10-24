@@ -306,6 +306,9 @@ Load guard:
 
 Fixes from the pre-releases:
 
+- Cancelling a dead job leaves a reused worker pid alone. Surviving members of its original process group
+  are stopped by their saved identities after the group is tied to a heartbeat or recorded backend; live-worker
+  termination rechecks the worker identity before signalling. Unreadable process identities leave cleanup incomplete.
 - A message ZCode reports as already held keeps its original command id. Relay adopts its session turn when it
   starts, or fails after 60 seconds with an explicit not-delivered reason; it never resends an uncertain duplicate.
   Only an explicit discarded-on-restart response permits a fresh id.

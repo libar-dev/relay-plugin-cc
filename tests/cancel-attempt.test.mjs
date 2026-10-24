@@ -1028,8 +1028,50 @@ process.kill = function(pid, signal) {
   assert.equal(isWorkerAlive(worker), true);
 });
 
-for (const delivered of [true, false]) {
-  test(`a ${delivered ? "delivered kill sweeps the old tree and finalizes its cancel" : "failed kill neither claims success nor finalizes a newer attempt's cancel"}`, async t => {
+for (const boundary of ["identity verification", "snapshot sweep"]) {
+  test(`cancel refuses an attempt advanced during ${boundary} before any signal`, async t => {
+    const { ctx, id, dir, worker } = await idleWorker(t);
+    const signals = path.join(ctx.root, "signals");
+    const advanced = path.join(ctx.root, "advanced");
+    const env = preload(ctx, "advance-at-signal-boundary", `
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+function advance() {
+  const file = ${JSON.stringify(jobPaths(dir).job)};
+  const job = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (job.attempts.length !== 1) return;
+  job.attempts.push({ attempt: 2, state: "running" });
+  fs.writeFileSync(file, JSON.stringify(job));
+  fs.writeFileSync(${JSON.stringify(advanced)}, "");
+}
+const kill = process.kill;
+process.kill = function(pid, signal) {
+  if (pid === ${worker.pid} && signal === 0 && /terminateProcessTree/.test(new Error().stack)) {
+    if (${JSON.stringify(boundary)} === "identity verification") advance();
+    else throw Object.assign(new Error("gone"), { code: "ESRCH" });
+  }
+  if (Math.abs(pid) === ${worker.pid} && signal !== 0) fs.appendFileSync(${JSON.stringify(signals)}, String(signal));
+  return kill.apply(this, arguments);
+};
+const spawnSync = childProcess.spawnSync;
+childProcess.spawnSync = function(...args) {
+  const result = spawnSync.apply(this, args);
+  if (${JSON.stringify(boundary)} === "snapshot sweep" && /stopProcessSnapshot/.test(new Error().stack)) advance();
+  return result;
+};
+syncBuiltinESMExports();`);
+    const result = companion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...env, RELAY_JOBS_CANCEL_GRACE_MS: "0" });
+    assert.equal(fs.existsSync(advanced), true, "the explicit boundary hook ran");
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.equal(JSON.parse(result.stdout).error.kind, "attempt-changed");
+    assert.equal(fs.existsSync(signals), false, "no signal precedes the attempt refusal");
+    assert.equal(isWorkerAlive(worker), true);
+  });
+}
+
+for (const [delivery, lateNoop] of [["tree", false], ["sweep", false], ["failed", false], ["tree", true], ["sweep", true]]) {
+  const delivered = delivery !== "failed";
+  test(`a ${delivery} kill ${delivered ? "sweeps the old tree and finalizes its cancel after the post-signal attempt recheck" : "neither claims success nor finalizes a newer attempt's cancel"}${lateNoop ? " despite a late no-op outcome" : ""}`, async t => {
     const { ctx, id, dir, worker } = await idleWorker(t);
     const replacement = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
     t.after(() => replacement.kill("SIGKILL"));
@@ -1038,12 +1080,28 @@ for (const delivered of [true, false]) {
     const env = preload(ctx, "advance-after-signal", `
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
+import { claimInboxMessages, writeOutcome } from ${JSON.stringify(path.join(ROOT, "plugins/relay/scripts/lib/jobs/messages.mjs"))};
 let signalled = false;
+import { isProcessIdentityAlive as alive } from ${JSON.stringify(path.join(ROOT, "plugins/relay/scripts/lib/util/process.mjs"))};
 const kill = process.kill;
 process.kill = function(pid, signal) {
-  if (Math.abs(pid) === ${worker.pid} && /terminateProcessTree/.test(new Error().stack)) {
+  const stack = new Error().stack;
+  // Pin an initial failed liveness check; the sweep must account for its own
+  // signal to the still-live, identity-verified original worker.
+  if (${JSON.stringify(delivery)} === "sweep" && pid === ${worker.pid} && signal === 0 && /terminateProcessTree/.test(stack)) {
+    throw Object.assign(new Error("gone"), { code: "ESRCH" });
+  }
+  // Signal 0 is only a liveness probe, including during identity verification.
+  if (Math.abs(pid) === ${worker.pid} && signal !== 0 && /terminateProcessTree|stopProcessSnapshot/.test(stack)) {
     if (!signalled) kill(${worker.pid}, "SIGKILL");
     signalled = true;
+    // Pin exit before a failed delivery's fallback identity check. Previously
+    // the test raced a zombie transition after killing during a signal-0 probe.
+    const deadline = Date.now() + 5000;
+    while (alive(${JSON.stringify(worker)})) {
+      if (Date.now() >= deadline) throw new Error("worker did not exit after SIGKILL");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+    }
     if (${delivered}) return true;
     throw Object.assign(new Error("gone"), { code: "ESRCH" });
   }
@@ -1059,6 +1117,13 @@ childProcess.spawnSync = function(...args) {
       job.attempts.push({ attempt: 2, state: "running" });
       job.worker = ${JSON.stringify(next)};
       fs.writeFileSync(file, JSON.stringify(job));
+      // A replacement worker can refuse the old inbox message after the kill.
+      // That refusal must not erase the signal the cancel already delivered.
+      if (${lateNoop}) {
+        for (const message of claimInboxMessages(${JSON.stringify(dir)})) {
+          writeOutcome(${JSON.stringify(dir)}, message.id, { action: "no-op", reason: "attempt 2 now runs" });
+        }
+      }
     }
   }
   return spawnSync.apply(this, args);
@@ -1068,7 +1133,7 @@ syncBuiltinESMExports();`);
     assert.equal(fs.existsSync(swept), true);
     assert.equal(result.status, delivered ? 0 : 1, result.stdout + result.stderr);
     const [name] = pendingInboxMessages(dir);
-    const message = JSON.parse(fs.readFileSync(path.join(jobPaths(dir).inbox, name), "utf8"));
+    const message = lateNoop ? cancels(dir)[0].message : JSON.parse(fs.readFileSync(path.join(jobPaths(dir).inbox, name), "utf8"));
     if (delivered) {
       const actions = JSON.parse(result.stdout).actions;
       assert.ok(actions.some(action => action.startsWith("killed the worker process")));
@@ -1086,12 +1151,18 @@ syncBuiltinESMExports();`);
 test("a signal that finds the worker already gone prints no killed-worker action", async t => {
   const { ctx, id, worker } = await idleWorker(t);
   const env = preload(ctx, "signal-not-delivered", `
+import { isProcessIdentityAlive as alive } from ${JSON.stringify(path.join(ROOT, "plugins/relay/scripts/lib/util/process.mjs"))};
 const kill = process.kill;
 let gone = false;
 process.kill = function(pid, signal) {
-  if (Math.abs(pid) === ${worker.pid} && /terminateProcessTree/.test(new Error().stack)) {
+  if (Math.abs(pid) === ${worker.pid} && signal !== 0 && /terminateProcessTree/.test(new Error().stack)) {
     if (!gone) kill(${worker.pid}, "SIGKILL");
     gone = true;
+    const deadline = Date.now() + 5000;
+    while (alive(${JSON.stringify(worker)})) {
+      if (Date.now() >= deadline) throw new Error("worker did not exit after SIGKILL");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+    }
     throw Object.assign(new Error("gone"), { code: "ESRCH" });
   }
   return kill.apply(this, arguments);
