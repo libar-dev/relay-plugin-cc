@@ -700,7 +700,10 @@ for (const persisted of [false, true]) {
       const job = JSON.parse(fs.readFileSync(path.join(ctx.jobDir, "job.json"), "utf8"));
       const ours = [job.worker, job.server, ...(job.workers ?? []), ...(job.attempts ?? []).flatMap(attempt => attempt.servers ?? [])];
       for (const identity of ours) {
-        if (identity && isWorkerAlive(identity)) process.kill(identity.pid, "SIGKILL");
+        if (identity && isWorkerAlive(identity)) {
+          try { process.kill(identity.pid, "SIGKILL"); }
+          catch (error) { if (error.code !== "ESRCH") throw error; }
+        }
       }
       await waitFor(() => ours.every(identity => !identity || !isWorkerAlive(identity)));
     });
@@ -768,10 +771,12 @@ for (const persisted of [false, true]) {
       }
       const script = new URL('../plugins/relay/scripts/companion.mjs', import.meta.url).pathname;
       const marker = path.join(outer.root, 'nested-started');
-      const overrides = { HOME: inner.user, USERPROFILE: inner.user, RELAY_JOBS_HOME: inner.jobs, PATH: inner.env.PATH };
+      const innerRelease = path.join(inner.root, 'release-nested-turn');
+      const overrides = { HOME: inner.user, USERPROFILE: inner.user, RELAY_JOBS_HOME: inner.jobs, PATH: inner.env.PATH,
+        FAKE_CODEX_RELEASE_FILE: innerRelease };
       // Model a tool shell launching a foreground companion in the background, then exiting.
       // The task caller shares the outer group; its worker launches outside it.
-      const launch = `require('node:child_process').spawn(process.execPath, ${JSON.stringify([script, 'task', '--model', 'gpt-test', '--effort', 'low', 'Nested task'])}, {
+      const launch = `require('node:child_process').spawn(process.execPath, ${JSON.stringify([script, 'task', '--model', 'gpt-test', '--effort', 'low', '[held] Nested task'])}, {
         cwd: ${JSON.stringify(inner.work)}, env: { ...process.env, ...${JSON.stringify(overrides)} }, stdio: 'ignore'
       }).unref();`;
       const inject = `if (!require('node:fs').existsSync(${JSON.stringify(marker)})) {
@@ -783,7 +788,7 @@ for (const persisted of [false, true]) {
       // when the nested job starts slowly, and a server killed after its turn needs no recovery.
       // The resumed turn takes the fake's 3 s.
       const { id } = startJob(outer, header, '[long] Outer task');
-      const innerDir = await waitFor(() => jobDirs(inner).find(dir => JSON.parse(fs.readFileSync(path.join(dir, 'job.json'))).state === 'running'));
+      const innerDir = await waitFor(() => jobDirs(inner).find(dir => JSON.parse(fs.readFileSync(path.join(dir, 'job.json'))).state === 'running'), 30000);
       const innerId = path.basename(innerDir);
       const before = readJob(inner, innerId);
       const outerBefore = readJob(outer, id);
@@ -804,6 +809,7 @@ for (const persisted of [false, true]) {
       const afterTable = listProcesses();
       assert.ok(identities.every(identity => afterTable.some(row => row.pid === identity.pid && row.startTime === identity.startTime && !row.zombie)),
         'recovery killed the inner worker or server');
+      fs.writeFileSync(innerRelease, 'release');
       await finishJob(inner, innerId);
       assert.equal(readJob(inner, innerId).state, 'completed');
       await finishJob(outer, id);

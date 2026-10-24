@@ -73,6 +73,27 @@ test("the backend remains counted until close finishes", async t => {
   assert.equal(observed, true);
 });
 
+test("terminal relay results stay verbatim while close changes live memory accounting", async t => {
+  const s = seed(t); s.unblock();
+  const backend = backendNamed("codex"), connect = backend.connect;
+  let resultAtClose;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args), close = connection.close.bind(connection);
+    t.mock.method(connection, "close", async () => {
+      const view = loadJobView(s.dir);
+      assert.equal(view.state, "completed");
+      // An accounting sample at backend end must not change a result already returned.
+      resultAtClose = renderJobBlock({ ...view, job: { ...view.job, treeBytes: GiB } });
+      assert.equal(renderJobBlock({ ...view, job: { ...view.job, treeBytes: 0 } }), resultAtClose);
+      await close();
+    });
+    return connection;
+  });
+  await runWorker(s.dir, s.options);
+  assert.equal(renderJobBlock(loadJobView(s.dir)), resultAtClose);
+  assert.doesNotMatch(resultAtClose, /^memory:/m);
+});
+
 test("critical pressure before a warm turn queues without double charging the slot", async t => {
   const s = seed(t); s.unblock();
   const backend = backendNamed("codex"), connect = backend.connect;

@@ -129,7 +129,7 @@
     "snapshots": [
       {
         "phase": "start-and-steer",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 1\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nmemory: 0.0 GiB (job and its processes)\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 1\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",
@@ -211,7 +211,7 @@
       },
       {
         "phase": "continue",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 2\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nmemory: 0.0 GiB (job and its processes)\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 2\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",
@@ -318,7 +318,7 @@
       },
       {
         "phase": "resume",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 3\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nmemory: 0.0 GiB (job and its processes)\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 3\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",
@@ -580,7 +580,7 @@
     "snapshots": [
       {
         "phase": "start-and-steer",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 1\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nmemory: 0.0 GiB (job and its processes)\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 1\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",
@@ -662,7 +662,7 @@
       },
       {
         "phase": "continue",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 2\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nmemory: 0.0 GiB (job and its processes)\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 2\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",
@@ -769,7 +769,7 @@
       },
       {
         "phase": "resume",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 3\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nmemory: 0.0 GiB (job and its processes)\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 3\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",

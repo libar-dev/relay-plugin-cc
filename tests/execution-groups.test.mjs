@@ -65,6 +65,8 @@ for (const action of ["recover", "cancel"]) test(`dead worker and dead backend k
   const { ctx, id, dir, tree } = await treeJob(t, "detached");
   const job = readJob(ctx, id);
   const home = path.join(ctx.root, "admission"); ctx.env.RELAY_ADMISSION_HOME = home; ctx.env.RELAY_ADMISSION = "on";
+  ctx.env.RELAY_TEST_ADMISSION_READINGS = path.join(ctx.root, "readings.json");
+  fs.writeFileSync(ctx.env.RELAY_TEST_ADMISSION_READINGS, JSON.stringify({ totalBytes: 64 * 2 ** 30, availableBytes: 60 * 2 ** 30, cores: 8, load5: 0 }));
   fs.mkdirSync(path.join(home, "slots"), { recursive: true });
   fs.writeFileSync(path.join(home, "slots", `${id}.json`), JSON.stringify({ v: 1, jobId: id, jobDir: dir, pid: job.worker.pid, processStart: job.worker.startTime,
     backend: "codex", class: "light", state: "running", since: new Date().toISOString(), treeBytes: 2 ** 30 }));

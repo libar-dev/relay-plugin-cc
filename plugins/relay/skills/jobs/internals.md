@@ -72,7 +72,9 @@ sends TERM after 50 ms, KILL at 5 seconds and returns within 10 seconds, recordi
 if process end remains unobserved. Control RPC and turn deadlines are unchanged.
 
 Heartbeats write `treeBytes` to the job and running slot: Linux scope `memory.current`, otherwise
-summed member RSS. Guard status sums running jobs as `relayBytes`. Workers set Linux
+summed member RSS. Active-job text shows this live measurement; terminal result text omits it so
+cleanup cannot change the block a relay must return verbatim. JSON retains the accounting.
+Guard status sums running jobs as `relayBytes`. Workers set Linux
 `oom_score_adj` to 500 before backend spawn, inherited by tools. There is no static memory cap,
 and macOS has visibility and cleanup without enforced containment or pausing running tools.
 Transport lines are limited to 64 MiB; Kimi wire replay reads at most 4 MiB at once, retaining the

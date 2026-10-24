@@ -256,7 +256,9 @@ export function renderJobBlock(view) {
   }
   if (job.launch?.note) lines.push(`note: ${job.launch.note}`);
   if (job.cleanup?.state === "unresolved") lines.push(`cleanup: unresolved (${(job.cleanup.pids ?? []).join(", ")})${job.cleanup.cause ? `: ${job.cleanup.cause}` : ""}`);
-  if (Number.isFinite(job.treeBytes)) lines.push(`memory: ${(job.treeBytes / 2 ** 30).toFixed(1)} GiB (job and its processes)`);
+  // Cleanup still changes live accounting after a turn ends. A terminal result is copied
+  // verbatim by relay agents, so do not include that changing measurement in its text.
+  if (!isTerminalView(view) && Number.isFinite(job.treeBytes)) lines.push(`memory: ${(job.treeBytes / 2 ** 30).toFixed(1)} GiB (job and its processes)`);
   if (view.state === "queued" && job.admission?.reason) {
     lines.push(`queued: ${job.admission.reason} (since ${job.admission.since ?? "unknown"})`);
   }

@@ -21,6 +21,8 @@ Changed:
 
 Fixed:
 
+- Terminal result text omits live memory accounting, keeping verbatim relay hand-backs stable
+  while the backend closes and cleanup releases its memory.
 - macOS cleanup excludes its own process-table sampler, so an empty worker group no longer
   reports a phantom surviving process and fails before starting the backend.
 
