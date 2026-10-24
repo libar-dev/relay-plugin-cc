@@ -7,7 +7,8 @@ import { startWithinWindow } from "../lib/worker/delivery.mjs";
 import { appendRelayViolation } from "../lib/jobs/messages.mjs";
 import { nowIso, readJob } from "../lib/jobs/store.mjs";
 import { buildLaunchRequest, readLaunchPrompt, UsageError } from "../lib/jobs/request.mjs";
-import { readReservation } from "../lib/worker/admission.mjs";
+import { readReservation, releaseReservation } from "../lib/worker/admission.mjs";
+import { resumeDeadJobOnce } from "../lib/worker/recovery.mjs";
 import { SCHEMA_SENTENCE } from "../lib/harness/workflow.mjs";
 import { backendJson, backendLines, backendSettingLines, EXIT, loadJobViewSettled as loadJobView, relayAdoptionLines } from "../lib/jobs/view.mjs";
 import { adoptRelayJob, deliverRelayMessages, findAdoptableRelayJob, promptSha256, readJournalKey, readRelayPointer, readRelayTranscript, writeRelayPointer } from "../lib/harness/relay.mjs";
@@ -155,7 +156,11 @@ async function handleStartFromRelay(options) {
     for (const problem of transcript.problems) {
       appendRelayViolation(adoptable, { kind: "transcript", reason: `messages could not be checked: ${problem}`, agentId });
     }
-    await deliverRelayMessages(adoptable, transcript.messages, { wait: false });
+    const reservation = readReservation(agentId);
+    try {
+      if (loadJobView(adoptable).state === "dead") await resumeDeadJobOnce(adoptable);
+      await deliverRelayMessages(adoptable, transcript.messages, { wait: false, reservation });
+    } finally { if (reservation) releaseReservation(reservation); }
     const adopted = readJob(adoptable);
     if (options.json) printJson("start", { jobId: adopted.id, state: loadJobView(adoptable).state, jobDir: adoptable, notes: adopted.request?.notes ?? [], ...backendJson(adopted.request) });
     else process.stdout.write(adoptedBlock(adopted, adoptable));

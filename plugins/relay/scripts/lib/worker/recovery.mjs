@@ -3,7 +3,7 @@
 import process from "node:process";
 import fs from "node:fs";
 import path from "node:path";
-import { DEFAULTS } from "./admission.mjs";
+import { DEFAULTS, readReservation } from "./admission.mjs";
 import { releaseLeaseToConsumer, startWithinWindow } from "./delivery.mjs";
 import { acquireWorkerLease, isWorkerAlive } from "../jobs/lease.mjs";
 import { computeJobView } from "../jobs/view.mjs";
@@ -53,10 +53,12 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
   let cancelling = false;
   let cwd;
   let original;
+  let reservation;
   try {
     let job = readJob(jobDir);
     if (computeJobView(job).state !== "dead" || (job.kind && job.kind !== "task")) return false;
     original = job;
+    reservation = job.relay?.agentId ? readReservation(job.relay.agentId, env) : null;
     const epoch = job.recoveryEpoch ?? "start";
     const previous = recoveryForEpoch(job);
     // A reservation interrupted before posting is repaired with the same message id.
@@ -84,7 +86,7 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
   }
   if (!launch) return false;
   const result = await startWithinWindow(jobDir, cwd, { ...env, RELAY_WORKER_TRIGGER: "recovery" },
-    { windowMs: Number(env.RELAY_ADMISSION_POLL_MS) || DEFAULTS.pollMs, refuse: false });
+    { windowMs: Number(env.RELAY_ADMISSION_POLL_MS) || DEFAULTS.pollMs, refuse: false, reservation });
   // Workers update the job concurrently. Take its lease before changing the
   // recovery record, or let the worker's own attempt bookkeeping be authoritative.
   if (acquireWorkerLease(jobDir, me, "recovery")) {

@@ -467,13 +467,18 @@ function jobAccount(home, jobId, deps) {
 const kindLabel = kind => ({ usage: "usage limit", rate: "rate limit", concurrency: "concurrent request limit" })[kind] ?? kind;
 function refusalReason(p) { if (p.reason) return p.reason; return `${p.backend}${p.account ? ` (account ${p.account})` : ""} paused: ${kindLabel(p.kind)}${p.code ? ` (${p.code})` : ""} until ${p.until}`; }
 function waitHistory(admission, now) {
-  const totals = { ...(admission?.waitTotals ?? {}) };
+  const totals = {};
+  // Reason text includes changing readings. Aggregate by cause, with bounded
+  // keys, rather than making a new durable entry for every sample.
+  for (const old of Object.values(admission?.waitTotals ?? {})) {
+    if (typeof old?.kind !== "string" || !Number.isFinite(old.ms) || old.ms < 0) continue;
+    totals[old.kind] = { ...old, ms: (totals[old.kind]?.ms ?? 0) + old.ms };
+  }
   if (admission?.state === "waiting" && admission.reason) {
     const from = Date.parse(admission.reasonSince ?? admission.since);
     const elapsed = Number.isFinite(from) ? Math.max(0, now - from) : 0;
     const kind = admission.causeKind ?? admission.waitKind ?? "unknown";
-    const key = `${kind}: ${admission.reason}`;
-    totals[key] = { kind, reason: admission.reason, ms: (totals[key]?.ms ?? 0) + elapsed };
+    totals[kind] = { kind, reason: admission.reason, ms: (totals[kind]?.ms ?? 0) + elapsed };
   }
   return totals;
 }
@@ -952,7 +957,7 @@ export function reserveWaitingPlace(env = process.env, injected = {}) {
       return { pass: true, reservation };
     });
     return result.locked ? result.value : { pass: false, reason: "admission lock busy" };
-  } catch (error) { return { pass: false, reason: `guard unavailable (${error.message})` }; }
+  } catch (error) { return { pass: false, error: true, reason: `guard unavailable (${error.message})` }; }
 }
 
 // Called only under the job lease after its refusal has become terminal.
@@ -965,4 +970,16 @@ export function discardSpawnReservation(jobDir, env = process.env) {
       if (job.admission?.state === "not-started" && slot?.state === "spawning") fs.rmSync(file, { force: true });
     });
   } catch {}
+}
+
+export function releaseReservation(reservation, env = process.env) {
+  if (!validReservation(reservation)) return false;
+  const deps = dependencies({ env }), home = admissionHome(env);
+  try { return retryLock(home, deps, () => {
+    const file = slotFile(home, `r-${reservation}`), slot = readJsonOrNull(file);
+    if (slot?.state !== "reserved") return false;
+    fs.rmSync(file, { force: true });
+    if (slot.agentId) fs.rmSync(bindingFile(env, slot.agentId), { force: true });
+    return true;
+  }).value ?? false; } catch { return false; }
 }

@@ -17,7 +17,7 @@ import { readRepoConfig } from "../lib/jobs/config.mjs";
 const STOP_REVIEW_TIMEOUT_MS = 10 * 60 * 1000;
 const STOP_PROBE_TIMEOUT_MS = 10 * 1000;
 // Starting the review job, the margin of its wait, and the cancel after a timeout.
-export const STOP_COMMAND_TIMEOUT_MS = 60 * 1000;
+export const STOP_COMMAND_TIMEOUT_MS = 90 * 1000;
 const REVIEW_BACKEND = backendWith("stopGate");
 const MANUAL_REVIEW = "Run /relay:review --wait to review by hand.";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));

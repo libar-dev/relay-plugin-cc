@@ -128,7 +128,7 @@ test('a gate crash falls back to the bounded start, while cancellation is denied
   await h.handlers['agent.spawn'](h.$, spawnEvent, h.next); assert.equal(h.calls.length, 1);
   const cancelled = hooks([new Error('process.run aborted')]);
   await assert.rejects(cancelled.handlers['agent.spawn'](cancelled.$, spawnEvent, cancelled.next), /aborted/);
-  assert.ok(cancelled.catches['agent.spawn'](cancelled.$, spawnEvent).deny); assert.equal(cancelled.calls.length, 0);
+  assert.ok(cancelled.catches['agent.spawn'](cancelled.$, spawnEvent, { called: false }).deny); assert.equal(cancelled.calls.length, 0);
 });
 test('resume spawns do not take another waiting place', async () => {
   const h = hooks([]); await h.handlers['agent.spawn'](h.$, { ...spawnEvent, resume: { agentId: 'a-old' } }, h.next);
@@ -141,4 +141,21 @@ test('a Workflow stall retry is gated at its first step even without agent.spawn
   const step = h.handlers['turn.step'](h.$, { index: 0, agentId: 'a-retry', turnId: 'turn-retry' }, async function* (e) { return await h.next(e); });
   await step.next();
   assert.equal(h.calls.length, 1); assert.equal(h.runs.length, 2); assert.ok(h.runs.every(r => r.argv.includes('--retry') && r.argv.includes('a-retry')));
+});
+
+test('admission catches preserve a delegated result and never restart an already delegated step', async () => {
+  const h = hooks([]), result = { agentId: 'a-delegated' };
+  let calls = 0;
+  const next = async () => { calls++; return result; }; next.called = true;
+  assert.equal(await h.catches['agent.spawn'](h.$, spawnEvent, next), result); assert.equal(calls, 1);
+  const step = async function* () { throw new Error('synthetic model API error'); }; step.called = true;
+  const caught = h.catches['turn.step'](h.$, { index: 0, turnId: 't-error' }, step);
+  await assert.rejects(caught.next(), /synthetic model API error/);
+});
+test('a SendMessage resume skips the first-step gate even when its initial start had no job', async () => {
+  const h = hooks(['hold waiting worker limit: 2 of 2']);
+  await h.handlers['agent.spawn'](h.$, { ...spawnEvent, resume: { agentId: 'a-resumed' } }, h.next);
+  await h.handlers['classic.SubagentStart'](h.$, { agent_type: 'relay:job', agent_id: 'a-resumed' }, h.next);
+  const step = h.handlers['turn.step'](h.$, { index: 0, agentId: 'a-resumed', turnId: 't-resumed' }, async function* (e) { return await h.next(e); });
+  await step.next(); assert.equal(h.runs.length, 0);
 });

@@ -1121,7 +1121,7 @@ export function register(on) {
   on("agent.spawn", async ($, e, next) => {
     if (e?.subagentType !== "relay:job") return next(e);
     poller.fastUntil = poller.ticks + CLEARED_TICKS;
-    if (e.resume != null) return next(e);
+    if (e.resume != null) { if (e.resume.agentId) spawned.add(e.resume.agentId); return next(e); }
     if (isCheckedSpawn(e)) {
       let refusal = null;
       try { refusal = await headerRefusal($, e); } catch {}
@@ -1133,13 +1133,20 @@ export function register(on) {
     if (result?.agentId) {
       spawned.add(result.agentId);
       if (gate.reservation) {
-        const pending = $.process.run(["node", $.plugin.root + "/scripts/companion.mjs", "gate", "--bind", gate.reservation, "--agent", result.agentId], { timeoutMs: 10000 });
-        binding.set(result.agentId, pending);
-        try { await pending; } finally { binding.delete(result.agentId); }
+        try {
+          const pending = $.process.run(["node", $.plugin.root + "/scripts/companion.mjs", "gate", "--bind", gate.reservation, "--agent", result.agentId], { timeoutMs: 10000 });
+          binding.set(result.agentId, pending);
+          await pending;
+        } catch {
+          // The agent is already running; start's bounded admission remains authoritative.
+        } finally { binding.delete(result.agentId); }
       }
     }
     return result;
-  }).catch(($, e) => ({ deny: "relay admission was interrupted. Try again, or resume the Workflow." }));
+  }).catch(($, e, next) => {
+    if (next.called) return next(e);
+    return { deny: "relay admission was interrupted. Try again, or resume the Workflow." };
+  });
 
   // Workflow stall retries bypass agent.spawn. Track each actual attempt and
   // hold its first model step using the same host-process gate.
@@ -1149,12 +1156,16 @@ export function register(on) {
   });
   on("turn.step", async function* ($, e, next) {
     if (e.index !== 0 || !relayAgents.has(e.agentId)) return yield* next(e);
-    if (binding.has(e.agentId)) await binding.get(e.agentId);
-    if (spawned.delete(e.agentId)) return yield* next(e);
-    await waitForPlace($, true, e.agentId, relayAgents.get(e.agentId));
+    if (binding.has(e.agentId)) { try { await binding.get(e.agentId); } catch {} }
+    if (!spawned.delete(e.agentId)) await waitForPlace($, true, e.agentId, relayAgents.get(e.agentId));
     return yield* next(e);
-  }).catch(async function* ($, e) { return { turnId: e.turnId, index: e.index, answer: "state: not started\nerror: relay admission was interrupted; resume the Workflow.",
-    toolUses: [], stopReason: "end_turn", usage: { input_tokens: 0, output_tokens: 0 } }; });
+  }).catch(async function* ($, e, next) {
+    // The engine reuses an in-flight next result here; it does not run the model twice.
+    if (next.called) return yield* next(e);
+    const answer = "state: not started\nerror: relay admission was interrupted; resume the Workflow.";
+    yield { kind: "text", index: 0, text: answer };
+    return { turnId: e.turnId, index: e.index, answer, toolUses: [], stopReason: "end_turn", usage: null };
+  });
 
   on("session.send", async ($, e, next) => {
     const result = await next(e);
@@ -1207,6 +1218,7 @@ export function register(on) {
   // after it has returned, and a slow or stuck listing never holds Claude Code's stop.
   on("turn.complete", async ($, e, next) => {
     const completed = await next(e);
+    if (e.agentId != null) { relayAgents.delete(e.agentId); spawned.delete(e.agentId); binding.delete(e.agentId); }
     if (e.agentId != null && e.reason === "aborted") {
       try {
         $.clock.after(0, () => {

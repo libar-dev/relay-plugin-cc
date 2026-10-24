@@ -1,14 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { independentWorkerRegistry, isProcessIdentityAlive } from "../util/process.mjs";
+import { independentWorkerRegistry, safeWorkerRegistry, isProcessIdentityAlive } from "../util/process.mjs";
 import { readJsonOrNull, writeJsonAtomic } from "../jobs/store.mjs";
 
-export function registerWorker(worker, { env = process.env, platform = process.platform } = {}) {
+export function registerWorker(worker, { env = process.env, platform = process.platform, directory = independentWorkerRegistry() } = {}) {
   if (!["linux", "darwin"].includes(platform)) return null;
   // Cleanup boundaries must survive an unwritable admission directory, even with
   // the guard off. Publish before handoff; inability to publish prevents launch.
-  const directory = independentWorkerRegistry();
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (!safeWorkerRegistry(directory)) throw new Error("Worker identity directory must be private, owned by this user and not a symlink.");
+  if (!worker?.startTime) throw new Error("Worker process identity could not be read; no backend was started.");
   pruneWorkerRegistry(directory);
   const file = path.join(directory, `${worker.pid}.json`);
   writeJsonAtomic(file, worker);

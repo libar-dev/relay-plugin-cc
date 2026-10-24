@@ -59,6 +59,10 @@ function markCancelledAfterKill(jobDir, reason, attempt = null, killed = false, 
   const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
   const deadline = Date.now() + 2000;
   while (!acquireWorkerLease(jobDir, me, "cancel")) {
+    const current = readJob(jobDir);
+    // A finished worker may still be closing its backend. Its job needs one
+    // no-op receipt, not a delegated cancel plus a second receipt.
+    if (attempt === null && TERMINAL_STATES.has(current.state)) return { ended: current.state };
     const holder = readLease(jobDir);
     if (!isWorkerLease(holder) && Date.now() < deadline) {
       pause();

@@ -685,6 +685,7 @@ export async function deliverRelayMessages(jobDir, messages, options = {}) {
 async function deliverRelayMessagesUnderLock(jobDir, messages, options) {
   const env = options.env ?? process.env;
   const wait = options.wait ?? true;
+  const reservation = options.reservation ?? null;
   if (undeliveredMessages(jobDir, messages).length === 0) {
     return { busy: false, delivered: [], undelivered: [] };
   }
@@ -761,7 +762,7 @@ async function deliverRelayMessagesUnderLock(jobDir, messages, options) {
         postInboxMessage(jobDir, { id: record.messageId, kind: record.kind, text: message.text, relayUuid: message.uuid });
       }
       const ackTimeoutMs = envNumber(env, "RELAY_ACK_TIMEOUT_MS", 20000);
-      const { outcome, consumer } = await awaitOutcome(jobDir, record.messageId, { env, timeoutMs: ackTimeoutMs, wait });
+      const { outcome, consumer } = await awaitOutcome(jobDir, record.messageId, { env, timeoutMs: ackTimeoutMs, wait, reservation });
       if (!consumer) {
         appendRelayViolation(jobDir, { kind: "delivery", reason: `message ${message.uuid} acknowledgement timed out; will retry with message id ${record.messageId}` });
         break;

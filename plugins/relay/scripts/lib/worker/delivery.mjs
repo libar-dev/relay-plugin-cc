@@ -52,7 +52,7 @@ export function spawnWorker(jobDir, cwd, env = process.env, { reservation = null
     if (job?.state === "queued" && job.admission?.waitKind === "worker" && Date.now() - retryAt >= 0 && Date.now() - retryAt < poll) return null;
     const result = spawnWithAdmission(jobDir, env, () => spawnWorkerProcess(jobDir, cwd, env), {}, { reservation });
     const deferred = readJob(jobDir);
-    if (deferred?.state === "queued" && deferred.admission?.waitKind === "worker") writeJob(jobDir, { ...deferred, launchPendingAt: new Date(Date.now()).toISOString(), admission: { ...deferred.admission, workerRetryAt: new Date(Date.now()).toISOString() } });
+    if (deferred?.state === "queued" && deferred.admission?.waitKind === "worker") writeJob(jobDir, { ...deferred, launchPendingAt: new Date(Date.now()).toISOString(), admission: { ...deferred.admission, launcher: { pid: process.pid, startTime: readProcessStartTime(process.pid) }, workerRetryAt: new Date(Date.now()).toISOString() } });
     return result;
   } catch (error) {
     // Dispatch acknowledgement is an observation, not worker ownership. An
@@ -184,7 +184,7 @@ export async function awaitOutcome(jobDir, messageId, options = {}) {
   if (!hasLiveWorker(jobDir) && messageAccount(jobDir).undelivered.includes(messageId) && timeoutMs > 0) {
     const job = readJob(jobDir);
     spawned += (await startWithinWindow(jobDir, job?.request?.cwd ?? process.cwd(), env,
-      { windowMs: timeoutMs, messageId, refuse: false })).spawned;
+      { windowMs: timeoutMs, messageId, refuse: false, reservation: options.reservation })).spawned;
   }
   let nextSpawn = -Infinity, wasLive = false;
   for (;;) {
@@ -219,8 +219,8 @@ export async function awaitOutcome(jobDir, messageId, options = {}) {
 // Drop a message into the job's inbox and wait until a worker records its outcome.
 export async function deliverMessage(jobDir, kind, text, extra = {}, options = {}) {
   const message = postInboxMessage(jobDir, { kind, text, ...extra });
-  const { outcome, spawned, consumer } = await awaitOutcome(jobDir, message.id, options);
-  return { message, outcome, spawned, consumer };
+  const { outcome, spawned } = await awaitOutcome(jobDir, message.id, options);
+  return { message, outcome, spawned };
 }
 
 export function pruneLaunches(jobDir, keep = 20) {

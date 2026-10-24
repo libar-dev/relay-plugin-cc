@@ -528,7 +528,7 @@ test('scope-only pids absent from the process table remain unresolved and keep t
   const job = { worker: leader, execution: { leader, pgid: leader.pid, cgroup: group, cgroupId: 37, bootId: 'synthetic-boot' } };
   const members = executionMembers(job, []);
   assert.deepEqual([...members], [{ pid, startTime: null, identityUnknown: true }]);
-  assert.match(members.cause, /no process identity/);
+  assert.equal(members.cause, undefined, "unknown scope pids retain capacity without suppressing verified signals");
   assert.equal(executionAlive(job, { env: {}, listProcesses: () => [], isAlive: () => false }), true);
 });
 
@@ -578,4 +578,58 @@ test('caller acknowledgement observation timeout never erases a live dispatched 
   await waitFor(() => ctx.fakeState().appServerStarts === 1);
   assert.equal(job.workers.length, 1); assert.equal(ctx.fakeState().appServerStarts, 1);
   assert.equal(fs.readdirSync(dir).filter(name => /^launch-/.test(name)).length, 1);
+});
+
+test('a fork between process-table and scope reads does not stop cancellation of verified processes', { skip: process.platform !== 'linux' }, async t => {
+  const probe = spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--slice=relay-jobs.slice', '--', 'true']);
+  if (probe.status !== 0) return t.skip('user systemd manager unavailable');
+  const ctx = setup(t, { turnMs: 30000 });
+  const marker = path.join(ctx.root, 'fork-now'), childFile = path.join(ctx.root, 'forked-child.json');
+  const preload = path.join(ctx.root, 'fork-during-cancel.mjs');
+  const processModule = new URL('../plugins/relay/scripts/lib/util/process.mjs', import.meta.url).href;
+  fs.writeFileSync(preload, `import fs from 'node:fs'; import {spawn} from 'node:child_process';
+import {readProcessStartTime} from ${JSON.stringify(processModule)};
+const marker=${JSON.stringify(marker)}, childFile=${JSON.stringify(childFile)};
+if(process.argv[1]?.endsWith('/bin/codex')) {
+ let forked=false;
+ const timer=setInterval(()=>{if(!forked && fs.existsSync(marker)) {
+  forked=true; const child=spawn('sleep',['300'],{detached:true,stdio:'ignore'});
+  child.on('spawn',()=>{fs.writeFileSync(childFile,JSON.stringify({pid:child.pid,startTime:readProcessStartTime(child.pid)}));child.unref();});
+ }},5); timer.unref();
+}
+if(process.argv[2]==='cancel') {
+ const read=fs.readFileSync;
+ let paused=false;
+ fs.readFileSync=function(file,...args) {
+  if(!paused && String(file).endsWith('/cgroup.procs')) {
+   paused=true;fs.writeFileSync(marker,'fork'); const until=Date.now()+5000;
+   while(!fs.existsSync(childFile) && Date.now()<until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5);
+  }
+  return read(file,...args);
+ };
+}`);
+  ctx.env.NODE_OPTIONS = `--import=${preload}`;
+  const { id } = startJob(ctx, undefined, '[held] Fork while cancellation reads the scope.');
+  await waitFor(() => readJob(ctx, id).turnId);
+  assert.ok(readJob(ctx, id).execution.cgroup);
+  let child;
+  t.after(() => { if (child && isProcessIdentityAlive(child)) process.kill(child.pid, 'SIGKILL'); });
+  const cancelled = companion(ctx, ['cancel', id]);
+  child = JSON.parse(fs.readFileSync(childFile));
+  assert.equal(cancelled.status, 0, cancelled.stdout + cancelled.stderr);
+  assert.equal(readJob(ctx, id).state, 'cancelled');
+  await waitFor(() => !isProcessIdentityAlive(child));
+});
+
+test('worker identity storage rejects symlinks, shared modes and missing identities', async t => {
+  const { registerWorker } = await import('../plugins/relay/scripts/lib/worker/registry.mjs');
+  const ctx = setup(t), directory = path.join(ctx.root, 'identity-storage'), link = path.join(ctx.root, 'identity-link');
+  fs.mkdirSync(directory, { mode: 0o700 }); fs.symlinkSync(directory, link);
+  const worker = { pid: process.pid, startTime: readProcessStartTime(process.pid), jobDir: ctx.root };
+  assert.throws(() => registerWorker(worker, { directory: link }), /private.*symlink/);
+  fs.chmodSync(directory, 0o777);
+  assert.throws(() => registerWorker(worker, { directory }), /private.*symlink/);
+  fs.chmodSync(directory, 0o700);
+  assert.throws(() => registerWorker({ ...worker, startTime: null }, { directory }), /identity could not be read/);
+  const file = registerWorker(worker, { directory }); assert.equal(JSON.parse(fs.readFileSync(file)).startTime, worker.startTime);
 });

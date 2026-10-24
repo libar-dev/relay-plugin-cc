@@ -159,7 +159,7 @@ test('33 gated submissions reach backend admission with no refused or unowned wo
 });
 
 test('foreground task uses a detached worker rather than the waiting caller', async t => {
-  const s = domain(t); s.ctx.env.RELAY_ADMISSION = 'off';
+  const s = domain(t); s.ctx.env.RELAY_ADMISSION = 'off'; s.ctx.env.RELAY_JOBS_ACK_TIMEOUT_MS = '5000';
   const script = path.join(ROOT, 'plugins/relay/scripts/companion.mjs');
   const caller = spawn(process.execPath, [script, 'task', '[quick] Dummy.'], { cwd: s.ctx.work, env: s.ctx.env, stdio: 'ignore' });
   const exited = once(caller, 'exit');
@@ -218,4 +218,28 @@ test('a dispatch arriving after refusal cannot acquire the worker lease or run t
   assert.equal(acquireWorkerLease(dir, me), true); releaseWorkerLease(dir, me);
   // The assertion fixture has no actual worker; close the explicit message for teardown.
   claimInboxMessages(dir); writeOutcome(dir, explicit.id, { action: 'skipped' });
+});
+
+test('recovery converts an adopting relay reservation rather than blocking behind it', async t => {
+  const s = domain(t, 1); s.ctx.env.RELAY_ADMISSION_POLL_MS = '1000';
+  const dir = job(s, 'job-reserved-recovery', 'running');
+  writeJob(dir, { ...readJob(dir), worker: { pid: 2147483647, startTime: 'gone' }, relay: { agentId: 'a-adopted' } });
+  const place = reserveWaitingPlace(s.ctx.env, s.deps);
+  assert.equal(bindReservation(place.reservation, 'a-adopted', s.ctx.env, s.deps), true);
+  assert.equal(reserveWaitingPlace(s.ctx.env, s.deps).pass, false);
+  assert.equal(await resumeDeadJobOnce(dir, s.ctx.env), true);
+  assert.equal(fs.existsSync(path.join(s.ctx.env.RELAY_ADMISSION_HOME, 'slots', `r-${place.reservation}.json`)), false);
+  await waitFor(() => readJob(dir).state === 'completed' && !hasLiveWorker(dir));
+});
+
+test('a guard error is an error from the gate so hooks can fall back to bounded start', t => {
+  const s = domain(t); s.ctx.env.RELAY_ADMISSION_HOME = '/dev/null/unwritable';
+  const result = companion(s.ctx, ['gate', '--wait-seconds', '30']);
+  assert.equal(result.status, 1); assert.match(result.stderr, /guard unavailable/); assert.equal(result.stdout, '');
+});
+
+test('a plain resume with no job bypasses the retry gate even if no waiting place is free', t => {
+  const s = domain(t, 0);
+  const result = companion(s.ctx, ['gate', '--retry', '--agent', 'a-refused', '--wait-seconds', '30']);
+  assert.equal(result.status, 0); assert.equal(result.stdout, 'pass\n');
 });

@@ -1167,3 +1167,20 @@ test('slot cleaning and release require fresh live execution evidence even with 
   assert.equal(describeGuard(s.env, {}, deps).activeSeats, 1); assert.equal(fs.existsSync(file), true);
   assert.equal(releaseSlot(s.home, c.jobId, leader, deps), false); assert.equal(fs.existsSync(file), true);
 });
+
+test('changing memory readings accumulate one bounded hold kind and outweigh a short final stagger', t => {
+  const s = setup(t); fillOtherMinimum(s);
+  const c = s.ctx({ model: 'synthetic-model' });
+  for (let i = 0; i < 100; i++) {
+    s.setMachine({ availableBytes: (10 + i / 100) * GiB });
+    const held = admit(c, s.deps); assert.equal(held.waitKind, 'memory');
+    c.admission = held.record; c.waitingSince = held.record.since; s.tick(1000);
+  }
+  s.setMachine({ availableBytes: 100 * GiB });
+  fs.writeFileSync(path.join(s.home, 'timing.json'), JSON.stringify({ lastStart: new Date(s.deps.now()).toISOString() }));
+  const stagger = admit(c, s.deps); c.admission = stagger.record;
+  s.tick(D.spacingMs); const result = admit(c, s.deps);
+  assert.equal(result.admit, true); assert.equal(result.record.waitKind, 'memory');
+  assert.equal(result.record.waitTotals.memory.ms, 100000);
+  assert.equal(Object.keys(result.record.waitTotals).length, 2);
+});

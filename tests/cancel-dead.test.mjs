@@ -5,6 +5,7 @@ import { once } from "node:events";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { setup, companion, waitFor } from "./support/job-helpers.mjs";
+import { acquireWorkerLease, releaseWorkerLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 import { writeExecutable } from "./support/helpers.mjs";
 import { createJobDir, readJob, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { isProcessIdentityAlive, listProcesses, readProcessStartTime } from "../plugins/relay/scripts/lib/util/process.mjs";
@@ -234,4 +235,21 @@ fs.readFileSync = function(file, ...args) {
   assert.equal(readJob(jobDir).state, "cancelled");
   assert.equal(isProcessIdentityAlive(identity), false);
   assert.equal(isProcessIdentityAlive(member), false);
+});
+
+
+test("a completed job with a closing worker records one no-op cancel without delegating another", async t => {
+  const ctx = setup(t);
+  const worker = await sleeper(t, true), server = await sleeper(t, false);
+  const { id, jobDir } = recorded(ctx, worker.identity, server.identity, { state: "completed", attempts: [{ attempt: 1, state: "completed" }] });
+  assert.equal(acquireWorkerLease(jobDir, worker.identity), true);
+  t.after(() => releaseWorkerLease(jobDir, worker.identity));
+  const result = companion(ctx, ["cancel", id]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(isProcessIdentityAlive(worker.identity), true);
+  assert.equal(isProcessIdentityAlive(server.identity), false);
+  const messages = ["inbox", "inbox/claimed"].flatMap(dir => fs.readdirSync(path.join(jobDir, dir)).filter(n => n.endsWith(".json")).map(n => JSON.parse(fs.readFileSync(path.join(jobDir, dir, n))))).filter(m => m.kind === "cancel");
+  assert.equal(messages.length, 1);
+  const outcome = JSON.parse(fs.readFileSync(path.join(jobDir, "inbox/outcomes", `${messages[0].id}.json`)));
+  assert.equal(outcome.action, "no-op");
 });
