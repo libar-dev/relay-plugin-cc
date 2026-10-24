@@ -709,17 +709,19 @@ async function runWorkerRound(jobDir, options, held) {
               const message = pendingSteers.shift();
               enqueue({ prompt: message.text, source: "steer", message, clientId: message.id }, "the turn ended before the steer was delivered");
             }
-            confirmSteers(true);
             // An accepted steer the backend lost with its server runs as the next turn; one the
             // backend may still hold is dropped, never sent twice.
             for (const id of result.unjoinedSteers ?? []) {
+              openSteers.delete(id);
               const message = steered.get(id);
               if (message) enqueue({ prompt: message.text, source: "steer", message, clientId: message.id }, "the backend accepted the steer but lost it before a turn took it");
             }
             for (const { id, reason } of result.droppedSteers ?? []) {
+              openSteers.delete(id);
               const message = steered.get(id);
               if (message) outcome(message, { action: "dropped", reason });
             }
+            confirmSteers(true);
 
             if (result.turnStatus !== "completed" && !refusal && connection.server.exitInfo) {
               throw new Error(backend.endMessage(connection.server.exitInfo));

@@ -23,6 +23,41 @@ import { installFakeZcode } from "./fakes/zcode.mjs";
 import { installFakeKimi } from "./fakes/kimi.mjs";
 import { setup, HEADER, startJob, jobDirs, readJob, waitFor as waitForJob, finishJob } from "./support/job-helpers.mjs";
 
+for (const persisted of [false, true]) {
+  test(`ZCode worker death before steer confirmation: ${persisted ? "history closes it as delivered-before" : "the owed steer runs once"}`, async t => {
+    const ctx = setup(t);
+    const fake = installFakeZcode(ctx.bin, { guideHold: true, guideHistoryOnly: persisted });
+    ctx.env.ZCODE_BINARY = fake.binary;
+    const { id } = startJob(ctx, "backend: zcode\nmodel: default\neffort: default", "[long] First turn.");
+    const dir = jobDirs(ctx).find(dir => path.basename(dir) === id);
+    await waitForJob(() => readJob(ctx, id).turnId);
+    const message = postInboxMessage(dir, { kind: "steer", text: "[quick] Owed correction." });
+    await waitForJob(() => readOutcome(dir, message.id)?.action === "interject-queued");
+    assert.ok(owedMessages(dir).some(entry => entry.id === message.id));
+    const before = readJob(ctx, id);
+    // Kill the worker in the acknowledgement-to-confirmation window, then its backend.
+    // No in-memory steer map survives either process.
+    process.kill(before.worker.pid, "SIGKILL");
+    await waitForJob(() => !isWorkerAlive(before.worker));
+    process.kill(before.server.pid, "SIGKILL");
+    await waitForJob(() => !isWorkerAlive(before.server));
+    assert.equal(fake.state().sessions.sess_1.messages.some(entry => entry.commandId === message.id), persisted);
+    const result = companion(ctx, ["wait", id, "--auto-resume", "--timeout-seconds", "15"]);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    await finishJob(ctx, id);
+    assert.equal(readOutcome(dir, message.id).action, persisted ? "delivered-before" : "turn-started");
+    assert.deepEqual(owedMessages(dir), []);
+    const state = fake.state();
+    assert.equal(state.turns.filter(turn => turn.text === message.text).length, persisted ? 0 : 1);
+    const sends = state.requests.filter(r => r.params?.type === "sendText" && r.params.commandId.replace(/~\d+$/, "") === message.id);
+    assert.equal(sends.filter(r => r.params.payload.requestedDelivery === "guide").length, 1);
+    // The replacement resends only after the explicit discarded-on-restart response.
+    assert.deepEqual(sends.filter(r => r.params.payload.requestedDelivery === "startNow").map(r => r.params.commandId),
+      persisted ? [] : [message.id, `${message.id}~1`]);
+    assert.equal(readJob(ctx, id).automaticResumes.length, 1);
+  });
+}
+
 // Worker recovery and cancellation
 {
 
