@@ -269,6 +269,9 @@ Load guard:
 
 Fixes from the pre-releases:
 
+- When a relay retypes a job's block with a changed line, the hand-back guard names the first differing line before
+  repeating the exact result. This helps correct a `dir:` line copied from `report:`; the result format, matching
+  rules and eight-block budget are unchanged. Not yet checked live: whether a Haiku relay corrects the line when told.
 - A Workflow relay is told that the harness's "user request" is the lead's request to the whole Workflow, not its
   task, and that the "computed task" is the job's brief: it runs its three commands whatever the request says. The
   agent and hook instructions and its block reasons say `${CLAUDE_PLUGIN_ROOT}` in those commands is typed as written

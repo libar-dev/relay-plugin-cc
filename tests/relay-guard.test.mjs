@@ -459,6 +459,92 @@ test("without SubagentHandback, SubagentStop still checks the final text", async
   assert.equal(await stop(ctx, resultOf(ctx, jobId)), null);
 });
 
+for (const workflow of [false, true]) {
+  test(`${workflow ? "Workflow" : "Agent-tool"} hand-back names only the first differing line of a retyped block`, async () => {
+    const ctx = relayContext("job", { ...(workflow ? { workflow: WORKFLOW } : {}), turnMs: 100 });
+    let jobId;
+    if (workflow) {
+      ctx.append(ctx.userRequest(), ctx.workflowPrompt(), ctx.environment(), ctx.snapshot("string"));
+      ({ jobId } = await relayStart(ctx));
+      assert.ok(jobId);
+    } else {
+      jobId = await startedRelay(ctx, QUICK);
+    }
+    assert.equal(waitJob(ctx, jobId).status, 0);
+    const block = companion(ctx, ["result", jobId, ...(workflow ? ["--state-only"] : [])]).stdout;
+    const dir = `dir: ${jobDirOf(ctx, jobId)}`;
+    const report = `report: ${jobDirOf(ctx, jobId)}/report.md`;
+    const head = `${workflow ? `${WORKFLOW_NOTE}\n\n` : ""}Your final message must be exactly the job's result, with nothing added or removed.`;
+    const reply = "Reply with exactly this text and nothing else, with no code fence around it:\n";
+    const hint = (written, required) => `One line differs: you wrote ${JSON.stringify(written)}; it must be ${JSON.stringify(required)}.\n`;
+
+    const wrongDir = block.replace(dir, `${dir}/report.md`);
+    // Use the same fence and whitespace normalization as the existing matcher.
+    const normalized = workflow
+      ? wrongDir.split("\n").map((line) => `  ${line}  `).join("\r\n")
+      : wrongDir;
+    const blocked = await stop(ctx, `\`\`\`yaml\n${normalized}\n\`\`\``);
+    assert.equal(blocked?.decision, "block");
+    assert.equal(blocked.reason, head + "\n" + hint(`${dir}/report.md`, dir) + reply + block);
+    assert.equal(expectedFromReason(blocked.reason), block, "only the result follows the copy instruction");
+
+    const twoLines = await stop(ctx, wrongDir.replace(report, "report: none"));
+    assert.equal(twoLines?.decision, "block");
+    assert.equal(twoLines.reason, head + "\n" + hint("report: none", report) + reply + block);
+
+    const prose = await stop(ctx, "The job finished; here is my summary.");
+    assert.equal(prose?.decision, "block");
+    assert.equal(prose.reason, head + " " + reply + block, "unrelated prose keeps the old reason");
+    assert.equal(await stop(ctx, block), null, "the unchanged result still passes");
+
+    if (workflow) {
+      for (const omitted of ["session", "relay"]) {
+        assert.match(block, new RegExp(`^${omitted}: `, "m"));
+        const fewerLines = wrongDir.split("\n").filter((line) => !line.startsWith(`${omitted}: `));
+        // Request lines may be omitted and lines may be reordered by the matcher.
+        const reordered = [...fewerLines.slice(0, 2), ...fewerLines.slice(2).reverse()].join("\n");
+        const fewer = await stop(ctx, reordered);
+        assert.equal(fewer?.decision, "block");
+        assert.equal(fewer.reason, head + "\n" + hint(`${dir}/report.md`, dir) + reply + block);
+        assert.equal(await stop(ctx, reordered.replace(`${dir}/report.md`, dir)), null);
+      }
+      const added = await stop(ctx, block + "extra: invented\n");
+      assert.equal(added?.decision, "block");
+      assert.equal(added.reason, head + '\nRemove this line, which is not in the result: "extra: invented".\n' + reply + block);
+      assert.equal(await stop(ctx, block), null);
+      const missing = await stop(ctx, block.split("\n").filter((line) => !line.startsWith("report: ")).join("\n"));
+      assert.equal(missing?.decision, "block");
+      assert.equal(missing.reason, head + `\nA line is missing: ${JSON.stringify(report)}.\n` + reply + block);
+      assert.equal(await stop(ctx, block), null);
+    } else {
+      const crlf = await stop(ctx, block.replaceAll("\n", "\r\n"));
+      assert.equal(crlf?.decision, "block");
+      assert.equal(crlf.reason, head + "\n" + hint("state: completed\r", "state: completed") + reply + block);
+      assert.equal(await stop(ctx, block), null);
+
+      const longLine = "a".repeat(1100) + "correct" + "z".repeat(1000);
+      fs.writeFileSync(path.join(jobDirOf(ctx, jobId), "report.md"), longLine + "\n");
+      const longBlock = resultOf(ctx, jobId);
+      const long = await stop(ctx, longBlock.replace(longLine, longLine.replace("correct", "altered")));
+      assert.equal(long?.decision, "block");
+      assert.ok(long.reason.length <= longBlock.length + head.length + reply.length + 410, "quoted context has a bounded length");
+      const context = "a".repeat(60);
+      assert.equal(long.reason, head + "\n" + hint(`…${context}altered${"z".repeat(93)}…`, `…${context}correct${"z".repeat(93)}…`) + reply + longBlock);
+      assert.equal(expectedFromReason(long.reason), longBlock, "truncation affects only the hint");
+      assert.equal(await stop(ctx, longBlock), null);
+
+      const changed = longBlock.replace(/^dir: .+$/m, "dir: invented-model-text");
+      for (let index = 0; index < RELAY_BLOCK_BUDGET; index += 1) {
+        assert.equal((await stop(ctx, changed))?.decision, "block");
+      }
+      assert.equal(await stop(ctx, changed), null);
+      const violation = resultOf(ctx, jobId).split("\n").find((line) => line.startsWith("relay-violation:"));
+      assert.equal(violation, "relay-violation: final-message: the relay was let go after 8 blocks: " + head);
+      assert.doesNotMatch(violation, /invented-model-text|One line differs/);
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------------------
 
 test("an unreadable transcript is a recorded violation that is never forgotten, and the relay proceeds", async () => {
@@ -762,14 +848,18 @@ test("only the block itself passes; trailing whitespace is ignored; eight blocks
   assert.equal((await stop(ctx, without("report")))?.decision, "block", "the report line left out");
   assert.equal((await stop(ctx, block.replace("state: completed", "state: failed")))?.decision, "block", "a changed line");
   assert.equal(await stop(ctx, block), null);
-  // Eight consecutive blocks, then the ninth stop lets the relay go and records it.
+  // Eight consecutive blocks with a hint, then the ninth stop records only the safe lead-in.
+  const written = block.replace(/^dir: .+$/m, "dir: invented-model-text");
   for (let index = 0; index < RELAY_BLOCK_BUDGET; index += 1) {
-    const blocked = await stop(ctx, "wrong", { stop_hook_active: index > 0 });
+    const blocked = await stop(ctx, written, { stop_hook_active: index > 0 });
     assert.equal(blocked?.decision, "block", `block ${index + 1}`);
+    assert.match(blocked.reason, /One line differs: you wrote "dir: invented-model-text"/);
   }
   assert.doesNotMatch(resultOf(ctx, jobId), /relay-violation/);
-  assert.equal(await stop(ctx, "wrong", { stop_hook_active: true }), null);
-  assert.match(resultOf(ctx, jobId), /^relay-violation: final-message: the relay was let go after 8 blocks/m);
+  assert.equal(await stop(ctx, written, { stop_hook_active: true }), null);
+  const violation = resultOf(ctx, jobId).split("\n").find((line) => line.startsWith("relay-violation:"));
+  assert.equal(violation, "relay-violation: final-message: the relay was let go after 8 blocks: " + WORKFLOW_NOTE);
+  assert.doesNotMatch(violation, /invented-model-text|One line differs/);
 });
 
 test("a result between tries at the final message does not renew the block budget", async () => {
