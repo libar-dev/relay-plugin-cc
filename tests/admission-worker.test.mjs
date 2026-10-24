@@ -375,3 +375,48 @@ for (const [name, variable] of [["codex", "CODEX_HOME"], ["zcode", "ZCODE_DATA_B
   assert.equal(JSON.parse(fs.readFileSync(pauseFile)).account, current.account);
   assert.equal(fs.existsSync(path.join(home, "pauses", `${name}-${first.account}.json`)), false);
 });
+
+test("heartbeat memory is visible in the job, slot and aggregate guard status", async t => {
+  const { describeGuard, renderGuard } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const { renderJobBlock } = await import("../plugins/relay/scripts/lib/jobs/view.mjs");
+  const s = seed(t, "[held] Sample memory."); s.unblock();
+  s.options.env.RELAY_JOBS_HEARTBEAT_MS = "20";
+  const running = runWorker(s.dir, s.options);
+  await waitFor(() => readJob(s.dir).treeBytes > 0);
+  const slot = JSON.parse(fs.readFileSync(path.join(s.ctx.env.RELAY_ADMISSION_HOME, "slots", "job-admission-worker.json")));
+  assert.ok(slot.treeBytes > 0);
+  const guard = describeGuard(s.ctx.env, {}, s.options.admission);
+  assert.ok(guard.relayBytes > 0);
+  assert.match(renderGuard(guard).join("\n"), /relay jobs use [\d.]+ GiB/);
+  assert.match(renderJobBlock(loadJobView(s.dir)), /memory: [\d.]+ GiB \(job and its processes\)/);
+  postInboxMessage(s.dir, { kind: "cancel" });
+  await running;
+});
+
+test("unresolved owned tools fail cleanup and retain the running seat", async t => {
+  const { spawn } = await import("node:child_process");
+  const { readProcessStartTime } = await import("../plugins/relay/scripts/lib/util/process.mjs");
+  const s = seed(t); s.unblock();
+  s.options.predecessorCleanup = { killImpl() {}, graceMs: 0 };
+  const backend = backendNamed("codex"), connect = backend.connect;
+  let child;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args), run = connection.run.bind(connection);
+    t.mock.method(connection, "run", async (...turn) => {
+      const result = await run(...turn);
+      child = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
+      await waitFor(() => readProcessStartTime(child.pid));
+      fs.writeFileSync(path.join(s.dir, "processes.json"), JSON.stringify({ members: [{ pid: child.pid, startTime: readProcessStartTime(child.pid) }] }));
+      return result;
+    });
+    return connection;
+  });
+  t.after(() => { try { child?.kill("SIGKILL"); } catch {} });
+  await runWorker(s.dir, s.options);
+  const job = readJob(s.dir);
+  assert.equal(job.state, "failed");
+  assert.equal(job.cleanup.state, "unresolved");
+  assert.ok(job.cleanup.pids.includes(child.pid));
+  assert.match(job.errorMessage, /cleanup: unresolved/);
+  assert.equal(fs.existsSync(path.join(s.ctx.env.RELAY_ADMISSION_HOME, "slots", "job-admission-worker.json")), true);
+});

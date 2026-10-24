@@ -273,8 +273,8 @@ for (const persisted of [false, true]) {
       const swept = job.attempts[0].servers[0];
       const replacement = job.attempts.at(-1).servers[0];
       assert.equal(swept.pid, old.server.pid);
-      assert.ok(swept.endedAt, "the sweep records endedAt");
-      assert.ok(Date.parse(swept.endedAt) <= Date.parse(replacement.startedAt), "swept before the new server started");
+      assert.ok(swept.deathObservedAt, "the sweep records when death was observed");
+      assert.ok(Date.parse(swept.deathObservedAt) <= Date.parse(replacement.startedAt), "swept before the new server started");
     });
   }
 
@@ -396,13 +396,13 @@ for (const persisted of [false, true]) {
     assert.equal(job.attempts[0].servers[0].endedAt, undefined);
   });
 
-  test("the sweep skips an already-ended record of a live identity", async (t) => {
+  test("the sweep stops a live owned identity even if a record says it ended", async (t) => {
     const { identity } = await oldServer(t);
     const ended = { ...identity, endedAt: new Date().toISOString(), code: 0 };
     const ctx = sweepJob({ servers: [ended] });
     const job = await ctx.run();
     assert.equal(job.state, "completed");
-    assert.equal(isWorkerAlive(identity), true);
+    assert.equal(isWorkerAlive(identity), false);
   });
 
   test("the sweep stops a predecessor recorded only in attempts[].servers", async (t) => {
@@ -411,7 +411,7 @@ for (const persisted of [false, true]) {
     const job = await ctx.run();
     assert.equal(job.state, "completed");
     assert.equal(isWorkerAlive(identity), false);
-    assert.ok(job.attempts[0].servers[0].endedAt, "the swept server's record is ended");
+    assert.ok(job.attempts[0].servers[0].deathObservedAt, "the swept server's record is ended");
     assert.equal(ctx.fakeState().turnStarts.length, 1);
   });
 
@@ -748,7 +748,7 @@ for (const persisted of [false, true]) {
   const waitFor = waitForJob;
 
   for (const backend of ['codex', 'grok', 'zcode', 'kimi']) {
-    test(`${backend}: recovery preserves a nested companion job sharing its process group`, async t => {
+    test(`${backend}: recovery preserves a nested companion job in its own execution group`, async t => {
       const outer = setup(t, { turnMs: 3000 });
       const inner = setup(t, { turnMs: 6000 });
       let binary = path.join(outer.bin, 'codex');
@@ -770,7 +770,7 @@ for (const persisted of [false, true]) {
       const marker = path.join(outer.root, 'nested-started');
       const overrides = { HOME: inner.user, USERPROFILE: inner.user, RELAY_JOBS_HOME: inner.jobs, PATH: inner.env.PATH };
       // Model a tool shell launching a foreground companion in the background, then exiting.
-      // Both shells use captured output, but the companion retains the outer worker's group.
+      // The task caller shares the outer group; its worker launches outside it.
       const launch = `require('node:child_process').spawn(process.execPath, ${JSON.stringify([script, 'task', '--model', 'gpt-test', '--effort', 'low', 'Nested task'])}, {
         cwd: ${JSON.stringify(inner.work)}, env: { ...process.env, ...${JSON.stringify(overrides)} }, stdio: 'ignore'
       }).unref();`;
@@ -798,7 +798,7 @@ for (const persisted of [false, true]) {
       });
       const table = listProcesses();
       const identities = [before.worker.pid, before.serverPid].map(pid => table.find(row => row.pid === pid));
-      assert.ok(identities.every(row => row && row.pgid === outerBefore.worker.pid));
+      assert.ok(identities.every(row => row && row.pgid === before.worker.pid));
       process.kill(outerBefore.serverPid, 'SIGKILL');
       await waitFor(() => readJob(outer, id).automaticResumes?.length === 1);
       const afterTable = listProcesses();

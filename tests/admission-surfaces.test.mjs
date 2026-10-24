@@ -1,5 +1,7 @@
 import "./support/isolate-env.mjs";
 import fs from "node:fs";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -105,11 +107,13 @@ test("deferred spawn errors remain retryable without aborting callers", async t 
   const { retryQueuedWorker } = await import("../plugins/relay/scripts/lib/worker/delivery.mjs");
   const ctx = setup(t), { jobDir } = createJobDir(ctx.work, "queued-failure", ctx.env);
   writeJob(jobDir, { id: "queued-failure", state: "queued", request: { cwd: ctx.work }, admission: { waitKind: "worker", reason: "memory low" } });
-  const open = fs.openSync, notes = [];
-  t.mock.method(fs, "openSync", (file, ...args) => {
-    if (file === jobPaths(jobDir).stderr) throw new Error("synthetic spawn error");
-    return open(file, ...args);
+  const spawn = childProcess.spawnSync, notes = [];
+  t.mock.method(childProcess, "spawnSync", (command, args, ...rest) => {
+    if (args?.[0]?.endsWith("/launcher.mjs")) throw new Error("synthetic spawn error");
+    return spawn(command, args, ...rest);
   });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   t.mock.method(process.stderr, "write", chunk => { notes.push(String(chunk)); return true; });
   assert.equal(retryQueuedWorker(jobDir, ctx.env), null);
   assert.equal(readJob(jobDir).state, "queued");

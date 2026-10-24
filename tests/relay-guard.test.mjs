@@ -37,6 +37,7 @@ import {
 import { handleRelayHook, parseCompanionCommand } from "../plugins/relay/scripts/hooks/relay-guard.mjs";
 import { findRelayJob, parseRelayTranscript, promptSha256, readGuardState, readRelayPointer, relayAgentTypes, RELAY_BLOCK_BUDGET, stripRetrySuffix, transcriptCandidates, writeGuardState } from "../plugins/relay/scripts/lib/harness/relay.mjs";
 import { busyViews } from "./support/busy-view.mjs";
+import { readLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 import { parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { classifyHarnessEntry, SCHEMA_SENTENCE } from "../plugins/relay/scripts/lib/harness/workflow.mjs";
 
@@ -1497,6 +1498,7 @@ test("a relay that never runs start gets its job and session recorded by the hoo
     assert.equal(readJobJson(ctx, jobId).launchedBy.claudeSessionId, ctx.sessionId, what);
     assert.equal(JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout).claudeSessionId, ctx.sessionId, what);
     assert.equal(waitJob(ctx, jobId).status, 0, what);
+    await waitFor(() => !readLease(jobDirOf(ctx, jobId)));
     const handback = await pre(ctx, "SubagentHandback", { message: "Hi." });
     assert.equal(decision(handback), "allow", what);
     assert.equal(updated(handback).message, resultOf(ctx, jobId), `${what}: the hand-back is the job's result`);
@@ -1521,6 +1523,7 @@ test("a queued Workflow stays pending through repeated hand-back and stop attemp
   assert.ok(jobId);
   assert.equal(waitJob(ctx, jobId).status, 0);
   const dir = jobDirOf(ctx, jobId);
+  await waitFor(() => !readLease(dir));
   const file = path.join(dir, "job.json");
   const job = JSON.parse(fs.readFileSync(file, "utf8"));
   ctx.env.RELAY_ADMISSION = "on";

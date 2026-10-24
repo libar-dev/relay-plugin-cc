@@ -615,12 +615,13 @@ test("a server killed while a prompt queued behind Kimi's own turn runs: one rec
   await waitFor(() => !isWorkerAlive(worker), 5000);
 });
 
-test("containment: a shell command Kimi runs in its own session ends with the old server's sweep; one a server SIGKILL orphaned is out of reach, and relay claims no cleanup of it", async t => {
+test("containment: sampled Kimi shell commands end after worker death and after worker plus backend death", async t => {
   const identity = pid => ({ pid, startTime: readProcessStartTime(pid) });
   const start = async () => {
     const ctx = fixture(t, { shellChild: true, turnMs: 30000 });
     const { id } = startJob(ctx, HEADER, "Run a command.");
     const record = await waitFor(() => ctx.kimi().descendants?.[0]);
+    await waitFor(() => JSON.parse(fs.readFileSync(path.join(jobDir(ctx, id), "processes.json"), "utf8")).members.some(p => p.pid === record.childPid));
     const job = readJob(ctx, id);
     const processes = { worker: job.worker, server: identity(record.appServerPid), child: identity(record.childPid) };
     t.after(() => { for (const proc of Object.values(processes)) if (isWorkerAlive(proc)) process.kill(proc.pid, "SIGKILL"); });
@@ -637,20 +638,16 @@ test("containment: a shell command Kimi runs in its own session ends with the ol
   await finishJob(swept.ctx, swept.id);
   assert.equal(isWorkerAlive(swept.server), false, "the sweep ended the old server");
   assert.equal(isWorkerAlive(swept.child), false, "and the command it started in a session of its own");
-  assert.ok(readJob(swept.ctx, swept.id).attempts[0].servers[0].endedAt, "the sweep recorded the server's end");
+  assert.ok(readJob(swept.ctx, swept.id).attempts[0].servers[0].deathObservedAt, "the sweep recorded the server's end");
 
-  // Worker and server die by SIGKILL: the command is reparented, no longer a descendant of
-  // anything relay recorded (design.md, Processes). Recovery does not reach it, and no record
-  // claims it was stopped.
+  // Worker and backend die by SIGKILL. The execution group and registry retain ownership.
   const orphaned = await start();
   process.kill(orphaned.server.pid, "SIGKILL");
   process.kill(orphaned.worker.pid, "SIGKILL");
   await waitFor(() => companion(orphaned.ctx, ["status", orphaned.id]).stdout.includes("state: dead"));
   assert.equal(companion(orphaned.ctx, ["resume", orphaned.id, "--message", "[quick] Finish."]).status, 0);
   await finishJob(orphaned.ctx, orphaned.id);
-  assert.equal(isWorkerAlive(orphaned.child), true, "out of reach, as documented");
-  assert.doesNotMatch(fs.readFileSync(path.join(jobDir(orphaned.ctx, orphaned.id), "job.json"), "utf8"), new RegExp(`"pid":${orphaned.child.pid}\\b`));
-  process.kill(orphaned.child.pid, "SIGKILL");
+  assert.equal(isWorkerAlive(orphaned.child), false, "recovery also stops the orphaned command");
 });
 
 test("server death mid-turn records the exit; a second death in the attempt fails it", async t => {

@@ -8,20 +8,7 @@ import { acquireWorkerLease, isWorkerAlive } from "../jobs/lease.mjs";
 import { computeJobView } from "../jobs/view.mjs";
 import { messageExists, newMessageId, postInboxMessage } from "../jobs/messages.mjs";
 import { nowIso, readJob, readJsonOrNull, writeJob } from "../jobs/store.mjs";
-import { listProcesses, readProcessStartTime, snapshotProcessTree, stopProcessSnapshot } from "../util/process.mjs";
-
-// Every app-server recorded on the job (the live one in `server` and each attempt's
-// `servers`) that has no `endedAt` and still runs as the same process (pid and start time).
-function liveRecordedAppServers(job) {
-  const live = new Map();
-  for (const server of [job?.server, ...(job?.attempts ?? []).flatMap((attempt) => attempt?.servers ?? [])]) {
-    const key = `${server?.pid}:${server?.startTime}`;
-    if (server?.pid && !server.endedAt && !live.has(key) && isWorkerAlive(server)) {
-      live.set(key, { pid: server.pid, startTime: server.startTime ?? null });
-    }
-  }
-  return [...live.values()];
-}
+import { stopExecution, readProcessStartTime } from "../util/process.mjs";
 
 // The sweep: stop those app-servers with every descendant, SIGTERM then SIGKILL. Returns
 // the servers found and every process still running after the kill wait. Descendants are
@@ -30,31 +17,17 @@ function liveRecordedAppServers(job) {
 // identity, which needs no table. `options.listProcesses` replaces the table read (tests);
 // the other options go to stopProcessSnapshot.
 export async function stopRecordedAppServers(job, options = {}) {
-  const servers = liveRecordedAppServers(job);
-  if (servers.length === 0) {
-    return { servers, survivors: [] };
-  }
-  const table = (options.listProcesses ?? listProcesses)();
-  if (!table) {
-    return { servers, survivors: servers, cause: "the process table could not be read" };
-  }
-  const survivors = await stopProcessSnapshot(snapshotProcessTree(servers.map((server) => server.pid), { table }), options);
-  for (const server of servers) {
-    if (!survivors.some((entry) => entry.pid === server.pid) && isWorkerAlive(server)) {
-      survivors.push(server);
-    }
-  }
-  return { servers, survivors, ...(survivors.cause ? { cause: survivors.cause } : {}) };
+  return stopExecution(job, options);
 }
 
-// The patch that records `endedAt` on every swept server that is gone, and clears the live
+// The patch records `deathObservedAt` on swept servers and clears the live
 // identity when it was one of them. A survivor keeps its record open.
 export function sweptAppServersPatch(job, { servers, survivors }, at = nowIso()) {
   const same = (a, b) => a?.pid === b.pid && (a?.startTime ?? null) === (b.startTime ?? null);
   const gone = servers.filter((server) => !survivors.some((entry) => entry.pid === server.pid));
   const ended = (server) => server && !server.endedAt && gone.some((entry) => same(server, entry));
   const attempts = (job.attempts ?? []).map((attempt) =>
-    attempt?.servers ? { ...attempt, servers: attempt.servers.map((server) => (ended(server) ? { ...server, endedAt: at } : server)) } : attempt
+    attempt?.servers ? { ...attempt, servers: attempt.servers.map((server) => (ended(server) ? { ...server, deathObservedAt: at } : server)) } : attempt
   );
   const live = ended(job.server);
   return { attempts, ...(live ? { server: null, serverPid: null } : {}) };
@@ -84,8 +57,8 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
     const epoch = job.recoveryEpoch ?? "start";
     const previous = recoveryForEpoch(job);
     // A reservation interrupted before posting is repaired with the same message id.
-    const sweep = await stopRecordedAppServers(job);
-    if (sweep.survivors.length) throw new Error(`Could not stop the dead job's processes: ${sweep.survivors.map(entry => entry.pid).join(", ")}${sweep.cause ? ` (${sweep.cause})` : ""}`);
+    const sweep = await stopRecordedAppServers(job, { jobDir });
+    if (sweep.survivors.length || sweep.cause) throw new Error(`Could not stop the dead job's processes: ${sweep.survivors.map(entry => entry.pid).join(", ")}${sweep.cause ? ` (${sweep.cause})` : ""}`);
     job = readJob(jobDir);
     if (sweep.servers.length) job = { ...job, ...sweptAppServersPatch(job, sweep) };
     cancelling = cancelIsRunning(jobDir);
@@ -109,7 +82,7 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
   } finally {
     releaseLeaseToConsumer(jobDir, me, env, { spawn: !launch && !cancelling });
   }
-  if (launch) spawnWorker(jobDir, cwd, env);
+  if (launch) spawnWorker(jobDir, cwd, { ...env, RELAY_WORKER_TRIGGER: "recovery" });
   return launch;
 }
 

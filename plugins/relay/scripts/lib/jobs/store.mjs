@@ -17,6 +17,8 @@ import { default as fs } from "node:fs";
 import { default as os } from "node:os";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
+import { writeFileAtomic, writeJsonAtomic, readJsonOrNull } from "../util/fs.mjs";
+export { writeFileAtomic, writeJsonAtomic, readJsonOrNull } from "../util/fs.mjs";
 import { runCommand } from "../util/process.mjs";
 import { JobNotFound } from "../util/errors.mjs";
 
@@ -111,27 +113,6 @@ export function jobPaths(jobDir) {
     // and holds its own copy, so a later binding lives here and is merged in by readJob.
     relay: path.join(jobDir, "relay.json")
   };
-}
-
-
-export function writeFileAtomic(filePath, content) {
-  const tmp = `${filePath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  fs.writeFileSync(tmp, content, "utf8");
-  fs.renameSync(tmp, filePath);
-}
-
-
-export function writeJsonAtomic(filePath, value) {
-  writeFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-
-export function readJsonOrNull(filePath) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
 }
 
 

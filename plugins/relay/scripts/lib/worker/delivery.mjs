@@ -2,19 +2,20 @@
 // the message, and wait (bounded) for the worker to record an outcome. The companion's
 // steer, continue and resume commands and the relay hook share this code.
 
-import { spawn } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { absoluteJobsHomeEnv, jobPaths, readJob, writeJob, TERMINAL_STATES } from "../jobs/store.mjs";
+import { absoluteJobsHomeEnv, jobPaths, readJob, writeJob, readJsonOrNull, writeJsonAtomic, TERMINAL_STATES } from "../jobs/store.mjs";
 import { isMessagePending, messageAccount, pendingInboxMessages, postInboxMessage, readOutcome, writeOutcome } from "../jobs/messages.mjs";
 import { isWorkerLease, readLease, releaseWorkerLease } from "../jobs/lease.mjs";
 import { spawnWithAdmission, DEFAULTS } from "./admission.mjs";
 import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
 import { holderAlive } from "./admission.mjs";
-import { inOwnUserScope } from "../util/process.mjs";
+import { readProcessStartTime } from "../util/process.mjs";
 
 export const COMPANION_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..", "companion.mjs");
 
@@ -44,21 +45,29 @@ export function spawnWorker(jobDir, cwd, env = process.env) {
 }
 
 function spawnWorkerProcess(jobDir, cwd, env) {
-  const paths = jobPaths(jobDir);
-  const fd = fs.openSync(paths.stderr, "a");
-  try {
-    const launch = inOwnUserScope(process.execPath, [COMPANION_SCRIPT, "worker", jobDir], { env, description: `relay job worker ${path.basename(jobDir)}` });
-    const child = spawn(launch.command, launch.args, {
-      cwd: fs.existsSync(cwd) ? cwd : jobDir,
-      env: absoluteJobsHomeEnv(env),
-      detached: true,
-      stdio: ["ignore", fd, fd]
-    });
-    child.unref();
-    return child.pid ?? null;
-  } finally {
-    fs.closeSync(fd);
+  const file = path.join(jobDir, `launch-${randomUUID()}.json`);
+  writeJsonAtomic(file, { jobId: path.basename(jobDir), trigger: env.RELAY_WORKER_TRIGGER ?? process.argv[2] ?? "dispatch",
+    caller: { pid: process.pid, startTime: readProcessStartTime(process.pid) }, requestedAt: new Date().toISOString(), state: "pending" });
+  /** @type {NodeJS.ProcessEnv} */
+  const launchEnv = absoluteJobsHomeEnv(env);
+  delete launchEnv.RELAY_WORKER_TRIGGER;
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("./launcher.mjs", import.meta.url)), file, COMPANION_SCRIPT, jobDir, fs.existsSync(cwd) ? cwd : jobDir], {
+    env: launchEnv, encoding: "utf8", timeout: 10000, maxBuffer: 65536, stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (result.error || result.status !== 0) throw result.error ?? new Error(`Worker launch failed: ${result.stderr}`);
+  const pid = Number(result.stdout.trim());
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error("Worker launcher returned no process identity.");
+  // Do not publish a successful dispatch until the worker proves it was reparented.
+  // Keeping the caller here also lets the worker detect Stop during the handoff.
+  const deadline = Date.now() + 10000;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadline) {
+    const launch = readJsonOrNull(file);
+    if (launch?.state === "acknowledged") return launch.worker.pid;
+    if (launch?.state?.startsWith("handoff-")) throw new Error("Worker launch handoff failed; no backend was started.");
+    Atomics.wait(pause, 0, 0, 10);
   }
+  throw new Error("Worker launch acknowledgement timed out; no dispatch was confirmed.");
 }
 
 // Only a live worker consumes inbox messages. A cancel or a recovery that holds the lease

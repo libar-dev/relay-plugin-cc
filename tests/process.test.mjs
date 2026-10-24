@@ -108,16 +108,16 @@ exec /bin/ps "$@"
   assert.match(companion(ctx, ['status', id]).stdout, /^state: dead$/m);
 });
 
-test("a worker started from a unit of the user's systemd goes through systemd-run --user --scope, and only then", () => {
+test("a worker started from a unit of the user's systemd goes through systemd-run --user --scope, whenever the user manager answers", () => {
   const service = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/t3code.service\n";
   const scoped = inOwnUserScope("node", ["companion.mjs", "worker", "/j"], { platform: "linux", env: {}, cgroup: service, probe: () => true, description: "relay job worker j" });
   assert.equal(scoped.command, "systemd-run");
-  assert.deepEqual(scoped.args, ["--user", "--scope", "--quiet", "--collect", "--description=relay job worker j", "--", "node", "companion.mjs", "worker", "/j"]);
+  assert.deepEqual(scoped.args, ["--user", "--scope", "--quiet", "--collect", "--slice=relay-jobs.slice", "--description=relay job worker j", "--", "node", "companion.mjs", "worker", "/j"]);
   const plain = { command: "node", args: ["w"] };
   assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "darwin", env: {}, cgroup: service, probe: () => true }), plain, "not Linux");
   assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "linux", env: { RELAY_WORKER_SCOPE: "off" }, cgroup: service, probe: () => true }), plain, "turned off");
-  assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "linux", env: {}, cgroup: "0::/user.slice/user-1000.slice/session-7.scope\n", probe: () => true }), plain, "a login session");
-  assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "linux", env: {}, cgroup: "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-p1-i2.scope\n", probe: () => true }), plain, "already a scope");
+  assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "linux", env: {}, cgroup: "0::/user.slice/user-1000.slice/session-7.scope\n", probe: () => true }).command, "systemd-run", "a login session");
+  assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "linux", env: {}, cgroup: "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-p1-i2.scope\n", probe: () => true }).command, "systemd-run", "already a scope");
   assert.deepEqual(inOwnUserScope("node", ["w"], { platform: "linux", env: {}, cgroup: service, probe: () => false }), plain, "systemd-run cannot make a scope");
 });
 
@@ -131,7 +131,7 @@ test("groupSurvivors finds only original group members born no earlier than the 
   const expected = [{ pid: 5000, startTime: "linux:100" }, { pid: 5001, startTime: "linux:99" }, { pid: 5004, startTime: null }];
   assert.deepEqual(groupSurvivors(leader, table, { aliveUntil: "1970-01-01T00:00:03Z" }), expected);
   assert.deepEqual(groupSurvivors(leader, [...table, row(4321, 4321, "linux:200")]), []);
-  assert.equal(groupSurvivors(leader, [...table, row(4321, 4321, null)]).some(entry => entry.pid === 4321 && entry.startTime === null), true);
+  assert.equal(groupSurvivors(leader, [...table, row(4321, 4321, null)], { aliveUntil: "1970-01-01T00:00:03Z" }).some(entry => entry.pid === 4321 && entry.startTime === null), true);
   assert.deepEqual(groupSurvivors({ pid: 4321, startTime: null }, table), []);
   assert.deepEqual(groupSurvivors(null, table), []);
   assert.match(groupSurvivors(leader, null).cause, /process table could not be read/);
@@ -249,10 +249,11 @@ test("an unreadable live identity stays in discovery and is never signalled", { 
     const tree = snapshotProcessTree([child.pid], { table });
     assert.equal(tree[0].startTime, null);
     const group = groupSurvivors({ pid: child.pid, startTime: "linux:1" }, table);
-    assert.equal(group[0].pid, child.pid);
+    assert.equal(group.length, 0);
+    assert.equal(group.unverified, 1);
     assert.ok(liveSnapshotMembers([identity], { table }).some(entry => entry.pid === child.pid));
     const signals = [];
-    for (const snapshot of [[identity], tree, group]) {
+    for (const snapshot of [[identity], tree]) {
       const remaining = await stopProcessSnapshot(snapshot, { killImpl: (pid, signal) => { if (signal !== 0) signals.push([pid, signal]); }, graceMs: 0 });
       assert.equal(remaining[0].pid, child.pid);
       assert.match(remaining.cause, /identities could not be read/);

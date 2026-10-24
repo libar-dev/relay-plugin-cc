@@ -254,6 +254,7 @@ export function renderJobBlock(view) {
   } else if (job.errorMessage && view.state !== "completed") {
     lines.push(`error: ${String(job.errorMessage).replace(/\s+/g, " ").trim()}`);
   }
+  if (Number.isFinite(job.treeBytes)) lines.push(`memory: ${(job.treeBytes / 2 ** 30).toFixed(1)} GiB (job and its processes)`);
   if (view.state === "queued" && job.admission?.reason) {
     lines.push(`queued: ${job.admission.reason} (since ${job.admission.since ?? "unknown"})`);
   }

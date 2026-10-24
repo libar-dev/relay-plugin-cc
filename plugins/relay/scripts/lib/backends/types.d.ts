@@ -195,7 +195,11 @@ export interface ExitInfo {
   pid: number | null;
   code: number | null;
   signal: string | null;
-  endedAt: string;
+  endedAt?: string;
+  /** Close deadline elapsed without an observed exit. */
+  closeTimedOut?: boolean;
+  closeTimedOutAt?: string;
+  deathObservedAt?: string;
   stdoutClosedBeforeExit: boolean;
   partialStdoutBytes: number;
   stderrTail: string;

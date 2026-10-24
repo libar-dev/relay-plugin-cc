@@ -161,7 +161,7 @@ test("cancel leaves a reused process group alive after its replacement leader ex
   const data = await waitFor(() => fs.existsSync(marker) && JSON.parse(fs.readFileSync(marker, "utf8")));
   const member = { pid: data.pid, startTime: readProcessStartTime(data.pid) };
   await ended;
-  const { id, jobDir } = recorded(ctx, { pid: leader.pid, startTime: "linux:1" }, null,
+  const { id, jobDir } = recorded(ctx, { pid: leader.pid, startTime: process.platform === "linux" ? "linux:1" : "ps:Thu Jan 1 00:00:00 1970" }, null,
     { heartbeatAt: new Date(Date.now() - 3600000).toISOString() });
   assert.equal(listProcesses().some(row => row.pid === leader.pid), false);
   assert.equal(listProcesses().find(row => row.pid === member.pid).pgid, leader.pid);
@@ -169,7 +169,7 @@ test("cancel leaves a reused process group alive after its replacement leader ex
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(readJob(jobDir).state, "cancelled");
   assert.equal(isProcessIdentityAlive(member), true);
-  assert.ok(JSON.parse(result.stdout).actions.includes("1 processes in the dead worker's old process group could not be tied to the job; nothing was signalled"));
+  assert.ok(JSON.parse(result.stdout).actions.includes("1 process in the dead worker's old process group could not be tied to the job; nothing was signalled"));
 });
 
 test("dead cancel reports an unreadable live process and leaves cleanup incomplete", { skip: process.platform !== "linux" }, async t => {
@@ -205,7 +205,7 @@ test("cancel does not claim pid reuse when the worker has no saved identity", as
 });
 
 
-test("live cancel never signals a group containing an unreadable member", { skip: process.platform !== "linux" }, async t => {
+test("live cancel stops its verified worker despite an unreadable descendant", { skip: process.platform !== "linux" }, async t => {
   const ctx = setup(t, { env: { RELAY_JOBS_CANCEL_GRACE_MS: "0" } });
   const marker = path.join(ctx.root, "live-member.json");
   const worker = spawn(process.execPath, ["--input-type=module", "-e", `
@@ -230,9 +230,8 @@ fs.readFileSync = function(file, ...args) {
 };
 `);
   const result = companion(ctx, ["cancel", id], { NODE_OPTIONS: `--import=${preload}` });
-  assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.match(result.stderr, new RegExp(`Could not stop processes ${member.pid} .*identities could not be read`));
-  assert.equal(readJob(jobDir).state, "running");
-  assert.equal(isProcessIdentityAlive(identity), true);
-  assert.equal(isProcessIdentityAlive(member), true);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(readJob(jobDir).state, "cancelled");
+  assert.equal(isProcessIdentityAlive(identity), false);
+  assert.equal(isProcessIdentityAlive(member), false);
 });

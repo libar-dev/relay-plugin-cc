@@ -59,9 +59,14 @@ const NEWLINE = 0x0a;
 // engine turn with no prompt turn of its own (a notice run inside one) belongs to the prompt turn
 // that ran when it started.
 export class KimiWire {
-  /** @param {() => string | null} locate */
-  constructor(locate) {
+  /**
+   * @param {() => string | null} locate
+   * @param {{ io?: typeof fs, retainPrompt?: (prompt: KimiPrompt) => boolean }} options
+   */
+  constructor(locate, { io = fs, retainPrompt = () => false } = {}) {
     this.locate = locate;
+    this.io = io;
+    this.retainPrompt = retainPrompt;
     /** @type {string | null} */
     this.file = null;
     this.offset = 0;
@@ -77,8 +82,9 @@ export class KimiWire {
     /** The prompt turn running when the engine turn started. @type {number | null} */
     this.engineOwner = null;
     // User messages Kimi kept in its context by id, for a prompt blocked before its input record.
-    /** @type {Map<string, string[]>} */
-    this.userMessages = new Map();
+    /** @type {Set<string>} */
+    this.userMessages = new Set();
+    this.pendingUserInputs = new Map();
   }
 
   /** The byte offset just past the last whole record read. */
@@ -97,32 +103,48 @@ export class KimiWire {
     this.file ??= this.locate();
     if (!this.file) return this;
     let fd;
-    try { fd = fs.openSync(this.file, "r"); }
+    try { fd = this.io.openSync(this.file, "r"); }
     catch (error) { if (error.code === "ENOENT") return this; throw error; }
-    let chunk;
     try {
-      const size = fs.fstatSync(fd).size;
-      if (size <= this.offset) return this;
-      chunk = Buffer.alloc(size - this.offset);
-      chunk = chunk.subarray(0, fs.readSync(fd, chunk, 0, chunk.length, this.offset));
-    } finally {
-      fs.closeSync(fd);
-    }
-    const start = this.consumed;
-    const bytes = this.partial.length > 0 ? Buffer.concat([this.partial, chunk]) : chunk;
-    this.offset += chunk.length;
-    let from = 0;
-    for (let end = bytes.indexOf(NEWLINE); end !== -1; end = bytes.indexOf(NEWLINE, from)) {
-      const line = bytes.subarray(from, end).toString("utf8");
-      const at = start + from;
-      from = end + 1;
-      if (!line.trim()) continue;
-      let record;
-      try { record = JSON.parse(line); } catch { continue; /* a line Kimi itself could not load either */ }
-      this.apply(record, at);
-    }
-    this.partial = Buffer.from(bytes.subarray(from));
+      const size = this.io.fstatSync(fd).size;
+      const chunk = Buffer.alloc(Math.min(4 * 1024 * 1024, Math.max(0, size - this.offset)));
+      while (this.offset < size) {
+        const length = this.io.readSync(fd, chunk, 0, Math.min(chunk.length, size - this.offset), this.offset);
+        if (!length) break;
+        const start = this.consumed;
+        const bytes = this.partial.length ? Buffer.concat([this.partial, chunk.subarray(0, length)]) : chunk.subarray(0, length);
+        this.offset += length;
+        let from = 0;
+        for (let end = bytes.indexOf(NEWLINE); end !== -1; end = bytes.indexOf(NEWLINE, from)) {
+          if (end - from > 64 * 1024 * 1024) throw new Error("Kimi wire record exceeds 64 MiB");
+          const line = bytes.subarray(from, end).toString("utf8");
+          const at = start + from;
+          from = end + 1;
+          if (!line.trim()) continue;
+          let record;
+          try { record = JSON.parse(line); } catch { continue; }
+          this.apply(record, at);
+          this.prune();
+        }
+        this.partial = Buffer.from(bytes.subarray(from));
+        if (this.partial.length > 64 * 1024 * 1024) throw new Error("Kimi wire record exceeds 64 MiB");
+      }
+    } finally { this.io.closeSync(fd); }
     return this;
+  }
+
+  prune() {
+    for (const turn of this.turns.values()) {
+      if (!turn.ended && turn.turnId !== this.running && turn.turnId !== this.engineTurn && turn.turnId !== this.engine) this.turns.delete(turn.turnId);
+    }
+    const ended = [...this.turns.values()].filter(t => t.ended && t.turnId !== this.engineTurn && t.turnId !== this.running);
+    const retainedTurns = new Set([...this.prompts.values()].filter(prompt => this.retainPrompt(prompt)).map(prompt => prompt.turnId));
+    for (const turn of ended.slice(0, -50)) if (!retainedTurns.has(turn.turnId)) this.turns.delete(turn.turnId);
+    const prompts = [...this.prompts.values()];
+    for (const prompt of prompts.slice(0, -50)) {
+      if (prompt.turnId === this.running || (prompt.turnId !== null && prompt.turnId === this.engineTurn) || this.retainPrompt(prompt)) continue;
+      this.prompts.delete(prompt.promptId);
+    }
   }
 
   // A new server process: a turn the record left open belonged to one that died.
@@ -191,7 +213,11 @@ export class KimiWire {
       case "context.append_message": {
         const message = record.message;
         if (message?.role === "user" && typeof message.id === "string" && (message.origin?.kind ?? "user") === "user") {
-          this.userMessages.set(message.id, message.content);
+          this.userMessages.add(message.id);
+          this.pendingUserInputs.set(message.id, { text: promptText(message.content), at });
+          for (const [id, input] of [...this.pendingUserInputs].slice(0, -50)) {
+            if (!this.retainPrompt({ promptId: id, ...input, turnId: null, delivered: true, started: false, terminal: null })) this.pendingUserInputs.delete(id);
+          }
         }
         return;
       }
@@ -200,7 +226,8 @@ export class KimiWire {
         if (typeof record.promptId !== "string") return;
         const prompt = this.prompt(record.promptId, at);
         prompt.terminal = record;
-        this.inputOf(prompt, this.userMessages.get(record.promptId));
+        if (prompt.text === null && this.pendingUserInputs.has(record.promptId)) prompt.text = this.pendingUserInputs.get(record.promptId).text;
+        this.pendingUserInputs.delete(record.promptId);
         return;
       }
       case "agent.turn.ended":
