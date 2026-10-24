@@ -8,7 +8,7 @@ import { releaseLeaseToConsumer, startWithinWindow } from "./delivery.mjs";
 import { acquireWorkerLease, isWorkerAlive } from "../jobs/lease.mjs";
 import { computeJobView } from "../jobs/view.mjs";
 import { messageExists, newMessageId, postInboxMessage } from "../jobs/messages.mjs";
-import { nowIso, readJob, readJsonOrNull, writeJob } from "../jobs/store.mjs";
+import { nowIso, readJob, readJsonOrNull, TERMINAL_STATES, writeJob } from "../jobs/store.mjs";
 import { stopExecution, readProcessStartTime } from "../util/process.mjs";
 
 // The sweep: stop those app-servers with every descendant, SIGTERM then SIGKILL. Returns
@@ -92,7 +92,12 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
   if (acquireWorkerLease(jobDir, me, "recovery")) {
     try {
       const job = readJob(jobDir), record = recoveryForEpoch(job);
-      if (!result.accepted && record?.state === "reserved") writeJob(jobDir, { ...job, state: original.state, worker: original.worker });
+      // Cancellation or a successor can win while dispatch is being observed.
+      // Restoring the old dead view must never overwrite either publication.
+      const changedWorker = job.worker && (job.worker.pid !== original.worker?.pid || job.worker.startTime !== original.worker?.startTime);
+      if (!result.accepted && record?.state === "reserved" && !TERMINAL_STATES.has(job.state) && !changedWorker) {
+        writeJob(jobDir, { ...job, state: original.state, worker: original.worker });
+      }
       if (record?.state === "reserved" && result.accepted) writeJob(jobDir, { ...job,
         automaticResumes: job.automaticResumes.map(entry => entry.id === record.id ? { ...entry, state: "launched" } : entry) });
     } finally { releaseLeaseToConsumer(jobDir, me, env, { spawn: false }); }
