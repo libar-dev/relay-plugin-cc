@@ -1,5 +1,13 @@
 # Agent guidance
 
+## Required core context
+
+Before any design, implementation, review, or delegation, read every document in `docs/mods/official/` using the local
+files, not web summaries or memory. These are the core Claude Code Mods documents required for all repository work.
+Within the same session, later tasks may consult the relevant sections instead of rereading unchanged copies. Every
+delegation brief must name this directory and require the receiving agent to read it before work. Use the installed
+build's declarations to resolve version-specific differences.
+
 ## This is a public repository and a public plugin
 
 relay-plugin-cc is open source, and anyone can install the plugin. Everything you write here is published: code,
