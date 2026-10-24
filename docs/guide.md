@@ -25,6 +25,39 @@ claude plugin install relay@libar-relay
 Run `/reload-plugins` in an open session, or start a new one. Type `/relay:` and the command menu lists relay's
 commands.
 
+## Develop beside the installed release
+
+From a checkout, run a development session alongside an ordinary production session:
+
+```bash
+# Terminal 1: production, using the installed release
+claude
+
+# Terminal 2: this checkout, with hot reload
+scripts/relay-dev.sh
+```
+
+The development launcher uses `--plugin-dir` and disables `relay@libar-relay` **only in that process**. It does not
+change your installed plugin or its settings. Each checkout has a persistent development home under
+`${XDG_STATE_HOME:-$HOME/.local/state}/relay-dev/`, with separate jobs and admission directories. Development jobs
+therefore never appear in the production job list, and production jobs are not used by the development guard.
+`RELAY_DEV_HOME` overrides that state root; `RELAY_DEV_WORKDIR` overrides the session's working directory.
+
+```bash
+# Print the development paths for another terminal
+scripts/relay-dev.sh env
+
+# Inspect development jobs
+scripts/relay-dev.sh status
+
+# Pass normal Claude arguments, such as --continue
+scripts/relay-dev.sh --continue
+```
+
+Run production and development in separate sessions, not two copies of the same plugin name inside one session.
+Claude Code can reject a second enabled plugin with the same name. To return to production, close the development
+session and run `claude` normally.
+
 ## Check your backends
 
 Type `/relay:setup`. Claude runs relay's setup and shows a table with one row for each backend home it finds: the
