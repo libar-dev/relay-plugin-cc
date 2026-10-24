@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { SpawnedServerClient } from "../plugins/relay/scripts/lib/backends/transport/stdio-rpc.mjs";
+import { SpawnedServerClient, MAX_LINE_BYTES } from "../plugins/relay/scripts/lib/backends/transport/stdio-rpc.mjs";
 import { KimiWire } from "../plugins/relay/scripts/lib/backends/kimi/wire.mjs";
 import { makeTempDir, writeExecutable } from "./support/helpers.mjs";
 
@@ -22,7 +22,7 @@ else {const chunk='x'.repeat(1024*1024); let n=70; function write(){while(n-->0)
   await client.close();
   assert.equal(client.exitSeen, true);
   assert.equal(client.lineBytes, 0);
-  assert.equal(client.lineChunks.length, 0);
+  assert.equal(client.lineBuffer, null);
 });
 
 test("bounded close escalates TERM to KILL even after ChildProcess.killed is true", { timeout: 12000 }, async t => {
@@ -116,4 +116,21 @@ for (const replay of [false, true]) test(`Kimi historical deliveries keep prompt
   assert.equal(wire.turns.get(64).report, "report-64");
   assert.equal(wire.prompts.size, 65);
   assert.equal(wire.promptSince(0, "prompt-0").delivered, true);
+});
+
+
+test("many tiny RPC fragments retain one bounded buffer and preserve UTF-8 and line boundaries", () => {
+  const client = new SpawnedServerClient("/tmp");
+  const received = [];
+  client.setNotificationHandler(message => received.push(message));
+  const message = { method: "tiny/chunks", params: { text: "é🙂".repeat(20000) } };
+  const bytes = Buffer.from(JSON.stringify(message));
+  for (let i = 0; i < bytes.length; i++) client.handleChunk(bytes.subarray(i, i + 1));
+  assert.equal(client.lineBytes, bytes.length);
+  assert.ok(client.lineBuffer.length < bytes.length * 2);
+  assert.ok(client.lineBuffer.length <= MAX_LINE_BYTES);
+  assert.equal(client.lineChunks, undefined, "no retained slice per input fragment");
+  client.handleChunk(Buffer.from('\n{"method":"next"}\n'));
+  assert.deepEqual(received, [message, { method: "next" }]);
+  assert.equal(client.lineBuffer, null); assert.equal(client.lineBytes, 0);
 });

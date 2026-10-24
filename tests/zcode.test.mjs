@@ -830,7 +830,7 @@ test("a duplicate with no session evidence tears down after the default 60 secon
   assert.equal(result.turnStatus, "failed");
   assert.equal(result.teardown, true);
   assert.equal(result.retryable, false);
-  assert.equal(result.error.message, "ZCode already holds this message (duplicate id) and did not start it within 60 s; it was not sent again, so it can't run twice.");
+  assert.equal(result.error.message, "ZCode already holds this message (duplicate id) but relay could not confirm its start within 60 s; it was not sent again, so it can't run twice.");
   assert.deepEqual(client.requests.filter(r => r.params?.type === "sendText").map(r => r.params.commandId), ["m1"]);
 });
 
@@ -1007,4 +1007,66 @@ test("the GLM docs: ZCode is the only route, GLM-5.3 and GLM-5.3-Flash run, Flas
   assert.match(read("plugins/relay/commands/setup.md").replace(/\s+/g, " "), /creates a draft session, reads its model list \(what ZCode's model picker shows\) and closes the draft unsaved, with no message/);
   const design = read("docs/design.md").replace(/\s+/g, " ");
   assert.match(design, /read its model list, and close it unsaved, with no message/);
+});
+
+
+test("cancel wakes a duplicate wait immediately, without waiting for its 60-second bound", async () => {
+  const { client } = await opened({ sendText: params => Promise.resolve(ack(params, { status: "duplicate" })) });
+  const connection = connections.get(client);
+  const running = runOf(client);
+  await sleep(10);
+  await connection.interrupt(null);
+  const result = await running;
+  assert.equal(result.turnStatus, "interrupted");
+  assert.equal(client.requests.filter(r => r.params?.type === "sendText").length, 1);
+});
+
+test("a duplicate steer remains uncertain until session inclusion proves it", async () => {
+  const { client } = await opened({ sendText: params => Promise.resolve(ack(params, { status: params.payload.requestedDelivery === "guide" ? "duplicate" : "accepted" })) });
+  const connection = connections.get(client), running = runOf(client);
+  await waitFor(() => connection.controlsReady());
+  client.emit("turn.started", "t1", { inputId: "m1" });
+  assert.equal((await connection.steer("t1", { id: "guide", text: "Guide" })).unconfirmed, true);
+  assert.equal(connection.steerHeld("guide"), false);
+  client.emit("turn.steerDrained", "t1", { drainedInputs: [{ intent: { sourceCommandId: "guide" } }] });
+  assert.equal(connection.steerHeld("guide"), true);
+  client.emit("turn.completed", "t1", { inputId: "m1", resultType: "success", response: "Done" });
+  await running;
+});
+
+test("a cancel received with a discarded acknowledgement prevents the final resend", async () => {
+  let connection;
+  const { client } = await opened({ sendText: params => {
+    connection.session.cancelRequested = true;
+    return Promise.resolve(ack(params, { status: "failed", reasonCode: "fault.command.inputDiscardedOnRestart" }));
+  } });
+  connection = connections.get(client);
+  assert.equal((await runOf(client)).turnStatus, "interrupted");
+  assert.equal(client.requests.filter(r => r.params?.type === "sendText").length, 1);
+});
+
+test("ZCode only treats model output or a successful completion as provider evidence", async () => {
+  const { client } = await opened(); const connection = connections.get(client);
+  let responses = 0;
+  const running = connection.run({ prompt: "main", clientId: "m1", source: "brief", onPending() {}, onTurnId() {}, onProviderResponse: () => responses++ });
+  await waitFor(() => connection.controlsReady());
+  client.emit("turn.started", "t1", { inputId: "m1" });
+  client.emit("turn.steerQueued", "t1", { inputId: "guide" });
+  assert.equal(responses, 0);
+  client.emit("model.streaming", "t1", { kind: "text_delta", delta: "Answer" });
+  assert.equal(responses, 1);
+  client.emit("turn.completed", "t1", { inputId: "m1", resultType: "success", response: "Done" });
+  await running; assert.equal(responses, 2);
+});
+
+
+test("the worker can cancel while ZCode is waiting for a duplicate with no turn id", async t => {
+  const ctx = fixture(t, { duplicateFirst: true }); ctx.env.RELAY_JOBS_ZCODE_DUPLICATE_MS = "60000";
+  const { id } = startJob(ctx, HEADER, "Duplicate.");
+  await waitFor(() => readJob(ctx, id).state === "running");
+  assert.equal(readJob(ctx, id).turnId, null);
+  companion(ctx, ["cancel", id]); await finishJob(ctx, id, 5);
+  assert.equal(readJob(ctx, id).state, "cancelled");
+  assert.equal(commands(ctx, "stop").length, 1);
+  assert.equal(commands(ctx, "sendText").length, 1);
 });

@@ -1,3 +1,4 @@
+import { SESSION_MS } from "./stdio-rpc.mjs";
 // The ACP messages Grok and Kimi use. Grok's queue and interjections, and Kimi's session record,
 // stay in their connections.
 export const ACP_INITIALIZE_PARAMS = {
@@ -26,11 +27,11 @@ export function acpUpdate(notification) {
 export function openSession(client, cwd, sessionId) {
   return client.request(sessionId ? "session/load" : "session/new", {
     ...(sessionId ? { sessionId } : {}), cwd, mcpServers: []
-  });
+  }, { timeoutMs: SESSION_MS });
 }
 
 export function setConfigOption(client, sessionId, configId, value) {
-  return client.request("session/set_config_option", { sessionId, configId, value });
+  return client.request("session/set_config_option", { sessionId, configId, value }, { timeoutMs: SESSION_MS });
 }
 
 // A client that serves file writes and terminals itself declares them, and the agent sends them.

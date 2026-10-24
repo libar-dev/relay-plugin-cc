@@ -1,3 +1,4 @@
+import { CONTROL_MS } from "../transport/stdio-rpc.mjs";
 /** @typedef {import("../types").Connection} Connection */
 import { CodexAppServerClient } from "./client.mjs";
 import { clientIdsInThread, openThread, runTurnOnThread } from "./turn.mjs";
@@ -64,7 +65,7 @@ class CodexConnection {
     };
     this.steerTracker.turnSteerHandler?.("requested", params);
     try {
-      const response = await this.client.request("turn/steer", params);
+      const response = await this.client.request("turn/steer", params, { timeoutMs: CONTROL_MS });
       this.steerTracker.turnSteerHandler?.("settled", params, true);
       return response;
     } catch (error) {
@@ -73,7 +74,9 @@ class CodexConnection {
     }
   }
 
-  async interrupt(turnId) { await this.client.request("turn/interrupt", { threadId: this.sessionId, turnId }); }
+  async interrupt(turnId) { await this.client.request("turn/interrupt", { threadId: this.sessionId, turnId }, { timeoutMs: CONTROL_MS }); }
+  get pingMethod() { return "account/read"; }
+  async ping() { await this.client.request("account/read", { refreshToken: false }, { timeoutMs: CONTROL_MS, wedgeOnTimeout: false }); }
   async close() { await this.client.close(); }
 }
 

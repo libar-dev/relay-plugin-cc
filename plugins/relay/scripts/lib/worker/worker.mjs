@@ -1,3 +1,4 @@
+import { backendLiveness } from "./liveness.mjs";
 // The job worker. One worker per job at a time, holding the job's lease. It starts its
 // backend's server process, opens the session, runs turns, acts on inbox messages, and is
 // the only writer of job.json while it lives. It stops the server when the job ends.
@@ -241,7 +242,7 @@ async function runWorkerRound(jobDir, options, held) {
   job = { ...job, jobDir, execution, executions: [...previousExecutions, execution].slice(-20), launches,
     launch: readJsonOrNull(executionEnv.RELAY_WORKER_LAUNCH ?? "") ?? job.launch };
   const backend = backendFor(job.request);
-  const admissionDeps = { env: executionEnv, platform: options.platform ?? process.platform, ...options.admission };
+  const admissionDeps = { request: job.request, env: executionEnv, platform: options.platform ?? process.platform, ...options.admission };
   const home = admissionHome(admissionDeps.env);
   let slot = null;
   const guardOn = admissionEnabled(admissionDeps.env, undefined, admissionDeps.platform ?? process.platform);
@@ -269,6 +270,7 @@ async function runWorkerRound(jobDir, options, held) {
   const cancelMessages = [];
   /** @type {import("../backends/types").Connection | null} */
   let connection = null;
+  let liveness = null;
   let sessionId = job.sessionId ?? null;
   let activeTurnId = null;
   let turnActive = false;
@@ -504,7 +506,7 @@ async function runWorkerRound(jobDir, options, held) {
   };
 
   async function serviceTurnControls() {
-    if (!connection || !sessionId || !turnActive || !connection.controlsReady(activeTurnId)) {
+    if (!connection || connection.server.wedged || !sessionId || !turnActive || !connection.controlsReady(activeTurnId)) {
       return;
     }
     if (cancelRequested && !interruptSent) {
@@ -569,6 +571,12 @@ async function runWorkerRound(jobDir, options, held) {
       slot = { ...slot, probe: false, probeGeneration: null, probeAt: null };
     }
   };
+  const noteRefusal = refusal => {
+    if (!guardOn || !refusal) return;
+    const pause = recordRefusal(home, backend.name, refusal, job.id, admissionDeps);
+    save({ refusal: { backend: backend.name, kind: refusal.kind, code: refusal.code,
+      message: refusal.message, at: nowIso(), pausedUntil: pause?.until ?? null } });
+  };
   const sample = (fresh = false) => {
     if (!["linux", "darwin"].includes(options.platform ?? process.platform)) return;
     try {
@@ -583,11 +591,7 @@ async function runWorkerRound(jobDir, options, held) {
   };
   const heartbeat = setInterval(() => {
     sample();
-    if (slot?.probeAt && (admissionDeps.now ?? Date.now)() - Date.parse(slot.probeAt) >= DEFAULTS.probeMs) {
-      if (activeTurnId) completeProbe();
-      else if (releaseProbe(home, backend.name, job.id, admissionDeps, slot.probeGeneration))
-        slot = { ...slot, probe: false, probeGeneration: null, probeAt: null };
-    }
+    void liveness?.tick(turnActive).catch(() => {});
   }, config.heartbeatMs);
   heartbeat.unref?.();
   const poller = setInterval(() => {
@@ -603,7 +607,7 @@ async function runWorkerRound(jobDir, options, held) {
 
   const request = job.request;
   const writeEvent = notification => fs.appendFileSync(paths.events, `${JSON.stringify({ at: lastEventAt, ...notification })}\n`, "utf8");
-  const touchEvents = () => { lastEventAt = nowIso(); };
+  const touchEvents = () => { lastEventAt = nowIso(); liveness?.touch(); };
   const eventRecorder = backend.eventRecorder(writeEvent, touchEvents);
   const connect = async () => {
     const attemptIndex = job.attempts.length - 1;
@@ -633,7 +637,7 @@ async function runWorkerRound(jobDir, options, held) {
     });
   };
 
-  let granted = false;
+  let grantedAt = null;
   let admitted = wasAdmitted(job);
   const waitForAdmission = async (turn = false) => {
     for (;;) {
@@ -646,7 +650,7 @@ async function runWorkerRound(jobDir, options, held) {
         throw Object.assign(new Error(decision.reason), { admissionPermanent: true });
       }
       if (decision.admit) {
-        granted = true;
+        grantedAt = (admissionDeps.now ?? Date.now)();
         admitted = true;
         touchEvents();
         save({ state: "starting", firstAdmittedAt: job.firstAdmittedAt ?? decision.record.admittedAt, admission: decision.record });
@@ -693,6 +697,15 @@ async function runWorkerRound(jobDir, options, held) {
           // Whether a turn ever ran on this thread, so a backend can tell a lost draft from lost work.
           sessionUsed: Boolean(sessionId && job.attempts.some((attempt) => attempt.turnId))
         });
+        liveness?.stop();
+        liveness = backendLiveness(connection, {
+          now: options.now ?? Date.now,
+          note(info) {
+            save({ backendLiveness: info });
+            writeEvent({ method: "relay/backendLiveness", params: info });
+          }
+        });
+        await liveness.open();
         sessionId = opened.sessionId;
         save({ sessionId, serviceTier: opened.serviceTier ?? null });
         // What the backend had to decide while opening is a `note:` in the state block, once.
@@ -745,13 +758,18 @@ async function runWorkerRound(jobDir, options, held) {
                 result = { ...result, turnStatus: "interrupted" };
                 break;
               }
-              if (!granted && !(await waitForAdmission(true))) {
+              if ((grantedAt === null || (admissionDeps.now ?? Date.now)() - Number(grantedAt) > 10000) && !(await waitForAdmission(true))) {
                 result = { ...result, turnStatus: "interrupted" };
                 break;
               }
-              granted = false;
+              grantedAt = null;
               try {
-                result = await connection.run({
+                let providerAnswered = false;
+                const running = connection.run({
+                  onProviderResponse() {
+                    if (!providerAnswered) { providerAnswered = true; completeProbe(); }
+                  },
+                  onProviderLimit(error) { noteRefusal(classifyRefusal(backend.name, error)); },
                   prompt: dispatch.prompt,
                   onPending() { save({ state: "running" }); void serviceTurnControls(); },
                   clientId: dispatch.clientId,
@@ -766,14 +784,18 @@ async function runWorkerRound(jobDir, options, held) {
                     void serviceTurnControls();
                   }
                 });
+                result = await Promise.race([running, ...(connection.server.wedgedPromise ? [connection.server.wedgedPromise.then(error => { throw error; })] : [])]);
+                if (connection.server.wedged) throw connection.server.wedged;
               } catch (error) {
+                if (connection.server.wedged) throw connection.server.wedged;
                 result = { turnStatus: "failed", error: { ...error.data, message: error.message, data: error.data }, finalMessage: "" };
               }
               refusal = guardOn && result.turnStatus === "failed" ? classifyRefusal(backend.name, result.error) : null;
-              if (refusal) {
-                const pause = recordRefusal(home, backend.name, refusal, job.id, admissionDeps);
-                save({ refusal: { backend: backend.name, kind: refusal.kind, code: refusal.code,
-                  message: refusal.message, at: nowIso(), pausedUntil: pause?.until ?? null } });
+              if (refusal) noteRefusal(refusal);
+              if (slot?.probe) {
+                const releasedSlot = slot;
+                releaseProbe(home, backend.name, job.id, admissionDeps, slot.probeGeneration);
+                slot = { ...releasedSlot, probe: false, probeGeneration: null, probeAt: null };
               }
               // A backend that retries model calls itself marks its failures `retryable: false`.
               // Commentary does not stop a retry; work done decides how the retry is sent.
@@ -822,7 +844,6 @@ async function runWorkerRound(jobDir, options, held) {
             let state;
             let errorMessage = null;
             if (result.turnStatus === "completed") {
-              completeProbe();
               state = "completed";
             } else if (result.turnStatus === "interrupted" && cancelRequested) {
               state = "cancelled";
@@ -876,8 +897,15 @@ async function runWorkerRound(jobDir, options, held) {
 
         break;
       } catch (error) {
-        granted = false;
+        grantedAt = null;
         if (error.admissionPermanent) throw error;
+        const wedged = connection?.server.wedged;
+        if (wedged) {
+          liveness?.stop();
+          turnActive = false;
+          await connection.close();
+          await settleInflight();
+        }
         accept(claimInboxMessages(jobDir));
         // The process exited and the connection is still draining its pipes: wait for the end
         // record, which the connection completes within its drain time.
@@ -886,7 +914,7 @@ async function runWorkerRound(jobDir, options, held) {
         // connect can fail before it returns a connection. Its onEnd record still exists.
         const end = connection?.server.exitInfo ?? job.attempts.at(-1).servers?.at(-1);
         if (!end?.endedAt) throw error;
-        const transportErrors = [...(job.attempts.at(-1).transportErrors ?? []), backend.endMessage(end)];
+        const transportErrors = [...(job.attempts.at(-1).transportErrors ?? []), wedged?.message ?? (error.name === "TransportTimeout" ? error.message : backend.endMessage(end))];
         updateAttempt({ transportErrors });
         if (!sessionId || transportErrors.length > 1 || recoveryForEpoch(job)) throw new Error(transportErrors.join("\n"));
         const recovery = { id: newMessageId(), epoch: job.recoveryEpoch ?? "start", at: nowIso(),
@@ -895,6 +923,7 @@ async function runWorkerRound(jobDir, options, held) {
         updateAttempt({ state: "starting" });
         await connection?.close();
         connection = null;
+        liveness?.stop();
         const sweep = await stopRecordedAppServers(job, { jobDir, ...options.predecessorCleanup });
         if (sweep.survivors.length || sweep.cause) {
           sweepFailed = true;
@@ -943,6 +972,7 @@ async function runWorkerRound(jobDir, options, held) {
   } finally {
     clearInterval(heartbeat);
     clearInterval(poller);
+    liveness?.stop();
     // The connection reads the server's output to its end as it closes. A turn can end on the
     // backend's record before the worker has read the updates the server sent ahead of it, so
     // the events are flushed only once the connection has closed.
@@ -960,6 +990,7 @@ async function runWorkerRound(jobDir, options, held) {
       }
       eventRecorder?.flush();
     } finally {
+      if (slot?.probe) releaseProbe(home, backend.name, job.id, admissionDeps, slot.probeGeneration);
       if (slot && !sweepFailed) releaseSlot(home, job.id, me, admissionDeps);
       slot = null;
     }

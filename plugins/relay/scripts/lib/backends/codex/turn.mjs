@@ -1,3 +1,4 @@
+import { SESSION_MS } from "../transport/stdio-rpc.mjs";
 /**
  * @typedef {import("./protocol").AppServerNotification} AppServerNotification
  * @typedef {import("./protocol").ThreadResumeParams} ThreadResumeParams
@@ -31,6 +32,8 @@
  *   reasoningSummary: string[],
  *   error: unknown,
  *   onTurnId: ((turnId: string) => void) | null,
+ *   onProviderResponse?: () => void,
+ *   onProviderLimit?: (error: unknown) => void,
  *   responseReceived: boolean,
  *   workSeen: boolean
  * }} TurnCaptureState
@@ -200,6 +203,8 @@ function createTurnCaptureState(threadId, options = {}) {
     reasoningSummary: [],
     error: null,
     onTurnId: options.onTurnId ?? null,
+    onProviderResponse: options.onProviderResponse,
+    onProviderLimit: options.onProviderLimit,
     responseReceived: false,
     // Any item beyond the user's own message: a failed turn that did work is never resent.
     workSeen: false
@@ -383,6 +388,8 @@ function applyTurnNotification(state, message) {
       (message.method.startsWith("item/") || message.method === "turn/started")) {
     invalidateInference(state);
   }
+  if (["item/agentMessage/delta", "item/reasoning/summaryTextDelta", "item/reasoning/textDelta"].includes(message.method) ||
+      (["item/started", "item/completed"].includes(message.method) && ["agentMessage", "reasoning", "commandExecution", "fileChange", "mcpToolCall", "webSearch", "collabAgentToolCall"].includes(message.params.item?.type))) state.onProviderResponse?.();
   switch (message.method) {
     case "thread/started":
       trackThread(state, message.params.thread.id);
@@ -414,6 +421,7 @@ function applyTurnNotification(state, message) {
       break;
     case "error":
       state.error = message.params.error;
+      if (message.params.willRetry) state.onProviderLimit?.(message.params.error);
       break;
     case "turn/completed":
       if ((message.params.threadId ?? null) !== state.threadId) {
@@ -541,7 +549,7 @@ export function connectOptions(options) {
 
 
 export async function startThread(client, cwd, options = {}) {
-  const response = await client.request("thread/start", buildThreadParams(cwd, options));
+  const response = await client.request("thread/start", buildThreadParams(cwd, options), { timeoutMs: SESSION_MS });
   const threadId = response.thread.id;
   if (options.threadName) {
     try {
@@ -564,7 +572,7 @@ export async function startThread(client, cwd, options = {}) {
 
 
 async function resumeThread(client, threadId, cwd, options = {}) {
-  return client.request("thread/resume", buildResumeParams(threadId, cwd, options));
+  return client.request("thread/resume", buildResumeParams(threadId, cwd, options), { timeoutMs: SESSION_MS });
 }
 
 
@@ -608,7 +616,7 @@ export async function runTurnOnThread(client, threadId, options = {}) {
         ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
         outputSchema: options.outputSchema ?? null
       }),
-    { onTurnId: options.onTurnId, steerTracker: options.steerTracker }
+    { onTurnId: options.onTurnId, steerTracker: options.steerTracker, onProviderResponse: options.onProviderResponse, onProviderLimit: options.onProviderLimit }
   );
 
   return {

@@ -131,3 +131,24 @@ saved for the next admission check. Future startup times remain reserved across 
 Only a currently held seat can be reused; earlier completed admissions do not reserve a place.
 Memory later used by tools/tests, native Claude agents, other harnesses and other users is outside
 admission control. Recognized provider pauses and recovery are described in [orchestration.md](orchestration.md).
+
+
+### Backend liveness and provider evidence
+
+Relay gives a backend 2 minutes to start, 5 minutes to open or configure a session, and 30 seconds
+to take a steer or a cancel request. ACP cancel is a notification without a reply. A turn has no time
+limit. After 10 minutes without notifications, relay pings every 5 minutes with a 30-second deadline;
+two consecutive unanswered pings use the normal one-restart server recovery path. Responsive long
+builds and sleeps keep running. An open-time ping tests this capability on each connection; no answer
+disables the watchdog for that connection with an event note, keeping control deadlines.
+`backendLiveness` in job JSON and `relay/backendLiveness` events show `backend answering`,
+`checking the backend`, or `watchdog disabled`, and name the ping method.
+
+After a pause, one job probes the provider; the pause ends only when that job gets an actual answer
+from the provider, not when it merely starts. A live probe retains its claim through slow startup and
+silent turns. A turn ending without model evidence releases the claim without clearing the pause.
+A start grant older than 10 seconds is checked again before sending. Codex and Grok retry notifications
+and Kimi's `turn.step.retrying` record pause new starts immediately while the active attempt retries.
+ZCode exposes no runtime retry signal, so its coverage is terminal failures only. Pauses follow the
+backend account home. Grok retry classification has not been verified with a live exhausted account;
+Grok's web search cannot be disabled.

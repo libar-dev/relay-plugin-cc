@@ -268,7 +268,7 @@ test("dormant workerless jobs stop deferring the repository review gate after fi
   assert.equal(findActiveJob(s.ctx.work, now + 15 * 60000 + 1).id, job.id, "an adopter makes it active again");
 });
 
-test("a heartbeat during slow probe startup releases the claim without provider success", async t => {
+test("a heartbeat during slow probe startup retains the claim until provider evidence", async t => {
   const { recordRefusal, listPauses } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
   const s = seed(t); s.unblock();
   s.options.env.RELAY_JOBS_HEARTBEAT_MS = "10";
@@ -279,14 +279,16 @@ test("a heartbeat during slow probe startup releases the claim without provider 
   let paused;
   t.mock.method(backend, "connect", async (...args) => {
     assert.ok(listPauses(s.ctx.env, deps)[0].probing);
-    s.tick(D.probeMs);
-    await waitFor(() => { paused = JSON.parse(fs.readFileSync(path.join(home, "pauses", "codex.json"))); return paused && !paused.probe; });
+    s.tick(D.probeMs + 10000);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    paused = JSON.parse(fs.readFileSync(path.join(home, "pauses", "codex.json")));
+    assert.ok(paused.probe);
     assert.equal(paused.strikes, 1);
     return connect(...args);
   });
   await runWorker(s.dir, s.options);
   assert.equal(readJob(s.dir).state, "completed");
-  assert.equal(listPauses(s.ctx.env, deps)[0].strikes, 1, "completion of a released generation cannot clear the pause");
+  assert.equal(listPauses(s.ctx.env, deps).length, 0, "actual model output clears the probe");
 });
 
 test("server-death replacement waits for critical states, scope, provider pause and pacing before reconnecting", async t => {
@@ -500,4 +502,209 @@ test("a reparented worker acknowledges even after its caller has gone", async t 
   assert.equal(ack.state, "acknowledged");
   assert.ok(ack.callerGoneAt);
   assert.equal(readJob(s.dir).state, "completed");
+});
+
+test("a silent probe retains its fence beyond two minutes and clears only on provider evidence", async t => {
+  const { recordRefusal, listPauses, admit } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const s = seed(t); s.unblock();
+  s.options.env.RELAY_JOBS_HEARTBEAT_MS = "10";
+  const home = s.ctx.env.RELAY_ADMISSION_HOME, deps = { ...s.options.admission, env: s.ctx.env };
+  recordRefusal(home, "codex", { kind: "rate" }, "previous", deps); s.tick(D.ratePauseMs);
+  const backend = backendNamed("codex"), connect = backend.connect;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args);
+    t.mock.method(connection, "run", async turn => {
+      turn.onPending(); turn.onTurnId("silent-turn"); s.tick(D.probeMs + 10000);
+      await new Promise(resolve => setTimeout(resolve, 30));
+      assert.ok(listPauses(s.ctx.env, deps)[0].probing);
+      const decision = admit({ home, jobId: "other-job", request: readJob(s.dir).request,
+        me: { pid: process.pid, startTime: readJob(s.dir).worker.startTime } }, deps);
+      assert.equal(decision.waitKind, "probe");
+      turn.onProviderResponse();
+      assert.equal(listPauses(s.ctx.env, deps).length, 0);
+      return { turnStatus: "completed", finalMessage: "Answer" };
+    });
+    return connection;
+  });
+  await runWorker(s.dir, s.options); assert.equal(readJob(s.dir).state, "completed");
+});
+
+test("a slow connection rechecks a grant before sending into a newly recorded provider pause", async t => {
+  const { recordRefusal } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const s = seed(t); s.unblock();
+  const home = s.ctx.env.RELAY_ADMISSION_HOME, deps = { ...s.options.admission, env: s.ctx.env };
+  const backend = backendNamed("codex"), connect = backend.connect;
+  let held = false;
+  s.options.admissionSleep = async () => {
+    assert.equal(readJob(s.dir).admission.waitKind, "pause"); held = true;
+    fs.rmSync(path.join(home, "pauses", "codex.json"));
+  };
+  t.mock.method(backend, "connect", async (...args) => {
+    s.tick(15000); recordRefusal(home, "codex", { kind: "usage" }, "other-job", deps);
+    const connection = await connect(...args), run = connection.run.bind(connection);
+    t.mock.method(connection, "run", (...turn) => { assert.equal(held, true); return run(...turn); });
+    return connection;
+  });
+  await runWorker(s.dir, s.options); assert.equal(readJob(s.dir).state, "completed");
+});
+
+test("a completed local turn without provider evidence releases its probe and preserves the pause", async t => {
+  const { recordRefusal, listPauses } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const s = seed(t); s.unblock();
+  const home = s.ctx.env.RELAY_ADMISSION_HOME, deps = { ...s.options.admission, env: s.ctx.env };
+  recordRefusal(home, "codex", { kind: "rate" }, "previous", deps); s.tick(D.ratePauseMs);
+  const backend = backendNamed("codex"), connect = backend.connect;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args);
+    t.mock.method(connection, "run", async () => ({ turnStatus: "completed", finalMessage: "" }));
+    return connection;
+  });
+  await runWorker(s.dir, s.options);
+  const pause = listPauses(s.ctx.env, deps)[0];
+  assert.equal(readJob(s.dir).state, "completed"); assert.equal(pause.strikes, 1); assert.equal(pause.probing, false);
+});
+
+for (const [name, error] of [["codex", { codexErrorInfo: { usageLimitExceeded: {} }, message: "Quota" }],
+  ["grok", { message: "HTTP 429 Too Many Requests" }], ["kimi", { message: "403 You have reached your weekly usage limit" }]]) {
+  test(`${name} early retry signal pauses new work before the current turn completes`, async t => {
+    const { admit } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+    const s = seed(t); s.unblock();
+    if (name !== "codex") {
+      const { installFakeGrok } = await import("./fakes/grok.mjs");
+      const { installFakeKimi } = await import("./fakes/kimi.mjs");
+      const fake = name === "grok" ? installFakeGrok(s.ctx.bin) : installFakeKimi(s.ctx.bin);
+      s.ctx.env[`${name.toUpperCase()}_BINARY`] = fake.binary;
+      const request = buildLaunchRequest({ backend: name, model: "default", effort: "default", cd: s.ctx.work }, { baseDir: s.ctx.work, env: s.ctx.env });
+      writeJob(s.dir, { ...readJob(s.dir), request });
+    }
+    const backend = backendNamed(name), connect = backend.connect;
+    let signalled = false;
+    t.mock.method(backend, "connect", async (...args) => {
+      const connection = await connect(...args);
+      t.mock.method(connection, "run", async turn => {
+        turn.onPending(); turn.onTurnId("still-running"); turn.onProviderLimit(error); signalled = true;
+        const decision = admit({ home: s.ctx.env.RELAY_ADMISSION_HOME, jobId: "queued-job", request: readJob(s.dir).request,
+          me: readJob(s.dir).worker }, { ...s.options.admission, env: s.ctx.env });
+        assert.equal(decision.waitKind, "pause"); assert.equal(readJob(s.dir).state, "running");
+        return { turnStatus: "completed", finalMessage: "Eventually answered" };
+      });
+      return connection;
+    });
+    await runWorker(s.dir, s.options);
+    assert.equal(signalled, true); assert.equal(readJob(s.dir).state, "completed");
+    assert.equal(readJob(s.dir).refusal.kind, name === "grok" ? "rate" : "usage");
+  });
+}
+
+test("two unanswered watchdog pings close the server and use the one-recovery path", async t => {
+  const { TransportTimeout } = await import("../plugins/relay/scripts/lib/backends/transport/stdio-rpc.mjs");
+  const s = seed(t); s.unblock();
+  let now = 0, connections = 0;
+  s.options.now = () => now; s.options.env.RELAY_JOBS_HEARTBEAT_MS = "10";
+  const backend = backendNamed("codex"), connect = backend.connect;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args); connections++;
+    if (connections === 1) {
+      let pings = 0;
+      t.mock.method(connection, "ping", async () => { if (pings++ > 0) throw new TransportTimeout("codex", "account/read", 30000); });
+      t.mock.method(connection, "run", async turn => {
+        turn.onPending(); turn.onTurnId("silent"); now = 10 * 60000;
+        await waitFor(() => readJob(s.dir).backendLiveness.misses === 1);
+        now += 5 * 60000;
+        return new Promise(() => {});
+      });
+    }
+    return connection;
+  });
+  await runWorker(s.dir, s.options);
+  const job = readJob(s.dir);
+  assert.equal(job.state, "completed"); assert.equal(connections, 2);
+  assert.equal(job.automaticResumes.length, 1); assert.equal(job.automaticResumes[0].reason, "app-server");
+  assert.match(job.attempts[0].transportErrors[0], /codex stopped answering \(account\/read, 30 s\)/);
+  assert.ok(job.attempts[0].servers[0].endedAt);
+});
+
+test("initialize with no reply fails the job at its control deadline", async t => {
+  const { writeExecutable } = await import("./support/helpers.mjs");
+  const s = seed(t); s.unblock();
+  writeExecutable(path.join(s.ctx.bin, "codex"), '#!/usr/bin/env node\nprocess.stdin.resume();\n');
+  const setTimer = globalThis.setTimeout;
+  let deadlineSeen = false;
+  t.mock.method(globalThis, "setTimeout", (callback, ms, ...args) => {
+    if (ms === 120000) { deadlineSeen = true; return setTimer(callback, 10, ...args); }
+    return setTimer(callback, ms, ...args);
+  });
+  await runWorker(s.dir, s.options);
+  const job = readJob(s.dir);
+  assert.equal(deadlineSeen, true); assert.equal(job.state, "failed");
+  assert.match(job.errorMessage, /codex stopped answering \(initialize, 120 s\)/);
+  assert.ok(job.attempts[0].servers[0].endedAt);
+});
+
+test("an unanswered open-time ping disables the watchdog and the job still completes", async t => {
+  const { TransportTimeout } = await import("../plugins/relay/scripts/lib/backends/transport/stdio-rpc.mjs");
+  const s = seed(t); s.unblock();
+  const backend = backendNamed("codex"), connect = backend.connect;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args);
+    t.mock.method(connection, "ping", async () => { throw new TransportTimeout("codex", "account/read", 30000); });
+    return connection;
+  });
+  await runWorker(s.dir, s.options);
+  assert.equal(readJob(s.dir).state, "completed");
+  assert.equal(readJob(s.dir).backendLiveness.enabled, false);
+  assert.match(fs.readFileSync(jobPaths(s.dir).events, "utf8"), /watchdog disabled/);
+});
+
+test("a steer that never answers is queued with recovery evidence and cannot hang settleInflight", async t => {
+  const s = seed(t, "[held] Wait for the steer."); s.unblock();
+  const backend = backendNamed("codex"), connect = backend.connect;
+  const setTimer = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, ms, ...args) => setTimer(callback, ms === 30000 ? 20 : ms, ...args));
+  let connections = 0, steer;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args); connections++;
+    if (connections === 1) {
+      const send = connection.client.sendMessage.bind(connection.client);
+      t.mock.method(connection.client, "sendMessage", message => { if (message.method !== "turn/steer") send(message); });
+      const run = connection.run.bind(connection);
+      t.mock.method(connection, "run", turn => {
+        steer = postInboxMessage(s.dir, { kind: "steer", text: "[quick] Next turn." });
+        return run(turn);
+      });
+    }
+    return connection;
+  });
+  await runWorker(s.dir, s.options);
+  const job = readJob(s.dir);
+  assert.equal(job.state, "completed"); assert.equal(connections, 2);
+  assert.ok(job.messages.some(m => m.id === steer.id && m.action === "queued-next-turn" && /stopped answering/.test(m.reason)));
+  assert.ok(["turn-started", "delivered-before"].includes(readOutcome(s.dir, steer.id).action));
+  assert.equal(job.automaticResumes.length, 1);
+});
+
+test("a worker leaves a silent 25-minute sleep alive while the backend answers pings", async t => {
+  const s = seed(t); s.unblock();
+  let now = 0, pings = 0, turns = 0, finished = false;
+  s.options.now = () => now; s.options.env.RELAY_JOBS_HEARTBEAT_MS = "10";
+  const backend = backendNamed("codex"), connect = backend.connect;
+  t.mock.method(backend, "connect", async (...args) => {
+    const connection = await connect(...args), close = connection.close.bind(connection);
+    t.mock.method(connection, "ping", async () => { pings++; });
+    t.mock.method(connection, "close", async () => { assert.equal(finished, true); await close(); });
+    t.mock.method(connection, "run", async turn => {
+      turns++; turn.onPending(); turn.onTurnId("long-sleep");
+      for (let minute = 1; minute <= 25; minute++) {
+        now = minute * 60000;
+        await new Promise(resolve => setTimeout(resolve, 25));
+        assert.equal(connection.server.wedged, null);
+      }
+      finished = true;
+      return { turnStatus: "completed", finalMessage: "Sleep finished" };
+    });
+    return connection;
+  });
+  await runWorker(s.dir, s.options);
+  assert.equal(readJob(s.dir).state, "completed"); assert.equal(turns, 1); assert.equal(pings, 5);
+  assert.equal(readJob(s.dir).automaticResumes?.length ?? 0, 0);
 });

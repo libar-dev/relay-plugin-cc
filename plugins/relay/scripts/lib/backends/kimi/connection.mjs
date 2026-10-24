@@ -1,3 +1,4 @@
+import { CONTROL_MS, SESSION_MS } from "../transport/stdio-rpc.mjs";
 import { admissionEnabled, DEFAULTS } from "../../worker/admission.mjs";
 import { shellCommandMarkdown } from "../../util/shell.mjs";
 /** @typedef {import("../types").Connection} Connection */
@@ -137,6 +138,11 @@ export class KimiConnection {
 
   get server() { return this.client; }
 
+  get pingMethod() { return "relay/ping"; }
+  async ping() {
+    try { await this.client.request("relay/ping", {}, { timeoutMs: CONTROL_MS, wedgeOnTimeout: false }); }
+    catch (error) { if (error.rpcCode !== -32601) throw error; }
+  }
   async close() {
     await this.stopObserver("the connection closed");
     await this.reads?.close();
@@ -173,7 +179,7 @@ export class KimiConnection {
       sessionId = sessionId ?? response.sessionId;
       this.sessionId = sessionId;
       // Kimi keeps model and effort across a load but not the mode, so all three go every time.
-      await client.request("session/set_mode", { sessionId, modeId: KIMI_MODES[request.mode] });
+      await client.request("session/set_mode", { sessionId, modeId: KIMI_MODES[request.mode] }, { timeoutMs: SESSION_MS });
       for (const [configId, value] of [["model", request.model], ["thinking", request.effort]]) {
         if (value != null) await setConfigOption(client, sessionId, configId, value);
       }
@@ -215,9 +221,13 @@ export class KimiConnection {
     const wire = this.wire.read();
     // Where this prompt's records can start: a record at or after it came after the send.
     const from = wire.consumed;
+    wire.onRecord = record => {
+      if (record.type === "turn.step.retrying") options.onProviderLimit?.(record.error ?? { message: record.errorMessage });
+    };
     const run = { turnId: null, didWork: false, from };
     client.setNotificationHandler(notification => {
       if (notification.params?.sessionId !== sessionId) return;
+      if (notification.method === "session/update" && ["agent_message_chunk", "agent_thought_chunk", "tool_call"].includes(notification.params?.update?.sessionUpdate)) options.onProviderResponse?.();
       if (acpUpdate(notification).didWork) run.didWork = true;
     });
     const ended = client.exitPromise.then(() => { throw new Error(kimiEndMessage(client.exitInfo)); });
@@ -238,6 +248,7 @@ export class KimiConnection {
       return { turnId: run.turnId, turnStatus: "failed", finalMessage: "", didWork: run.didWork, retryable: false, error: { message: error.message } };
     } finally {
       await this.stopObserver(client.exitSeen || client.exitInfo ? "Kimi's server ended" : "the run ended");
+      wire.onRecord = null;
       client.setNotificationHandler(null);
     }
   }
@@ -377,6 +388,6 @@ export async function connect(request, hooks) {
     }
   });
   try { await client.initialize(); }
-  catch (error) { await reads?.close(); await client.close(); throw new Error(client.exitInfo ? kimiEndMessage(client.exitInfo) : error.message); }
+  catch (error) { await reads?.close(); await client.close(); if (error.name === "TransportTimeout") throw error; throw new Error(client.exitInfo ? kimiEndMessage(client.exitInfo) : error.message); }
   return new KimiConnection(client, request, { ...hooks, state: { ...hooks.state, binary } }, reads);
 }

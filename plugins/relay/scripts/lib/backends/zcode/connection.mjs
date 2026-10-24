@@ -1,3 +1,4 @@
+import { CONTROL_MS, SESSION_MS } from "../transport/stdio-rpc.mjs";
 /** @typedef {import("../types").Connection} Connection */
 // ZCode's app-server protocol, isolated from the worker's message and process accounting.
 // Sessions and turns go through ZCode Protocol v4 commands (`v4/command`); a turn's start and
@@ -146,12 +147,12 @@ function live(connection, promise) {
   return Promise.race([promise, connection.server.exitPromise.then(() => { throw new Error(zcodeEndMessage(connection.server.exitInfo)); }), ...(connection.session?.closedPromise ? [connection.session.closedPromise] : [])]);
 }
 
-function call(connection, method, params) {
-  return live(connection, Promise.resolve().then(() => connection.client.request(method, params)));
+function call(connection, method, params, options = { timeoutMs: SESSION_MS }) {
+  return live(connection, Promise.resolve().then(() => connection.client.request(method, params, options)));
 }
 
-function command(connection, sessionId, type, payload, commandId = randomUUID()) {
-  return call(connection, "v4/command", { commandId, clientId: CLIENT_ID, sessionId, type, payload, issuedAt: Date.now() });
+function command(connection, sessionId, type, payload, commandId = randomUUID(), options = { timeoutMs: SESSION_MS }) {
+  return call(connection, "v4/command", { commandId, clientId: CLIENT_ID, sessionId, type, payload, issuedAt: Date.now() }, options);
 }
 
 // A stop with steers still queued pauses ZCode's queue, durably, and ZCode then refuses every
@@ -163,7 +164,7 @@ function sendText(connection, commandId, text, requestedDelivery) {
   return command(connection, z.sessionId, "sendText", {
     text, requestedDelivery, modelSelection: z.selection, mode: zcodeSessionMode(z.request), heldQueueDisposition: "clearQueueAndSend",
     ...(denied.length ? { toolDisallowlist: denied } : {})
-  }, commandId);
+  }, commandId, { timeoutMs: requestedDelivery === "guide" ? CONTROL_MS : undefined });
 }
 
 function refused(ack, what) {
@@ -194,11 +195,15 @@ function trackSession(connection, notification) {
   const z = connection.session;
   if (notification.method !== "session/event" || notification.params?.sessionId !== z.sessionId) return;
   const { type, turnId, payload = {} } = notification.params;
+  if ((type === "model.streaming" && ["text_delta", "reasoning_delta", "tool_call"].includes(payload.kind)) ||
+      (type === "tool.updated" && payload.kind === "started") ||
+      (type === "part.delta" && ["text", "reasoning", "tool-call", "tool_call"].includes(payload.type ?? payload.part?.type)) ||
+      (type === "turn.completed" && payload.resultType === "success")) z.onProviderResponse?.();
   if (type === "turn.started") {
     z.running.set(turnId, payload.inputId ?? null);
     if (payload.inputId) z.joined.add(baseId(payload.inputId));
     z.outstanding.delete(payload.inputId);
-    if (z.cancelRequested) void command(connection, z.sessionId, "stop", {}).catch(() => {});
+    if (z.cancelRequested) void command(connection, z.sessionId, "stop", {}, undefined, { timeoutMs: CONTROL_MS }).catch(() => {});
   } else if (type === "turn.steerDrained") {
     for (const id of inputIdsOf(payload)) {
       z.joined.add(baseId(id));
@@ -285,6 +290,8 @@ class ZcodeConnection {
   }
 
   get server() { return this.client; }
+  get pingMethod() { return "runtime/capabilities"; }
+  async ping() { await this.client.request("runtime/capabilities", {}, { timeoutMs: CONTROL_MS, wedgeOnTimeout: false }); }
   async close() { await this.client.close(); }
 
   /** @param {import("../types").OpenOptions} options */
@@ -305,6 +312,7 @@ class ZcodeConnection {
      *   closed: string | null,
      *   selection: ReturnType<typeof resolveZcodeSelection> | null,
      *   changed: (() => void) | null,
+     *   onProviderResponse?: (() => void) | null,
      *   closedPromise?: Promise<never>,
      *   rejectClosed?: (reason: Error) => void
      * }} */
@@ -410,7 +418,7 @@ class ZcodeConnection {
     z.changed?.();
     try {
       const ack = await sendText(this, commandId, message.text, "guide");
-      if (ack.status !== "accepted") throw new Error(refused(ack, "steer"));
+      if (!["accepted", "duplicate"].includes(ack.status)) throw new Error(refused(ack, "steer"));
       // Accepted while idle, ZCode starts it as its own turn, and this run waits for it.
       return { turnId, unconfirmed: true };
     } catch (error) {
@@ -426,7 +434,8 @@ class ZcodeConnection {
     const client = this.client;
     const z = this.session;
     z.cancelRequested = true;
-    const ack = await command(this, z.sessionId, "stop", {});
+    z.changed?.();
+    const ack = await command(this, z.sessionId, "stop", {}, undefined, { timeoutMs: CONTROL_MS });
     if (!["accepted", "noop", "duplicate"].includes(ack.status)) throw new Error(refused(ack, "stop"));
     z.changed?.();
   }
@@ -449,6 +458,7 @@ class ZcodeConnection {
     const ours = end => end.inputId === commandId;
     const settle = () => { clearTimeout(settleTimer); settleTimer = null; };
     const check = () => {
+      if (z.cancelRequested) duplicateStarted?.(false);
       if (!turnId) {
         const started = [...z.running].find(([, inputId]) => inputId === commandId)?.[0] ?? z.ended.slice(first).find(ours)?.turnId;
         if (started) { turnId = started; options.onTurnId(started); }
@@ -485,17 +495,22 @@ class ZcodeConnection {
       droppedSteers: [...dropped].map(([input, reason]) => ({ id: baseId(input), reason }))
     });
     z.cancelRequested = false;
+    z.onProviderResponse = options.onProviderResponse;
     z.changed = check;
     try {
       for (let resend = 0; ; resend += 1) {
         // Each discarded answer is immediate, and suffixes an earlier process used
         // are unknown here, so the bound is generous.
+        if (z.cancelRequested) return { turnId, turnStatus: "interrupted", finalMessage: "", ...receipts() };
         z.outstanding.add(commandId);
         const ack = await sendText(this, commandId, options.prompt, "startNow");
         if (ack.status === "accepted") break;
         z.outstanding.delete(commandId);
         // A duplicate may still start: adopt only that id, as soon as its session event arrives.
         if (ack.status === "duplicate") {
+          // The worker must be able to stop a duplicate wait even before a turn id arrives.
+          z.pending = true;
+          options.onPending?.();
           let timer;
           let started;
           try {
@@ -509,8 +524,9 @@ class ZcodeConnection {
             duplicateStarted = null;
           }
           if (started) break;
+          if (z.cancelRequested) return { turnId, turnStatus: "interrupted", finalMessage: "", ...receipts() };
           return { turnId: null, turnStatus: "failed", finalMessage: "", teardown: true,
-            error: { message: `ZCode already holds this message (duplicate id) and did not start it within ${Number((duplicateWaitMs / 1000).toFixed(1))} s; it was not sent again, so it can't run twice.` }, ...receipts() };
+            error: { message: `ZCode already holds this message (duplicate id) but relay could not confirm its start within ${Number((duplicateWaitMs / 1000).toFixed(1))} s; it was not sent again, so it can't run twice.` }, ...receipts() };
         }
         // Only positive evidence that the old input was discarded permits a fresh id.
         const discarded = ack.status === "failed" && ack.reasonCode === DISCARDED_ON_RESTART;
@@ -532,6 +548,7 @@ class ZcodeConnection {
       z.outstanding.clear();
       z.pending = false;
       z.changed = null;
+      z.onProviderResponse = null;
     }
   }
 }
@@ -551,7 +568,7 @@ export async function connect(request, hooks) {
       onServerRequest(message, transport) { answerServerRequest(request, message, transport); }
     });
     try { await client.initialize(); }
-    catch (error) { await client.close(); throw new Error(client.exitInfo ? zcodeEndMessage(client.exitInfo) : protocolMessage(error)); }
+    catch (error) { await client.close(); if (error.name === "TransportTimeout") throw error; throw new Error(client.exitInfo ? zcodeEndMessage(client.exitInfo) : protocolMessage(error)); }
     return new ZcodeConnection(client, request);
 }
 // Where `zcode app-server` finds its sign-in and default model, read without a model call and
