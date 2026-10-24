@@ -97,6 +97,7 @@ export function terminateProcessTree(pid, options = {}) {
   if (!ownsPid()) return { attempted: false, delivered: false, method: null };
 
   const signal = options.signal ?? "SIGTERM";
+  options.beforeSignal?.();
   try {
     killImpl(-(options.identity?.pgid ?? pid), signal);
     return { attempted: true, delivered: true, method: "process-group" };
@@ -106,6 +107,7 @@ export function terminateProcessTree(pid, options = {}) {
     // Signal the pid itself in that case. Recheck ownership: the leader may have
     // exited and its pid may have been reused since the group signal failed.
     if (!ownsPid()) return { attempted: true, delivered: false, method: "process-group" };
+    options.beforeSignal?.();
     try {
       killImpl(pid, signal);
       return { attempted: true, delivered: true, method: "process" };
@@ -340,7 +342,9 @@ export async function stopProcessSnapshot(snapshot, options = {}) {
     const live = members();
     for (const entry of live) {
       if (tableUnreadable || entry.identityUnknown || !entry.startTime) continue;
-      try { killImpl(entry.pid, signal); } catch { /* gone already */ }
+      options.beforeSignal?.(entry, signal);
+      try { killImpl(entry.pid, signal); } catch { continue; /* gone already */ }
+      options.onSignal?.(entry, signal);
     }
   };
   const waitGone = async (ms) => {

@@ -25,9 +25,9 @@ function cancelStopped(jobDir, message, attempt, includeDead = true, killed = fa
     (attempt !== null && (killed || TAKEN_ACTIONS.has(outcome?.action)) && view.job.attempts.length > attempt));
 }
 
-function checkRefused(jobDir, message) {
+function checkRefused(jobDir, message, killed = false) {
   const outcome = message ? readOutcome(jobDir, message.id) : null;
-  if (outcome?.action === "no-op") {
+  if (!killed && outcome?.action === "no-op") {
     throw new AttemptChanged(`Job ${path.basename(jobDir)}: ${outcome.reason ?? "the attempt changed"}; nothing was cancelled.`);
   }
   return outcome;
@@ -74,7 +74,7 @@ function markCancelledAfterKill(jobDir, reason, attempt = null, killed = false, 
     const until = Date.now() + envNumber("RELAY_JOBS_CANCEL_GRACE_MS", 10000);
     while (!cancelStopped(jobDir, message, attempt, false, killed) && Date.now() < until) pause();
     const view = loadJobView(jobDir);
-    const outcome = checkRefused(jobDir, message);
+    const outcome = checkRefused(jobDir, message, killed);
     if (attempt !== null && view.job.attempts.length > attempt && (killed || TAKEN_ACTIONS.has(outcome?.action))) {
       if (killed) finishKilledCancel(jobDir, originalMessage, attempt);
       return { advanced: view.job.attempts.length, outcome };
@@ -84,7 +84,7 @@ function markCancelledAfterKill(jobDir, reason, attempt = null, killed = false, 
   }
   try {
     const job = readJob(jobDir);
-    const outcome = checkRefused(jobDir, originalMessage);
+    const outcome = checkRefused(jobDir, originalMessage, killed);
     if ((killed || taken) && attempt !== null && job.attempts.length > attempt) {
       if (killed) finishKilledCancel(jobDir, originalMessage, attempt);
       return { advanced: job.attempts.length, outcome };
@@ -135,7 +135,7 @@ function markCancelledAfterKill(jobDir, reason, attempt = null, killed = false, 
 function finishKilledCancel(jobDir, message, attempt) {
   if (!message) return;
   const outcome = readOutcome(jobDir, message.id);
-  if (!outcome || ["interrupt-sent", "interrupt-failed"].includes(outcome.action)) {
+  if (!outcome || ["interrupt-sent", "interrupt-failed", "no-op"].includes(outcome.action)) {
     writeOutcome(jobDir, message.id, { action: "cancelled", reason: `the cancel stopped attempt ${attempt}'s worker` });
   }
 }
@@ -259,9 +259,17 @@ export async function handleCancel(argv) {
       let outcome = checkRefused(jobDir, message);
       let taken = TAKEN_ACTIONS.has(outcome?.action);
       let killed = false;
+      const beforeSignal = () => {
+        if (!killed && !taken) checkAttempt(readJob(jobDir), attempt);
+      };
+      const recordKill = (method) => {
+        if (killed) return;
+        killed = true;
+        actions.push(`killed the worker process ${method === "process" ? "" : "tree "}(${worker.pid}) after ${Math.round(graceMs / 1000)}s`);
+      };
       const refresh = () => {
         view = loadJobView(jobDir);
-        outcome = checkRefused(jobDir, message);
+        outcome = checkRefused(jobDir, message, killed);
         taken = TAKEN_ACTIONS.has(outcome?.action);
       };
       const runsOn = () => {
@@ -292,9 +300,8 @@ export async function handleCancel(argv) {
           if (worker?.pid && isWorkerAlive(worker)) {
             const unknown = tree.filter(entry => !entry.startTime);
             if (unknown.length) throw new Error(`Could not stop processes ${unknown.map(entry => entry.pid).join(", ")} of job ${view.job.id}: process identities could not be read.`);
-            const kill = terminateProcessTree(worker.pid, { identity: worker });
-            killed = kill.delivered;
-            if (killed) actions.push(`killed the worker process ${kill.method === "process" ? "" : "tree "}(${worker.pid}) after ${Math.round(graceMs / 1000)}s`);
+            const kill = terminateProcessTree(worker.pid, { identity: worker, beforeSignal });
+            if (kill.delivered) recordKill(kill.method);
           }
         } else if (worker?.pid) {
           await waitUntil(() => !isWorkerAlive(worker) || (attempt !== null && (stateNow(jobDir)?.job.attempts.length ?? 0) > attempt), 5000, 100);
@@ -306,7 +313,14 @@ export async function handleCancel(argv) {
           }
         }
       }
-      const survivors = await stopProcessSnapshot(tree);
+      const survivors = await stopProcessSnapshot(tree, {
+        beforeSignal,
+        // The group signal may have failed verification or delivery. A later sweep
+        // can still stop the verified original worker; retain that fact at once.
+        onSignal: (entry) => {
+          if (entry.pid === worker?.pid && entry.startTime === worker.startTime) recordKill("process");
+        }
+      });
       if (survivors.length > 0 || survivors.cause || tree.cause) {
         throw new Error(`Could not stop processes ${survivors.map((entry) => entry.pid).join(", ")} of job ${view.job.id}. ${survivors.cause ?? tree.cause ?? "They are still running"}.`);
       }
