@@ -24,6 +24,7 @@ Changed:
 
 Fixed:
 
+- Delivered corrections retain their automatic recovery allowance if the worker exits during acknowledgement.
 - Unreadable message storage fails explicitly and preserves owed work; it cannot be mistaken for an empty inbox at completion.
 - Continuations and recovery use the same bounded launch path. Undelivered pending messages are
   withdrawn rather than acknowledged without a worker, and interrupted recovery keeps its message id.

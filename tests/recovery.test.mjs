@@ -189,9 +189,49 @@ for (const persisted of [false, true]) {
     // Delivering a message into the automatic turn earns a fresh retry too.
     assert.equal(companion(ctx, ["steer", id, "--message", "User correction"]).status, 0);
     killWorker(ctx, id);
-    await waitFor(() => readJobJson(ctx, id).automaticResumes.length === 3 && readJobJson(ctx, id).turnId);
+    await waitFor(() => turnRecorded(ctx, id, 5));
+    assert.equal(readJobJson(ctx, id).automaticResumes.length, 3);
     companion(ctx, ["cancel", id]);
-    assert.equal((await waitingAgain).status, 5);
+    const cancelled = await waitingAgain;
+    assert.equal(cancelled.status, 5, cancelled.stdout + cancelled.stderr);
+  });
+
+  test("a delivered steer rearms recovery before its receipt can be observed", async t => {
+    const ctx = relayContext("job", { turnMs: 30000 });
+    const marker = path.join(ctx.home, "receipt-published"), release = path.join(ctx.home, "release-receipt");
+    const preload = path.join(ctx.home, "freeze-after-receipt.mjs");
+    fs.writeFileSync(preload, `import fs from "node:fs";
+const rename = fs.renameSync;
+fs.renameSync = function (from, to, ...args) {
+  const result = rename.call(this, from, to, ...args);
+  if (process.argv[2] === "worker" && String(to).includes("/inbox/outcomes/") && fs.readFileSync(to, "utf8").includes('"action": "steered"')) {
+    fs.writeFileSync(${JSON.stringify(marker)}, "");
+    while (!fs.existsSync(${JSON.stringify(release)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  }
+  return result;
+};`);
+    ctx.env.NODE_OPTIONS = `${ctx.env.NODE_OPTIONS ?? ""} --import ${preload}`;
+    t.after(() => fs.writeFileSync(release, ""));
+    const id = await start(ctx);
+    killWorker(ctx, id);
+    const waiting = waitAsync(ctx, await waitInput(ctx, id));
+    t.after(async () => {
+      fs.writeFileSync(release, "");
+      companion(ctx, ["cancel", id]);
+      await waiting;
+    });
+    await waitFor(() => turnRecorded(ctx, id, 2));
+    const sent = companion(ctx, ["steer", id, "--message", "Durable user correction"]);
+    assert.equal(sent.status, 0, sent.stdout + sent.stderr);
+    await waitFor(() => fs.existsSync(marker));
+    const messageId = /^message: steer (.+)$/m.exec(sent.stdout)[1];
+    assert.equal(readJobJson(ctx, id).recoveryEpoch, messageId, "the receipt cannot precede its retry allowance");
+    killWorker(ctx, id);
+    await waitFor(() => turnRecorded(ctx, id, 3));
+    assert.equal(readJobJson(ctx, id).automaticResumes.length, 2);
+    companion(ctx, ["cancel", id]);
+    const cancelled = await waiting;
+    assert.equal(cancelled.status, 5, cancelled.stdout + cancelled.stderr);
   });
 
   test("two concurrent relay waits reserve only one automatic resume", async () => {
