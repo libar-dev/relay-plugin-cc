@@ -255,7 +255,6 @@ export function renderJobBlock(view) {
     lines.push(`error: ${String(job.errorMessage).replace(/\s+/g, " ").trim()}`);
   }
   if (job.launch?.note) lines.push(`note: ${job.launch.note}`);
-  if (job.cleanup?.state === "unresolved") lines.push(`cleanup: unresolved (${(job.cleanup.pids ?? []).join(", ")})${job.cleanup.cause ? `: ${job.cleanup.cause}` : ""}`);
   // Cleanup still changes live accounting after a turn ends. A terminal result is copied
   // verbatim by relay agents, so do not include that changing measurement in its text.
   if (!isTerminalView(view) && Number.isFinite(job.treeBytes)) lines.push(`memory: ${(job.treeBytes / 2 ** 30).toFixed(1)} GiB (job and its processes)`);
@@ -292,6 +291,14 @@ export function renderJobBlock(view) {
     lines.push(`capacity-retries: ${job.capacityRetries.length}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+// Status can report late cleanup without changing the verbatim result a relay copied.
+export function renderJobStatus(view) {
+  const cleanup = view.job.cleanup;
+  return renderJobBlock(view) + (cleanup?.state === "unresolved"
+    ? `cleanup: unresolved (${(cleanup.pids ?? []).join(", ")})${cleanup.cause ? `: ${cleanup.cause}` : ""}\n`
+    : "");
 }
 
 // What `result` prints: the state block, then, when there is a report, `---` and the whole
@@ -383,6 +390,7 @@ export function jobViewJson(view, { messages = true } = {}) {
     state: view.state,
     storedState: view.storedState,
     admission: settledAdmission(view.job.admission, view.state) ?? null,
+    cleanup: view.job.cleanup ?? null,
     refusal: view.job.refusal ?? null,
     stalled: view.stalled,
     deadReason: view.deadReason,

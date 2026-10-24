@@ -27,6 +27,7 @@ import { ownExecution, readProcessStartTime, listProcesses, readProcessTableCach
 import { stopRecordedAppServers, sweptAppServersPatch } from "./recovery.mjs";
 
 import { DEFAULT_RESUME_MESSAGE, recoveryForEpoch } from "./recovery.mjs";
+import { registerWorker } from "./registry.mjs";
 const APP_SERVER_LOG_BYTES = 1024 * 1024;
 
 function appendStderr(file, chunk) {
@@ -122,12 +123,8 @@ function isCapacityError(error) {
 // message found then is taken with a fresh lease (or by the worker that took it first).
 export async function runWorker(jobDir, options = {}) {
   const platform = options.platform ?? process.platform;
-  const workerRegistry = `${admissionHome({ ...process.env, ...options.env })}.workers`;
-  const registryFile = path.join(workerRegistry, `${process.pid}.json`);
-  if (["linux", "darwin"].includes(platform)) {
-    fs.mkdirSync(workerRegistry, { recursive: true });
-    writeJsonAtomic(registryFile, { pid: process.pid, startTime: readProcessStartTime(process.pid), jobDir });
-  }
+  const registryFile = registerWorker({ pid: process.pid, startTime: readProcessStartTime(process.pid), jobDir },
+    { env: { ...process.env, ...options.env }, platform });
   try {
     const launchFile = (options.env ?? process.env).RELAY_WORKER_LAUNCH;
     if (launchFile) {
@@ -191,7 +188,7 @@ export async function runWorker(jobDir, options = {}) {
       }
     }
   } finally {
-    try { fs.rmSync(registryFile, { force: true }); } catch {}
+    try { if (registryFile) fs.rmSync(registryFile, { force: true }); } catch {}
   }
 }
 

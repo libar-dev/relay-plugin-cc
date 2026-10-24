@@ -16,7 +16,7 @@ import { installFakeZcode } from "./fakes/zcode.mjs";
 // Rows omit messages; --estimate uses relay.review-estimate/1 for BOTH reviews.
 const HEAD = ["schema", "relayVersion", "relayBuild"];
 const JOB = [
-  "id", "kind", "state", "storedState", "admission", "refusal", "stalled", "deadReason", "sessionId", "turnId",
+  "id", "kind", "state", "storedState", "admission", "cleanup", "refusal", "stalled", "deadReason", "sessionId", "turnId",
   "claudeSessionId", "model", "effort", "backend", "fast", "serviceTier", "mode", "webSearch",
   "cwd", "attempts", "errorMessage", "createdAt", "updatedAt", "completedAt", "jobDir",
   "reportPath", "hasReport", "summary", "relay", "relayViolations", "relayViolationCount",

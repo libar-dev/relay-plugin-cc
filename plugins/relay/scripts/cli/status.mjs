@@ -8,7 +8,7 @@ import { messageAccount } from "../lib/jobs/messages.mjs";
 import { isWorkerLease, readLease } from "../lib/jobs/lease.mjs";
 import { readRepoConfig, readUserConfig } from "../lib/jobs/config.mjs";
 import { PLUGIN_BUILD, PLUGIN_VERSION } from "../lib/util/plugin.mjs";
-import { exitCodeFor, JobViewBusy, jobRowJson, jobViewJson, loadJobViewSettled as loadJobView, renderJobBlock, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
+import { exitCodeFor, JobViewBusy, jobRowJson, jobViewJson, loadJobViewSettled as loadJobView, renderJobBlock, renderJobStatus, renderJobList, renderResultText, sortViewsNewestFirst } from "../lib/jobs/view.mjs";
 
 const STATUS_LIST_LIMIT = 20;
 const STATUS_PAGE_BYTES = 2 * 1024 * 1024;
@@ -103,7 +103,7 @@ export function handleStatus(argv) {
   if (positionals[0]) {
     const view = loadJobView(findJobDir(positionals[0]));
     if (options.json) printJson("status", jobViewJson(view));
-    else process.stdout.write(renderJobBlock(view));
+    else process.stdout.write(renderJobStatus(view));
     return;
   }
   const cwd = resolveCommandCwd(options);

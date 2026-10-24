@@ -13,6 +13,43 @@ import { spawnWorker } from "../plugins/relay/scripts/lib/worker/delivery.mjs";
 
 const script = path.join(ROOT, "plugins/relay/scripts/companion.mjs");
 const alive = pid => isProcessIdentityAlive({ pid });
+
+for (const disabledBy of ["environment", "config"]) {
+  for (const parentState of disabledBy === "config" ? ["read-only"] : ["read-only", "unavailable"]) test(`guard off (${disabledBy}) launches with a ${parentState} admission parent`, async t => {
+    const ctx = setup(t, { env: { RELAY_WORKER_SCOPE: "off" } });
+    const parent = path.join(ctx.root, "admission-parent");
+    const home = path.join(parent, "admission");
+    fs.mkdirSync(home, { recursive: true });
+    ctx.env.RELAY_ADMISSION_HOME = home;
+    if (disabledBy === "config") {
+      delete ctx.env.RELAY_ADMISSION;
+      fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ admission: "off" }));
+    } else ctx.env.RELAY_ADMISSION = "off";
+    if (parentState === "read-only") {
+      fs.chmodSync(parent, 0o555);
+      t.after(() => fs.chmodSync(parent, 0o755));
+      // Verify the fixture really denies creation (privileged runners may bypass chmod).
+      try { fs.mkdirSync(`${home}.probe`); }
+      catch (error) { assert.equal(error.code, "EACCES"); }
+      if (fs.existsSync(`${home}.probe`)) return t.skip("runner bypasses directory permissions");
+    } else {
+      fs.rmSync(parent, { recursive: true });
+      fs.writeFileSync(parent, "not a directory");
+    }
+    const { id } = startJob(ctx);
+    const launched = await waitFor(() => {
+      const job = readJob(ctx, id);
+      return job.launch?.state === "acknowledged" && job;
+    });
+    assert.equal(launched.launch?.state, "acknowledged", "launch still verifies reparenting");
+    assert.ok(launched.launch.worker.startTime);
+    assert.notEqual(launched.launch.worker.ppid, launched.launch.caller.pid);
+    await finishJob(ctx, id);
+    assert.equal(readJob(ctx, id).state, "completed");
+    assert.equal(ctx.fakeState().appServerStarts, 1);
+  });
+}
+
 async function treeJob(t, mode, { scope = false, guard = false, brief = "[held] Keep running" } = {}) {
   const ctx = setup(t, { env: { RELAY_WORKER_SCOPE: scope ? "on" : "off", RELAY_JOBS_HEARTBEAT_MS: "100" } });
   if (guard) {

@@ -6,7 +6,7 @@ import test from "node:test";
 import { setup, waitFor } from "./support/job-helpers.mjs";
 import { createJobDir, jobPaths, readJob, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
-import { loadJobView, renderJobBlock } from "../plugins/relay/scripts/lib/jobs/view.mjs";
+import { loadJobView, renderJobBlock, renderJobStatus } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 import { backendNamed } from "../plugins/relay/scripts/lib/backends/index.mjs";
@@ -447,7 +447,8 @@ test("unresolved owned tools preserve completion and retain the running seat", a
   assert.equal(job.state, "completed");
   assert.equal(job.cleanup.state, "unresolved");
   assert.ok(job.cleanup.pids.includes(child.pid));
-  assert.match(renderJobBlock(loadJobView(s.dir)), /cleanup: unresolved/);
+  assert.doesNotMatch(renderJobBlock(loadJobView(s.dir)), /cleanup: unresolved/);
+  assert.match(renderJobStatus(loadJobView(s.dir)), /cleanup: unresolved/);
   assert.equal(fs.existsSync(path.join(s.ctx.env.RELAY_ADMISSION_HOME, "slots", "job-admission-worker.json")), true);
 });
 

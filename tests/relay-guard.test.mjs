@@ -460,6 +460,36 @@ test("without SubagentHandback, SubagentStop still checks the final text", async
   assert.equal(await stop(ctx, resultOf(ctx, jobId)), null);
 });
 
+test("late unresolved cleanup preserves the copied result and stays visible in status", async () => {
+  const preload = path.join(makeTempDir(), "fail-launch.mjs");
+  fs.writeFileSync(preload, "if (process.argv[1]?.endsWith('/launcher.mjs')) process.exit(1);\n");
+  const ctx = relayContext("job", { turnMs: 50, env: { NODE_OPTIONS: `--import=${preload}` } });
+  const jobId = await startedRelay(ctx, QUICK);
+  assert.equal(readJobJson(ctx, jobId).state, "queued");
+  const { runWorker } = await import("../plugins/relay/scripts/lib/worker/worker.mjs");
+  const { listProcesses } = await import("../plugins/relay/scripts/lib/util/process.mjs");
+  let copied;
+  await runWorker(jobDirOf(ctx, jobId), {
+    env: ctx.env,
+    predecessorCleanup: { listProcesses() {
+      if (readJobJson(ctx, jobId).state === "completed") {
+        copied ??= resultOf(ctx, jobId);
+        return null; // The final sweep cannot verify that the execution is empty.
+      }
+      return listProcesses();
+    } }
+  });
+  assert.match(copied, /^state: completed$/m);
+  const cleanup = readJobJson(ctx, jobId).cleanup;
+  assert.equal(cleanup.state, "unresolved");
+  assert.match(cleanup.cause, /process table/);
+  assert.equal(resultOf(ctx, jobId), copied, "completion freezes the copied block");
+  assert.equal(await stop(ctx, copied), null, "SubagentStop accepts the original copy");
+  assert.match(companion(ctx, ["status", jobId]).stdout, /^cleanup: unresolved .*process table/m);
+  const status = JSON.parse(companion(ctx, ["status", jobId, "--json"]).stdout);
+  assert.deepEqual(status.cleanup, cleanup);
+});
+
 for (const workflow of [false, true]) {
   test(`${workflow ? "Workflow" : "Agent-tool"} hand-back names only the first differing line of a retyped block`, async () => {
     const ctx = relayContext("job", { ...(workflow ? { workflow: WORKFLOW } : {}), turnMs: 100 });
