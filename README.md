@@ -327,10 +327,9 @@ Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
   The busy-load allowance is `F = min(16, max(2, C−2))` seats, applied at five-minute load
   at least `1.5C` or unknown host bytes, for new seats outside the minimum only.
   Load above `3C` holds all new starts, including replacements. A macOS pressure warning is
-  shown but holds nothing. A turn on a running backend waits only for critical memory,
-  critical pressure or provider protection (pauses and probes). It takes no new startup hold.
-  Host bytes after other holds below `max(0.75 GiB, 0.05T)` or macOS critical pressure hold
-  those next turns too. Host load is skipped with a note when its CPU scope differs from available CPUs.
+  shown but holds nothing. A turn on a running backend takes no new startup hold and waits only for
+  critical memory (host bytes after other holds below `max(0.75 GiB, 0.05T)`), macOS critical pressure
+  or provider protection (pauses and probes). Host load is skipped with a note when its CPU scope differs from available CPUs.
 - The first two identified very-heavy and first three other active jobs skip the host reserve and the busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits, provider protection, ordering and start pacing. There is no very-heavy maximum.
   Guaranteed starts must leave `max(0.75 GiB, 0.05T)` after other holds and their own `J`.
   Very heavy means GPT-6 Astra and the Kimi K3 family at any effort. Effort alone, including

@@ -169,7 +169,7 @@ The load guard shares capacity across your sessions. New backend starts and repl
 at least 5 seconds apart; turns on a running backend are not paced.
 The first two identified very-heavy and first three other active jobs skip the host reserve and the busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits, provider protection, ordering and start pacing. There is no very-heavy maximum.
 Very heavy means GPT-6 Astra and Kimi K3 at every effort. Max/ultra effort on other models does not enter that pool.
-A macOS pressure warning is shown but holds nothing. Retained turns wait only for critical memory/pressure
+A macOS pressure warning is shown but holds nothing. A turn of a job that is already running waits only for critical memory/pressure
 or provider pauses/probes. Low memory, high load or a backend's usage or rate limit can delay new starts;
 the queue reason tells you which. `/relay:setup` shows the saved settings and whether the guard is active.
 Use `/relay:setup --admission off` to turn it off and `--admission on` to restore it.

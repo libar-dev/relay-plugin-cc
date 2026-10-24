@@ -8,12 +8,6 @@ its entries here.
 
 Pre-release cuts:
 
-- Planned for `3.0.0-pre.6`: correct the guaranteed minimum that was misread as a maximum.
-  The first two very-heavy and first three other active jobs skip host reserve and busy-seat gates,
-  with critical/startup/scope/fit/provider/order/pacing checks retained. There is no very-heavy maximum;
-  the old setup flag is removed and stored limits are ignored with a note. Pressure warnings hold
-  nothing. Retained turns keep their seat and hold, claim probes and close waits without start pacing.
-
 - `3.0.0-pre.1` (2026-10-22, tag `v3.0.0-pre.1`): Phases 1, 2, 3 and 5 and Phase 6's report, as below; Phase 4
   has not landed.
 - `3.0.0-pre.2` (2026-10-23, tag `v3.0.0-pre.2`): what it fixes and changes over pre.1. The details are in
@@ -230,11 +224,11 @@ Load guard:
 
 - `3.0.0-dev.17`: macOS pressure warning reads as `warning`; critical stays `critical`. Warning and load above
   `3C` still hold only new jobs, and shared pacing stays 5 seconds.
-- Only Astra and the Kimi K3 family count toward the very-heavy quota; max effort on other models no longer does.
+- Only Astra and the Kimi K3 family count as very heavy; max effort on other models no longer does.
 - Admission history keeps its last queue cause and shows it beside the completed wait duration. Cancellation
   closes waiting records; JSON views also close stale waiting records for ended jobs without changing stored history.
 - Historical job records are parsed outside the admission lock and cached until their file changes. Potentially
-  live jobs and unended servers are rechecked under the lock, preserving seats and quota accounting.
+  live jobs and unended servers are rechecked under the lock, preserving seat accounting.
 - Probe startup timeouts release only the fenced claim, retaining the provider pause and strike history. An
   active turn still uses the existing probe window; a completed turn can clear its matching pause.
 - Deferred spawn failures leave work queued and report a retry note instead of aborting wait or relay hooks.
