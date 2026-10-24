@@ -16,6 +16,7 @@ import path from "node:path";
 import process from "node:process";
 
 import { admit, admissionHome, releaseSlot, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded, releaseProbe, wasAdmitted } from "./admission.mjs";
+import { requestAccount } from "../jobs/request.mjs";
 import { backendFor } from "../backends/index.mjs";
 import { truncateCodePoints } from "../util/text.mjs";
 import { acquireWorkerLease, releaseWorkerLease, readLease } from "../jobs/lease.mjs";
@@ -173,8 +174,10 @@ async function runWorkerRound(jobDir, options, held) {
     throw new Error(`No job.json in ${jobDir}.`);
   }
 
+  const executionEnv = { ...process.env, ...options.env };
+  job = { ...job, request: { ...job.request, account: requestAccount(job.request, executionEnv) } };
   const backend = backendFor(job.request);
-  const admissionDeps = { env: { ...process.env, ...options.env }, ...options.admission };
+  const admissionDeps = { env: executionEnv, ...options.admission };
   const home = admissionHome(admissionDeps.env);
   let slot = null;
   const guardOn = admissionEnabled(admissionDeps.env, undefined, admissionDeps.platform ?? process.platform);
@@ -529,7 +532,7 @@ async function runWorkerRound(jobDir, options, held) {
     return backend.connect(request, {
       state: job.backendState ?? {},
       saveState(patch) { save({ backendState: { ...job.backendState, ...patch } }); },
-      env: { ...process.env, ...options.env },
+      env: executionEnv,
       onSpawn(proc) {
         serverIndex = job.attempts[attemptIndex].servers?.length ?? 0;
         const identity = { pid: proc.pid ?? null, startTime: proc.pid ? readProcessStartTime(proc.pid) : null, startedAt: nowIso() };
@@ -709,17 +712,19 @@ async function runWorkerRound(jobDir, options, held) {
               const message = pendingSteers.shift();
               enqueue({ prompt: message.text, source: "steer", message, clientId: message.id }, "the turn ended before the steer was delivered");
             }
-            confirmSteers(true);
             // An accepted steer the backend lost with its server runs as the next turn; one the
             // backend may still hold is dropped, never sent twice.
             for (const id of result.unjoinedSteers ?? []) {
+              openSteers.delete(id);
               const message = steered.get(id);
               if (message) enqueue({ prompt: message.text, source: "steer", message, clientId: message.id }, "the backend accepted the steer but lost it before a turn took it");
             }
             for (const { id, reason } of result.droppedSteers ?? []) {
+              openSteers.delete(id);
               const message = steered.get(id);
               if (message) outcome(message, { action: "dropped", reason });
             }
+            confirmSteers(true);
 
             if (result.turnStatus !== "completed" && !refusal && connection.server.exitInfo) {
               throw new Error(backend.endMessage(connection.server.exitInfo));

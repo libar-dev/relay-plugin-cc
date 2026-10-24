@@ -41,6 +41,12 @@ The module's `command.run` hooks answer `/relay:status`, `/relay:result`, `/rela
 
 If the backend server dies before the turn finishes, the worker resumes the saved session once with "Your session was cut off. Continue the task from where you stopped, then write the final report." If the worker dies, the relay's wait (the hook adds `--auto-resume`) can spend that same retry, except while a `cancel` runs on the job: recovery then waits, and the job ends `cancelled`. Start, a user continue and each delivered user message renew the shared allowance. A second server death in one attempt returns `failed`; a worker death after the allowance was spent returns `dead`. The attempt a dead worker left open is closed as `dead` when the next one begins, and every attempt records the plugin version that ran it as `relayVersion`.
 
+A Grok or ZCode steer acknowledged without proof that it joined a turn stays `interject-queued` and owed.
+Grok's session history or ZCode's `turn.started` / `turn.steerDrained` event confirms it as `steered`.
+After a worker death, resumed history closes an included message as `delivered-before`; otherwise it runs as a turn.
+A message ZCode reports as already held is never sent again: relay waits up to 60 seconds for it to start,
+or reports it as not delivered. Only ZCode's explicit `inputDiscardedOnRestart` response permits a fresh command id.
+
 On Linux, a worker started from a unit of the user's systemd (T3 Code's server runs as `t3code.service`) runs in a scope of its own through `systemd-run --user --scope`, because stopping a unit kills every process in its cgroup, a new session or not. `RELAY_WORKER_SCOPE=off` turns that off. On macOS, quitting T3 Code has killed workers; the cause is not known, and the recovery above covers one such death. Every recovery appears as `automatic-resume:` with its cause in the state block. All resumes keep the first launch's cwd, mode, network, writable roots, web search, model, effort, tier, backend and Grok home. A job keeps its tier even when the `fast-tier` setting changes while it runs.
 
 ## Git worktrees
@@ -80,6 +86,13 @@ Small hosts where `R + J > total` still fail the permanent-fit test.
 Very heavy means GPT-6 Astra and Kimi K3 at any effort; other models at max/ultra stay outside it.
 An unresolved default model is a coverage limit. Eligible backends with fewer active seats go first.
 Starts and replacement backends are paced 5 s apart.
-Native Windows visibly bypasses admission; missing sensors and errors show degraded/bypass notes.
+Native Windows visibly bypasses admission; missing sensors show degraded notes.
+If the guard itself fails (its files can't be read or written), new starts wait and the job's state
+names the error; `RELAY_ADMISSION=off` or `/relay:setup --admission off` lets work start without the guard.
+A damaged guard record counts as busy until it is set aside. Damaged slots retain a startup hold for
+30 seconds and count as active seats for 10 minutes before quarantine. Damaged pauses hold their
+backend account for 15 minutes before quarantine. Refusals received during lock contention are
+saved for the next admission check. Future startup times remain reserved across clock corrections.
+Only a currently held seat can be reused; earlier completed admissions do not reserve a place.
 Memory later used by tools/tests, native Claude agents, other harnesses and other users is outside
 admission control. Recognized provider pauses and recovery are described in [orchestration.md](orchestration.md).

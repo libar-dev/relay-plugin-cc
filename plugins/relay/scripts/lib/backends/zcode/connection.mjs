@@ -19,9 +19,9 @@ const LIST_TIMEOUT = Symbol("model list timeout");
 
 // `unresolvedInputMs`: how long a steer ZCode accepted may stay neither in a turn nor drained
 // into one, once nothing runs, before the run ends without it and reports it dropped.
-// `duplicateStartMs`: how long a message whose id ZCode already holds may take to start
-// before it is sent again under a new id. `modelListMs`: how long the read of every model the
-// sign-in serves may take before the named model is sent as written.
+// `duplicateWaitMs`: how long a message whose id ZCode already holds may take to start
+// before delivery is reported uncertain, without resending. `modelListMs`: how long the read
+// of every model the sign-in serves may take before the named model is sent as written.
 function zcodeTimings(env = process.env) {
   const ms = (name, fallback) => {
     const value = Number(env[name]);
@@ -29,7 +29,7 @@ function zcodeTimings(env = process.env) {
   };
   return {
     unresolvedInputMs: ms("RELAY_JOBS_ZCODE_UNRESOLVED_MS", 10000),
-    duplicateStartMs: ms("RELAY_JOBS_ZCODE_DUPLICATE_MS", 2000),
+    duplicateWaitMs: ms("RELAY_JOBS_ZCODE_DUPLICATE_MS", 60000),
     modelListMs: ms("RELAY_JOBS_ZCODE_MODEL_LIST_MS", 10000)
   };
 }
@@ -196,10 +196,14 @@ function trackSession(connection, notification) {
   const { type, turnId, payload = {} } = notification.params;
   if (type === "turn.started") {
     z.running.set(turnId, payload.inputId ?? null);
+    if (payload.inputId) z.joined.add(baseId(payload.inputId));
     z.outstanding.delete(payload.inputId);
     if (z.cancelRequested) void command(connection, z.sessionId, "stop", {}).catch(() => {});
   } else if (type === "turn.steerDrained") {
-    for (const id of inputIdsOf(payload)) z.outstanding.delete(id);
+    for (const id of inputIdsOf(payload)) {
+      z.joined.add(baseId(id));
+      z.outstanding.delete(id);
+    }
   } else if (type === "turn.completed" || type === "turn.failed") {
     z.running.delete(turnId);
     z.outstanding.delete(payload.inputId);
@@ -292,6 +296,7 @@ class ZcodeConnection {
      *   sessionId: string | null,
      *   running: Map<string, string>,
      *   outstanding: Set<string>,
+     *   joined: Set<string>,
      *   sent: Set<string>,
      *   ended: Array<{ turnId: string, inputId: string, type: string, payload: object }>,
      *   steering: number,
@@ -304,7 +309,7 @@ class ZcodeConnection {
      *   rejectClosed?: (reason: Error) => void
      * }} */
     const z = this.session = {
-      request, sessionId: sessionId ?? null, running: new Map(), outstanding: new Set(), sent: new Set(), ended: [],
+      request, sessionId: sessionId ?? null, running: new Map(), outstanding: new Set(), joined: new Set(), sent: new Set(), ended: [],
       steering: 0, pending: false, cancelRequested: false, closed: null, selection: null, changed: null
     };
     z.closedPromise = new Promise((_resolve, reject) => { z.rejectClosed = reject; });
@@ -384,9 +389,15 @@ class ZcodeConnection {
 
   delivered(item) { return Boolean(item.clientId && this.deliveredIds.has(item.clientId)); }
   controlsReady() { return Boolean(this.session?.pending); }
+  steerHeld(id) { return Boolean(this.session?.joined.has(id)); }
+  steerLost(id) {
+    for (const input of this.session?.outstanding ?? []) {
+      if (baseId(input) === id) this.session.outstanding.delete(input);
+    }
+  }
 
-  // An accepted steer is `steered`. If the server ends before ZCode puts it into a turn, the
-  // run hands it back in `unjoinedSteers` and the worker runs it as the next turn; if the run
+  // An accepted steer stays owed until a session event shows it joined a turn. If the server
+  // ends first, the run hands it back in `unjoinedSteers` and the worker runs it as the next turn; if the run
   // ends otherwise without it, it is reported in `droppedSteers`.
   /** @param {import("../types").InboxMessage} message */
   async steer(turnId, message) {
@@ -401,7 +412,7 @@ class ZcodeConnection {
       const ack = await sendText(this, commandId, message.text, "guide");
       if (ack.status !== "accepted") throw new Error(refused(ack, "steer"));
       // Accepted while idle, ZCode starts it as its own turn, and this run waits for it.
-      return { turnId };
+      return { turnId, unconfirmed: true };
     } catch (error) {
       z.outstanding.delete(commandId);
       throw error;
@@ -425,7 +436,7 @@ class ZcodeConnection {
     const client = this.client;
     const z = this.session;
     const sessionId = z.sessionId;
-    const { unresolvedInputMs, duplicateStartMs } = zcodeTimings();
+    const { unresolvedInputMs, duplicateWaitMs } = zcodeTimings();
     const id = options.clientId;
     let commandId = nextCommandId(z, id);
     let turnId = null;
@@ -434,6 +445,7 @@ class ZcodeConnection {
     let resolveDone;
     const done = new Promise(resolve => { resolveDone = resolve; });
     let settleTimer = null;
+    let duplicateStarted = null;
     const ours = end => end.inputId === commandId;
     const settle = () => { clearTimeout(settleTimer); settleTimer = null; };
     const check = () => {
@@ -441,6 +453,7 @@ class ZcodeConnection {
         const started = [...z.running].find(([, inputId]) => inputId === commandId)?.[0] ?? z.ended.slice(first).find(ours)?.turnId;
         if (started) { turnId = started; options.onTurnId(started); }
       }
+      if (turnId) duplicateStarted?.(true);
       if (!z.pending || !z.ended.slice(first).some(ours) || z.running.size || z.steering) { settle(); return; }
       if (z.outstanding.size && !z.cancelRequested) {
         // ZCode took a steer that neither joined a turn nor started one: give it time. ZCode
@@ -475,21 +488,33 @@ class ZcodeConnection {
     z.changed = check;
     try {
       for (let resend = 0; ; resend += 1) {
-        // Each discarded or duplicate answer is immediate, and suffixes an earlier process used
+        // Each discarded answer is immediate, and suffixes an earlier process used
         // are unknown here, so the bound is generous.
         z.outstanding.add(commandId);
         const ack = await sendText(this, commandId, options.prompt, "startNow");
         if (ack.status === "accepted") break;
         z.outstanding.delete(commandId);
-        // The id reached ZCode before its process was replaced, but not the session. ZCode
-        // answers `duplicate` while it may still start it, and a failure naming the restart
-        // once it discarded it: send it again under a new id unless it starts.
-        const discarded = ack.status === "failed" && ack.reasonCode === DISCARDED_ON_RESTART;
-        if ((ack.status === "duplicate" || discarded) && resend < 20) {
-          if (ack.status === "duplicate") {
-            await live(this, new Promise(resolve => setTimeout(resolve, duplicateStartMs)));
-            if ([...z.running.values(), ...z.ended.slice(first).map(end => end.inputId)].includes(commandId)) break;
+        // A duplicate may still start: adopt only that id, as soon as its session event arrives.
+        if (ack.status === "duplicate") {
+          let timer;
+          let started;
+          try {
+            started = await live(this, new Promise(resolve => {
+              duplicateStarted = resolve;
+              timer = setTimeout(() => resolve(false), duplicateWaitMs);
+              check();
+            }));
+          } finally {
+            clearTimeout(timer);
+            duplicateStarted = null;
           }
+          if (started) break;
+          return { turnId: null, turnStatus: "failed", finalMessage: "", teardown: true,
+            error: { message: `ZCode already holds this message (duplicate id) and did not start it within ${Number((duplicateWaitMs / 1000).toFixed(1))} s; it was not sent again, so it can't run twice.` }, ...receipts() };
+        }
+        // Only positive evidence that the old input was discarded permits a fresh id.
+        const discarded = ack.status === "failed" && ack.reasonCode === DISCARDED_ON_RESTART;
+        if (discarded && resend < 20) {
           commandId = nextCommandId(z, id);
           continue;
         }

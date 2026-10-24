@@ -98,22 +98,36 @@ function sendText(m, envelope) {
   }
   const admit = () => { state.commands[sessionId + ':' + envelope.commandId] = { status: 'accepted', process: process.pid }; promote(); save(); };
   const ack = delivery => { admit(); send({ id: m.id, result: { commandId: envelope.commandId, status: 'accepted', revisionAtDecision: 1, result: { type: 'inputAccepted', delivery, inputId: envelope.commandId } } }); };
+  if (options.duplicateFirst && !state.duplicateHeld) {
+    state.duplicateHeld = input.commandId; admit();
+    send({ id: m.id, result: { commandId: input.commandId, status: 'duplicate', revisionAtDecision: 1 } });
+    if (options.duplicateStartMs != null) setTimeout(() => startTurn(input), options.duplicateStartMs);
+    return;
+  }
   if (options.rejectSend) { send({ id: m.id, result: { commandId: envelope.commandId, status: 'rejected', reasonCode: 'proto.fake', message: 'fake refusal', revisionAtDecision: 1 } }); return; }
   if (options.dieBeforeFirstSend && !state.diedBeforeSend) { state.diedBeforeSend = true; save(); console.error('fake zcode died before admission'); process.exit(17); }
   if (options.dieAfterAdmit && !state.diedAfterAdmit) { state.diedAfterAdmit = true; admit(); console.error('fake zcode died after admission'); process.exit(17); }
   if (!active) { ack('startNow'); startTurn(input); return; }
-  if (payload.requestedDelivery === 'guide' && options.guideHold) { ack('queue'); state.held = [...(state.held || []), input.commandId]; save(); active.guided?.(); return; }
+  if (payload.requestedDelivery === 'guide' && options.guideHold) {
+    ack('queue'); state.held = [...(state.held || []), input.commandId];
+    // Persisted inclusion whose notification never reached the worker.
+    if (options.guideHistoryOnly) history().push({ commandId: input.commandId, text: input.text });
+    save(); active.guided?.(); return;
+  }
   if (payload.requestedDelivery === 'guide' && !options.guideMiss) {
     ack('queue');
     event('turn.steerQueued', active.turnId, { pendingInputId: 'queue_' + input.commandId, inputId: input.commandId, input: input.text, inputPreview: input.text, inputSize: input.text.length, delivery: 'guide', targetTurnId: active.turnId, queueLength: 1 });
     const turn = active;
-    setTimeout(() => {
+    const drain = () => {
       if (active !== turn) { queue.push(input); return; }
       turn.steers.push(input.text); history().push({ commandId: input.commandId, text: input.text }); save();
       const source = options.drainIds ?? 'both';
       event('turn.steerDrained', turn.turnId, { pendingInputIds: source === 'drained' ? [] : ['queue_' + input.commandId], targetTurnId: turn.turnId, injectedMessageIds: ['msg-steer'], ...(source === 'pending' ? {} : { drainedInputs: [{ pendingInputId: 'queue_' + input.commandId, messageId: 'msg-steer', text: input.text, delivery: 'guide', intent: { sourceCommandId: input.commandId } }] }) });
       turn.guided?.();
-    }, 10);
+    };
+    if (options.guideDrainGate) {
+      const timer = setInterval(() => { if (fs.existsSync(file + '.drain')) { clearInterval(timer); drain(); } }, 10);
+    } else setTimeout(drain, 10);
     return;
   }
   if (payload.requestedDelivery === 'startNow') { finish('cancelled'); clearTimeout(active?.timer); ack('startNow'); setTimeout(() => startTurn(input), 5); return; }

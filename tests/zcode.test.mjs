@@ -8,6 +8,7 @@ import { zcodeEventRecorder } from "../plugins/relay/scripts/lib/backends/zcode/
 import { companion, finishJob, jobDir, jobDirs, promptFile, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 import { installFakeZcode } from "./fakes/zcode.mjs";
 import { backendReadyEnv } from "./support/backend-ready.mjs";
+import { owedMessages, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 
 const HEADER = "backend: zcode\nmodel: glm-5.3\neffort: default";
 const UNATTENDED = ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Agent", "SendMessage", "CronCreate", "CronDelete", "CronList", "CronUpdate", "ReadSessionContext"];
@@ -101,15 +102,23 @@ test("a turn completes with its report; every request carries the job's settings
 
 test("a running steer is a guide drained into the turn by either id field; an idle steer runs the next turn", async t => {
   for (const drainIds of ["drained", "pending"]) {
-    const ctx = fixture(t, { turnMs: 700, drainIds, steered: true });
+    const ctx = fixture(t, { turnMs: 700, drainIds, steered: true, guideDrainGate: true });
     const { id } = startJob(ctx, HEADER, "First.");
     await waitFor(() => readJob(ctx, id).turnId);
     assert.equal(companion(ctx, ["steer", id, "--message", "Mid-turn."]).status, 0);
+    const dir = jobDir(ctx, id);
+    const message = await waitFor(() => owedMessages(dir).find(m => m.kind === "steer"));
+    await waitFor(() => readOutcome(dir, message.id)?.action === "interject-queued");
+    assert.equal(events(ctx, id).some(e => e.params?.type === "turn.steerDrained"), false);
+    assert.match(companion(ctx, ["status", id, "--json"]).stdout, /interject-queued/);
+    fs.writeFileSync(`${ctx.fakeState}.drain`, "drain");
     await finishJob(ctx, id);
     assert.equal(report(ctx, id), "Report for: First.\nSteered with: Mid-turn.\n");
     const steer = readJob(ctx, id).messages.filter(m => m.kind === "steer");
-    assert.deepEqual(steer.map(m => m.action), ["steered"]);
+    assert.deepEqual(steer.map(m => m.action), ["interject-queued", "steered"]);
     assert.equal(steer[0].turnId, "turn-1");
+    assert.equal(readOutcome(dir, message.id).action, "steered");
+    assert.deepEqual(owedMessages(dir), []);
     assert.deepEqual(ctx.zcode().inputs.map(input => [input.delivery, input.active]), [["startNow", false], ["guide", true]]);
     const guide = ctx.zcode().inputs[1];
     assert.deepEqual([guide.modelSelection, guide.mode, guide.toolDisallowlist, guide.heldQueueDisposition], [ctx.zcode().inputs[0].modelSelection, "yolo", UNATTENDED, "clearQueueAndSend"]);
@@ -175,6 +184,34 @@ test("a message ZCode admitted but discarded with its process runs once under a 
   const briefs = ctx.zcode().requests.filter(r => r.params?.type === "sendText" && r.params.payload.text === "[quick] Admitted then lost.");
   assert.deepEqual(briefs.map(r => r.params.commandId), [`brief-${id}`, `brief-${id}`, `brief-${id}~1`]);
   assert.equal(readJob(ctx, id).state, "completed");
+});
+
+test("a duplicate starting after 2.5 seconds runs only the original command", async t => {
+  const ctx = fixture(t, { duplicateFirst: true, duplicateStartMs: 2500 });
+  ctx.env.RELAY_JOBS_ZCODE_DUPLICATE_MS = "";
+  const { id } = startJob(ctx, HEADER, "[quick] Already held.");
+  await finishJob(ctx, id);
+  assert.deepEqual(commands(ctx, "sendText").map(r => r.params.commandId), [`brief-${id}`]);
+  assert.deepEqual(ctx.zcode().turns.map(turn => turn.commandId), [`brief-${id}`]);
+});
+
+test("a duplicate that never starts fails and drops the message without a second send", async t => {
+  const ctx = fixture(t);
+  const { id } = startJob(ctx, HEADER, "[quick] First.");
+  await finishJob(ctx, id);
+  installFakeZcode(ctx.bin, { duplicateFirst: true });
+  assert.equal(companion(ctx, ["continue", id, "--message", "[quick] Already held."]).status, 0);
+  await finishJob(ctx, id, 3);
+  const job = readJob(ctx, id);
+  const messageId = job.attempts.at(-1).messageId;
+  const outcome = readOutcome(jobDir(ctx, id), messageId);
+  assert.equal(job.state, "failed");
+  assert.equal(outcome.action, "dropped");
+  assert.match(outcome.reason, /ZCode already holds this message \(duplicate id\).*it was not sent again, so it can't run twice/);
+  assert.equal(job.attempts.at(-1).teardown.messageId, messageId);
+  assert.deepEqual(owedMessages(jobDir(ctx, id)), []);
+  assert.deepEqual(commands(ctx, "sendText").map(r => r.params.commandId), [`brief-${id}`, messageId]);
+  assert.equal(ctx.zcode().turns.length, 1);
 });
 
 test("modes: read-only removes writing tools and allows permission only for reading tools; reverse requests are answered", async t => {
@@ -399,8 +436,10 @@ test("a steer ZCode accepted but held is reported dropped, never sent twice; a c
   assert.equal(companion(ctx, ["steer", id, "--message", "[quick] Held."]).status, 0);
   await finishJob(ctx, id);
   const steer = readJob(ctx, id).messages.filter(m => m.kind === "steer");
-  assert.deepEqual(steer.map(m => m.action), ["steered", "dropped"]);
+  assert.deepEqual(steer.map(m => m.action), ["interject-queued", "dropped"]);
   assert.match(steer[1].reason, /neither ran it nor added it to a turn within 0 s; it was not sent again/);
+  assert.deepEqual(owedMessages(jobDir(ctx, id)), []);
+  assert.equal(readJob(ctx, id).attempts.length, 1);
   assert.equal(readJob(ctx, id).state, "completed");
   assert.equal(report(ctx, id), "Report for: First.\n");
   assert.deepEqual(ctx.zcode().turns.map(turn => turn.commandId), [`brief-${id}`]);
@@ -415,7 +454,7 @@ test("a steer ZCode accepted but held is reported dropped, never sent twice; a c
   companion(cancelled, ["cancel", launched.id]);
   await finishJob(cancelled, launched.id, 5);
   const actions = readJob(cancelled, launched.id).messages.filter(m => m.kind === "steer");
-  assert.deepEqual(actions.map(m => m.action), ["steered", "dropped"]);
+  assert.deepEqual(actions.map(m => m.action), ["interject-queued", "dropped"]);
   assert.equal(actions[1].reason, "the job was cancelled before ZCode took the steer");
   // ZCode now holds its queue; the next message clears the dropped steer and runs alone.
   assert.equal(cancelled.zcode().sessions.sess_1.heldQueue.length, 1);
@@ -486,6 +525,32 @@ function withEnv(t, values) {
   t.after(() => { for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } });
 }
 const runOf = (client, id = "m1") => connections.get(client).run({ prompt: "main", clientId: id, source: "brief", onTurnId() {}, onPending() {} });
+
+test("steer acceptance stays unconfirmed until a start or drain proves inclusion, including suffixed ids", async () => {
+  for (const evidence of ["turn.started", "turn.steerDrained"]) {
+    const { client } = await opened();
+    const connection = connections.get(client);
+    const run = runOf(client);
+    await waitFor(() => connection.controlsReady());
+    client.emit("turn.started", "t1", { inputId: "m1" });
+    connection.session.sent.add("a");
+    assert.deepEqual(await connection.steer("t1", { id: "a", text: "A" }), { turnId: "t1", unconfirmed: true });
+    assert.equal(connection.steerHeld("a"), false);
+    client.emit("turn.steerQueued", "t1", { inputId: "a~1" });
+    assert.equal(connection.steerHeld("a"), false);
+    client.emit(evidence, evidence === "turn.started" ? "t2" : "t1", {
+      inputId: "a~1", drainedInputs: [{ intent: { sourceCommandId: "a~1" } }]
+    });
+    assert.equal(connection.steerHeld("a"), true);
+    if (evidence === "turn.started") client.emit("turn.completed", "t2", { inputId: "a~1", resultType: "success", response: "A" });
+    client.emit("turn.completed", "t1", { inputId: "m1", resultType: "success", response: "R" });
+    assert.deepEqual((await run).droppedSteers, []);
+    connection.session.outstanding.add("lost~2");
+    connection.steerLost("lost");
+    assert.equal(connection.session.outstanding.has("lost~2"), false);
+    assert.equal(connection.steerHeld("lost"), false);
+  }
+});
 
 test("a steer arriving as an older steer's wait expires keeps its own wait and its own turn", async t => {
   withEnv(t, { RELAY_JOBS_ZCODE_UNRESOLVED_MS: "100" });
@@ -597,9 +662,9 @@ test("the wait defaults and overrides reach model reads, duplicate waits and unt
   const originalTimer = globalThis.setTimeout;
   try {
     for (const [values, expected] of [
-      [[], [10000, 2000, 10000]],
-      [["5", "x", "7"], [7, 2000, 5]],
-      [["-1", "-5", "-3"], [10000, 2000, 10000]]
+      [[], [10000, 60000, 10000]],
+      [["5", "x", "7"], [7, 60000, 5]],
+      [["-1", "-5", "-3"], [10000, 60000, 10000]]
     ]) {
       names.forEach((name, index) => { if (values[index] === undefined) delete process.env[name]; else process.env[name] = values[index]; });
       const delays = [];
@@ -612,11 +677,12 @@ test("the wait defaults and overrides reach model reads, duplicate waits and unt
           "session/resume": { settings: { model: { current: { providerId: "p", modelId: "GLM-5.3" }, available: [] } } },
           sendText: params => Promise.resolve(ack(params, { status: params.commandId === "main" ? "duplicate" : "accepted" }))
         }, { model: "glm-5.3-flash" });
-        const run = runOf(client, "main");
-        while (!client.requests.some(request => request.params.commandId === "main~1")) await new Promise(resolve => originalTimer(resolve, 0));
+        assert.equal((await runOf(client, "main")).teardown, true);
+        const run = runOf(client, "next");
+        while (!connections.get(client).controlsReady()) await new Promise(resolve => originalTimer(resolve, 0));
         await connections.get(client).steer(null, { id: "guide", text: "more" });
-        client.emit("turn.started", "turn", { inputId: "main~1" });
-        client.emit("turn.completed", "turn", { inputId: "main~1", resultType: "success", response: "Report" });
+        client.emit("turn.started", "turn", { inputId: "next" });
+        client.emit("turn.completed", "turn", { inputId: "next", resultType: "success", response: "Report" });
         assert.equal((await run).droppedSteers[0].id, "guide");
         assert.deepEqual(delays, expected);
       } finally {
@@ -628,7 +694,7 @@ test("the wait defaults and overrides reach model reads, duplicate waits and unt
   }
 });
 
-test("an id discarded again and again is resent under fresh suffixes until ZCode takes it", async () => {
+test("an explicitly discarded id takes fresh suffixes, bounded at twenty resends", async () => {
   const discarded = params => Promise.resolve({ commandId: params.commandId, status: "failed", reasonCode: "fault.command.inputDiscardedOnRestart", revisionAtDecision: 0 });
   const { client } = await opened({ sendText: params => /~(6)$/.test(params.commandId) ? Promise.resolve(ack(params)) : discarded(params) });
   const run = runOf(client);
@@ -638,6 +704,9 @@ test("an id discarded again and again is resent under fresh suffixes until ZCode
   const result = await run;
   assert.equal(result.turnStatus, "completed");
   assert.deepEqual(client.requests.filter(r => r.params?.type === "sendText").map(r => r.params.commandId), ["m1", "m1~1", "m1~2", "m1~3", "m1~4", "m1~5", "m1~6"]);
+  const { client: neverAccepted } = await opened({ sendText: discarded });
+  assert.equal((await runOf(neverAccepted)).turnStatus, "failed");
+  assert.equal(neverAccepted.requests.filter(r => r.params?.type === "sendText").length, 21);
 });
 
 test("a steer ZCode accepted when its server ends is handed back to run again, not dropped", async () => {
@@ -731,22 +800,38 @@ test("a run counts only its own session's events and its own turn", async () => 
   assert.deepEqual([(await second).finalMessage, (await second).turnId], ["R2", "t2"]);
 });
 
-test("the duplicate path: a duplicate that starts during its wait is not resent; endless duplicates stop at twenty resends", async t => {
+test("a duplicate is adopted from its start event immediately, without resending", async t => {
   withEnv(t, { RELAY_JOBS_ZCODE_DUPLICATE_MS: "30" });
   const duplicate = params => Promise.resolve({ commandId: params.commandId, status: "duplicate", revisionAtDecision: 0 });
-  let { client } = await opened({ sendText: duplicate });
+  const { client } = await opened({ sendText: duplicate });
   const run = runOf(client);
   await sleep(10);
   client.emit("turn.started", "t1", { inputId: "m1" });
-  await sleep(40);
+  await waitFor(() => connections.get(client).controlsReady());
   client.emit("turn.completed", "t1", { inputId: "m1", resultType: "success", response: "R" });
   assert.equal((await run).finalMessage, "R");
   assert.deepEqual(client.requests.filter(r => r.params?.type === "sendText").map(r => r.params.commandId), ["m1"]);
-  ({ client } = await opened({ sendText: duplicate }));
-  const endless = await runOf(client);
-  assert.equal(endless.turnStatus, "failed");
-  assert.match(endless.error.message, /ZCode refused the message \(duplicate\)/);
-  assert.equal(client.requests.filter(r => r.params?.type === "sendText").length, 21);
+});
+
+test("a duplicate with no session evidence tears down after the default 60 seconds of fake time", async t => {
+  withEnv(t, { RELAY_JOBS_ZCODE_DUPLICATE_MS: "" });
+  const { client } = await opened({ sendText: params => Promise.resolve(ack(params, { status: "duplicate" })) });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const run = runOf(client);
+  // Flush request/ack microtasks so the duplicate wait is armed before advancing time.
+  await new Promise(resolve => setImmediate(resolve));
+  let finished = false;
+  run.then(() => { finished = true; });
+  t.mock.timers.tick(59999);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, false);
+  t.mock.timers.tick(1);
+  const result = await run;
+  assert.equal(result.turnStatus, "failed");
+  assert.equal(result.teardown, true);
+  assert.equal(result.retryable, false);
+  assert.equal(result.error.message, "ZCode already holds this message (duplicate id) and did not start it within 60 s; it was not sent again, so it can't run twice.");
+  assert.deepEqual(client.requests.filter(r => r.params?.type === "sendText").map(r => r.params.commandId), ["m1"]);
 });
 
 test("a cancel ends only its own run: the next run on the client gives an untaken steer the normal wait", async t => {

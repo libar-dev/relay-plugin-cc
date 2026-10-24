@@ -329,3 +329,49 @@ test("turns on the same connection ignore critical load and pacing without refre
   await runWorker(s.dir, s.options);
   assert.equal(readJob(s.dir).state, "completed"); assert.equal(turns, 2); assert.equal(connections, 1);
 });
+
+for (const [name, variable] of [["codex", "CODEX_HOME"], ["zcode", "ZCODE_DATA_BASE_DIR"]]) test(`${name} resumed workers use the current execution account for admission and refusals`, async t => {
+  const { recordRefusal } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const s = seed(t); s.unblock();
+  if (name === "zcode") {
+    const { installFakeZcode } = await import("./fakes/zcode.mjs");
+    s.ctx.env.ZCODE_BINARY = installFakeZcode(s.ctx.bin).binary;
+  }
+  const originalHome = path.join(s.ctx.root, "account-a"), currentHome = path.join(s.ctx.root, "account-b");
+  fs.mkdirSync(originalHome); fs.mkdirSync(currentHome);
+  s.ctx.env[variable] = originalHome;
+  const values = { backend: name, model: "default", effort: "default", cd: s.ctx.work };
+  const first = buildLaunchRequest(values, { baseDir: s.ctx.work, env: s.ctx.env });
+  writeJob(s.dir, { ...readJob(s.dir), request: first });
+  await runWorker(s.dir, s.options);
+  assert.equal(readJob(s.dir).state, "completed");
+  s.ctx.env[variable] = currentHome;
+  const current = buildLaunchRequest(values, { baseDir: s.ctx.work, env: s.ctx.env });
+  assert.notEqual(first.account, current.account);
+  const home = s.ctx.env.RELAY_ADMISSION_HOME, pauseFile = path.join(home, "pauses", `${name}-${current.account}.json`);
+  recordRefusal(home, name, { kind: "rate" }, "previous", { ...s.options.admission, env: s.ctx.env, request: current });
+  let waited = false, connections = 0;
+  s.options.admissionSleep = async () => {
+    const job = readJob(s.dir);
+    assert.equal(job.admission.waitKind, "pause"); assert.equal(job.request.account, current.account);
+    waited = true; fs.rmSync(pauseFile); s.tick(D.spacingMs);
+  };
+  const backend = backendNamed(name), connect = backend.connect;
+  t.mock.method(backend, "connect", async (request, options) => {
+    connections++;
+    assert.equal(waited, true, "the current account pause must gate the resumed connection");
+    assert.equal(request.account, current.account); assert.equal(options.env[variable], currentHome);
+    const connection = await connect(request, options);
+    t.mock.method(connection, "run", async () => ({ turnStatus: "failed", finalMessage: "", error: name === "codex"
+      ? { codexErrorInfo: "usageLimitExceeded", message: "synthetic quota" }
+      : { data: { code: "1113" }, message: "synthetic quota" } }));
+    return connection;
+  });
+  postInboxMessage(s.dir, { kind: "continue", text: "[quick] Resume under current account." });
+  await runWorker(s.dir, s.options);
+  const job = readJob(s.dir);
+  assert.equal(connections, 1); assert.equal(job.state, "failed"); assert.equal(job.refusal.kind, "usage");
+  assert.equal(job.request.account, current.account);
+  assert.equal(JSON.parse(fs.readFileSync(pauseFile)).account, current.account);
+  assert.equal(fs.existsSync(path.join(home, "pauses", `${name}-${first.account}.json`)), false);
+});

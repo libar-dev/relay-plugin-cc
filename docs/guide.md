@@ -172,7 +172,10 @@ Very heavy means GPT-6 Astra and Kimi K3 at every effort. Max/ultra effort on ot
 A macOS pressure warning is shown but holds nothing. A turn of a job that is already running waits only for critical memory/pressure
 or provider pauses/probes. Low memory, high load or a backend's usage or rate limit can delay new starts;
 the queue reason tells you which. `/relay:setup` shows the saved settings and whether the guard is active.
-Use `/relay:setup --admission off` to turn it off and `--admission on` to restore it.
+If the guard itself fails, new starts wait with the error as their queue reason. Damaged guard
+records count as busy until set aside. Provider pauses apply to the selected account home.
+Use `RELAY_ADMISSION=off` or `/relay:setup --admission off` to start without the guard, and
+`/relay:setup --admission on` to restore the saved setting.
 
 A queued job still occupies its Claude agent and, in a Workflow, one of that run's agent slots. A Workflow can
 run up to 16 agents at once, fewer with fewer CPUs; `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` changes that

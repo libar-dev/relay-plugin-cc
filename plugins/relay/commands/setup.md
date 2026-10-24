@@ -104,6 +104,9 @@ work with the overview, which applies them first; with `--backend` they are a us
 `--admission on|off` changes the load guard for every session of this user; change it only when
 the user asks. Very heavy jobs have no maximum; the minimum is two very heavy plus three other jobs.
 The configured guard path is independent of `RELAY_JOBS_HOME`.
+If the load guard fails, new starts wait and their state names the error. Damaged guard records
+count as busy until set aside. `RELAY_ADMISSION=off` or `/relay:setup --admission off` lets work
+start without the guard; do not turn it off unless the user asks.
 
 If `Next steps` says to install Codex with npm:
 - Use `AskUserQuestion` exactly once to ask whether Claude should install Codex now.
