@@ -575,7 +575,7 @@ async function runWorkerRound(jobDir, options, held) {
   const sample = (fresh = false) => {
     if (!["linux", "darwin"].includes(options.platform ?? process.platform)) return;
     try {
-      const table = fresh ? listProcesses() : readProcessTableCached({ home });
+      const table = fresh || !guardOn ? listProcesses() : readProcessTableCached({ home });
       sampleExecution(job, jobDir, table);
       const treeBytes = executionBytes(job, table, { jobDir });
       if (slot) updateSlotMemory(home, job.id, me, treeBytes, admissionDeps);

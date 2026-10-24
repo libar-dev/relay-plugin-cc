@@ -161,10 +161,19 @@ test("capacity retries check critical pressure before sending another turn", asy
 });
 
 test("inherited guard off survives a partial worker environment and creates no admission files", async t => {
-  const s = seed(t);
+  const s = seed(t, "[held] Wait for a heartbeat with the guard off.");
   delete s.options.env.RELAY_ADMISSION;
   assert.equal(process.env.RELAY_ADMISSION, "off");
-  await runWorker(s.dir, s.options);
+  const release = path.join(s.ctx.root, "release-guard-off");
+  s.options.env.FAKE_CODEX_RELEASE_FILE = release;
+  const running = runWorker(s.dir, s.options);
+  try {
+    await waitFor(() => readJob(s.dir).treeBytes > 0);
+    assert.equal(fs.existsSync(s.ctx.env.RELAY_ADMISSION_HOME), false, "a heartbeat must not create the disabled guard's cache");
+  } finally {
+    fs.writeFileSync(release, "release");
+    await running;
+  }
   assert.equal(readJob(s.dir).state, "completed");
   assert.equal(fs.existsSync(s.ctx.env.RELAY_ADMISSION_HOME), false);
 });

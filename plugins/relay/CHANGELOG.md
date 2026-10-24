@@ -21,6 +21,8 @@ Changed:
 
 Fixed:
 
+- Worker heartbeats keep process accounting active with the load guard off without creating
+  the disabled guard's shared cache directory.
 - Terminal result text omits live memory accounting, keeping verbatim relay hand-backs stable
   while the backend closes and cleanup releases its memory.
 - macOS cleanup excludes its own process-table sampler, so an empty worker group no longer
