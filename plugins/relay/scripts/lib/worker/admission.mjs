@@ -666,7 +666,7 @@ function applyRefusal(old, refusal, jobId, now, backend, account) {
   const same = !old?.damaged && old?.kind === refusal.kind;
   const strikes = same ? (old.strikes ?? 1) + ((now >= Date.parse(old.until) || old.lastJobId !== jobId) ? 1 : 0) : 1;
   const reset = Date.parse(refusal.resetAt);
-  const provider = refusal.kind === "usage" && Number.isFinite(reset) && reset <= now + DEFAULTS.pauseExpiryMs;
+  const provider = refusal.kind === "usage" && Number.isFinite(reset) && reset > now && reset <= now + DEFAULTS.pauseExpiryMs;
   const duration = refusal.kind === "usage" ? DEFAULTS.usagePauseMs : refusal.kind === "concurrency" ? DEFAULTS.concurrencyPauseMs : Math.min(DEFAULTS.ratePauseMs * 2 ** Math.min(strikes - 1, 20), DEFAULTS.maxRatePauseMs);
   const until = Math.max(old?.damaged ? Date.parse(old.until) : 0, provider ? reset : now + Math.min(duration, DEFAULTS.pauseExpiryMs));
   return { v: 1, backend, account, ...refusal, since: same ? old.since : iso(now), updatedAt: iso(now), until: iso(until), strikes, resetSource: provider ? "provider" : "default", lastJobId: jobId, probe: null };

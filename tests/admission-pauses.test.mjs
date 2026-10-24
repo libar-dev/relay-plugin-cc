@@ -312,9 +312,13 @@ for (const kind of ["rate", "usage"]) test(`pending ${kind} refusals keep their 
   assert.equal(admit(s.ctx(2), s.deps).admit, true, "legacy pending files use mtime as receipt time");
 });
 
-test("an already-expired explicit provider reset proceeds to a probe", t => {
-  const s = setup(t), resetAt = new Date(s.deps.now() - 1000).toISOString();
-  assert.equal(recordRefusal(s.root, "codex", { kind: "usage", resetAt }, "old", s.deps).until, resetAt);
+test("a provider reset already past at receipt gets the default usage pause, not an immediate probe", t => {
+  const s = setup(t), now = s.deps.now(), resetAt = new Date(now - 1000).toISOString();
+  const p = recordRefusal(s.root, "codex", { kind: "usage", resetAt }, "old", s.deps);
+  assert.equal(p.resetSource, "default");
+  assert.equal(p.until, new Date(now + D.usagePauseMs).toISOString());
+  assert.equal(admit(s.ctx(1), s.deps).waitKind, "pause");
+  s.tick(D.usagePauseMs);
   assert.equal(admit(s.ctx(1), s.deps).slot.probe, true);
 });
 
