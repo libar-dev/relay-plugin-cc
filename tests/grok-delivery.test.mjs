@@ -430,7 +430,8 @@ import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mj
         } else {
           await waitFor(() => companion(ctx, ['status', id]).stdout.includes('state: dead'));
         }
-        assert.equal(companion(ctx, ['resume', id, '--message', '[quick] Recover.']).status, 0);
+        const resumed = companion(ctx, ['resume', id, '--message', '[quick] Recover.']);
+        assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr);
         await finishJob(ctx, id);
         const after = readJob(ctx, id);
         assert.equal(after.sessionId, before.sessionId);

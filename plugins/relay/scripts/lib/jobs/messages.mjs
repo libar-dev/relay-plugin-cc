@@ -27,16 +27,24 @@ export function postInboxMessage(jobDir, message) {
 }
 
 
-export function pendingInboxMessages(jobDir) {
-  const paths = jobPaths(jobDir);
-  try {
-    return fs
-      .readdirSync(paths.inbox)
-      .filter((name) => name.endsWith(".json") && !name.startsWith("."))
-      .sort();
-  } catch {
-    return [];
+export class InboxStorageError extends Error {
+  constructor(directory, cause) {
+    super(`Message storage uncertain: cannot list ${directory} (${cause.code ?? cause.message}); completion cannot be confirmed.`, { cause });
+    this.name = "InboxStorageError";
   }
+}
+
+function messageNames(directory) {
+  try { return fs.readdirSync(directory); }
+  catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw new InboxStorageError(directory, error);
+  }
+}
+
+export function pendingInboxMessages(jobDir) {
+  return messageNames(jobPaths(jobDir).inbox)
+    .filter(name => name.endsWith(".json") && !name.startsWith(".")).sort();
 }
 
 
@@ -175,10 +183,7 @@ const WORK_KINDS = new Set(["steer", "continue", "resume"]);
 export function readJobMessages(jobDir) {
   const paths = jobPaths(jobDir);
   const relays = new Map();
-  const namesIn = (dir) => {
-    try { return fs.readdirSync(dir).filter(name => name.endsWith(".json") && !name.startsWith(".")); }
-    catch { return []; }
-  };
+  const namesIn = dir => messageNames(dir).filter(name => name.endsWith(".json") && !name.startsWith("."));
   const relayDir = path.join(paths.inbox, "relay");
   for (const name of namesIn(relayDir).sort()) {
     const record = readJsonOrNull(path.join(relayDir, name));
@@ -211,12 +216,7 @@ export function readJobMessages(jobDir) {
 
 function readClaimedMessages(jobDir) {
   const paths = jobPaths(jobDir);
-  let names = [];
-  try {
-    names = fs.readdirSync(paths.claimed).filter((name) => name.endsWith(".json")).sort();
-  } catch {
-    return [];
-  }
+  const names = messageNames(paths.claimed).filter(name => name.endsWith(".json")).sort();
   return names
     .map((name) => readJsonOrNull(path.join(paths.claimed, name)))
     .filter(Boolean)

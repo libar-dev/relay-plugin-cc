@@ -238,7 +238,7 @@ fs.readFileSync = function(file, ...args) {
 });
 
 
-test("a completed job with a closing worker records one no-op cancel without delegating another", async t => {
+test("a completed job with a closing worker records one cleanup receipt without delegating another", async t => {
   const ctx = setup(t);
   const worker = await sleeper(t, true), server = await sleeper(t, false);
   const { id, jobDir } = recorded(ctx, worker.identity, server.identity, { state: "completed", attempts: [{ attempt: 1, state: "completed" }] });
@@ -251,5 +251,5 @@ test("a completed job with a closing worker records one no-op cancel without del
   const messages = ["inbox", "inbox/claimed"].flatMap(dir => fs.readdirSync(path.join(jobDir, dir)).filter(n => n.endsWith(".json")).map(n => JSON.parse(fs.readFileSync(path.join(jobDir, dir, n))))).filter(m => m.kind === "cancel");
   assert.equal(messages.length, 1);
   const outcome = JSON.parse(fs.readFileSync(path.join(jobDir, "inbox/outcomes", `${messages[0].id}.json`)));
-  assert.equal(outcome.action, "no-op");
+  assert.equal(outcome.action, "cancelled");
 });

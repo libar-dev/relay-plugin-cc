@@ -24,6 +24,7 @@ Changed:
 
 Fixed:
 
+- Unreadable message storage fails explicitly and preserves owed work; it cannot be mistaken for an empty inbox at completion.
 - Continuations and recovery use the same bounded launch path. Undelivered pending messages are
   withdrawn rather than acknowledged without a worker, and interrupted recovery keeps its message id.
 - Repeated launch failures stop after three attempts and show the error and count. Handoff retries

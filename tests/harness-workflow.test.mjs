@@ -159,3 +159,40 @@ test('a SendMessage resume skips the first-step gate even when its initial start
   const step = h.handlers['turn.step'](h.$, { index: 0, agentId: 'a-resumed', turnId: 't-resumed' }, async function* (e) { return await h.next(e); });
   await step.next(); assert.equal(h.runs.length, 0);
 });
+
+for (const event of ['agent.spawn', 'turn.step']) test(`${event} gate storage uncertainty reaches bounded start and cannot admit a worker`, async t => {
+  const { setup, companion, promptFile, jobDirs } = await import('./support/job-helpers.mjs');
+  const { readJob } = await import('../plugins/relay/scripts/lib/jobs/store.mjs');
+  const { hasLiveWorker } = await import('../plugins/relay/scripts/lib/worker/delivery.mjs');
+  const ctx = setup(t, { env: { RELAY_ADMISSION: 'on', RELAY_ADMISSION_HOME: '/dev/null/unwritable', RELAY_JOBS_ACK_TIMEOUT_MS: '100', RELAY_ADMISSION_POLL_MS: '20' } });
+  const h = hooks([]);
+  const gateResults = [];
+  h.$.process.run = async argv => {
+    if (argv[2] === 'check-header') return { exitCode: 0, stdout: 'ok\n' };
+    const result = companion(ctx, argv.slice(2)); gateResults.push(result);
+    return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr };
+  };
+  let starts = 0;
+  const boundedStart = () => {
+    starts++;
+    const result = companion(ctx, ['start', '--prompt-file', promptFile(ctx)]);
+    assert.equal(result.status, 6, result.stdout + result.stderr);
+    assert.match(result.stdout, /state: not started/);
+    return { agentId: 'a-refused' };
+  };
+  if (event === 'agent.spawn') await h.handlers[event](h.$, { ...spawnEvent, workflow: { runId: 'wf-storage' } }, boundedStart);
+  else {
+    await h.handlers['classic.SubagentStart'](h.$, { agent_type: 'relay:job', agent_id: 'a-unknown', transcript_path: '/missing/workflows/wf-storage/agent-a-unknown.jsonl' }, h.next);
+    const step = h.handlers[event](h.$, { index: 0, agentId: 'a-unknown', turnId: 't-storage' }, async function* () { return boundedStart(); });
+    await step.next();
+  }
+  assert.equal(starts, 1);
+  assert.equal(gateResults.length, 1);
+  assert.equal(gateResults[0].status, 1);
+  assert.match(gateResults[0].stderr, /guard unavailable/);
+  for (const dir of jobDirs(ctx)) {
+    assert.equal(readJob(dir).admission.state, 'not-started');
+    assert.equal(hasLiveWorker(dir), false);
+    assert.equal(readJob(dir).attempts.length, 0);
+  }
+});
