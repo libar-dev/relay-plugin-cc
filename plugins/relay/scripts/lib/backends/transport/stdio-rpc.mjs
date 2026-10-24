@@ -11,6 +11,7 @@ import { default as process } from "node:process";
 import { spawn } from "node:child_process";
 
 
+import { readProcessStartTime, isProcessIdentityAlive } from "../../util/process.mjs";
 import { PLUGIN_VERSION } from "../../util/plugin.mjs";
 
 
@@ -34,6 +35,8 @@ const DEFAULT_CAPABILITIES = {
   ]
 };
 
+
+export const MAX_LINE_BYTES = 64 * 1024 * 1024;
 
 const STDERR_TAIL_BYTES = 4096;
 
@@ -83,7 +86,8 @@ class AppServerClientBase {
     /** Called with every notification before the handler; never replaced by turn capture. */
     this.notificationTap = options.notificationTap ?? null;
     this.exitInfo = null;
-    this.lineBuffer = "";
+    this.lineChunks = [];
+    this.lineBytes = 0;
     this.transport = "unknown";
 
     this.exitPromise = new Promise((resolve) => {
@@ -130,13 +134,28 @@ class AppServerClientBase {
   }
 
   handleChunk(chunk) {
-    this.lineBuffer += chunk;
-    let newlineIndex = this.lineBuffer.indexOf("\n");
-    while (newlineIndex !== -1) {
-      const line = this.lineBuffer.slice(0, newlineIndex);
-      this.lineBuffer = this.lineBuffer.slice(newlineIndex + 1);
+    if (this.exitResolved) return;
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+    let from = 0;
+    while (from < bytes.length) {
+      const end = bytes.indexOf(10, from);
+      const piece = bytes.subarray(from, end === -1 ? bytes.length : end);
+      this.lineBytes += piece.length;
+      if (this.lineBytes > MAX_LINE_BYTES) {
+        this.lineChunks = [];
+        this.lineBytes = 0;
+        this.handleExit(createProtocolError(`${this.options.backendName ?? "codex"} sent a single message over 64 MiB; the connection was closed`));
+        void this.close();
+        return;
+      }
+      this.lineChunks.push(piece);
+      if (end === -1) break;
+      const line = Buffer.concat(this.lineChunks, this.lineBytes).toString("utf8");
+      this.lineChunks = [];
+      this.lineBytes = 0;
       this.handleLine(line);
-      newlineIndex = this.lineBuffer.indexOf("\n");
+      if (this.exitResolved) return;
+      from = end + 1;
     }
   }
 
@@ -222,6 +241,8 @@ class AppServerClientBase {
     this.resolveExit(undefined);
   }
 
+  async close() {}
+
   sendMessage(_message) {
     throw new Error("sendMessage must be implemented by subclasses.");
   }
@@ -248,7 +269,8 @@ export class SpawnedServerClient extends AppServerClientBase {
     });
     this.processEndPromise = new Promise((resolve) => { this.resolveProcessEnd = resolve; });
 
-    this.proc.stdout.setEncoding("utf8");
+
+    this.processIdentity = { pid: this.proc.pid, startTime: readProcessStartTime(this.proc.pid) };
     this.options.onSpawn?.(this.proc);
 
     this.proc.stderr.on("data", (chunk) => {
@@ -267,8 +289,8 @@ export class SpawnedServerClient extends AppServerClientBase {
     this.proc.stdout.on("end", () => {
       this.transportEnded = true;
       this.stdoutClosedBeforeExit = !this.exitSeen;
-      this.partialStdoutBytes = Buffer.byteLength(this.lineBuffer, "utf8");
-      this.lineBuffer = "";
+      this.partialStdoutBytes = this.lineBytes;
+      this.lineChunks = []; this.lineBytes = 0;
       // EOF can arrive while the process is still alive. Stop it so pending requests
       // get the actual exit details, even if it left stderr or its event loop open.
       if (!this.exitSeen) void this.close();
@@ -276,6 +298,7 @@ export class SpawnedServerClient extends AppServerClientBase {
     this.proc.on("close", (code, signal) => {
       clearTimeout(this.drainTimer);
       this.exitInfo = {
+        ...(this.exitInfo?.closeTimedOut ? { closeTimedOut: true } : {}),
         pid: this.proc.pid ?? null, code, signal, endedAt: new Date().toISOString(),
         stdoutClosedBeforeExit: Boolean(this.stdoutClosedBeforeExit),
         partialStdoutBytes: this.partialStdoutBytes ?? 0,
@@ -306,31 +329,43 @@ export class SpawnedServerClient extends AppServerClientBase {
   drainAfterExit() {
     if (this.exitResolved) return;
     if (!this.transportEnded) {
-      this.partialStdoutBytes = Buffer.byteLength(this.lineBuffer, "utf8");
-      this.lineBuffer = "";
+      this.partialStdoutBytes = this.lineBytes;
+      this.lineChunks = []; this.lineBytes = 0;
     }
     this.proc.stdout.destroy();
     this.proc.stderr.destroy();
   }
 
   async close() {
-    if (this.closed) {
-      await this.processEndPromise;
-      return;
-    }
-
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
-
-    if (this.proc && !this.proc.killed) {
-      this.proc.stdin.end();
-      setTimeout(() => {
-        if (this.proc && !this.proc.killed && this.proc.exitCode === null) {
-          this.proc.kill("SIGTERM");
+    this.closePromise = (async () => {
+      if (!this.proc) return;
+      const wait = ms => new Promise(resolve => {
+        const timer = setTimeout(() => resolve(false), ms);
+        this.processEndPromise.then(() => { clearTimeout(timer); resolve(true); });
+      });
+      const signal = name => {
+        if (!this.exitSeen && this.processIdentity?.startTime &&
+            isProcessIdentityAlive(this.processIdentity) && readProcessStartTime(this.proc.pid) === this.processIdentity.startTime) {
+          this.proc.kill(name);
         }
-      }, 50).unref?.();
-    }
-
-    await this.processEndPromise;
+      };
+      this.proc.stdin.end();
+      if (await wait(50)) return;
+      signal("SIGTERM");
+      if (await wait(this.options.closeGraceMs ?? 4950)) return;
+      // ChildProcess.killed means a signal was sent, not that the process exited.
+      signal("SIGKILL");
+      if (await wait(this.options.closeKillWaitMs ?? 5000)) return;
+      this.exitInfo = { pid: this.proc.pid, code: null, signal: null, closeTimedOut: true,
+        closeTimedOutAt: new Date().toISOString(), stderrTail: this.stderr };
+      this.options.onEnd?.(this.exitInfo);
+      this.proc.stdout.destroy();
+      this.proc.stderr.destroy();
+      this.handleExit(createProtocolError(`${this.options.backendName ?? "codex"} did not exit after SIGKILL`));
+    })();
+    return this.closePromise;
   }
 
   sendMessage(message) {

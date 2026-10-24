@@ -126,7 +126,9 @@ export class KimiConnection {
     this.state = { ...hooks.state };
     this.sessionId = null;
     // The session's record, read by this connection alone.
-    this.wire = new KimiWire(() => wireFile(String(this.request.kimiHome), this.sessionId));
+    this.wire = new KimiWire(() => wireFile(String(this.request.kimiHome), this.sessionId), {
+      retainPrompt: prompt => Object.values(this.state.deliveries ?? {}).some(delivery => delivery.sessionId === this.sessionId && prompt.at >= delivery.offset && prompt.text === delivery.text)
+    });
     // The one wire observer: run() starts it, and run(), interrupt() and close() abort it and
     // wait for it to stop. An observer left polling would keep the worker alive after the job.
     /** @type {{ controller: AbortController, done: Promise<any>, response: { value: any, error: any } } | null} */

@@ -202,7 +202,7 @@ import { companion, jobDirOf, readJobJson, relayContext, waitFor as waitForForAp
       const destroyed = [];
       client.proc = { stdout: { destroy: () => destroyed.push("stdout") }, stderr: { destroy: () => destroyed.push("stderr") } };
       client.transportEnded = stdoutEnded;
-      client.lineBuffer = stdoutEnded ? "" : '{"partial":';
+      client.lineBytes = stdoutEnded ? 0 : Buffer.byteLength('{"partial":');
       client.handleProcessExit(17, null);
       assert.equal(client.exitSeen, true);
       assert.deepEqual(scheduled.map(entry => entry.ms), [200]);

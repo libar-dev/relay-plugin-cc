@@ -568,21 +568,22 @@ test("cancel interrupts the running turn and wait exits 5", async () => {
   assert.equal(waitJob(ctx, jobId, 2).status, 5);
 });
 
-test("cancel stops a foreground job whose process-group kill fails with ESRCH", async () => {
+test("cancel stops a foreground task's detached worker and its waiter reports cancellation", async t => {
   const ctx = setup("job-hang", { env: { RELAY_JOBS_CANCEL_GRACE_MS: "300" } });
-  // Not detached: the foreground task shares the test's process group, so kill(-pid) fails
-  // with ESRCH, like a companion started in the foreground of a shell.
+  // The foreground caller waits while its worker owns a separate process group.
   const child = spawn("node", [SCRIPT, "task", "--model", "gpt-test", "--effort", "low", "Hang forever."], {
     cwd: ctx.work,
     env: ctx.env,
     stdio: "ignore"
   });
   const exited = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
-  const jobId = await waitFor(() => {
+  let jobId;
+  t.after(() => { if (jobId) companion(ctx, ["cancel", jobId]); child.kill("SIGKILL"); });
+  jobId = await waitFor(() => {
     for (const slug of fs.readdirSync(ctx.home)) {
       for (const id of fs.readdirSync(path.join(ctx.home, slug))) {
         const job = readJobJson(ctx, id);
-        if (job.turnId && job.worker?.pid === child.pid) {
+        if (job.turnId && job.worker?.pid && job.worker.pid !== child.pid) {
           return id;
         }
       }
@@ -596,7 +597,8 @@ test("cancel stops a foreground job whose process-group kill fails with ESRCH", 
     assert.match(cancelled.stdout, /killed the worker process/);
     const exit = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 5000))]);
     assert.ok(exit, "the foreground job is still alive after cancel");
-    assert.equal(exit.signal, "SIGTERM");
+    assert.equal(exit.signal, null);
+    assert.equal(exit.code, 1);
     assert.equal(readJobJson(ctx, jobId).state, "cancelled");
   } finally {
     child.kill("SIGKILL");
@@ -794,7 +796,7 @@ test("a continuation whose thread/resume fails keeps no previous report", async 
   assert.ok(fs.existsSync(path.join(jobDirOf(ctx, jobId), "attempts", "1-report.md")));
 });
 
-test("cancel of a foreground job (ESRCH path) leaves no worker, app-server or descendant running", async () => {
+test("cancel of a foreground task leaves no worker, app-server or descendant running", async () => {
   const ctx = setup("job-hang-child", { env: { RELAY_JOBS_CANCEL_GRACE_MS: "300" } });
   const child = spawn("node", [SCRIPT, "task", "--model", "gpt-test", "--effort", "low", "Hang with a child."], {
     cwd: ctx.work,
@@ -804,22 +806,24 @@ test("cancel of a foreground job (ESRCH path) leaves no worker, app-server or de
   let descendants = [];
   try {
     const record = await waitFor(() => ctx.fakeState().descendants?.[0]);
+    descendants = [record.appServerPid, record.childPid];
     const jobId = await waitFor(() => {
       for (const slug of fs.readdirSync(ctx.home)) {
         for (const id of fs.readdirSync(path.join(ctx.home, slug))) {
-          if (readJobJson(ctx, id).worker?.pid === child.pid) {
+          if (readJobJson(ctx, id).serverPid === record.appServerPid) {
             return id;
           }
         }
       }
       return null;
     });
-    descendants = [child.pid, record.appServerPid, record.childPid];
+    descendants = [readJobJson(ctx, jobId).worker.pid, record.appServerPid, record.childPid];
     const cancelled = companion(ctx, ["cancel", jobId]);
     assert.equal(cancelled.status, 0, cancelled.stderr);
     for (const pid of descendants) {
       assert.equal(pidAlive(pid), false, `process ${pid} survived cancel`);
     }
+    await waitFor(() => !pidAlive(child.pid));
     assert.equal(readJobJson(ctx, jobId).state, "cancelled");
   } finally {
     for (const pid of descendants) {

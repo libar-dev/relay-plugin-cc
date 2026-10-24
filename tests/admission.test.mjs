@@ -1,5 +1,7 @@
 import "./support/isolate-env.mjs";
 import fs from "node:fs";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -962,11 +964,13 @@ test("an unwritable admission home holds worker creation and records its reason"
   assert.match(job.admission.reason, /load guard error:.*RELAY_ADMISSION=off/);
   assert.equal(computeJobView(job, { now: s.deps.now() + 60001 }).state, "queued");
   fs.chmodSync(s.home, 0o700);
-  const open = fs.openSync; let retries = 0;
-  t.mock.method(fs, "openSync", (file, ...args) => {
-    if (file === path.join(c.jobDir, "stderr.log")) { retries++; throw new Error("synthetic spawn reached"); }
-    return open(file, ...args);
+  const spawn = childProcess.spawnSync; let retries = 0;
+  t.mock.method(childProcess, "spawnSync", (command, args, ...rest) => {
+    if (args?.[0]?.endsWith("/launcher.mjs")) { retries++; throw new Error("synthetic spawn reached"); }
+    return spawn(command, args, ...rest);
   });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   t.mock.method(process.stderr, "write", () => true);
   assert.equal(retryQueuedWorker(c.jobDir, { ...s.env, RELAY_ADMISSION: "off" }), null);
   assert.equal(retries, 1);

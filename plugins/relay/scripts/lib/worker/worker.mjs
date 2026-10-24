@@ -15,15 +15,15 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { admit, admissionHome, releaseSlot, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded, releaseProbe, wasAdmitted } from "./admission.mjs";
+import { admit, admissionHome, releaseSlot, updateSlotMemory, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded, releaseProbe, wasAdmitted } from "./admission.mjs";
 import { requestAccount } from "../jobs/request.mjs";
 import { backendFor } from "../backends/index.mjs";
 import { truncateCodePoints } from "../util/text.mjs";
 import { acquireWorkerLease, releaseWorkerLease, readLease } from "../jobs/lease.mjs";
 import { claimInboxMessages, CLOSED_ACTIONS, newMessageId, owedMessages, pendingInboxMessages, readOutcome, writeOutcome } from "../jobs/messages.mjs";
-import { jobPaths, nowIso, readJob, writeFileAtomic, writeJob } from "../jobs/store.mjs";
+import { jobPaths, nowIso, readJob, writeFileAtomic, writeJob, readJsonOrNull, writeJsonAtomic } from "../jobs/store.mjs";
 import { PLUGIN_VERSION } from "../util/plugin.mjs";
-import { readProcessStartTime } from "../util/process.mjs";
+import { ownExecution, readProcessStartTime, listProcesses, readProcessTableCached, sampleExecution, executionBytes, isProcessIdentityAlive } from "../util/process.mjs";
 import { stopRecordedAppServers, sweptAppServersPatch } from "./recovery.mjs";
 
 import { DEFAULT_RESUME_MESSAGE, recoveryForEpoch } from "./recovery.mjs";
@@ -121,6 +121,41 @@ function isCapacityError(error) {
 // and runs in the next round. After the lease is gone the inbox is read once more, and a
 // message found then is taken with a fresh lease (or by the worker that took it first).
 export async function runWorker(jobDir, options = {}) {
+  const launchFile = (options.env ?? process.env).RELAY_WORKER_LAUNCH;
+  if (launchFile) {
+    const deadline = Date.now() + 10000;
+    for (;;) {
+      const launch = readJsonOrNull(launchFile);
+      const table = listProcesses();
+      const byPid = new Map((table ?? []).map(row => [row.pid, row]));
+      let row = byPid.get(process.pid);
+      let underCaller = false;
+      const seen = new Set();
+      while (row && !seen.has(row.pid)) {
+        seen.add(row.pid);
+        if (row.pid === launch?.caller?.pid && row.startTime === launch.caller.startTime) underCaller = true;
+        row = byPid.get(row.ppid);
+      }
+      if (launch?.caller && table && !table.some(row => row.pid === launch.caller.pid && row.startTime === launch.caller.startTime && !row.zombie)) {
+        writeJsonAtomic(launchFile, { ...launch, state: "handoff-aborted", abortedAt: nowIso() });
+        return;
+      }
+      if (launch?.launcher && table && !isProcessIdentityAlive(launch.launcher) && !underCaller && (process.platform !== "darwin" || process.ppid === 1)) {
+        const self = byPid.get(process.pid);
+        writeJsonAtomic(launchFile, { ...launch, state: "acknowledged", acknowledgedAt: nowIso(),
+          worker: { pid: process.pid, startTime: self?.startTime, ppid: process.ppid, pgid: self?.pgid } });
+        break;
+      }
+      if (Date.now() >= deadline) {
+        if (launch) writeJsonAtomic(launchFile, { ...launch, state: "handoff-failed", failedAt: nowIso() });
+        throw new Error("Worker launch handoff did not leave the caller's process tree; no backend was started.");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+  if (process.platform === "linux") {
+    try { fs.writeFileSync("/proc/self/oom_score_adj", "500"); } catch {}
+  }
   // The submitting process may still be publishing its spawn reservation.
   const spawnDeadline = Date.now() + DEFAULTS.spawnGraceMs;
   while (readLease(jobDir)?.role === "spawn" && Date.now() < spawnDeadline) {
@@ -176,6 +211,25 @@ async function runWorkerRound(jobDir, options, held) {
 
   const executionEnv = { ...process.env, ...options.env };
   job = { ...job, request: { ...job.request, account: requestAccount(job.request, executionEnv) } };
+  const execution = ownExecution(me);
+  const legacyExecution = !job.execution && !job.executions?.length && job.worker
+    ? { leader: job.worker, pgid: job.worker.pgid ?? job.worker.pid, startedAt: job.worker.startedAt ?? job.startedAt }
+    : null;
+  const previousExecutions = [...new Map([...(job.executions ?? []), job.execution, legacyExecution].filter(Boolean)
+    .filter(e => !sameProcess(e.leader, me))
+    .map(e => [`${e.leader?.pid}:${e.leader?.startTime}`, { ...e, aliveUntil: e.aliveUntil ?? job.heartbeatAt ?? job.lastEventAt ?? job.startedAt }])).values()];
+  const launches = fs.readdirSync(jobDir).filter(name => /^launch-.*\.json$/.test(name)).map(name => {
+    const file = path.join(jobDir, name);
+    const launch = readJsonOrNull(file);
+    if (launch?.worker && ["pending", "acknowledged"].includes(launch.state) && !isProcessIdentityAlive(launch.worker)) {
+      const observed = { ...launch, state: "death-observed", deathObservedAt: nowIso() };
+      writeJsonAtomic(file, observed);
+      return observed;
+    }
+    return launch;
+  }).filter(Boolean).sort((a, b) => String(a.requestedAt).localeCompare(String(b.requestedAt))).slice(-20);
+  job = { ...job, jobDir, execution, executions: [...previousExecutions, execution].slice(-20), launches,
+    launch: readJsonOrNull(executionEnv.RELAY_WORKER_LAUNCH ?? "") ?? job.launch };
   const backend = backendFor(job.request);
   const admissionDeps = { env: executionEnv, ...options.admission };
   const home = admissionHome(admissionDeps.env);
@@ -183,7 +237,12 @@ async function runWorkerRound(jobDir, options, held) {
   const guardOn = admissionEnabled(admissionDeps.env, undefined, admissionDeps.platform ?? process.platform);
   let lastEventAt = job.lastEventAt ?? null;
   const save = (patch = {}) => {
-    job = { ...job, ...patch, lastEventAt, heartbeatAt: nowIso() };
+    const heartbeatAt = sameProcess(patch.worker ?? job.worker, me) ? nowIso() : job.heartbeatAt;
+    job = { ...job, ...patch, lastEventAt, heartbeatAt };
+    if (sameProcess(job.worker, me)) {
+      job.execution = { ...job.execution, aliveUntil: heartbeatAt };
+      job.executions = job.executions.map(e => sameProcess(e.leader, me) ? job.execution : e);
+    }
     writeJob(jobDir, job);
   };
 
@@ -306,7 +365,7 @@ async function runWorkerRound(jobDir, options, held) {
   accept(claimInboxMessages(jobDir));
   pruneDefaultResumes();
 
-  // Set when a predecessor's app-server survives the sweep: its identity stays on the job,
+  // Set when a predecessor's execution survives the sweep: its identity stays on the job,
   // and the worker ends without another round (the next one would meet the same server).
   let sweepFailed = false;
   const releaseAndReturn = async (patch) => {
@@ -318,6 +377,15 @@ async function runWorkerRound(jobDir, options, held) {
       save(patch);
       releaseWorkerLease(jobDir, me);
       return { job, stop: true };
+    }
+    if (job.cleanup?.state !== "empty") {
+      const sweep = await stopRecordedAppServers(job, { jobDir, ...options.predecessorCleanup });
+      if (sweep.survivors.length || sweep.cause) {
+        save({ ...patch, state: "failed", cleanup: { state: "unresolved", pids: sweep.survivors.map(p => p.pid), cause: sweep.cause },
+          errorMessage: `cleanup: unresolved (${sweep.survivors.map(p => p.pid).join(", ")})${sweep.cause ? `: ${sweep.cause}` : ""}` });
+        releaseWorkerLease(jobDir, me);
+        return { job, stop: true };
+      }
     }
     save({ ...patch, serverPid: null, server: null });
     return { job, held: handOff() };
@@ -494,8 +562,15 @@ async function runWorkerRound(jobDir, options, held) {
       slot = { ...slot, probe: false, probeGeneration: null, probeAt: null };
     }
   };
+  const sample = (fresh = false) => {
+    const table = fresh ? listProcesses() : readProcessTableCached({ home });
+    sampleExecution(job, jobDir, table);
+    const treeBytes = executionBytes(job, table, { jobDir });
+    if (slot) updateSlotMemory(home, job.id, me, treeBytes, admissionDeps);
+    save({ treeBytes });
+  };
   const heartbeat = setInterval(() => {
-    save({});
+    sample();
     if (slot?.probeAt && (admissionDeps.now ?? Date.now)() - Date.parse(slot.probeAt) >= DEFAULTS.probeMs) {
       if (activeTurnId) completeProbe();
       else if (releaseProbe(home, backend.name, job.id, admissionDeps, slot.probeGeneration))
@@ -541,7 +616,7 @@ async function runWorkerRound(jobDir, options, held) {
         appendStderr(paths.serverStderr, Buffer.from(`\n--- attempt ${attemptIndex + 1}, app-server ${serverIndex + 1}, pid ${identity.pid}, ${identity.startedAt} ---\n`));
       },
       onStderr(chunk) { appendStderr(paths.serverStderr, chunk); },
-      onEnd(info) { record(info); },
+      onEnd(info) { sample(true); record(info); },
       tap(notification) { eventRecorder.record(notification); }
     });
   };
@@ -581,12 +656,13 @@ async function runWorkerRound(jobDir, options, held) {
     // place covers start, continue, resume, a steer that becomes a turn, relay delivery and
     // automatic recovery. A server that survives, or a sweep that cannot see the process
     // table, fails the job, and no second app-server starts beside it.
-    const sweep = await stopRecordedAppServers(job, options.predecessorCleanup);
+    const sweep = await stopRecordedAppServers(job, { jobDir, ...options.predecessorCleanup });
     if (sweep.servers.length > 0) {
       save(sweptAppServersPatch(job, sweep));
     }
-    if (sweep.survivors.length > 0) {
+    if (sweep.survivors.length > 0 || sweep.cause) {
       sweepFailed = true;
+      save({ cleanup: { state: "unresolved", pids: sweep.survivors.map(p => p.pid), cause: sweep.cause } });
       const servers = sweep.servers.filter((server) => sweep.survivors.some((entry) => entry.pid === server.pid)).map((server) => `app-server pid ${server.pid}`);
       const others = sweep.survivors.filter((entry) => !sweep.servers.some((server) => server.pid === entry.pid)).map((entry) => `pid ${entry.pid}`);
       // The queued work stays owed: a later worker runs it once the old server is gone.
@@ -807,6 +883,13 @@ async function runWorkerRound(jobDir, options, held) {
         updateAttempt({ state: "starting" });
         await connection?.close();
         connection = null;
+        const sweep = await stopRecordedAppServers(job, { jobDir, ...options.predecessorCleanup });
+        if (sweep.survivors.length || sweep.cause) {
+          sweepFailed = true;
+          save({ cleanup: { state: "unresolved", pids: sweep.survivors.map(p => p.pid), cause: sweep.cause } });
+          throw new Error(`processes ${sweep.survivors.map(p => p.pid).join(", ")} started by the previous backend are still running; no new backend was started${sweep.cause ? ` (${sweep.cause})` : ""}`);
+        }
+        save(sweptAppServersPatch(job, sweep));
         activeTurnId = null;
         turnActive = false;
         interruptSent = false;
@@ -856,9 +939,17 @@ async function runWorkerRound(jobDir, options, held) {
         await connection.close().catch(() => {});
         connection = null;
       }
+      if (!sweepFailed) {
+        const sweep = await stopRecordedAppServers(job, { jobDir, ...options.predecessorCleanup });
+        if (sweep.survivors.length || sweep.cause) {
+          sweepFailed = true;
+          save({ cleanup: { state: "unresolved", pids: sweep.survivors.map(p => p.pid), cause: sweep.cause }, state: "failed",
+            errorMessage: `${job.errorMessage ? job.errorMessage + "\n" : ""}cleanup: unresolved (${sweep.survivors.map(p => p.pid).join(", ")})${sweep.cause ? `: ${sweep.cause}` : ""}` });
+        } else save({ ...sweptAppServersPatch(job, sweep), cleanup: { state: "empty" }, treeBytes: 0 });
+      }
       eventRecorder?.flush();
     } finally {
-      if (slot) releaseSlot(home, job.id, me, admissionDeps);
+      if (slot && !sweepFailed) releaseSlot(home, job.id, me, admissionDeps);
       slot = null;
     }
   }

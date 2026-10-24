@@ -47,7 +47,35 @@ After a worker death, resumed history closes an included message as `delivered-b
 A message ZCode reports as already held is never sent again: relay waits up to 60 seconds for it to start,
 or reports it as not delivered. Only ZCode's explicit `inputDiscardedOnRestart` response permits a fresh command id.
 
-On Linux, a worker started from a unit of the user's systemd (T3 Code's server runs as `t3code.service`) runs in a scope of its own through `systemd-run --user --scope`, because stopping a unit kills every process in its cgroup, a new session or not. `RELAY_WORKER_SCOPE=off` turns that off. On macOS, quitting T3 Code has killed workers; the cause is not known, and the recovery above covers one such death. Every recovery appears as `automatic-resume:` with its cause in the state block. All resumes keep the first launch's cwd, mode, network, writable roots, web search, model, effort, tier, backend and Grok home. A job keeps its tier even when the `fast-tier` setting changes while it runs.
+Every worker, whatever dispatches it, starts through a short-lived launcher and acknowledges only
+after leaving its caller's descendant tree (PPID 1 on macOS). The caller waits for that acknowledgement;
+a Stop during handoff can abort dispatch before any backend starts. `launch-*.json` and the job's
+bounded launch history retain the trigger, caller PID/start time, launcher identity and acknowledged
+worker PPID/PGID. `deathObservedAt` records discovery of a death, not its exit time.
+
+Each worker records an execution group and retains the last 20 execution identities. On Linux with
+an available user systemd manager, `systemd-run --user --scope --slice=relay-jobs.slice` contains the
+job and its tools, including children that change sessions; `RELAY_WORKER_SCOPE=off` disables it.
+Elsewhere, identity-checked process-group members plus a descendant registry (`processes.json`)
+provide cleanup. Heartbeats sample descendants every 10 seconds using a process table cached for
+5 seconds across workers, pruning gone identities; backend exit also takes a fresh sample. A
+setsid child that orphans before any sample can escape tracking without a scope.
+
+Backend loss and job completion stop owned processes with TERM/CONT, then KILL, before reconnect or
+slot release. An unresolved survivor fails the job and keeps its seat. The backend close itself
+sends TERM after 50 ms, KILL at 5 seconds and returns within 10 seconds, recording `closeTimedOut`
+if process end remains unobserved. Control RPC and turn deadlines are unchanged.
+
+Heartbeats write `treeBytes` to the job and running slot: Linux scope `memory.current`, otherwise
+summed member RSS. Guard status sums running jobs as `relayBytes`. Workers set Linux
+`oom_score_adj` to 500 before backend spawn, inherited by tools. There is no static memory cap,
+and macOS has visibility and cleanup without enforced containment or pausing running tools.
+Transport lines are limited to 64 MiB; Kimi wire replay reads at most 4 MiB at once, retaining the
+running turn, the last 50 ended turns and delivery-deduplication evidence.
+
+Every recovery appears as `automatic-resume:` with its cause in the state block. All resumes keep
+the first launch's cwd, mode, network, writable roots, web search, model, effort, tier, backend and
+Grok home. A job keeps its tier even when the `fast-tier` setting changes while it runs.
 
 ## Git worktrees
 

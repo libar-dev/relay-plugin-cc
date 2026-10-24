@@ -8,6 +8,9 @@ its entries here.
 
 Changed:
 
+- Jobs own their execution groups and stop their tools at backend loss, cancellation and completion.
+  Linux workers use per-job scopes whenever a user manager is available, and set OOM score 500.
+  Job and guard status show memory used by relay jobs and their processes.
 - Load guard errors hold new starts with the error and explicit off switch in the queue reason.
   `RELAY_ADMISSION=off` and `/relay:setup --admission off` still bypass the guard.
 - Provider pauses follow the account home used by each worker attempt, including resumed jobs.
@@ -17,6 +20,15 @@ Changed:
 
 Fixed:
 
+- Replacement backends and slot release wait for process cleanup, including sampled detached tools.
+  Cleanup failures keep surviving processes counted. Cancelling terminal jobs also cleans leftovers.
+- Every worker leaves its caller's descendant tree before dispatch acknowledgement, including dispatch
+  from long-lived waiters, hooks and recovery; launch provenance and interrupted handoffs are recorded.
+- Backend close escalates TERM to KILL within a bounded window. Transport messages over 64 MiB close
+  the connection; Kimi history replay uses bounded reads and prunes old turn and prompt state.
+- Cancellation checks the attempt before its sweep, counts every verified signal, and can stop a
+  verified worker despite an unreadable child. Unknown members require verified group ownership.
+  Successor heartbeats no longer extend the predecessor's ownership bound.
 - Damaged slots count conservatively until quarantine; a damaged job slot cannot reuse a seat.
   Damaged pauses and pending refusals hold the affected account or backend for at most 15 minutes
   before quarantine. Refusals saved during admission-lock contention retain their original receipt
