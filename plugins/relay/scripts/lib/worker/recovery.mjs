@@ -27,7 +27,7 @@ export function sweptAppServersPatch(job, { servers, survivors }, at = nowIso())
   const gone = servers.filter((server) => !survivors.some((entry) => entry.pid === server.pid));
   const ended = (server) => server && !server.endedAt && gone.some((entry) => same(server, entry));
   const attempts = (job.attempts ?? []).map((attempt) =>
-    attempt?.servers ? { ...attempt, servers: attempt.servers.map((server) => (ended(server) ? { ...server, deathObservedAt: at } : server)) } : attempt
+    attempt?.servers ? { ...attempt, servers: attempt.servers.map((server) => (ended(server) ? { ...server, deathObservedAt: server.deathObservedAt ?? at } : server)) } : attempt
   );
   const live = ended(job.server);
   return { attempts, ...(live ? { server: null, serverPid: null } : {}) };

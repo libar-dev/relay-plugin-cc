@@ -11,11 +11,22 @@ import { acquireWorkerLease, isWorkerAlive, readLease, releaseWorkerLease } from
 import { createJobDir, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { owedMessages, postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
-import { DEFAULT_RESUME_MESSAGE, resumeDeadJobOnce } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
+import { DEFAULT_RESUME_MESSAGE, resumeDeadJobOnce, sweptAppServersPatch } from "../plugins/relay/scripts/lib/worker/recovery.mjs";
 import { loadJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { ownershipDir } from "../plugins/relay/scripts/lib/util/ownership.mjs";
 import { readProcessStartTime, listProcesses } from "../plugins/relay/scripts/lib/util/process.mjs";
 import { awaitOutcome } from "../plugins/relay/scripts/lib/worker/delivery.mjs";
+
+test("repeated cleanup preserves the predecessor's first observed death", () => {
+  const server = { pid: 100, startTime: "linux:1000" };
+  const sweep = { servers: [server], survivors: [] };
+  const firstAt = "2026-10-01T00:00:00.000Z";
+  let job = { server, serverPid: server.pid, attempts: [{ servers: [server] }] };
+  job = { ...job, ...sweptAppServersPatch(job, sweep, firstAt) };
+  const later = sweptAppServersPatch(job, sweep, "2026-10-01T00:01:00.000Z");
+  assert.equal(later.attempts[0].servers[0].deathObservedAt, firstAt);
+  assert.equal(job.server, null);
+});
 import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 import { COMPANION, RELAY_CMD, companion, decision, jobDirOf, pre, readJobJson, relayContext, relayStart, updated, waitFor } from "./support/relay-fixture.mjs";
 import { installFakeGrok } from "./fakes/grok.mjs";
@@ -269,6 +280,7 @@ for (const persisted of [false, true]) {
       assert.equal(sent.status, 0, sent.stderr + sent.stdout);
       assert.equal(companion(ctx, ["wait", id, "--timeout-seconds", "10"]).status, 0);
       assert.equal(isWorkerAlive(old.server), false, "the replacement swept the old server");
+      await waitFor(() => !isWorkerAlive(readJobJson(ctx, id).worker));
       const job = readJobJson(ctx, id);
       const swept = job.attempts[0].servers[0];
       const replacement = job.attempts.at(-1).servers[0];

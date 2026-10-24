@@ -21,6 +21,8 @@ Changed:
 
 Fixed:
 
+- Repeated cleanup preserves a predecessor's first observed death, keeping the recorded
+  ordering of predecessor exit and replacement startup intact.
 - Worker heartbeats keep process accounting active with the load guard off without creating
   the disabled guard's shared cache directory.
 - Terminal result text omits live memory accounting, keeping verbatim relay hand-backs stable
