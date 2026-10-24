@@ -92,6 +92,10 @@ export function terminateProcessTree(pid, options = {}) {
 
   const killImpl = options.killImpl ?? process.kill.bind(process);
 
+  const ownsPid = () => !options.identity || (options.identity.pid === pid && options.identity.startTime &&
+    isProcessIdentityAlive(options.identity, options) && readProcessStartTime(pid, options) === options.identity.startTime);
+  if (!ownsPid()) return { attempted: false, delivered: false, method: null };
+
   const signal = options.signal ?? "SIGTERM";
   try {
     killImpl(-pid, signal);
@@ -99,7 +103,9 @@ export function terminateProcessTree(pid, options = {}) {
   } catch {
     // The group kill fails with ESRCH when the pid is alive but does not lead its own
     // process group, for example a companion started in the foreground of a shell
-    // Signal the pid itself in that case.
+    // Signal the pid itself in that case. Recheck ownership: the leader may have
+    // exited and its pid may have been reused since the group signal failed.
+    if (!ownsPid()) return { attempted: true, delivered: false, method: "process-group" };
     try {
       killImpl(pid, signal);
       return { attempted: true, delivered: true, method: "process" };
@@ -137,7 +143,7 @@ function readProcessInfo(pid, options = {}) {
     try {
       const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
       const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      return { zombie: fields[0] === "Z", startTime: fields[19] ? `linux:${fields[19]}` : null };
+      return { zombie: fields[0] === "Z", ppid: Number(fields[1]), pgid: Number(fields[2]), startTime: fields[19] ? `linux:${fields[19]}` : null };
     } catch {
       return null;
     }
@@ -206,9 +212,42 @@ export function listProcesses(options = {}) {
     if (!Number.isInteger(pid) || !Number.isInteger(ppid)) {
       continue;
     }
-    rows.push({ pid, ppid, pgid, zombie: parts[3].startsWith("Z"), startTime: `ps:${parts.slice(4, 9).join(" ")}` });
+    // Use the same identity format as worker records. On Linux, ticks also avoid
+    // confusing two processes started within the same second of ps's lstart.
+    const info = (options.platform ?? process.platform) === "linux" ? readProcessInfo(pid, options) : null;
+    const startTime = (options.platform ?? process.platform) === "linux" ? info?.startTime : `ps:${parts.slice(4, 9).join(" ")}`;
+    if (!startTime) continue;
+    rows.push({ pid, ppid: info?.ppid ?? ppid, pgid: info?.pgid ?? pgid, zombie: info?.zombie ?? parts[3].startsWith("Z"), startTime });
   }
   return rows;
+}
+
+// A detached worker's original group cannot outlive reuse of its leader pid.
+// Discover leftovers by group membership, never by the stale leader's parent link.
+/** @returns {ProcessSnapshot} */
+export function groupSurvivors(leader, table) {
+  if (!table) return Object.assign([], { cause: "the process table could not be read" });
+  if (!Number.isInteger(leader?.pid) || leader.pid <= 0 || !leader.startTime) return [];
+  const current = table.find(row => row.pid === leader.pid);
+  if (current && current.startTime !== leader.startTime) return [];
+  const startedAt = (value) => {
+    if (value?.startsWith("linux:")) {
+      const ticks = value.slice(6);
+      return /^\d+$/.test(ticks) ? BigInt(ticks) : null;
+    }
+    if (value?.startsWith("ps:")) {
+      const ms = Date.parse(`${value.slice(3)} UTC`);
+      return Number.isFinite(ms) ? ms : null;
+    }
+    return null;
+  };
+  const start = startedAt(leader.startTime);
+  if (start === null) return [];
+  return table.filter(row => {
+    const at = startedAt(row.startTime);
+    return row.pgid === leader.pid && row.pid !== process.pid && !row.zombie &&
+      row.startTime?.split(":", 1)[0] === leader.startTime.split(":", 1)[0] && at !== null && at >= start;
+  }).map(({ pid, startTime }) => ({ pid, startTime }));
 }
 
 // The given roots and all their descendants, each with its start time, so a later kill

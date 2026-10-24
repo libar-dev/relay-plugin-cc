@@ -2,7 +2,7 @@ import { sleep, envNumber, parseCommandInput, resolveJobReference, printJson } f
 import fs from "node:fs";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
-import { readProcessStartTime, snapshotProcessTree, stopProcessSnapshot, terminateProcessTree } from "../lib/util/process.mjs";
+import { groupSurvivors, listProcesses, readProcessStartTime, snapshotProcessTree, stopProcessSnapshot, terminateProcessTree } from "../lib/util/process.mjs";
 import { releaseLeaseToConsumer } from "../lib/worker/delivery.mjs";
 import { acquireWorkerLease, isWorkerAlive, isWorkerLease, readLease } from "../lib/jobs/lease.mjs";
 import { claimInboxMessages, owedMessages, readOutcome, writeOutcome, postInboxMessage, recordReceipt } from "../lib/jobs/messages.mjs";
@@ -218,9 +218,12 @@ export async function handleCancel(argv) {
       actions.push(`already ${view.state}`);
     } else if (view.state === "dead" || (view.state === "queued" && !view.job.worker?.pid && view.job.admission?.waitKind === "worker")) {
       checkAttempt(readJob(jobDir), attempt);
+      let reusedPid = false;
       if (view.job.worker?.pid) {
-        // The worker is gone; stop anything left in its process group.
-        terminateProcessTree(view.job.worker.pid);
+        const table = listProcesses();
+        tree = mergeSnapshots(tree, groupSurvivors(view.job.worker, table));
+        if (tree.cause) throw new Error(`Could not cancel job ${view.job.id}: ${tree.cause}.`);
+        reusedPid = table.some(row => row.pid === view.job.worker.pid && row.startTime !== view.job.worker.startTime);
       }
       const survivors = await stopProcessSnapshot(tree);
       if (survivors.length > 0 || survivors.cause || tree.cause) {
@@ -229,7 +232,9 @@ export async function handleCancel(argv) {
       const result = markCancelledAfterKill(jobDir, "Cancelled after the worker had died.", attempt);
       if (result.wrote) {
         recordReceipt(jobDir, { kind: "cancel", text: "" }, { action: "cancelled", reason: "the worker had died; the job was marked cancelled" });
-        actions.push("worker was already gone; marked cancelled");
+        actions.push(reusedPid && tree.length === 0
+          ? "the worker was already gone and its process id now belongs to another process; nothing was signalled"
+          : "worker was already gone; marked cancelled");
       } else {
         reportCancelHandOff(jobDir, result, actions, options.json, attempt);
       }
@@ -277,7 +282,7 @@ export async function handleCancel(argv) {
         if (!cooperative && (!stopped || view.state === "dead")) {
           checkAttempt(readJob(jobDir), attempt);
           if (worker?.pid && isWorkerAlive(worker)) {
-            const kill = terminateProcessTree(worker.pid);
+            const kill = terminateProcessTree(worker.pid, { identity: worker });
             killed = kill.delivered;
             if (killed) actions.push(`killed the worker process ${kill.method === "process" ? "" : "tree "}(${worker.pid}) after ${Math.round(graceMs / 1000)}s`);
           }

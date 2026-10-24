@@ -226,6 +226,9 @@ message: a message sent while it runs becomes the next turn.
 | `/relay:adversarial-review [focus]` | a review that questions the approach and its assumptions; its answer must be review JSON |
 | `/relay:transfer [--source <jsonl>]` | import the current Claude Code session into a Codex session you resume with `codex resume <id>` |
 
+Cancelling a job whose worker has died stops only processes that still belong to the job; a process id
+the system has since given to another program is left alone.
+
 The plugin's hooks module answers `/relay:status`, `/relay:result`, `/relay:cancel` and
 `/relay:transfer` itself: it runs the companion and shows its output, with no model turn and no
 tokens spent. The answer starts with the command as you typed it, then the companion's lines in a
@@ -418,7 +421,7 @@ and its status line counts the repository's running and dead jobs and owed messa
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-pre.6. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.21. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
