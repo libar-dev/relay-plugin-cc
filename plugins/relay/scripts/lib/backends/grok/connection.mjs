@@ -1,3 +1,4 @@
+import { CONTROL_MS, SESSION_MS } from "../transport/stdio-rpc.mjs";
 /** @typedef {import("../types").Connection} Connection */
 import { ACP_INITIALIZE_PARAMS, ACP_CHUNKS, acpUpdate, openSession, setConfigOption, promptSession, cancelSession, promptCancelled, promptResult, answerPermission } from "../transport/acp.mjs";
 import { heldMessage, evidenceKey, countHeld, grokSessionMessages } from "./history.mjs";
@@ -96,6 +97,11 @@ class GrokConnection {
   }
 
   get server() { return this.client; }
+  get pingMethod() { return "relay/ping"; }
+  async ping() {
+    try { await this.client.request("relay/ping", {}, { timeoutMs: CONTROL_MS, wedgeOnTimeout: false }); }
+    catch (error) { if (error.rpcCode !== -32601) throw error; }
+  }
   async close() { await this.client.close(); }
 
   saveState(patch) {
@@ -235,14 +241,14 @@ class GrokConnection {
     const promptId = this.running;
     this.steers = (this.steers ?? 0) + 1;
     try {
-      const response = await client.request("_x.ai/interject", { sessionId, text: message.text });
+      const response = await client.request("_x.ai/interject", { sessionId, text: message.text }, { timeoutMs: CONTROL_MS });
       const status = response.result?.status ?? response.status;
       if (status !== "queued") throw new Error(`Grok did not queue the interjection: ${status ?? "unknown"}`);
       // Queued is not durable: Grok can lose the interjection before it persists it.
       if (promptId) this.saveState({ promptIds: { ...this.state.promptIds, [message.id]: promptId } });
       return { turnId, promptId, unconfirmed: true };
     } catch (error) {
-      if (!client.exitSeen) this.saveDeliveries(this.settle(delivery, false));
+      if (!client.exitSeen && !client.wedged) this.saveDeliveries(this.settle(delivery, false));
       throw error;
     } finally {
       this.steers -= 1;
@@ -287,6 +293,8 @@ class GrokConnection {
         check();
       }
       const update = params.update;
+      if (notification.method === "session/update" && ["agent_message_chunk", "agent_thought_chunk", "tool_call"].includes(update?.sessionUpdate)) options.onProviderResponse?.();
+      if (notification.method === "_x.ai/session/update" && update?.sessionUpdate === "retry_state") options.onProviderLimit?.({ message: update.reason ?? update.retryState?.reason, data: { retryState: update.retryState ?? update } });
       const standard = acpUpdate(notification);
       if (standard.didWork || update?.sessionUpdate === "tool_call_delta_chunk") didWork = true;
       if (standard.startsTool) text = "";
@@ -354,6 +362,6 @@ export async function connect(request, hooks) {
       }
     });
     try { await client.initialize(); }
-    catch (error) { await client.close(); throw new Error(client.exitInfo ? grokEndMessage(client.exitInfo) : error.message); }
+    catch (error) { await client.close(); if (error.name === "TransportTimeout") throw error; throw new Error(client.exitInfo ? grokEndMessage(client.exitInfo) : error.message); }
     return new GrokConnection(client, request, { ...hooks, state: { ...hooks.state, binary } });
 }

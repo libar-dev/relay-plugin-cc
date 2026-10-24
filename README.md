@@ -370,17 +370,34 @@ lock stays queued and cancellable; a stuck-lock diagnostic identifies the holder
 
 Recognized usage refusals pause Codex, Grok, Kimi or ZCode for 30 minutes, or a definite reset within
 six hours. Rate pauses start at 60 seconds and double to 15 minutes; Kimi concurrency refusals
-pause for 10 minutes. After a pause, one generation-fenced probe runs; its success clears the
-pause. Refused jobs remain failed for explicit resume. Pauses follow the selected backend account home; default homes retain the existing pause files.
+pause for 10 minutes. After a pause, one job probes the provider; the pause ends only when that job gets an actual answer from the
+provider, not when it merely starts. Refused jobs remain failed for explicit resume. Pauses follow the selected backend account home; default homes retain the existing pause files.
 Grok recognizes explicit weekly/usage/credit exhaustion, rate-limit text and provider 429 errors;
 its usage classifier has not been verified against a live exhausted account. A live probe is never replaced by age.
-These pauses gate new starts, not requests or retries inside running turns.
+These pauses gate new starts and later turns on other jobs while a running turn keeps its own retries.
+
+| Backend | Paused on | When |
+|---|---|---|
+| Codex | usage or rate | at first retry, including subagent signals |
+| Grok | weekly credits or rate | at first retry, unverified with a live exhausted account |
+| Kimi | usage, rate or concurrency | at first retry |
+| ZCode | usage or rate | when the turn fails; runtime retries are not exposed |
+
+Grok's web search cannot be turned off.
 With the guard effective, Kimi's internal retry default is 3 unless explicitly configured.
 
 Turn it off for an invocation with `RELAY_ADMISSION=off`, or domain-wide with
 `/relay:setup --admission off`. `/relay:setup --admission on` restores it. Settings live in
 `~/.relay-jobs/admission/config.json` (or `RELAY_ADMISSION_HOME/config.json`), shared across jobs
 homes. A custom jobs home cannot disable the guard. Old weight/class controls are ignored.
+
+Backend startup has a 2-minute deadline; session setup has 5 minutes, and a steer or cancel request has
+30 seconds. ACP cancellation is a notification and has no reply to wait for. Turns have no time limit.
+After 10 minutes without notifications, relay checks the backend every 5 minutes. Two unanswered
+30-second pings restart it once, using the normal server recovery path. A backend answering pings can
+keep a silent build or sleep running indefinitely. Relay tests ping support on each connection; an
+unanswered initial ping disables that watchdog and records a note, while control deadlines still apply.
+Job JSON and events record whether the backend is answering or relay is checking it.
 
 After a job starts, relay samples memory used by the job and its tools. Job status shows `memory:`,
 and guard status shows `relay jobs use`. On Linux, when a user systemd manager is available, every

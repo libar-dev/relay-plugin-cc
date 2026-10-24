@@ -11,6 +11,12 @@ Changed:
 - Job acceptance requires a live worker lease within one minute; refused starts exit 6 and never run later.
   Workflow relays wait at spawn for a waiting place, including stall retries at their first step;
   plain relay calls report capacity after 30 seconds. Large batches should use Workflows.
+- Backend controls have request deadlines; silent turns use a capability-tested ping watchdog.
+  Responsive long-running tools have no turn time limit. Unresponsive backends follow the existing
+  one-restart recovery path.
+- Provider probes require model-response evidence and slow startup grants are checked again before
+  sending. Codex, Grok and Kimi retry signals pause new work immediately for the selected account.
+
 - Foreground `task` workers run independently of the caller; Ctrl-C leaves a dispatched job running.
 - Jobs own their execution groups and stop their tools at backend loss, cancellation and completion.
   Linux workers use per-job scopes whenever a user manager is available, and set OOM score 500.
@@ -31,6 +37,12 @@ Fixed:
   preserve owed continuations, and messages racing worker exit retry without a five-second delay.
 - Nested workers publish their identity independently of admission storage, including with the guard off.
   Admission retains time per wait reason and reports the longest hold after admission.
+- Provider retry refusals preserve a live probe’s claim and generation, including deferred refusals
+  replayed before a healthy answer clears the pause.
+- RPC input coalesces tiny fragments so per-fragment object overhead cannot escape the line-memory bound.
+- ZCode duplicate waits cancel promptly and report uncertain starts accurately. Duplicate steer
+  acknowledgements stay owed until inclusion is proved, and cancellation prevents discarded-input resends.
+
 - Repeated cleanup preserves a predecessor's first observed death, keeping the recorded
   ordering of predecessor exit and replacement startup intact.
 - Worker heartbeats keep process accounting active with the load guard off without creating

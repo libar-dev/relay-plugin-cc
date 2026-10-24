@@ -352,3 +352,35 @@ test("guard status identifies each paused account", t => {
   const lines = renderGuard({ enabled: true, availableBytes: null, pauses: listPauses(s.env, s.deps) });
   assert.ok(lines.some(line => line.includes(`kimi (account ${account}) paused:`)));
 });
+
+for (const pending of [false, true]) test(`a retry refusal preserves a live probe's owner and generation (${pending ? 'pending replay' : 'direct'})`, t => {
+  const s = setup(t);
+  recordRefusal(s.root, "codex", { kind: "rate" }, "previous", s.deps); s.tick(D.ratePauseMs);
+  const owner = s.ctx(1), first = admit(owner, s.deps), generation = first.slot.probeGeneration;
+  const file = path.join(s.root, "admission.lock");
+  if (pending) acquireOwnership(file, { pid: process.pid });
+  try {
+    const refusal = recordRefusal(s.root, "codex", { kind: "rate" }, owner.jobId, { ...s.deps, lockSleep() {} });
+    if (pending) assert.deepEqual(refusal, { pending: true });
+  } finally { if (pending) releaseOwnership(file); }
+  s.tick(D.maxRatePauseMs + D.probeMs);
+  assert.equal(admit(s.ctx(2), s.deps).waitKind, "probe", "no second probe while the retrying owner lives");
+  const pause = JSON.parse(fs.readFileSync(path.join(s.root, "pauses", "codex.json")));
+  assert.equal(pause.probe.jobId, owner.jobId); assert.equal(pause.probe.generation, generation);
+  assert.equal(probeSucceeded(s.root, "codex", "job-2", s.deps, generation), false);
+  assert.equal(probeSucceeded(s.root, "codex", owner.jobId, s.deps, "stale-generation"), false);
+  assert.equal(probeSucceeded(s.root, "codex", owner.jobId, s.deps, generation), true);
+  assert.equal(listPauses(s.env, s.deps).length, 0);
+});
+
+test("a retry refusal preserves recovery when its pending record is folded by probe success", t => {
+  const s = setup(t);
+  recordRefusal(s.root, "codex", { kind: "rate" }, "previous", s.deps); s.tick(D.ratePauseMs);
+  const owner = s.ctx(1), first = admit(owner, s.deps), file = path.join(s.root, "admission.lock");
+  acquireOwnership(file, { pid: process.pid });
+  try { assert.deepEqual(recordRefusal(s.root, "codex", { kind: "rate" }, owner.jobId, { ...s.deps, lockSleep() {} }), { pending: true }); }
+  finally { releaseOwnership(file); }
+  assert.equal(probeSucceeded(s.root, "codex", owner.jobId, s.deps, first.slot.probeGeneration), true);
+  assert.deepEqual(fs.readdirSync(path.join(s.root, "pauses", "pending")), []);
+  s.tick(D.spacingMs); assert.equal(admit(s.ctx(2), s.deps).admit, true, "an older pending retry must not resurrect the recovered pause");
+});

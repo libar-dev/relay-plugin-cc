@@ -65,6 +65,7 @@ export class KimiWire {
    */
   constructor(locate, { io = fs, retainPrompt = () => false } = {}) {
     this.locate = locate;
+    this.onRecord = null;
     this.io = io;
     this.retainPrompt = retainPrompt;
     /** @type {string | null} */
@@ -123,6 +124,7 @@ export class KimiWire {
           if (!line.trim()) continue;
           let record;
           try { record = JSON.parse(line); } catch { continue; }
+          this.onRecord?.(record);
           this.apply(record, at);
           this.prune();
         }

@@ -159,6 +159,8 @@ export interface ConnectHooks {
  */
 export interface Connection {
   readonly server: ServerState;
+  readonly pingMethod?: string;
+  ping?(): Promise<void>;
   /** Open a new session, or resume `sessionId`. */
   open(options: OpenOptions): Promise<OpenedSession>;
   /** Whether a work item reached the session before a previous worker died. */
@@ -181,6 +183,9 @@ export interface Connection {
 }
 
 export interface ServerState {
+  readonly wedged?: Error;
+  readonly wedgedPromise?: Promise<Error>;
+  markWedged?(error: Error): void;
   readonly exitInfo: ExitInfo | null;
   /** The process exited; its pipes may still be draining. */
   readonly exitSeen: boolean;
@@ -245,6 +250,12 @@ export interface InboxMessage {
 }
 
 export interface TurnInput {
+  /** Cancellation the worker has claimed, including while an initial acknowledgement waits. */
+  isCancelled?(): boolean;
+  /** Evidence of model output, never a local acknowledgement or replay. */
+  onProviderResponse?(): void;
+  /** A provider refusal while the harness continues its own retries. */
+  onProviderLimit?(error: unknown): void;
   prompt: string;
   clientId: string;
   source: WorkItem["source"];

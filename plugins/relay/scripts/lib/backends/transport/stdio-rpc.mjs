@@ -71,11 +71,25 @@ function createProtocolError(message, data) {
 }
 
 
+export class TransportTimeout extends Error {
+  constructor(backend, method, timeoutMs) {
+    super(`${backend} stopped answering (${method}, ${timeoutMs / 1000} s)`);
+    this.name = "TransportTimeout";
+    this.method = method;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+export const CONTROL_MS = 30000;
+export const SESSION_MS = 300000;
+
 class AppServerClientBase {
   constructor(cwd, options = {}) {
     this.cwd = cwd;
     this.options = options;
     this.pending = new Map();
+    this.wedged = null;
+    this.wedgedPromise = new Promise(resolve => { this.resolveWedged = resolve; });
     this.nextId = 1;
     this.stderr = "";
     this.closed = false;
@@ -86,7 +100,7 @@ class AppServerClientBase {
     /** Called with every notification before the handler; never replaced by turn capture. */
     this.notificationTap = options.notificationTap ?? null;
     this.exitInfo = null;
-    this.lineChunks = [];
+    this.lineBuffer = null;
     this.lineBytes = 0;
     this.transport = "unknown";
 
@@ -104,9 +118,11 @@ class AppServerClientBase {
    * @template {AppServerMethod} M
    * @param {M} method
    * @param {import("../codex/protocol").AppServerRequestParams<M>} params
+   * @param {{ timeoutMs?: number, wedgeOnTimeout?: boolean }} [options]
    * @returns {Promise<import("../codex/protocol").AppServerResponse<M>>}
    */
-  request(method, params) {
+  request(method, params, { timeoutMs, wedgeOnTimeout = true } = {}) {
+    if (this.wedged) return Promise.reject(this.wedged);
     if (this.closed) {
       throw new Error(`${this.options.backendName ?? "codex"} server client is closed.`);
     }
@@ -120,10 +136,25 @@ class AppServerClientBase {
     this.nextId += 1;
 
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, method });
-      this.sendMessage({ id, method, params });
+      let timer;
+      const finish = fn => value => { clearTimeout(timer); fn(value); };
+      this.pending.set(id, { resolve: finish(resolve), reject: finish(reject), method });
+      if (timeoutMs != null) timer = setTimeout(() => {
+        const error = new TransportTimeout(this.options.backendName ?? "codex", method, timeoutMs);
+        this.pending.delete(id);
+        if (wedgeOnTimeout) this.markWedged(error);
+        reject(error);
+      }, timeoutMs);
+      try { this.sendMessage({ id, method, params }); }
+      catch (error) { this.pending.delete(id); clearTimeout(timer); reject(error); }
     });
 
+  }
+
+  markWedged(error) {
+    if (this.wedged) return;
+    this.wedged = error;
+    this.resolveWedged(error);
   }
 
   notify(method, params = {}) {
@@ -142,16 +173,23 @@ class AppServerClientBase {
       const piece = bytes.subarray(from, end === -1 ? bytes.length : end);
       this.lineBytes += piece.length;
       if (this.lineBytes > MAX_LINE_BYTES) {
-        this.lineChunks = [];
+        this.lineBuffer = null;
         this.lineBytes = 0;
         this.handleExit(createProtocolError(`${this.options.backendName ?? "codex"} sent a single message over 64 MiB; the connection was closed`));
         void this.close();
         return;
       }
-      this.lineChunks.push(piece);
+      // Keep one geometrically grown buffer, not one retained object per fragment. A peer
+      // trickling single bytes cannot amplify the payload bound into millions of Buffers.
+      if (!this.lineBuffer || this.lineBuffer.length < this.lineBytes) {
+        const buffer = Buffer.allocUnsafe(Math.min(MAX_LINE_BYTES, Math.max(4096, (this.lineBuffer?.length ?? 0) * 2, this.lineBytes)));
+        this.lineBuffer?.copy(buffer, 0, 0, this.lineBytes - piece.length);
+        this.lineBuffer = buffer;
+      }
+      piece.copy(this.lineBuffer, this.lineBytes - piece.length);
       if (end === -1) break;
-      const line = Buffer.concat(this.lineChunks, this.lineBytes).toString("utf8");
-      this.lineChunks = [];
+      const line = this.lineBuffer.toString("utf8", 0, this.lineBytes);
+      this.lineBuffer = null;
       this.lineBytes = 0;
       this.handleLine(line);
       if (this.exitResolved) return;
@@ -290,7 +328,7 @@ export class SpawnedServerClient extends AppServerClientBase {
       this.transportEnded = true;
       this.stdoutClosedBeforeExit = !this.exitSeen;
       this.partialStdoutBytes = this.lineBytes;
-      this.lineChunks = []; this.lineBytes = 0;
+      this.lineBuffer = null; this.lineBytes = 0;
       // EOF can arrive while the process is still alive. Stop it so pending requests
       // get the actual exit details, even if it left stderr or its event loop open.
       if (!this.exitSeen) void this.close();
@@ -313,7 +351,7 @@ export class SpawnedServerClient extends AppServerClientBase {
     await this.request(this.options.initializeMethod ?? "initialize", this.options.initializeParams ?? {
       clientInfo: this.options.clientInfo ?? DEFAULT_CLIENT_INFO,
       capabilities: this.options.capabilities ?? DEFAULT_CAPABILITIES
-    });
+    }, { timeoutMs: 120000 });
     if (!this.options.initializeParams) this.notify("initialized", {});
   }
 
@@ -330,7 +368,7 @@ export class SpawnedServerClient extends AppServerClientBase {
     if (this.exitResolved) return;
     if (!this.transportEnded) {
       this.partialStdoutBytes = this.lineBytes;
-      this.lineChunks = []; this.lineBytes = 0;
+      this.lineBuffer = null; this.lineBytes = 0;
     }
     this.proc.stdout.destroy();
     this.proc.stderr.destroy();
