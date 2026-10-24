@@ -36,9 +36,9 @@ export function spawnWorker(jobDir, cwd, env = process.env, { reservation = null
     pruneLaunches(jobDir);
     const latest = latestLaunch(jobDir);
     if (latest?.worker && ["pending", "acknowledged"].includes(latest.state) && isProcessIdentityAlive(latest.worker)) return null;
-    if (job && (!TERMINAL_STATES.has(job.state) || pendingInboxMessages(jobDir).length) && launchInterrupted(job, latest) && job.admission?.causeKind !== "launch") {
+    if (job && (!TERMINAL_STATES.has(job.state) || pendingInboxMessages(jobDir).length) && launchInterrupted(job, latest)) {
       job = { ...job, state: TERMINAL_STATES.has(job.state) ? job.state : "queued", worker: null, admission: { ...job.admission, state: "waiting",
-        waitKind: "worker", causeKind: "launch", reason: "worker launch interrupted; retrying", since: new Date().toISOString() } };
+        waitKind: "worker", causeKind: "launch", launcher: { pid: process.pid, startTime: readProcessStartTime(process.pid) }, reason: "worker launch interrupted; retrying", since: new Date().toISOString() } };
       writeJob(jobDir, job);
     }
     const pendingId = pendingInboxMessages(jobDir).at(0) ?? null;
