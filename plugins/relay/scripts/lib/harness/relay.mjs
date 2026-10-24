@@ -21,7 +21,7 @@ import path from "node:path";
 import process from "node:process";
 
 import { awaitOutcome, hasLiveWorker, COMPANION_SCRIPT } from "../worker/delivery.mjs";
-import { appendRelayViolation, messageExists, messageAccount, newMessageId, postInboxMessage } from "../jobs/messages.mjs";
+import { InboxStorageError, appendRelayViolation, messageExists, messageAccount, newMessageId, postInboxMessage } from "../jobs/messages.mjs";
 import { absoluteJobsHomeEnv, listJobDirs, nowIso, readJob, jobPaths, readJsonOrNull, resolveJobsHome, TERMINAL_STATES, writeJsonAtomic } from "../jobs/store.mjs";
 import { isTerminalView, JobViewBusy, loadJobView } from "../jobs/view.mjs";
 import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
@@ -526,6 +526,11 @@ export function findAdoptableRelayJob(env, { agentId, workflowRunId, journalKey,
     try {
       state = loadJobView(dir).state;
     } catch (error) {
+      // Uncertain message storage cannot turn an existing call into a new job.
+      if (error instanceof InboxStorageError) {
+        appendRelayViolation(dir, { kind: "delivery", reason: `messages could not be delivered: ${error.message}` });
+        throw error;
+      }
       // A busy job is at work: it stays a candidate. A directory without job.json does not.
       if (!(error instanceof JobViewBusy)) continue;
       state = null;

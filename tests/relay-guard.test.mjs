@@ -1553,7 +1553,7 @@ test("a Workflow relay that never runs start gets the Workflow correction with i
   assert.equal(waitJob(ctx, jobId).status, 0);
 });
 
-test("a queued Workflow stays pending through repeated hand-back and stop attempts beyond the escape budget", async () => {
+test("a queued Workflow stays pending through repeated hand-back and stop attempts beyond the escape budget", async t => {
   const ctx = relayContext("job", { workflow: WORKFLOW, turnMs: 100 });
   ctx.append(ctx.userRequest(), ctx.environment(), ctx.workflowPrompt("computedTask", QUICK), ctx.snapshot("string"));
   const { jobId } = await relayStart(ctx);
@@ -1563,11 +1563,17 @@ test("a queued Workflow stays pending through repeated hand-back and stop attemp
   await waitFor(() => !readLease(dir));
   const file = path.join(dir, "job.json");
   const job = JSON.parse(fs.readFileSync(file, "utf8"));
+  const { acquireWorkerLease, releaseWorkerLease, isWorkerAlive } = await import("../plugins/relay/scripts/lib/jobs/lease.mjs");
+  const { readProcessStartTime } = await import("../plugins/relay/scripts/lib/util/process.mjs");
+  await waitFor(() => !isWorkerAlive(job.worker));
+  const worker = { pid: process.pid, startTime: readProcessStartTime(process.pid) };
+  assert.equal(acquireWorkerLease(dir, worker), true);
+  t.after(() => { releaseWorkerLease(dir, worker); fs.writeFileSync(file, JSON.stringify(job)); });
   ctx.env.RELAY_ADMISSION = "on";
   ctx.env.RELAY_ADMISSION_HOME = path.join(ctx.root ?? path.dirname(dir), "synthetic-admission");
   ctx.env.RELAY_TEST_ADMISSION_READINGS = path.join(dir, "synthetic-readings.json");
   fs.writeFileSync(ctx.env.RELAY_TEST_ADMISSION_READINGS, JSON.stringify({ availableBytes: 0, totalBytes: 40 * 2 ** 30, cores: 8, load5: 0 }));
-  fs.writeFileSync(file, JSON.stringify({ ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker", reason: "memory low", since: new Date().toISOString() } }));
+  fs.writeFileSync(file, JSON.stringify({ ...job, state: "queued", worker, admission: { state: "waiting", waitKind: "memory", reason: "memory low", since: new Date().toISOString() } }));
   for (let i = 0; i < RELAY_BLOCK_BUDGET + 2; i++) {
     assert.equal(decision(await pre(ctx, "SubagentHandback", { message: "done" })), "deny");
     const blocked = await stop(ctx, "done");
