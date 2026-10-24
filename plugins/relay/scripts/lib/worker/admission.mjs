@@ -668,12 +668,18 @@ function applyRefusal(old, refusal, jobId, now, backend, account) {
   const reset = Date.parse(refusal.resetAt);
   const provider = refusal.kind === "usage" && Number.isFinite(reset) && reset > now && reset <= now + DEFAULTS.pauseExpiryMs;
   const duration = refusal.kind === "usage" ? DEFAULTS.usagePauseMs : refusal.kind === "concurrency" ? DEFAULTS.concurrencyPauseMs : Math.min(DEFAULTS.ratePauseMs * 2 ** Math.min(strikes - 1, 20), DEFAULTS.maxRatePauseMs);
-  const until = Math.max(old?.damaged ? Date.parse(old.until) : 0, provider ? reset : now + Math.min(duration, DEFAULTS.pauseExpiryMs));
-  return { v: 1, backend, account, ...refusal, since: same ? old.since : iso(now), updatedAt: iso(now), until: iso(until), strikes, resetSource: provider ? "provider" : "default", lastJobId: jobId, probe: null };
+  // A new refusal never shortens a pause already in force, whatever order refusals are folded in.
+  const kept = old ? Date.parse(old.until) : NaN;
+  const fresh = provider ? reset : now + Math.min(duration, DEFAULTS.pauseExpiryMs);
+  const keepOld = Number.isFinite(kept) && kept > fresh;
+  const until = keepOld ? kept : fresh;
+  const resetSource = keepOld && !old.damaged ? old.resetSource ?? "default" : provider ? "provider" : "default";
+  return { v: 1, backend, account, ...refusal, since: same ? old.since : iso(now), updatedAt: iso(now), until: iso(until), strikes, resetSource, lastJobId: jobId, probe: null };
 }
 function foldPending(home, backend, account, deps) {
   const dir = path.join(home, "pauses", "pending"), now = deps.now();
   let damaged = null;
+  const valid = [];
   for (const name of files(dir).sort()) {
     if (!name.startsWith(`${backend}-`) || !name.endsWith(".json")) continue;
     const file = path.join(dir, name);
@@ -695,6 +701,11 @@ function foldPending(home, backend, account, deps) {
     }
     // Older writers supplied only mtime; replay must never restart their cooldown.
     const receivedAt = Math.min(now, pending.receivedAt == null ? fs.statSync(file).mtimeMs : Date.parse(pending.receivedAt));
+    valid.push({ file, name, pending, receivedAt });
+  }
+  // Replay in arrival order, so strikes and the last job follow the order the refusals happened.
+  valid.sort((a, b) => a.receivedAt - b.receivedAt || a.name.localeCompare(b.name));
+  for (const { file, pending, receivedAt } of valid) {
     const old = pauseRead(home, backend, deps, true, false, account);
     pauseWrite(home, backend, applyRefusal(old, pending.refusal, pending.jobId, receivedAt, backend, account), account);
     fs.rmSync(file);

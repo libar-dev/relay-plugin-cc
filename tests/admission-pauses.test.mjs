@@ -312,6 +312,21 @@ for (const kind of ["rate", "usage"]) test(`pending ${kind} refusals keep their 
   assert.equal(admit(s.ctx(2), s.deps).admit, true, "legacy pending files use mtime as receipt time");
 });
 
+test("pending refusals replay in arrival order and never shorten a pause in force", t => {
+  const s = setup(t), file = path.join(s.root, "admission.lock"), dir = path.join(s.root, "pauses", "pending");
+  const first = s.deps.now(), laterReset = new Date(first + 20 * 60000).toISOString(), earlierReset = new Date(first + 5 * 60000).toISOString();
+  acquireOwnership(file, { pid: process.pid });
+  try {
+    assert.deepEqual(recordRefusal(s.root, "codex", { kind: "usage", resetAt: laterReset }, "newer", { ...s.deps, lockSleep() {} }), { pending: true });
+  } finally { releaseOwnership(file); }
+  // An older refusal with an earlier reset, saved under a name that sorts last.
+  fs.writeFileSync(path.join(dir, "codex-zzzz-older.json"), JSON.stringify({ backend: "codex", account: null, refusal: { kind: "usage", resetAt: earlierReset }, jobId: "older", receivedAt: new Date(first - 60000).toISOString() }));
+  assert.equal(admit(s.ctx(1), s.deps).waitKind, "pause");
+  const [pause] = listPauses(s.env, s.deps);
+  assert.equal(pause.until, laterReset, "the later provider reset stands");
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
+
 test("a provider reset already past at receipt gets the default usage pause, not an immediate probe", t => {
   const s = setup(t), now = s.deps.now(), resetAt = new Date(now - 1000).toISOString();
   const p = recordRefusal(s.root, "codex", { kind: "usage", resetAt }, "old", s.deps);
