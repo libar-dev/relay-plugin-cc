@@ -15,7 +15,7 @@ import { isWorkerLease, readLease, releaseWorkerLease } from "../jobs/lease.mjs"
 import { spawnWithAdmission, DEFAULTS } from "./admission.mjs";
 import { acquireOwnership, releaseOwnership } from "../util/ownership.mjs";
 import { holderAlive } from "./admission.mjs";
-import { readProcessStartTime } from "../util/process.mjs";
+import { readProcessStartTime, isProcessIdentityAlive } from "../util/process.mjs";
 
 export const COMPANION_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..", "companion.mjs");
 
@@ -32,7 +32,14 @@ export function spawnWorker(jobDir, cwd, env = process.env) {
   const lease = jobPaths(jobDir).lease;
   if (!acquireOwnership(lease, { pid: process.pid, startTime: null, role: "spawn" }, { isAlive: holderAlive })) return null;
   try {
-    const job = readJob(jobDir);
+    let job = readJob(jobDir);
+    const latest = latestLaunch(jobDir);
+    if (latest?.worker && ["pending", "acknowledged"].includes(latest.state) && isProcessIdentityAlive(latest.worker)) return null;
+    if (job && !TERMINAL_STATES.has(job.state) && launchInterrupted(job, latest) && job.admission?.causeKind !== "launch") {
+      job = { ...job, state: "queued", worker: null, admission: { ...job.admission, state: "waiting",
+        waitKind: "worker", causeKind: "launch", reason: "worker launch interrupted; retrying", since: new Date().toISOString() } };
+      writeJob(jobDir, job);
+    }
     const retryAt = Date.parse(job?.admission?.workerRetryAt);
     const poll = envNumber(env, "RELAY_ADMISSION_POLL_MS", DEFAULTS.pollMs);
     if (job?.state === "queued" && job.admission?.waitKind === "worker" && Date.now() >= retryAt && Date.now() - retryAt < poll) return null;
@@ -40,6 +47,14 @@ export function spawnWorker(jobDir, cwd, env = process.env) {
     const deferred = readJob(jobDir);
     if (deferred?.state === "queued" && deferred.admission?.waitKind === "worker") writeJob(jobDir, { ...deferred, launchPendingAt: new Date(Date.now()).toISOString(), admission: { ...deferred.admission, workerRetryAt: new Date(Date.now()).toISOString() } });
     return result;
+  } catch (error) {
+    const job = readJob(jobDir);
+    if (job && (!TERMINAL_STATES.has(job.state) || pendingInboxMessages(jobDir).length > 0)) writeJob(jobDir, { ...job, state: "queued", worker: null,
+      admission: { ...job.admission, state: "waiting", waitKind: "worker", causeKind: "launch",
+        reason: "worker launch interrupted; retrying", launchError: error.message,
+        since: new Date().toISOString(), workerRetryAt: new Date().toISOString() } });
+    process.stderr.write(`relay load guard: deferred worker spawn failed (${error.message}); work remains queued for retry\n`);
+    return null;
   }
   finally { releaseOwnership(lease); }
 }
@@ -159,8 +174,26 @@ export async function deliverMessage(jobDir, kind, text, extra = {}, options = {
   return { message, outcome, spawned };
 }
 
+function latestLaunch(jobDir) {
+  return fs.readdirSync(jobDir).filter(name => /^launch-.*\.json$/.test(name))
+    .map(name => readJsonOrNull(path.join(jobDir, name))).filter(Boolean)
+    .sort((a, b) => String(a.requestedAt).localeCompare(String(b.requestedAt))).at(-1);
+}
+
+function launchInterrupted(job, latest) {
+  return latest && (latest.state === "pending" || latest.state?.startsWith("handoff-")) &&
+    !isProcessIdentityAlive(latest.worker) && !(job.attempts ?? []).some(attempt => Date.parse(attempt.startedAt) >= Date.parse(latest.requestedAt));
+}
+
 export function retryQueuedWorker(jobDir, env = process.env) {
   const job = readJob(jobDir);
+  if (job && !TERMINAL_STATES.has(job.state) && !hasLiveWorker(jobDir) && !isProcessIdentityAlive(job.worker)) {
+    const latest = latestLaunch(jobDir);
+    if (launchInterrupted(job, latest)) {
+      // Re-read and reserve under the spawn lease; concurrent waiters share that fence.
+      return spawnWorker(jobDir, job.request?.cwd ?? process.cwd(), env);
+    }
+  }
   if (job?.state === "queued" && job.admission?.waitKind === "worker" && !hasLiveWorker(jobDir)) {
     try { return spawnWorker(jobDir, job.request?.cwd ?? process.cwd(), env); }
     catch (error) {

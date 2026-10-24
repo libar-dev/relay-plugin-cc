@@ -2,7 +2,7 @@ import { sleep, envNumber, parseCommandInput, resolveJobReference, printJson } f
 import fs from "node:fs";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
-import { executionMembers, groupSurvivors, listProcesses, readProcessStartTime, snapshotProcessTree, stopProcessSnapshot, terminateProcessTree } from "../lib/util/process.mjs";
+import { executionMembers, groupSurvivors, listProcesses, readProcessStartTime, snapshotExecutionTree, stopProcessSnapshot, terminateProcessTree } from "../lib/util/process.mjs";
 import { releaseLeaseToConsumer } from "../lib/worker/delivery.mjs";
 import { acquireWorkerLease, isWorkerAlive, isWorkerLease, readLease } from "../lib/jobs/lease.mjs";
 import { claimInboxMessages, owedMessages, readOutcome, writeOutcome, postInboxMessage, recordReceipt } from "../lib/jobs/messages.mjs";
@@ -213,7 +213,7 @@ export async function handleCancel(argv) {
     const initialTable = listProcesses();
     const terminal = isTerminalView(view) && view.state !== "dead";
     const initialRoots = terminal ? processRoots({ ...view.job, worker: null }) : processRoots(view.job);
-    let tree = mergeSnapshots(snapshotProcessTree(initialRoots, { table: initialTable }), executionMembers(view.job, initialTable, { jobDir }));
+    let tree = mergeSnapshots(snapshotExecutionTree(view.job, initialRoots, initialTable), executionMembers(view.job, initialTable, { jobDir }));
     if (terminal) tree = Object.assign(tree.filter(p => p.pid !== view.job.worker?.pid), tree.cause ? { cause: tree.cause } : {});
     if (tree.cause) throw new Error(`Could not cancel job ${view.job.id}: ${tree.cause}.`);
     if (isTerminalView(view) && view.state !== "dead" && tree.length === 0) {
@@ -301,12 +301,12 @@ export async function handleCancel(argv) {
         // The worker answered and may begin a newer attempt, so it is never signalled. Its tree is read
         // again for what attempt N left (a tool started while the turn was interrupted): a newer attempt is
         // recorded before its server starts, so a read after which the count is still N holds none of it.
-        const later = worker?.pid && isWorkerAlive(worker) ? snapshotProcessTree([worker.pid]) : [];
+        const later = worker?.pid && isWorkerAlive(worker) ? snapshotExecutionTree(view.job, [worker.pid]) : [];
         const current = readJob(jobDir)?.attempts?.length ?? 0;
         const merged = current === attempt || (attempt === 1 && current === 0) ? mergeSnapshots(tree, later) : tree;
         tree = Object.assign(merged.filter(entry => entry.pid !== worker?.pid), merged.cause ? { cause: merged.cause } : {});
       } else {
-        tree = mergeSnapshots(tree, snapshotProcessTree(processRoots(view.job)));
+        tree = mergeSnapshots(tree, snapshotExecutionTree(view.job, processRoots(view.job)));
       }
       if (!advanced()) {
         checkAttempt(view.job, attempt);

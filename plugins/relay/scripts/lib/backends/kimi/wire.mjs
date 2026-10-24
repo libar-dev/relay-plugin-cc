@@ -138,8 +138,7 @@ export class KimiWire {
       if (!turn.ended && turn.turnId !== this.running && turn.turnId !== this.engineTurn && turn.turnId !== this.engine) this.turns.delete(turn.turnId);
     }
     const ended = [...this.turns.values()].filter(t => t.ended && t.turnId !== this.engineTurn && t.turnId !== this.running);
-    const retainedTurns = new Set([...this.prompts.values()].filter(prompt => this.retainPrompt(prompt)).map(prompt => prompt.turnId));
-    for (const turn of ended.slice(0, -50)) if (!retainedTurns.has(turn.turnId)) this.turns.delete(turn.turnId);
+    for (const turn of ended.slice(0, -50)) this.turns.delete(turn.turnId);
     const prompts = [...this.prompts.values()];
     for (const prompt of prompts.slice(0, -50)) {
       if (prompt.turnId === this.running || (prompt.turnId !== null && prompt.turnId === this.engineTurn) || this.retainPrompt(prompt)) continue;

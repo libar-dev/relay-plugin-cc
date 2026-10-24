@@ -23,7 +23,7 @@ Launch records retain the trigger, caller identity and worker parent/group ident
 When a job ends, is cancelled or loses its backend, relay stops every process the job started,
 including test runners and builds that outlived their parent. A job that must leave a service
 running should start it outside relay. Cleanup finishes before a replacement backend starts or
-capacity is released; unresolved processes remain counted and the job reports the failure.
+capacity is released; unresolved processes remain counted and appear in the job’s cleanup status.
 
 ## Backends
 

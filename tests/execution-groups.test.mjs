@@ -188,6 +188,10 @@ test("Stop during launcher handoff starts no backend; concurrent waiters recover
   process.kill(old.worker.pid, "SIGKILL"); if (old.server?.pid) process.kill(old.server.pid, "SIGKILL");
   await waitFor(() => !alive(old.worker.pid));
   writeJob(dir, { ...old, worker: null, server: null, pendingFirstTurn: true, state: "queued", admission: { waitKind: "worker", workerRetryAt: new Date(0).toISOString() } });
+  ctx.env.RELAY_ADMISSION = "on";
+  ctx.env.RELAY_ADMISSION_HOME = path.join(ctx.root, "admission");
+  ctx.env.RELAY_TEST_ADMISSION_READINGS = path.join(ctx.root, "readings.json");
+  fs.writeFileSync(ctx.env.RELAY_TEST_ADMISSION_READINGS, JSON.stringify({ totalBytes: 64 * 2 ** 30, availableBytes: 60 * 2 ** 30, cores: 64, load5: 0 }));
   const marker = path.join(ctx.root, "launcher-blocked");
   const preload = path.join(ctx.root, "handoff.mjs");
   fs.writeFileSync(preload, `import fs from 'node:fs';
@@ -202,17 +206,16 @@ if(process.argv[1]?.endsWith('/launcher.mjs')) {
   const launches = fs.readdirSync(dir).filter(name => name.startsWith("launch-"));
   const pending = launches.map(name => JSON.parse(fs.readFileSync(path.join(dir, name)))).find(entry => entry.state === "pending");
   assert.ok(pending?.worker?.pid);
+  assert.equal(readJob(ctx, id).state, "starting", "the interrupted reservation has left the worker queue");
   const starts = ctx.fakeState().appServerStarts;
   const killed = stopDescendants(lead.pid);
   assert.ok(killed.has(pending.worker.pid), "the race occurs before reparenting acknowledgement");
   await waitFor(() => !alive(pending.worker.pid));
   assert.equal(ctx.fakeState().appServerStarts, starts, "no backend runs before the handoff");
   // A pending handoff remains retryable. Concurrent waiters use the same lease fence.
-  const failed = readRecord(dir);
-  writeJob(dir, { ...failed, state: "queued", worker: null, admission: { waitKind: "worker", workerRetryAt: new Date(0).toISOString() } });
   const waiters = Array.from({ length: 3 }, () => spawn(process.execPath, [script, "wait", id, "--timeout-seconds", "30"], { env: ctx.env, cwd: ctx.work, stdio: "ignore" }));
   t.after(() => { for (const waiter of waiters) { try { waiter.kill("SIGKILL"); } catch {} } });
-  await waitFor(() => readJob(ctx, id).worker?.pid && readJob(ctx, id).launch?.state === "acknowledged");
+  await waitFor(() => readJob(ctx, id).worker?.pid && readJob(ctx, id).launch?.state === "acknowledged", 20000);
   assert.equal(readJob(ctx, id).workers.filter(w => w.pid !== old.worker.pid).length, 1);
   assert.ok(readJob(ctx, id).launches.some(launch => launch.state === "death-observed" && launch.deathObservedAt && !launch.endedAt));
 });
@@ -299,4 +302,164 @@ process.kill=function(pid,signal){
   assert.equal(fs.existsSync(signals), false);
   await finishJob(ctx, id);
   assert.equal(readJob(ctx, id).state, "completed");
+});
+
+for (const mismatch of ["inode", "boot"]) test(`a reused scope with a different ${mismatch} is ignored`, async t => {
+  const group = "/synthetic/relay-jobs.slice/run-u37.scope";
+  const read = fs.readFileSync, stat = fs.statSync, write = fs.writeFileSync;
+  const signals = [], writes = [];
+  t.mock.method(fs, "readFileSync", (file, ...args) => {
+    if (file === "/proc/sys/kernel/random/boot_id") return "current-boot\n";
+    if (file === `/sys/fs/cgroup${group}/cgroup.procs`) return "500000001\n";
+    return read(file, ...args);
+  });
+  t.mock.method(fs, "statSync", (file, ...args) => file === `/sys/fs/cgroup${group}` ? { ino: 37 } : stat(file, ...args));
+  t.mock.method(fs, "writeFileSync", (file, ...args) => {
+    if (file === `/sys/fs/cgroup${group}/cgroup.kill`) { writes.push(file); return; }
+    return write(file, ...args);
+  });
+  const execution = { leader: { pid: 500000000, startTime: "linux:100" }, pgid: 500000000,
+    cgroup: group, cgroupId: mismatch === "inode" ? 36 : 37, bootId: mismatch === "boot" ? "old-boot" : "current-boot" };
+  const table = [{ pid: 500000001, ppid: 1, pgid: 500000001, startTime: "linux:200" }];
+  const job = { execution };
+  assert.deepEqual(executionMembers(job, table), []);
+  const { executionAlive } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  assert.equal(executionAlive(job, { listProcesses: () => table }), false);
+  assert.deepEqual((await stopExecution(job, { listProcesses: () => table, killImpl: pid => signals.push(pid), graceMs: 0 })).survivors, []);
+  assert.deepEqual(signals, []);
+  assert.deepEqual(writes, []);
+});
+
+for (const sampled of [false, true]) test(`an escaped tracked tool's later children are found before cleanup (sampled=${sampled})`, async t => {
+  const ctx = setup(t), dir = ctx.root;
+  const backend = { pid: 500000001, ppid: 1, pgid: 500000001, startTime: "linux:100" };
+  const tool = { pid: 500000002, ppid: backend.pid, pgid: 500000002, startTime: "linux:200" };
+  const child = { pid: 500000003, ppid: tool.pid, pgid: tool.pgid, startTime: "linux:300" };
+  const job = { server: backend };
+  sampleExecution(job, dir, [backend, tool]);
+  let table = [{ ...tool, ppid: 1 }, child];
+  if (sampled) for (let n = 0; n < 3; n++) assert.ok(sampleExecution(job, dir, table).some(p => p.pid === child.pid));
+  const signals = [];
+  const result = await stopExecution(job, { jobDir: dir, listProcesses: () => table, graceMs: 0,
+    killImpl(pid, signal) { signals.push(pid); if (signal === "SIGTERM") table = table.filter(row => row.pid !== pid); } });
+  assert.ok(signals.includes(child.pid));
+  assert.deepEqual(result.survivors, []);
+});
+
+test("an unreadable backend identity never authorizes walking its children", async () => {
+  const root = { pid: 500000001, startTime: "linux:100" };
+  const table = [{ ...root, startTime: null, ppid: 1, pgid: root.pid },
+    { pid: 500000002, startTime: "linux:200", ppid: root.pid, pgid: root.pid }];
+  const signals = [];
+  const result = await stopExecution({ server: root }, { listProcesses: () => table, killImpl: pid => signals.push(pid), graceMs: 0 });
+  assert.deepEqual(signals, []);
+  assert.equal(result.survivors.some(p => p.pid === root.pid), true);
+  assert.equal(result.survivors.some(p => p.pid === 500000002), false);
+});
+
+test("a nested worker and its backend are excluded even if sampled during handoff", async t => {
+  const ctx = setup(t), dir = ctx.root, registry = path.join(dir, "workers");
+  fs.mkdirSync(registry);
+  const root = { pid: 500000001, ppid: 1, pgid: 500000001, startTime: "linux:100" };
+  const worker = { pid: 500000002, ppid: root.pid, pgid: 500000002, startTime: "linux:200" };
+  const backend = { pid: 500000003, ppid: worker.pid, pgid: worker.pgid, startTime: "linux:300" };
+  const job = { jobDir: dir, server: root, execution: { leader: root, pgid: root.pgid, workerRegistry: registry } };
+  const table = [root, worker, backend];
+  sampleExecution(job, dir, table); // Even an earlier sample must be corrected after publication.
+  fs.writeFileSync(path.join(registry, `${worker.pid}.json`), JSON.stringify({ ...worker, jobDir: path.join(dir, "inner") }));
+  assert.deepEqual(sampleExecution(job, dir, table).map(p => p.pid), [root.pid]);
+  const signals = [];
+  const result = await stopExecution(job, { jobDir: dir, listProcesses: () => table.filter(row => !signals.includes(row.pid)), graceMs: 0,
+    killImpl: pid => signals.push(pid) });
+  assert.deepEqual(signals, [root.pid]);
+  assert.deepEqual(result.survivors, []);
+});
+
+test("a failed launch stays queued and plain wait dispatches it without auto-resume", async t => {
+  const ctx = setup(t, { env: { RELAY_WORKER_SCOPE: "off" } });
+  const preload = path.join(ctx.root, "fail-launch.mjs");
+  fs.writeFileSync(preload, `if(process.argv[1]?.endsWith('/launcher.mjs')) process.exit(1);`);
+  const { id } = startJob(ctx, undefined, "[quick] Retry the launch.", { NODE_OPTIONS: `--import=${preload}` });
+  const queued = readJob(ctx, id);
+  assert.equal(queued.state, "queued");
+  assert.equal(queued.admission.causeKind, "launch");
+  assert.equal(queued.admission.waitKind, "worker");
+  assert.equal(companion(ctx, ["wait", id, "--timeout-seconds", "15"]).status, 0);
+  await finishJob(ctx, id);
+  assert.equal(readJob(ctx, id).attempts.length, 1);
+  assert.equal(readJob(ctx, id).workers.length, 1);
+  assert.equal(readJob(ctx, id).autoRecoveries?.length ?? 0, 0);
+});
+
+for (const cancel of [false, true]) test(`an actual nested task survives outer cleanup after sampling its launcher handoff (cancel=${cancel})`, async t => {
+  const outer = setup(t, { turnMs: 100, env: { RELAY_WORKER_SCOPE: "off" } });
+  const inner = setup(t, { turnMs: 30000, env: { RELAY_WORKER_SCOPE: "off" } });
+  const shared = path.join(outer.root, "admission");
+  outer.env.RELAY_ADMISSION_HOME = shared;
+  inner.env.RELAY_ADMISSION_HOME = shared;
+  const marker = path.join(outer.root, "nested-started"), blocked = path.join(inner.root, "blocked"), release = path.join(inner.root, "release");
+  const preload = path.join(inner.root, "hold-launcher.mjs");
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+if(process.argv[1]?.endsWith('/launcher.mjs')) {
+ const write=process.stdout.write.bind(process.stdout);
+ process.stdout.write=(...args)=>{fs.writeFileSync(${JSON.stringify(blocked)},fs.readFileSync(process.argv[2]));
+ const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)}))clearInterval(timer);},10);return write(...args);};
+}`);
+  const launch = `if(!require('node:fs').existsSync(${JSON.stringify(marker)})) {
+require('node:fs').writeFileSync(${JSON.stringify(marker)},'');
+require('node:child_process').spawn(process.execPath,${JSON.stringify([script, "task", "--model", "gpt-test", "--effort", "low", "[long] Nested task"])},
+{cwd:${JSON.stringify(inner.work)},env:{...process.env,...${JSON.stringify(inner.env)},NODE_OPTIONS:${JSON.stringify(`--import=${preload}`)}},stdio:'ignore'}).unref();
+}\n`;
+  const binary = path.join(outer.bin, "codex");
+  fs.writeFileSync(binary, fs.readFileSync(binary, "utf8").replace("\n", "\n" + launch));
+  const { id } = startJob(outer, undefined, "[long] Outer task");
+  const pending = await waitFor(() => fs.existsSync(blocked) && JSON.parse(fs.readFileSync(blocked)));
+  const record = readJob(outer, id), dir = jobDir(outer, id);
+  const table = listProcesses();
+  assert.ok(table.some(row => row.pid === pending.worker.pid));
+  assert.equal(sampleExecution(record, dir, table).some(row => row.pid === pending.worker.pid), false);
+  if (cancel) {
+    const result = companion(outer, ["cancel", id]);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  } else fs.writeFileSync(release, "go");
+  const { jobDirs } = await import("./support/job-helpers.mjs");
+  const innerDir = await waitFor(() => jobDirs(inner).find(dir => readRecord(dir).state === "running"));
+  const worker = readRecord(innerDir).worker;
+  if (!cancel) {
+    process.kill(readJob(outer, id).server.pid, "SIGKILL");
+    await finishJob(outer, id);
+  }
+  assert.equal(isProcessIdentityAlive(worker), true);
+  assert.equal(readRecord(innerDir).state, "running");
+});
+
+test("scope cleanup excludes older members and preserves nested workers sharing the scope", async t => {
+  const ctx = setup(t), registry = path.join(ctx.root, "workers");
+  fs.mkdirSync(registry);
+  const group = "/synthetic/relay-jobs.slice/run-u37.scope";
+  const leader = { pid: 500000000, startTime: "linux:200" };
+  const older = { pid: 500000001, ppid: 1, pgid: 500000001, startTime: "linux:100" };
+  const worker = { pid: 500000002, ppid: 1, pgid: 500000002, startTime: "linux:300" };
+  const tool = { pid: 500000003, ppid: 1, pgid: 500000003, startTime: "linux:400" };
+  let table = [older, worker, tool];
+  fs.writeFileSync(path.join(registry, `${worker.pid}.json`), JSON.stringify({ ...worker, jobDir: path.join(ctx.root, "nested") }));
+  const read = fs.readFileSync, stat = fs.statSync, write = fs.writeFileSync;
+  const scopeKills = [], signals = [];
+  t.mock.method(fs, "readFileSync", (file, ...args) => {
+    if (file === "/proc/sys/kernel/random/boot_id") return "current-boot\n";
+    if (file === `/sys/fs/cgroup${group}/cgroup.procs`) return `${older.pid}\n${worker.pid}\n${tool.pid}\n`;
+    return read(file, ...args);
+  });
+  t.mock.method(fs, "statSync", (file, ...args) => file === `/sys/fs/cgroup${group}` ? { ino: 37 } : stat(file, ...args));
+  t.mock.method(fs, "writeFileSync", (file, ...args) => {
+    if (file === `/sys/fs/cgroup${group}/cgroup.kill`) { scopeKills.push(file); return; }
+    return write(file, ...args);
+  });
+  const job = { jobDir: ctx.root, execution: { leader, pgid: leader.pid, cgroup: group, cgroupId: 37, bootId: "current-boot", workerRegistry: registry } };
+  assert.deepEqual(executionMembers(job, table).map(p => p.pid), [tool.pid]);
+  const result = await stopExecution(job, { listProcesses: () => table, graceMs: 0,
+    killImpl(pid) { signals.push(pid); table = table.filter(row => row.pid !== pid); } });
+  assert.deepEqual(signals, [tool.pid]);
+  assert.deepEqual(scopeKills, []);
+  assert.deepEqual(result.survivors, []);
 });

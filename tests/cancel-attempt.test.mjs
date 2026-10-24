@@ -321,11 +321,11 @@ fs.renameSync = function(from, to) {
     t.after(() => { try { process.kill(descendant.childPid, "SIGKILL"); } catch {} });
     const closeMarker = path.join(ctx.root, "closing");
     const cancelEnv = closing ? preload(ctx, "observe-closing", `
-const read = fs.readFileSync;
-fs.readFileSync = function(file, ...args) {
+const kill = process.kill;
+process.kill = function(pid, signal) {
   const stack = new Error().stack;
-  if (String(file).startsWith("/proc/") && /waitUntil/.test(stack) && !/cancelStopped/.test(stack)) fs.writeFileSync(${JSON.stringify(closeMarker)}, "");
-  return read.call(this, file, ...args);
+  if (pid === ${worker.pid} && signal === 0 && /waitUntil/.test(stack) && !/cancelStopped/.test(stack)) fs.writeFileSync(${JSON.stringify(closeMarker)}, "");
+  return kill.apply(this, arguments);
 };`) : {};
     const cancelled = asyncCompanion(ctx, ["cancel", id, "--attempt", "1", "--json"], { ...cancelEnv, RELAY_JOBS_CANCEL_GRACE_MS: "20000" });
     let resumedAt;
@@ -937,6 +937,9 @@ fs.renameSync = function(from, to) {
       const continued = companion(ctx, ["continue", id, "--message", "[long] Next."]);
       assert.equal(continued.status, 0, continued.stdout + continued.stderr);
       await waitFor(() => readJob(ctx, id).attempts.length === 2 && readJob(ctx, id).turnId);
+    } else {
+      // Hold the decision boundary until the resumed worker has actually settled its cancel.
+      await waitFor(() => cancels(dir)[0]?.outcome?.action === "cancelled");
     }
     pause.release();
     const result = await cancelling;
@@ -972,20 +975,17 @@ fs.renameSync = function(from, to) {
   }
   return result;
 };
-const read = fs.readFileSync;
-fs.readFileSync = function(file, ...args) {
-  if (ended && String(file).startsWith("/proc/") && /waitUntil/.test(new Error().stack) && !/cancelStopped/.test(new Error().stack)) {
+const kill = process.kill;
+process.kill = function(pid, signal) {
+  const stack = new Error().stack;
+  if (ended && pid === ${worker.pid} && signal === 0 && /waitUntil/.test(stack) && !/cancelStopped/.test(stack)) {
     ended = false;
     const file = ${JSON.stringify(jobPaths(dir).job)};
-    const job = JSON.parse(read.call(this, file, "utf8"));
+    const job = JSON.parse(fs.readFileSync(file, "utf8"));
     job.state = "running";
     job.attempts.push({ attempt: 2, state: "running" });
     fs.writeFileSync(file, JSON.stringify(job));
   }
-  return read.call(this, file, ...args);
-};
-const kill = process.kill;
-process.kill = function(pid, signal) {
   if (Math.abs(pid) === ${worker.pid} && signal !== 0) fs.appendFileSync(${JSON.stringify(signals)}, String(signal));
   return kill.apply(this, arguments);
 };`);
@@ -1007,7 +1007,7 @@ const spawnSync = childProcess.spawnSync;
 let snapshots = 0;
 childProcess.spawnSync = function(...args) {
   const result = spawnSync.apply(this, args);
-  if (/snapshotProcessTree/.test(new Error().stack) && ++snapshots === 1) {
+  if (/snapshotExecutionTree/.test(new Error().stack) && ++snapshots === 1) {
     const file = ${JSON.stringify(jobPaths(dir).job)};
     const job = JSON.parse(fs.readFileSync(file, "utf8"));
     job.attempts.push({ attempt: 2, state: "running" });

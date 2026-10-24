@@ -14,7 +14,7 @@ import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/
 import { computeJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { createJobDir, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
-import { readLease } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
+import { readLease, isWorkerAlive } from "../plugins/relay/scripts/lib/jobs/lease.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = path.join(ROOT, "plugins", "relay", "scripts", "companion.mjs");
@@ -760,6 +760,8 @@ test("from the moment a continue is taken, readers and cancel see the new attemp
   const ctx = setup("job", { turnMs: 50 });
   const jobId = startJob(ctx, HEADER, "First turn.\n");
   assert.equal(waitJob(ctx, jobId).status, 0);
+  // This case needs a fresh worker so its resume environment and publication are observed.
+  await waitFor(() => !readLease(jobDirOf(ctx, jobId)) && !isWorkerAlive(readJobJson(ctx, jobId).worker));
 
   const continuing = spawnAsync(ctx, ["continue", jobId, "--message", "Second turn."], { FAKE_CODEX_RESUME_DELAY_MS: "3000" });
   await waitFor(() => (readJobJson(ctx, jobId).workers ?? []).length === 2, { intervalMs: 5 });
@@ -783,6 +785,8 @@ test("a continuation whose thread/resume fails keeps no previous report", async 
   const ctx = setup("job", { turnMs: 50 });
   const jobId = startJob(ctx, HEADER, "First turn.\n");
   assert.equal(waitJob(ctx, jobId).status, 0);
+  // This case needs a fresh worker so its resume environment and publication are observed.
+  await waitFor(() => !readLease(jobDirOf(ctx, jobId)) && !isWorkerAlive(readJobJson(ctx, jobId).worker));
   const continued = companion(ctx, ["continue", jobId, "--message", "Second turn."], { env: { FAKE_CODEX_RESUME_FAIL: "1" } });
   assert.equal(continued.status, 0, continued.stderr);
   const waited = waitJob(ctx, jobId);

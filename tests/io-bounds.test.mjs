@@ -25,7 +25,7 @@ else {const chunk='x'.repeat(1024*1024); let n=70; function write(){while(n-->0)
   assert.equal(client.lineChunks.length, 0);
 });
 
-test("bounded close escalates TERM to KILL even after ChildProcess.killed is true", async t => {
+test("bounded close escalates TERM to KILL even after ChildProcess.killed is true", { timeout: 12000 }, async t => {
   const dir = makeTempDir("relay-close-bound-"); const binary = path.join(dir, "backend");
   writeExecutable(binary, `#!/usr/bin/env node
 process.on('SIGTERM',()=>{}); process.stdin.on('end',()=>{});
@@ -93,4 +93,27 @@ test("a continuation arriving during bounded backend close runs in the next roun
   assert.equal(ctx.fakeState().turnStarts.length, 2);
   assert.equal(isProcessIdentityAlive(closing.server), false);
   assert.equal(companion(ctx, ["wait", id, "--timeout-seconds", "15"]).status, 0);
+});
+
+for (const replay of [false, true]) test(`Kimi historical deliveries keep prompt evidence but expire reports (replay=${replay})`, () => {
+  const dir = makeTempDir("relay-wire-deliveries-");
+  const file = path.join(dir, "wire.jsonl");
+  fs.writeFileSync(file, "");
+  const wire = new KimiWire(() => file, { retainPrompt: () => true });
+  for (let n = 0; n < 65; n++) {
+    const records = [
+      { type: "agent.message.appended", message: { message: { role: "user", content: [{ type: "text", text: `prompt-${n}` }] }, meta: { source: "input", origin: { kind: "user" }, promptId: `p${n}` } } },
+      { type: "turn.prompt", turnId: n, origin: { kind: "user" }, promptId: `p${n}`, input: [{ type: "text", text: `prompt-${n}` }] },
+      { type: "agent.message.appended", message: { message: { role: "assistant", content: [{ type: "text", text: `report-${n}` }] } } },
+      { type: "turn.ended", turnId: n }
+    ];
+    fs.appendFileSync(file, records.map(r => JSON.stringify(r) + "\n").join(""));
+    if (!replay) wire.read();
+  }
+  wire.read();
+  assert.equal(wire.turns.size, 50);
+  assert.equal(wire.turns.has(0), false);
+  assert.equal(wire.turns.get(64).report, "report-64");
+  assert.equal(wire.prompts.size, 65);
+  assert.equal(wire.promptSince(0, "prompt-0").delivered, true);
 });

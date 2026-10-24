@@ -8,6 +8,7 @@ its entries here.
 
 Changed:
 
+- Foreground `task` workers run independently of the caller; Ctrl-C leaves a dispatched job running.
 - Jobs own their execution groups and stop their tools at backend loss, cancellation and completion.
   Linux workers use per-job scopes whenever a user manager is available, and set OOM score 500.
   Job and guard status show memory used by relay jobs and their processes.
@@ -19,6 +20,17 @@ Changed:
   Admission pauses do not bound requests or retries inside running turns.
 
 Fixed:
+
+- macOS cleanup excludes its own process-table sampler, so an empty worker group no longer
+  reports a phantom surviving process and fails before starting the backend.
+
+- Worker launch reservations no longer hold the admission lock across startup. Failed or interrupted
+  handoffs retry through plain `wait`; native Windows keeps detached launches with visible guard and
+  execution-group bypasses.
+- Scope ownership checks boot and inode identity. Cleanup tracks children of escaped tools, preserves
+  nested jobs, and reports unresolved job-end cleanup without changing completed or cancelled states.
+  Accounting failures preserve worker liveness and backend exit records; Kimi expires old reports while
+  retaining delivery evidence.
 
 - Replacement backends and slot release wait for process cleanup, including sampled detached tools.
   Cleanup failures keep surviving processes counted. Cancelling terminal jobs also cleans leftovers.

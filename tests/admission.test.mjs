@@ -1111,3 +1111,24 @@ test("a damaged own slot cannot reuse a busy seat or retain the damaged placehol
   const slot = JSON.parse(fs.readFileSync(file));
   assert.equal(slot.state, "waiting"); assert.equal(slot.damaged, undefined);
 });
+
+test("a burst can reserve other seats while the first launch handshake is still running", t => {
+  const s = setup(t);
+  const jobs = Array.from({ length: 8 }, () => {
+    const c = s.ctx();
+    writeJob(c.jobDir, { id: c.jobId, state: "starting", request: c.request });
+    return c;
+  });
+  let launches = 0, sleeps = 0;
+  const deps = { ...s.deps, lockSleep() { sleeps++; } };
+  const launch = index => spawnWithAdmission(jobs[index].jobDir, s.env, () => {
+    launches++;
+    assert.equal(JSON.parse(fs.readFileSync(path.join(s.home, "slots", `${jobs[index].jobId}.json`))).state, "spawning");
+    if (index + 1 < jobs.length) assert.equal(launch(index + 1), index + 2);
+    return index + 1;
+  }, deps);
+  assert.equal(launch(0), 1);
+  assert.equal(launches, jobs.length);
+  assert.equal(sleeps, 0);
+  assert.ok(jobs.every(c => readJob(c.jobDir).admission?.causeKind !== "lock"));
+});

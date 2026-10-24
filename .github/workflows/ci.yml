@@ -15,6 +15,7 @@ jobs:
     timeout-minutes: 30
 
     strategy:
+      fail-fast: false
       matrix:
         node: [22, 24]
         os: [ubuntu-latest, macos-latest]

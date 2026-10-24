@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { once } from "node:events";
 import { makeTempDir, writeExecutable } from "./support/helpers.mjs";
 import test from "node:test";
@@ -276,4 +277,30 @@ test("an identity becoming unreadable after TERM is unresolved and receives no K
   assert.deepEqual(signals, [[5000, "SIGTERM"]]);
   assert.equal(remaining[0].pid, identity.pid);
   assert.match(remaining.cause, /identities could not be read/);
+});
+
+
+test("Darwin process tables exclude their own already-exited ps sampler", t => {
+  const spawnSync = childProcess.spawnSync;
+  let sampler;
+  t.mock.method(childProcess, "spawnSync", (...args) => {
+    const result = spawnSync(...args);
+    if (args[0] === "ps" && args[1][0] === "-A") sampler = result.pid;
+    return result;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const table = listProcesses({ platform: "darwin" });
+  assert.ok(Number.isInteger(sampler));
+  assert.equal(table.some(row => row.pid === sampler), false);
+});
+
+test("Darwin cleanup of an otherwise empty worker group finds no phantom sampler", async () => {
+  const { stopExecution } = await import("../plugins/relay/scripts/lib/util/process.mjs");
+  const identity = { pid: process.pid, startTime: readProcessStartTime(process.pid, { platform: "darwin" }) };
+  const list = () => listProcesses({ platform: "darwin" }).filter(row => row.pid === process.pid || row.ppid === process.pid);
+  const table = list();
+  const pgid = table.find(row => row.pid === process.pid).pgid;
+  const result = await stopExecution({ execution: { leader: identity, pgid } }, { listProcesses: list, graceMs: 0 });
+  assert.deepEqual(result.survivors, []);
 });

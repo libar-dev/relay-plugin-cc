@@ -6,7 +6,7 @@ import test from "node:test";
 import { setup, waitFor } from "./support/job-helpers.mjs";
 import { createJobDir, jobPaths, readJob, writeJob } from "../plugins/relay/scripts/lib/jobs/store.mjs";
 import { buildLaunchRequest } from "../plugins/relay/scripts/lib/jobs/request.mjs";
-import { loadJobView } from "../plugins/relay/scripts/lib/jobs/view.mjs";
+import { loadJobView, renderJobBlock } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { postInboxMessage, readOutcome } from "../plugins/relay/scripts/lib/jobs/messages.mjs";
 import { runWorker } from "../plugins/relay/scripts/lib/worker/worker.mjs";
 import { backendNamed } from "../plugins/relay/scripts/lib/backends/index.mjs";
@@ -393,7 +393,7 @@ test("heartbeat memory is visible in the job, slot and aggregate guard status", 
   await running;
 });
 
-test("unresolved owned tools fail cleanup and retain the running seat", async t => {
+test("unresolved owned tools preserve completion and retain the running seat", async t => {
   const { spawn } = await import("node:child_process");
   const { readProcessStartTime } = await import("../plugins/relay/scripts/lib/util/process.mjs");
   const s = seed(t); s.unblock();
@@ -414,9 +414,59 @@ test("unresolved owned tools fail cleanup and retain the running seat", async t 
   t.after(() => { try { child?.kill("SIGKILL"); } catch {} });
   await runWorker(s.dir, s.options);
   const job = readJob(s.dir);
-  assert.equal(job.state, "failed");
+  assert.equal(job.state, "completed");
   assert.equal(job.cleanup.state, "unresolved");
   assert.ok(job.cleanup.pids.includes(child.pid));
-  assert.match(job.errorMessage, /cleanup: unresolved/);
+  assert.match(renderJobBlock(loadJobView(s.dir)), /cleanup: unresolved/);
   assert.equal(fs.existsSync(path.join(s.ctx.env.RELAY_ADMISSION_HOME, "slots", "job-admission-worker.json")), true);
+});
+
+test("native Windows acknowledges without a process table and runs with groups bypassed", async t => {
+  const s = seed(t); s.unblock();
+  const launch = path.join(s.dir, "launch-windows.json");
+  fs.writeFileSync(launch, JSON.stringify({ state: "pending", caller: { pid: 999999999, startTime: "gone" } }));
+  const running = runWorker(s.dir, { ...s.options, platform: "win32", env: { ...s.ctx.env, RELAY_WORKER_LAUNCH: launch },
+    admission: { ...s.options.admission, platform: "win32" } });
+  const ack = JSON.parse(fs.readFileSync(launch));
+  assert.equal(ack.state, "acknowledged");
+  assert.equal(ack.reparenting, "unverified");
+  await running;
+  const job = readJob(s.dir);
+  assert.equal(job.state, "completed");
+  assert.match(job.admission.notes.join(" "), /unsupported on win32/);
+  assert.match(renderJobBlock(loadJobView(s.dir)), /execution groups unsupported on win32/);
+});
+
+test("sampling failures preserve heartbeat liveness and the backend end record", async t => {
+  const s = seed(t, "[long] Wait for accounting trouble."); s.unblock();
+  const running = runWorker(s.dir, s.options);
+  await waitFor(() => readJob(s.dir).server?.pid);
+  const mkdir = fs.mkdirSync, rename = fs.renameSync;
+  let failedSamples = 0;
+  t.mock.method(fs, "mkdirSync", (directory, ...args) => {
+    if (directory === s.ctx.env.RELAY_ADMISSION_HOME) { failedSamples++; throw new Error("synthetic sample failure"); }
+    return mkdir(directory, ...args);
+  });
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === path.join(s.dir, "processes.json")) { failedSamples++; throw new Error("synthetic registry failure"); }
+    return rename(from, to);
+  });
+  await waitFor(() => failedSamples > 0);
+  postInboxMessage(s.dir, { kind: "cancel" });
+  await running;
+  assert.equal(readJob(s.dir).state, "cancelled");
+  assert.ok(readJob(s.dir).attempts.at(-1).servers.at(-1).endedAt);
+  assert.ok(failedSamples >= 2);
+});
+
+test("a reparented worker acknowledges even after its caller has gone", async t => {
+  const s = seed(t); s.unblock();
+  const launch = path.join(s.dir, "launch-caller-gone.json");
+  fs.writeFileSync(launch, JSON.stringify({ state: "pending", caller: { pid: 999999998, startTime: "gone" }, launcher: { pid: 999999999, startTime: "gone" } }));
+  // Model the outside-caller ancestry check independently of this test runner’s PPID.
+  await runWorker(s.dir, { ...s.options, platform: "linux", env: { ...s.ctx.env, RELAY_WORKER_LAUNCH: launch } });
+  const ack = JSON.parse(fs.readFileSync(launch));
+  assert.equal(ack.state, "acknowledged");
+  assert.ok(ack.callerGoneAt);
+  assert.equal(readJob(s.dir).state, "completed");
 });

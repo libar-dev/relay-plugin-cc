@@ -810,7 +810,6 @@ export function renderGuard(snapshot) {
 // caller owns retries; completing workers never launch another session's jobs.
 export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
   const deps = dependencies({ ...injected, env });
-  let spawned = null;
   let spawnAttempted = false;
   const launch = () => { spawnAttempted = true; return spawn(); };
   try {
@@ -844,15 +843,10 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
       }
       const slot = { v: 1, jobId: job.id, jobDir, pid: null, processStart: null, backend: job.request.backend ?? "codex", account: job.request.account ?? null, class: cls, weight: WEIGHTS[cls], state: "spawning", spawnAt: iso(deps.now()), since: iso(deps.now()), holdAt: iso(deps.now()), holdBytes: DEFAULTS.workerBytes, holdGroup: machine.group, scopes: machine.scopes };
       deps.writeSlot(home, slot);
-      try {
-        spawned = launch();
-        const cur = readJob(jobDir);
-        if (cur?.state === "queued" && cur.admission?.waitKind === "worker")
-          writeJob(jobDir, { ...cur, state: "starting", worker: null, launchPendingAt: iso(deps.now()),
-            admission: { ...cur.admission, waitKind: "spawned" } });
-        return spawned;
-      }
-      catch (e) { fs.rmSync(slotFile(home, job.id), { force: true }); throw e; }
+      if (job.state === "queued" && job.admission?.waitKind === "worker")
+        writeJob(jobDir, { ...job, state: "starting", worker: null, launchPendingAt: iso(deps.now()),
+          admission: { ...job.admission, waitKind: "spawned" } });
+      return slot;
     });
     if (!decision.locked) {
       const previousLock = job.admission?.waitKind === "worker" && /admission lock (busy|stuck)/.test(job.admission.reason);
@@ -863,7 +857,17 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
       return null;
     }
     lockWaits.delete(`${home}:${job.id}`);
-    return decision.value;
+    if (!decision.value) return null;
+    // The spawning reservation fences contenders while the handshake runs outside the lock.
+    try { return launch(); }
+    catch (e) {
+      retryLock(home, deps, () => {
+        const current = readJsonOrNull(slotFile(home, job.id));
+        if (current?.state === "spawning" && current.spawnAt === decision.value.spawnAt)
+          fs.rmSync(slotFile(home, job.id), { force: true });
+      });
+      throw e;
+    }
   } catch (e) {
     if (spawnAttempted) throw e;
     const job = readJob(jobDir);

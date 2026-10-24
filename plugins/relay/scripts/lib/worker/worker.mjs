@@ -121,64 +121,77 @@ function isCapacityError(error) {
 // and runs in the next round. After the lease is gone the inbox is read once more, and a
 // message found then is taken with a fresh lease (or by the worker that took it first).
 export async function runWorker(jobDir, options = {}) {
-  const launchFile = (options.env ?? process.env).RELAY_WORKER_LAUNCH;
-  if (launchFile) {
-    const deadline = Date.now() + 10000;
-    for (;;) {
-      const launch = readJsonOrNull(launchFile);
-      const table = listProcesses();
-      const byPid = new Map((table ?? []).map(row => [row.pid, row]));
-      let row = byPid.get(process.pid);
-      let underCaller = false;
-      const seen = new Set();
-      while (row && !seen.has(row.pid)) {
-        seen.add(row.pid);
-        if (row.pid === launch?.caller?.pid && row.startTime === launch.caller.startTime) underCaller = true;
-        row = byPid.get(row.ppid);
+  const platform = options.platform ?? process.platform;
+  const workerRegistry = `${admissionHome({ ...process.env, ...options.env })}.workers`;
+  const registryFile = path.join(workerRegistry, `${process.pid}.json`);
+  if (["linux", "darwin"].includes(platform)) {
+    fs.mkdirSync(workerRegistry, { recursive: true });
+    writeJsonAtomic(registryFile, { pid: process.pid, startTime: readProcessStartTime(process.pid), jobDir });
+  }
+  try {
+    const launchFile = (options.env ?? process.env).RELAY_WORKER_LAUNCH;
+    if (launchFile) {
+      const deadline = Date.now() + 10000;
+      for (;;) {
+        const launch = readJsonOrNull(launchFile);
+        const table = ["linux", "darwin"].includes(platform) ? listProcesses() : null;
+        const byPid = new Map((table ?? []).map(row => [row.pid, row]));
+        let row = byPid.get(process.pid);
+        let underCaller = false;
+        const seen = new Set();
+        while (row && !seen.has(row.pid)) {
+          seen.add(row.pid);
+          if (row.pid === launch?.caller?.pid && row.startTime === launch.caller.startTime) underCaller = true;
+          row = byPid.get(row.ppid);
+        }
+        const unsupported = !["linux", "darwin"].includes(platform);
+        if (unsupported || (launch?.launcher && table && !isProcessIdentityAlive(launch.launcher) && !underCaller && (platform !== "darwin" || process.ppid === 1))) {
+          const self = byPid.get(process.pid);
+          const callerGone = launch?.caller && table && !table.some(row => row.pid === launch.caller.pid && row.startTime === launch.caller.startTime && !row.zombie);
+          writeJsonAtomic(launchFile, { ...launch, state: "acknowledged", acknowledgedAt: nowIso(),
+            ...(callerGone ? { callerGoneAt: nowIso() } : {}),
+            ...(unsupported ? { reparenting: "unverified", note: `execution groups unsupported on ${platform}; detached launch bypassed` } : {}),
+            worker: { pid: process.pid, startTime: self?.startTime, ppid: process.ppid, pgid: self?.pgid } });
+          break;
+        }
+        if (Date.now() >= deadline) {
+          if (launch) writeJsonAtomic(launchFile, { ...launch, state: "handoff-failed", failedAt: nowIso() });
+          throw new Error("Worker launch handoff did not leave the caller's process tree; no backend was started.");
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
       }
-      if (launch?.caller && table && !table.some(row => row.pid === launch.caller.pid && row.startTime === launch.caller.startTime && !row.zombie)) {
-        writeJsonAtomic(launchFile, { ...launch, state: "handoff-aborted", abortedAt: nowIso() });
-        return;
-      }
-      if (launch?.launcher && table && !isProcessIdentityAlive(launch.launcher) && !underCaller && (process.platform !== "darwin" || process.ppid === 1)) {
-        const self = byPid.get(process.pid);
-        writeJsonAtomic(launchFile, { ...launch, state: "acknowledged", acknowledgedAt: nowIso(),
-          worker: { pid: process.pid, startTime: self?.startTime, ppid: process.ppid, pgid: self?.pgid } });
-        break;
-      }
-      if (Date.now() >= deadline) {
-        if (launch) writeJsonAtomic(launchFile, { ...launch, state: "handoff-failed", failedAt: nowIso() });
-        throw new Error("Worker launch handoff did not leave the caller's process tree; no backend was started.");
-      }
+    }
+    if (process.platform === "linux") {
+      try { fs.writeFileSync("/proc/self/oom_score_adj", "500"); } catch {}
+    }
+    // The submitting process may still be publishing its spawn reservation.
+    const spawnDeadline = Date.now() + DEFAULTS.spawnGraceMs;
+    while (Date.now() < spawnDeadline) {
+      const lease = readLease(jobDir);
+      if (lease?.role !== "spawn" || !isProcessIdentityAlive(lease)) break;
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-  }
-  if (process.platform === "linux") {
-    try { fs.writeFileSync("/proc/self/oom_score_adj", "500"); } catch {}
-  }
-  // The submitting process may still be publishing its spawn reservation.
-  const spawnDeadline = Date.now() + DEFAULTS.spawnGraceMs;
-  while (readLease(jobDir)?.role === "spawn" && Date.now() < spawnDeadline) {
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-  let result = null;
-  let held = null;
-  for (;;) {
-    const before = pendingInboxMessages(jobDir).join("\n");
-    const round = await runWorkerRound(jobDir, options, held);
-    result = round.job ?? result;
-    held = round.held ?? null;
-    if (round.stop) {
-      return result;
-    }
-    const pending = pendingInboxMessages(jobDir).join("\n");
-    // Stop when the inbox is empty, or when a round could take nothing from it.
-    if (!pending || (!round.job && pending === before)) {
-      if (held) {
-        releaseWorkerLease(jobDir, held);
+    let result = null;
+    let held = null;
+    for (;;) {
+      const before = pendingInboxMessages(jobDir).join("\n");
+      const round = await runWorkerRound(jobDir, options, held);
+      result = round.job ?? result;
+      held = round.held ?? null;
+      if (round.stop) {
+        return result;
       }
-      return result;
+      const pending = pendingInboxMessages(jobDir).join("\n");
+      // Stop when the inbox is empty, or when a round could take nothing from it.
+      if (!pending || (!round.job && pending === before)) {
+        if (held) {
+          releaseWorkerLease(jobDir, held);
+        }
+        return result;
+      }
     }
+  } finally {
+    try { fs.rmSync(registryFile, { force: true }); } catch {}
   }
 }
 
@@ -211,7 +224,7 @@ async function runWorkerRound(jobDir, options, held) {
 
   const executionEnv = { ...process.env, ...options.env };
   job = { ...job, request: { ...job.request, account: requestAccount(job.request, executionEnv) } };
-  const execution = ownExecution(me);
+  const execution = ownExecution(me, { platform: options.platform, workerRegistry: `${admissionHome(executionEnv)}.workers` });
   const legacyExecution = !job.execution && !job.executions?.length && job.worker
     ? { leader: job.worker, pgid: job.worker.pgid ?? job.worker.pid, startedAt: job.worker.startedAt ?? job.startedAt }
     : null;
@@ -231,7 +244,7 @@ async function runWorkerRound(jobDir, options, held) {
   job = { ...job, jobDir, execution, executions: [...previousExecutions, execution].slice(-20), launches,
     launch: readJsonOrNull(executionEnv.RELAY_WORKER_LAUNCH ?? "") ?? job.launch };
   const backend = backendFor(job.request);
-  const admissionDeps = { env: executionEnv, ...options.admission };
+  const admissionDeps = { env: executionEnv, platform: options.platform ?? process.platform, ...options.admission };
   const home = admissionHome(admissionDeps.env);
   let slot = null;
   const guardOn = admissionEnabled(admissionDeps.env, undefined, admissionDeps.platform ?? process.platform);
@@ -378,16 +391,13 @@ async function runWorkerRound(jobDir, options, held) {
       releaseWorkerLease(jobDir, me);
       return { job, stop: true };
     }
-    if (job.cleanup?.state !== "empty") {
-      const sweep = await stopRecordedAppServers(job, { jobDir, ...options.predecessorCleanup });
-      if (sweep.survivors.length || sweep.cause) {
-        save({ ...patch, state: "failed", cleanup: { state: "unresolved", pids: sweep.survivors.map(p => p.pid), cause: sweep.cause },
-          errorMessage: `cleanup: unresolved (${sweep.survivors.map(p => p.pid).join(", ")})${sweep.cause ? `: ${sweep.cause}` : ""}` });
-        releaseWorkerLease(jobDir, me);
-        return { job, stop: true };
-      }
+    const sweep = await stopRecordedAppServers(job, { jobDir, ...options.predecessorCleanup });
+    if (sweep.survivors.length || sweep.cause) {
+      save({ ...patch, cleanup: { state: "unresolved", pids: sweep.survivors.map(p => p.pid), cause: sweep.cause } });
+      releaseWorkerLease(jobDir, me);
+      return { job, stop: true };
     }
-    save({ ...patch, serverPid: null, server: null });
+    save({ ...patch, ...sweptAppServersPatch(job, sweep), cleanup: { state: "empty" }, serverPid: null, server: null });
     return { job, held: handOff() };
   };
 
@@ -563,11 +573,16 @@ async function runWorkerRound(jobDir, options, held) {
     }
   };
   const sample = (fresh = false) => {
-    const table = fresh ? listProcesses() : readProcessTableCached({ home });
-    sampleExecution(job, jobDir, table);
-    const treeBytes = executionBytes(job, table, { jobDir });
-    if (slot) updateSlotMemory(home, job.id, me, treeBytes, admissionDeps);
-    save({ treeBytes });
+    if (!["linux", "darwin"].includes(options.platform ?? process.platform)) return;
+    try {
+      const table = fresh ? listProcesses() : readProcessTableCached({ home });
+      sampleExecution(job, jobDir, table);
+      const treeBytes = executionBytes(job, table, { jobDir });
+      if (slot) updateSlotMemory(home, job.id, me, treeBytes, admissionDeps);
+      save({ treeBytes });
+    } catch {
+      // Accounting is best effort; it must not stop work or hide a backend's end record.
+    }
   };
   const heartbeat = setInterval(() => {
     sample();
@@ -616,7 +631,7 @@ async function runWorkerRound(jobDir, options, held) {
         appendStderr(paths.serverStderr, Buffer.from(`\n--- attempt ${attemptIndex + 1}, app-server ${serverIndex + 1}, pid ${identity.pid}, ${identity.startedAt} ---\n`));
       },
       onStderr(chunk) { appendStderr(paths.serverStderr, chunk); },
-      onEnd(info) { sample(true); record(info); },
+      onEnd(info) { record(info); sample(true); },
       tap(notification) { eventRecorder.record(notification); }
     });
   };
@@ -943,8 +958,7 @@ async function runWorkerRound(jobDir, options, held) {
         const sweep = await stopRecordedAppServers(job, { jobDir, ...options.predecessorCleanup });
         if (sweep.survivors.length || sweep.cause) {
           sweepFailed = true;
-          save({ cleanup: { state: "unresolved", pids: sweep.survivors.map(p => p.pid), cause: sweep.cause }, state: "failed",
-            errorMessage: `${job.errorMessage ? job.errorMessage + "\n" : ""}cleanup: unresolved (${sweep.survivors.map(p => p.pid).join(", ")})${sweep.cause ? `: ${sweep.cause}` : ""}` });
+          save({ cleanup: { state: "unresolved", pids: sweep.survivors.map(p => p.pid), cause: sweep.cause } });
         } else save({ ...sweptAppServersPatch(job, sweep), cleanup: { state: "empty" }, treeBytes: 0 });
       }
       eventRecorder?.flush();
