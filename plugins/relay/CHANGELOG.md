@@ -306,6 +306,12 @@ Load guard:
 
 Fixes from the pre-releases:
 
+- A message ZCode reports as already held keeps its original command id. Relay adopts its session turn when it
+  starts, or fails after 60 seconds with an explicit not-delivered reason; it never resends an uncertain duplicate.
+  Only an explicit discarded-on-restart response permits a fresh id.
+- An accepted ZCode steer stays `interject-queued` and owed until session events show it joined a turn. After a
+  worker death, resumed history confirms delivery or the steer runs once as a turn. A steer reported dropped is
+  closed before the worker considers unconfirmed steers for another turn.
 - When a relay retypes a job's block with a changed line, the hand-back guard names the first differing line before
   repeating the exact result. This helps correct a `dir:` line copied from `report:`; the result format, matching
   rules and eight-block budget are unchanged. Not yet checked live: whether a Haiku relay corrects the line when told.
