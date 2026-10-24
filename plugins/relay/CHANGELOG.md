@@ -6,6 +6,22 @@ The Mods plan ([docs/mods/plan.md](../../docs/mods/plan.md)), Phases 1 to 5 and 
 on the branch `release/3.0` ([docs/mods/release-3.0.md](../../docs/mods/release-3.0.md)). Each phase adds
 its entries here.
 
+Changed:
+
+- Load guard errors hold new starts with the error and explicit off switch in the queue reason.
+  `RELAY_ADMISSION=off` and `/relay:setup --admission off` still bypass the guard.
+- Provider pauses follow the selected account home. Grok recognizes explicit usage exhaustion,
+  rate-limit text and provider 429 errors; its usage classifier is not yet verified against a live exhausted account.
+  Admission pauses do not bound requests or retries inside running turns.
+
+Fixed:
+
+- Damaged slots count conservatively until quarantine; damaged pauses hold their account for 15 minutes.
+  Refusals received during admission-lock contention are saved and applied before another start.
+- Only currently held seats are reused. Slotless live jobs count toward the worker minimum, and
+  worker deferrals retain their original cause after admission. Clock corrections preserve startup
+  holds and pacing. A live provider probe cannot expire just because it is old.
+
 Pre-release cuts:
 
 - `3.0.0-pre.1` (2026-10-22, tag `v3.0.0-pre.1`): Phases 1, 2, 3 and 5 and Phase 6's report, as below; Phase 4
@@ -268,8 +284,8 @@ Load guard:
     reserve and busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits,
     provider protection, ordering and start pacing. There is no very-heavy maximum. Astra and Kimi K3
     are very heavy at any effort; effort alone on other models never enters that pool.
-  - Provider refusals: recognized Codex/Kimi/ZCode usage or rate errors, and Kimi concurrency refusals,
-    pause that backend; Grok has no classifier coverage. A pause does not resume the failed job. After the pause, one
+  - Provider refusals: recognized Codex/Grok/Kimi/ZCode usage or rate errors, and Kimi concurrency refusals,
+    pause that backend account. A pause does not resume the failed job. After the pause, one
     probe job goes first. Only while the guard is on, Kimi defaults to 3 total attempts per step unless
     `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP` is set; this default does not apply with the guard off or on native Windows.
 - A job that waits shows `queued` with its reason in status, `--json`, the status line and the board, and can be

@@ -22,6 +22,8 @@ export interface Backend {
   capabilityNotes: CapabilityNotes;
   /** How a header becomes this backend's launch request. */
   request: RequestRules;
+  /** Non-default resolved backend home, used only to derive the pause account key. */
+  accountHome(request: LaunchRequest, env: NodeJS.ProcessEnv): string | null;
   /** The state block's lines and `status --json` fields this backend adds. */
   view: StateView;
   /** Start one server process for a worker attempt or a review. */

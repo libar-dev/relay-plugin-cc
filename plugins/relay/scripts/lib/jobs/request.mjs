@@ -2,6 +2,7 @@
 // onto backend settings. Nothing here is inferred from the brief's words.
 
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 
@@ -223,5 +224,7 @@ export function buildLaunchRequest(values, options = {}) {
     writableRoots,
     notes
   };
-  return Object.assign(request, backend.request.complete(request, values, { env, userConfig }));
+  Object.assign(request, backend.request.complete(request, values, { env, userConfig }));
+  const home = backend.accountHome(request, env);
+  return Object.assign(request, { account: home ? createHash("sha256").update(home).digest("hex").slice(0, 12) : null });
 }

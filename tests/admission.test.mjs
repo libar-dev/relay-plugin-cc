@@ -190,15 +190,17 @@ test("live locks keep waiting beyond the stuck threshold; off bypasses without f
   } finally { releaseOwnership(file); }
 });
 
-test("sensor and guard failures degrade visibly; corrupt slots do not crash", t => {
+test("guard failures hold visibly; corrupt slots do not crash", t => {
   const s = setup(t), c = s.ctx();
   const unknown = admit(c, { ...s.deps, readMachine() { throw new Error("synthetic sensor failure"); } });
-  assert.equal(unknown.admit, true); assert.match(unknown.record.notes[0], /sensors not read/);
+  assert.equal(unknown.admit, false); assert.equal(unknown.waitKind, "guard-error");
+  assert.match(unknown.reason, /synthetic sensor failure.*RELAY_ADMISSION=off or setup --admission off/);
   s.tick();
+  fs.mkdirSync(path.join(s.home, "slots"), { recursive: true });
   fs.writeFileSync(path.join(s.home, "slots", "corrupt.json"), "{");
   assert.equal(admit(s.ctx(), s.deps).admit, true);
-  const bypass = admit(s.ctx(), { ...s.deps, readAdmissionConfig() { throw new Error("synthetic failure"); } });
-  assert.equal(bypass.record.state, "bypassed");
+  const held = admit(s.ctx(), { ...s.deps, readAdmissionConfig() { throw new Error("synthetic failure"); } });
+  assert.equal(held.admit, false); assert.equal(held.waitKind, "guard-error");
 });
 
 test("macOS uses its memory percentage despite low free+inactive, pressure bits and cached zero", t => {
@@ -929,4 +931,129 @@ test("simultaneous guaranteed starts serialize grants and retain global pacing",
   assert.ok(["lock", "stagger"].includes(decisions[held].waitKind));
   assert.equal(admit(callers[held], s.deps).waitKind, "stagger");
   s.tick(); assert.equal(admit(callers[held], s.deps).admit, true);
+});
+
+for (const fault of ["readMachine", "writeSlot"]) test(`guard ${fault} exceptions hold, deduplicate diagnostics and preserve the off switch`, t => {
+  const s = setup(t), c = s.ctx();
+  const deps = { ...s.deps, [fault]: () => { throw new Error("synthetic storage failure"); } };
+  const lines = [], original = process.stderr.write;
+  process.stderr.write = line => { lines.push(line); return true; };
+  try {
+    for (let n = 0; n < 2; n++) {
+      const held = admit(c, deps);
+      assert.equal(held.admit, false); assert.equal(held.waitKind, "guard-error");
+      assert.equal(held.retryMs, D.pollMs);
+      assert.match(held.reason, /holding new starts.*RELAY_ADMISSION=off or setup --admission off/);
+    }
+    assert.equal(lines.length, 1);
+    assert.equal(admit(c, { ...deps, env: { ...s.env, RELAY_ADMISSION: "off" } }).admit, true);
+  } finally { process.stderr.write = original; }
+});
+
+test("an unwritable admission home holds worker creation and records its reason", t => {
+  const s = setup(t), c = s.ctx();
+  writeJob(c.jobDir, { id: c.jobId, request: c.request, state: "starting", createdAt: new Date(s.deps.now()).toISOString() });
+  fs.mkdirSync(s.home, { mode: 0o500 });
+
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => assert.fail("must not spawn"), s.deps), null);
+  const job = readJob(c.jobDir);
+  assert.equal(job.state, "queued"); assert.equal(job.admission.waitKind, "worker");
+  assert.equal(job.admission.causeKind, "guard-error");
+  assert.match(job.admission.reason, /load guard error:.*RELAY_ADMISSION=off/);
+  assert.equal(computeJobView(job, { now: s.deps.now() + 60001 }).state, "queued");
+  fs.chmodSync(s.home, 0o700);
+  const open = fs.openSync; let retries = 0;
+  t.mock.method(fs, "openSync", (file, ...args) => {
+    if (file === path.join(c.jobDir, "stderr.log")) { retries++; throw new Error("synthetic spawn reached"); }
+    return open(file, ...args);
+  });
+  t.mock.method(process.stderr, "write", () => true);
+  assert.equal(retryQueuedWorker(c.jobDir, { ...s.env, RELAY_ADMISSION: "off" }), null);
+  assert.equal(retries, 1);
+});
+
+test("damaged slots consume busy seats, startup bytes and the minimum until quarantine", t => {
+  const s = setup(t);
+  s.setMachine({ cores: 6, load5: 10 });
+  fillOtherMinimum(s);
+  const file = path.join(s.home, "slots", "damaged.json");
+  fs.writeFileSync(file, "{"); fs.utimesSync(file, s.deps.now() / 1000, s.deps.now() / 1000);
+  const c = s.ctx();
+  assert.equal(admit(c, s.deps).waitKind, "seats");
+  assert.equal(describeGuard(s.env, {}, s.deps).pendingBytes, D.unknownStartupBytes);
+  s.tick(11000); assert.equal(admit(c, s.deps).waitKind, "seats"); assert.ok(fs.existsSync(file));
+  s.tick(10 * 60000 - 11000);
+  const granted = admit(c, s.deps); assert.equal(granted.admit, true);
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.readdirSync(path.join(s.home, "slots", "quarantine")).length, 1);
+  assert.ok(granted.record.notes.includes("slot record damaged.json was unreadable; quarantined"));
+});
+
+for (const ahead of [60000, 600000]) test(`future start timing ${ahead} ms is fenced or repaired`, t => {
+  const s = setup(t), c = s.ctx(); fs.mkdirSync(s.home, { recursive: true });
+  writeJsonAtomic(path.join(s.home, "timing.json"), { lastStart: new Date(s.deps.now() + ahead).toISOString() });
+  const result = admit(c, s.deps);
+  if (ahead <= D.clockSkewMs) {
+    assert.equal(result.waitKind, "stagger");
+    s.tick(ahead + D.spacingMs); assert.equal(admit(c, s.deps).admit, true);
+  } else {
+    assert.equal(result.admit, true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(s.home, "timing.json"))).lastStart, new Date(s.deps.now()).toISOString());
+    assert.equal(admit(s.ctx(), s.deps).waitKind, "stagger");
+  }
+});
+
+for (const ahead of [20000, 600000]) test(`future startup hold ${ahead} ms remains reserved`, t => {
+  const s = setup(t), c = s.ctx(); admit(c, s.deps);
+  const file = path.join(s.home, "slots", `${c.jobId}.json`), slot = JSON.parse(fs.readFileSync(file));
+  writeJsonAtomic(file, { ...slot, holdAt: new Date(s.deps.now() + ahead).toISOString() });
+  s.tick(D.spacingMs);
+  s.setMachine({ availableBytes: 128 * GiB * D.criticalFraction + D.startupBytes.codex });
+  assert.equal(admit(s.ctx(), s.deps).waitKind, "critical");
+  if (ahead > D.clockSkewMs) assert.equal(JSON.parse(fs.readFileSync(file)).holdAt, new Date(s.deps.now()).toISOString());
+});
+
+test("missing host bytes admits only the busy allowance after the minimum", t => {
+  const s = setup(t); s.setMachine({ cores: 6, availableBytes: null });
+  for (let n = 0; n < 4; n++) { assert.equal(admit(s.ctx(), s.deps).admit, true); s.tick(); }
+  assert.equal(admit(s.ctx(), s.deps).waitKind, "seats");
+});
+
+test("a completed job's historical admission does not reuse a released busy seat", t => {
+  const s = setup(t), c = s.ctx();
+  admit(c, s.deps); releaseSlot(s.home, c.jobId, c.me, s.deps); s.tick();
+  writeJob(c.jobDir, { id: c.jobId, state: "completed", request: c.request, firstAdmittedAt: new Date(s.deps.now()).toISOString() });
+  s.setMachine({ cores: 6, load5: 10 });
+  for (let n = 0; n < 4; n++) { assert.equal(admit(s.ctx(), s.deps).admit, true); s.tick(); }
+  assert.equal(admit({ ...c, admitted: true }, s.deps).waitKind, "seats");
+});
+
+test("slotless live very-heavy jobs consume the worker minimum", t => {
+  const s = setup(t), c = s.ctx({ model: "astra" });
+  const jobs = [s.ctx({ model: "astra" }), s.ctx({ model: "astra" })];
+  s.setLegacy(jobs.map(j => ({ id: j.jobId, state: "running", worker: j.me, request: j.request })));
+  s.setMachine({ availableBytes: 10 * GiB });
+  writeJob(c.jobDir, { id: c.jobId, state: "starting", request: c.request });
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => assert.fail("reserve must hold"), s.deps), null);
+  assert.equal(readJob(c.jobDir).admission.causeKind, "memory");
+  s.setMachine({ availableBytes: 100 * GiB });
+  const waiting = readJob(c.jobDir).admission;
+  assert.equal(spawnWithAdmission(c.jobDir, s.env, () => 1, s.deps), 1);
+  const spawned = readJob(c.jobDir).admission;
+  assert.equal(spawned.waitKind, "spawned"); assert.equal(spawned.causeKind, "memory");
+  const granted = admit({ ...c, admission: spawned, waitingSince: waiting.since }, s.deps);
+  assert.equal(granted.admit, true); assert.equal(granted.record.waitKind, "memory");
+});
+
+test("worker admission never launches or creates a job when its record cannot be read", t => {
+  const s = setup(t), dir = path.join(s.root, "missing-job");
+  assert.equal(spawnWithAdmission(dir, s.env, () => assert.fail("must not spawn"), s.deps), null);
+  assert.equal(fs.existsSync(dir), false);
+});
+
+test("the environment off switch survives configuration read errors", t => {
+  const s = setup(t), c = s.ctx(), env = { ...s.env, RELAY_ADMISSION: "off" };
+  const deps = { ...s.deps, env, readAdmissionConfig: () => { throw new Error("unreadable configuration"); } };
+  assert.equal(admit(c, deps).admit, true);
+  assert.equal(spawnWithAdmission(c.jobDir, env, () => 42, deps), 42);
 });

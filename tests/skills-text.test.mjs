@@ -184,3 +184,14 @@ test("AGENTS.md rule prose cannot enter the public content corpus", () => {
   ];
   assert.deepEqual(publicTextViolations(entries), ["docs/guide.md"]);
 });
+
+test("load guard documentation describes holds and the explicit off switch", () => {
+  for (const file of ["README.md", "docs/guide.md", "plugins/relay/skills/jobs/internals.md", "plugins/relay/commands/setup.md"]) {
+    const source = fs.readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.match(source, /guard (?:itself )?fails[^]*?new starts\s+wait/, file);
+    assert.match(source, /RELAY_ADMISSION=off/, file);
+    assert.match(source, /\/relay:setup --admission off/, file);
+    assert.match(source, /[Dd]amaged guard\s+records?\s+counts? as busy until (?:it is )?set aside/, file);
+    assert.doesNotMatch(source, /Guard\/storage errors visibly bypass|guard failures admit with a note/i, file);
+  }
+});

@@ -16,6 +16,11 @@ const cases = [
   ...["5-hour", "weekly (7-day)", "monthly"].map(p => ["kimi", { message: `You've reached your ${p} usage limit` }, "usage"]),
   ["kimi", { message: "reached your concurrent request limit", data: { details: { statusCode: 403 } } }, "concurrency"],
   ["kimi", { message: "Too many requests" }, "rate"],
+  ["grok", { message: "Weekly usage credits exhausted" }, "usage"],
+  ["grok", { message: "You've reached your weekly usage limit" }, "usage"],
+  ["grok", { data: { retryState: { reason: "weekly usage limit exceeded" } } }, "usage"],
+  ["grok", { message: "HTTP 429 rate limit" }, "rate"],
+  ["grok", { data: { retryState: { reason: "rate limit reached" } } }, "rate"],
   ...["1113", "1308", "1310", "1316", "1317", "1318", "1319", "1320", "1321", "1302"].flatMap(code => [
     ["zcode", { data: { code } }, code === "1302" ? "rate" : "usage"],
     ["zcode", { message: `[${code}] synthetic` }, code === "1302" ? "rate" : "usage"],
@@ -25,8 +30,8 @@ const cases = [
 for (const [index, [backend, error, kind]] of cases.entries()) test(`provider-owned refusal ${index + 1}: ${backend} ${kind}`, () => {
   assert.equal(classifyRefusal(backend, error)?.kind, kind);
 });
-test("bare status, unlisted errors and Grok never pause", () => {
-  for (const backend of ["codex", "kimi", "zcode", "grok"]) assert.equal(classifyRefusal(backend, { message: "The engine is currently overloaded", data: { statusCode: 429 } }), null);
+test("unlisted errors never pause; Grok recognizes provider 429", () => {
+  for (const backend of ["codex", "kimi", "zcode"]) assert.equal(classifyRefusal(backend, { message: "The engine is currently overloaded", data: { statusCode: 429 } }), null);
 });
 function setup(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-pause-")); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -69,7 +74,9 @@ test("a probe lease includes startup; expired generations cannot clear a later p
   const s = setup(t), refusal = classifyRefusal("codex", { codexErrorInfo: "rateLimitExceeded" });
   recordRefusal(s.root, "codex", refusal, "job-old", s.deps); s.tick(D.ratePauseMs);
   const first = admit(s.ctx(1), s.deps); s.tick(D.probeMs);
-  const second = admit(s.ctx(2), s.deps);
+  assert.equal(admit(s.ctx(2), s.deps).waitKind, "probe");
+  const deadDeps = { ...s.deps, isAlive: p => p?.pid !== 1 && Boolean(p?.pid) };
+  const second = admit(s.ctx(2), deadDeps);
   assert.equal(second.admit, true);
   assert.notEqual(second.slot.probeGeneration, first.slot.probeGeneration);
   assert.equal(probeSucceeded(s.root, "codex", "job-1", s.deps, first.slot.probeGeneration), false);
@@ -153,4 +160,106 @@ test("retained turns claim, adopt and release fenced probes without changing sta
   assert.equal(probeSucceeded(s.root, "codex", c.jobId, s.deps, probe.slot.probeGeneration), false);
   assert.equal(probeSucceeded(s.root, "codex", c.jobId, s.deps, next.slot.probeGeneration), true);
   assertPreserved(turn()); assert.equal(listPauses(s.env, s.deps).length, 0);
+});
+
+for (const contents of ["nope", JSON.stringify({ v: 1, backend: "codex", kind: "rate", until: "invalid" })]) test(`damaged pause holds until quarantine: ${contents}`, t => {
+  const s = setup(t), dir = path.join(s.root, "pauses"), file = path.join(dir, "codex.json");
+  fs.mkdirSync(dir); fs.writeFileSync(file, contents);
+  fs.utimesSync(file, s.deps.now() / 1000, s.deps.now() / 1000);
+  const held = admit(s.ctx(1), s.deps);
+  assert.equal(held.waitKind, "pause"); assert.match(held.reason, /codex pause record unreadable; holding until/);
+  s.tick(D.maxRatePauseMs - 1); assert.equal(admit(s.ctx(1), s.deps).waitKind, "pause");
+  s.tick(1); assert.equal(admit(s.ctx(1), s.deps).admit, true);
+  assert.equal(fs.existsSync(file), false); assert.equal(fs.readdirSync(path.join(dir, "quarantine")).length, 1);
+});
+
+test("a refusal blocked by a live child's lock is folded before the next grant", async t => {
+  const { spawn } = await import("node:child_process");
+  const { once } = await import("node:events");
+  const { readProcessStartTime } = await import("../plugins/relay/scripts/lib/util/process.mjs");
+  const s = setup(t), file = path.join(s.root, "admission.lock");
+  const child = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"]);
+  t.after(() => child.kill()); await once(child.stdout, "data");
+  acquireOwnership(file, { pid: child.pid, startTime: readProcessStartTime(child.pid) });
+  const deps = { ...s.deps, lockSleep: () => {} };
+  assert.deepEqual(recordRefusal(s.root, "codex", { kind: "rate" }, "old-job", deps), { pending: true });
+  const pending = path.join(s.root, "pauses", "pending");
+  assert.equal(fs.readdirSync(pending).length, 1);
+  child.kill(); await once(child, "close");
+  const { isProcessIdentityAlive } = await import("../plugins/relay/scripts/lib/util/process.mjs");
+  assert.equal(admit(s.ctx(1), { ...s.deps, isAlive: p => p?.pid === child.pid ? isProcessIdentityAlive(p) : Boolean(p?.pid) }).waitKind, "pause");
+  assert.equal(fs.readdirSync(pending).length, 0);
+});
+
+test("a live child probe is never expired by age, including the pause's expiry", async t => {
+  const { spawn } = await import("node:child_process"), { once } = await import("node:events");
+  const { isProcessIdentityAlive, readProcessStartTime } = await import("../plugins/relay/scripts/lib/util/process.mjs");
+  const s = setup(t);
+  const child = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"]);
+  t.after(() => child.kill()); await once(child.stdout, "data");
+  const deps = { ...s.deps, isAlive: p => p?.pid === child.pid ? isProcessIdentityAlive(p) : Boolean(p?.pid) };
+  recordRefusal(s.root, "codex", { kind: "rate" }, "old-job", deps); s.tick(D.ratePauseMs);
+  const owner = { ...s.ctx(1), me: { pid: child.pid, startTime: readProcessStartTime(child.pid) } };
+  const first = admit(owner, deps); assert.equal(first.slot.probe, true);
+  s.tick(D.probeMs + 1);
+  assert.equal(admit(s.ctx(2), deps).waitKind, "probe"); assert.equal(listPauses(s.env, deps)[0].probing, true);
+  s.tick(D.pauseExpiryMs);
+  assert.equal(admit(s.ctx(2), deps).waitKind, "probe");
+  child.kill(); await once(child, "close");
+  assert.equal(admit(s.ctx(2), deps).admit, true);
+});
+
+test("account pauses, probe generations and releases follow durable request accounts", async t => {
+  const { buildLaunchRequest } = await import("../plugins/relay/scripts/lib/jobs/request.mjs");
+  const { releaseProbe } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const s = setup(t), env = { ...s.env, HOME: s.root };
+  const request = home => buildLaunchRequest({ backend: "kimi", model: "default", effort: "default", kimiHome: home }, { env });
+  const a = { ...s.ctx(1), request: request("account-a") }, b = { ...s.ctx(2), request: request("account-b") };
+  assert.match(a.request.account, /^[a-f0-9]{12}$/); assert.notEqual(a.request.account, b.request.account);
+  assert.equal(admit(a, s.deps).admit, true); s.tick(D.spacingMs);
+  // No request injection: use the worker's existing public call shape.
+  recordRefusal(s.root, "kimi", { kind: "rate" }, a.jobId, s.deps);
+  assert.ok(fs.existsSync(path.join(s.root, "pauses", `kimi-${a.request.account}.json`)));
+  assert.equal(admit(a, s.deps).waitKind, "pause"); assert.equal(admit(b, s.deps).admit, true);
+  s.tick(D.ratePauseMs);
+  const probe = admit(a, s.deps); assert.equal(probe.slot.probe, true);
+  assert.equal(releaseProbe(s.root, "kimi", a.jobId, s.deps, probe.slot.probeGeneration), true);
+  const next = admit({ ...a, turn: true }, s.deps); assert.equal(next.slot.probe, true);
+  assert.equal(probeSucceeded(s.root, "kimi", a.jobId, s.deps, next.slot.probeGeneration), true);
+  const defaultRequest = request("default"); assert.equal(defaultRequest.account, null);
+  const c = { ...s.ctx(3), request: defaultRequest }; s.tick(D.spacingMs); admit(c, s.deps);
+  recordRefusal(s.root, "kimi", { kind: "usage" }, c.jobId, s.deps);
+  assert.ok(fs.existsSync(path.join(s.root, "pauses", "kimi.json")));
+  assert.equal(admit(c, s.deps).waitKind, "pause");
+  assert.equal(listPauses(s.env, s.deps)[0].account, null);
+});
+
+test("all backend home exports hash only non-default resolved homes", async t => {
+  const { buildLaunchRequest } = await import("../plugins/relay/scripts/lib/jobs/request.mjs");
+  const { createHash } = await import("node:crypto");
+  const s = setup(t), env = { ...s.env, HOME: s.root };
+  for (const backend of ["codex", "grok", "kimi", "zcode"]) {
+    const values = { backend, model: "default", effort: "default" };
+    assert.equal(buildLaunchRequest(values, { env }).account, null, backend);
+    const home = path.join(s.root, `${backend}-account`);
+    const alternate = { ...env, ...(backend === "codex" ? { CODEX_HOME: home } : backend === "zcode" ? { ZCODE_DATA_BASE_DIR: home } : {}) };
+    const fields = backend === "kimi" ? { kimiHome: home } : backend === "grok" ? { grokHome: home } : {};
+    const request = buildLaunchRequest({ ...values, ...fields }, { env: alternate });
+    assert.equal(request.account, createHash("sha256").update(home).digest("hex").slice(0, 12), backend);
+  }
+  assert.equal(classifyRefusal("grok", { message: "An unknown engine failure" }), null);
+});
+
+test("pending refusals are applied only to their account", t => {
+  const s = setup(t), file = path.join(s.root, "admission.lock"), account = "123456abcdef";
+  acquireOwnership(file, { pid: process.pid });
+  try {
+    assert.deepEqual(recordRefusal(s.root, "kimi", { kind: "rate" }, "job-a", { ...s.deps, request: { account }, lockSleep: () => {} }), { pending: true });
+  } finally { releaseOwnership(file); }
+  const pending = path.join(s.root, "pauses", "pending");
+  const ctx = { ...s.ctx(1), request: { backend: "kimi", account: "abcdef123456" } };
+  assert.equal(admit(ctx, s.deps).admit, true);
+  assert.equal(fs.readdirSync(pending).length, 1);
+  assert.equal(admit({ ...s.ctx(2), request: { backend: "kimi", account } }, s.deps).waitKind, "pause");
+  assert.equal(fs.readdirSync(pending).length, 0);
 });
