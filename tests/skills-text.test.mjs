@@ -58,7 +58,7 @@ test("documented guard defaults agree with local runtime exports", () => {
   }
   for (const effort of ["low", "default", "high", "max", "ultra"]) {
     assert.equal(modelClass({ backend: "codex", model: "gpt-6-astra", effort }), "very-heavy");
-    for (const model of ["kimi-code/k3", "kimi-code/k3-highspeed"]) {
+    for (const model of ["kimi-code/k3", "kimi-code/k3-highspeed", "k3-256k", "k3.1-pro", "kimi-code/k3.1-pro"]) {
       assert.equal(modelClass({ backend: "kimi", model, effort }), "very-heavy");
     }
   }
@@ -84,6 +84,12 @@ test("setup's captured-snapshot formatter preserves configured versus effective 
   const setup = read("commands/setup.md");
   assert.match(setup, /renderSetupPage\(JSON.parse/);
   assert.match(setup, /Never rerun setup just for formatting/);
+  const setupCalls = setup.split("\n").filter(line => line.startsWith('node ') && line.includes(' setup --json '));
+  assert.equal(setupCalls.length, 2);
+  for (const call of setupCalls) assert.ok(call.endsWith('--args-file "<args-file>" > "<args-file>.snapshot.json"'));
+  assert.match(setup, /^allowed-tools:.*\bRead\b.*Bash\(node:\*\)/m);
+  assert.match(setup, /Use `Read` on that file; never retype the JSON/);
+  assert.doesNotMatch(setup, /save the captured JSON with Write/);
 });
 
 test("the guide reconciles direct continuation, queued UI and conditional stop notices", () => {
@@ -110,10 +116,10 @@ const publicTextFiles = new Set([
   "plugins/relay/skills/jobs/SKILL.md", "plugins/relay/skills/jobs/internals.md",
   "plugins/relay/skills/jobs/models.md", "plugins/relay/skills/jobs/orchestration.md",
   "plugins/relay/skills/result-handling/SKILL.md",
-  "tests/commands.test.mjs", "tests/skills-text.test.mjs",
+  "tests/command-args.test.mjs", "tests/commands.test.mjs", "tests/skills-text.test.mjs",
 ]);
 // Character classes keep the rule's regex source from matching its own literal identifiers.
-const privateText = /(?:\/home\/[^/\s]+\/|\/Users\/[^/\s]+\/|\b(?:[T]hinkPad|[f]leet|D\d{2,})\b|\b\d{8}T\d{6}Z-[\w-]+\.jsonl\b)/i;
+const privateText = /(?:\/home\/[^/\s]+\/|\/Users\/[^/\s]+\/|\b(?:[T]hinkPad|[f]leet|D\d{2,}|M\d)\b|\b[o]wners?(?:['’]s?)?\b(?!"\s*:)|\b[u]ntil\s+you\s+(?:decide|choose)\b|\b\d{8}T\d{6}Z-[\w-]+\.jsonl\b)/i;
 const publicTextViolations = entries => entries
   .filter(([file]) => publicTextFiles.has(file))
   .filter(([, source]) => privateText.test(source))
@@ -123,6 +129,16 @@ test("public content scans the explicit changed-file corpus and permits generic 
   assert.ok(!privateText.test("~/.relay-jobs ~/.relay-jobs/admission ~/.claude/settings.json"));
   const entries = [...publicTextFiles].map(file => [file, fs.readFileSync(path.join(root, file), "utf8")]);
   assert.deepEqual(publicTextViolations(entries), []);
+});
+
+test("public content rejects synthetic machine, personal and decision framing", () => {
+  for (const digit of "0123456789") assert.ok(privateText.test("M" + digit));
+  for (const text of ["the " + "own" + "er", "own" + "er's guide", "own" + "er’s guide",
+    "until you " + "decide", "until you " + "choose"]) assert.ok(privateText.test(text), text);
+  assert.ok(!privateText.test("file ownership and generic process identifiers"));
+  assert.ok(!privateText.test(JSON.stringify({ ["own" + "er"]: { name: "Example Maintainer" } })));
+  assert.doesNotMatch(fs.readFileSync(path.join(root, "docs/guide.md"), "utf8"), /\]\([^)]*(?:docs\/)?mods\//);
+  assert.doesNotMatch(read("CHANGELOG.md"), /\]\([^)]*mods\/pre-release-3\.0\.md/);
 });
 
 test("AGENTS.md rule prose cannot enter the public content corpus", () => {

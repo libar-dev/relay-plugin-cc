@@ -7,11 +7,12 @@ policy. Prices are standard API USD per million tokens; subscriptions have separ
 ## Header choices and API list prices
 
 One shared quota allows 2 very heavy jobs: GPT-6 Astra and Kimi K3 at **any** effort. Effort alone
-never enters it; other models at max/ultra are outside the pool. Unresolved default models remain
-unknown until the backend resolves them. Native Claude models below are for harness comparison,
-not relay job models. Relay requires no external search or scraping service.
+never enters it; other models at max/ultra are outside the pool. The quota looks only at the model alias
+in the request, never the model behind that alias. A request using `default` is outside this quota unless
+the backend resolves it to an explicit model id before admission. Native Claude models below are for harness
+comparison, not relay job models. Relay requires no external search or scraping service.
 
-### Codex
+### Codex prices (≤272K-token prompts)
 
 | Model / header id | Efforts | Very heavy | Input / cache read / output | Cache write 30m / 12h | Source |
 |---|---|---|---|---|---|
@@ -39,7 +40,12 @@ These are Grok API prices, not a Grok Build subscription bill; tool and context 
 | Model / header alias | Efforts | Very heavy | Input / cache read / output | Cache write 5m / 1h | Source |
 |---|---|---|---|---|---|
 | Kimi K3 / `kimi-code/k3` (K3 family) | low, high, max where served | yes, any effort | 3 / 0.30 / 15 | 3 / 6 | [vendor][kimi] |
-| Kimi K2.8 Preview / `kimi-code/kimi-for-coding` | inspect setup; alias can change | no if resolved to K2.x | not verified for this preview | not verified | [availability][kimi-code] |
+| Kimi K2.8 Preview / `kimi-code/kimi-for-coding` | inspect setup; alias can change | no: the quota matches the alias, not the model it serves | not verified for this preview | not verified | [availability][kimi-code] |
+
+On Kimi, aliases containing `k3` as a separate token, including `k3-256k` and `k3.1-pro`, count as very
+heavy at every effort. `kimi-code/kimi-for-coding` stays outside the quota even if it serves a K3 model.
+As checked on 2026-10-24, the [benchmark source][kimi-k3] marks Kimi K3 deprecated in favour of Kimi K3.1 Pro.
+K3.1 Pro has no price or benchmark row in this dated snapshot; the existing numbers are unchanged.
 
 ### Native Claude
 
@@ -123,7 +129,7 @@ subscription windows), or mark it stale. A source-key/date test verifies attribu
 The jobs skill's explicit GLM/Kimi ids are checked locally; Codex/native Claude availability comes
 from setup/the native harness rather than a complete static relay catalog.
 
-## Sources (all read 2026-10-23)
+## Sources (snapshot read 2026-10-23; price tier and K3 deprecation checked 2026-10-24)
 
 [openai]: https://developers.openai.com/api/docs/pricing
 [claude]: https://platform.claude.com/docs/en/about-claude/pricing

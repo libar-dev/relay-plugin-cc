@@ -1,7 +1,7 @@
 ---
 description: Check every backend the relay can run (Codex, Grok, ZCode, Kimi): binary, sign-in, default model and effort, models; or toggle the stop-time review gate, fast tier, job MCP servers or the load guard
 argument-hint: '[--backend codex|grok|zcode|kimi] [--grok-home H|--kimi-home H] [--enable-review-gate|--disable-review-gate] [--fast-tier allowed|off] [--job-mcp-off names|none] [--admission on|off] [--max-very-heavy 1|2|default]'
-allowed-tools: Write, Bash(node:*), Bash(npm:*), AskUserQuestion
+allowed-tools: Read, Write, Bash(node:*), Bash(npm:*), AskUserQuestion
 ---
 
 Raw slash-command arguments:
@@ -15,7 +15,7 @@ node -e 'const fs = require("node:fs"); const path = require("node:path"); const
 
 Use `Write` with `file_path` set to the printed absolute path and `content` set to the raw slash-command arguments exactly, including empty text and trailing newlines. Do not add a framing newline. In every companion recipe, replace only `<args-file>` with that generated path. Never put argument values in Bash source, shell arguments, JavaScript source, or a heredoc; do not build other commands from them. `--args-file` reads the exact file content with the single-string argument parser. Allocate and write it once; reuse it for the initial call and the post-install rerun.
 
-After setup finishes or stops (including an error), remove the file and its private directory with the fixed cleanup command below. Missing files and directories are accepted. Cleanup refuses other path shapes and never removes a directory recursively.
+After setup finishes or stops (including an error), remove the snapshot with the removal recipe below, then remove the argument file and its private directory with the fixed cleanup command below. Missing files and directories are accepted. Cleanup refuses other path shapes and never removes a directory recursively.
 
 ```bash
 node --input-type=module -e 'const { pathToFileURL } = await import("node:url"); const { cleanupArgumentFile } = await import(pathToFileURL(process.argv[1]).href); cleanupArgumentFile(process.argv[2]);' "${CLAUDE_PLUGIN_ROOT}/scripts/lib/util/argument-file.mjs" "<args-file>"
@@ -30,10 +30,12 @@ Setup uses relay's raw-argument grammar. `$VAR`, command substitutions and globs
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-file "<args-file>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-file "<args-file>" > "<args-file>.snapshot.json"
 ```
 
-The output is one JSON object (`schema: "relay.setup/1"`). When it holds `error`, print its `message` and stop.
+The call writes one JSON object (`schema: "relay.setup/1"`) straight to `<args-file>.snapshot.json`.
+Use `Read` on that file; never retype the JSON. When it holds `error`, print its `message` and stop.
+The quoted redirection uses only the generated path and keeps the command under `Bash(node:*)`.
 
 With no `--backend`, setup checks every backend home it finds and exits 0 whatever it finds: the
 Codex home (`~/.codex` or `CODEX_HOME`), `~/.grok` and every `~/.grok-<name>`, ZCode, and
@@ -63,8 +65,8 @@ message to a running job as its next turn, so write `steer (next turn)` for it, 
 holds configured admission, cap, busy seats, waiting-worker limit and the shared-domain `configPath`;
 `loadGuard` holds effective state and sensors. Configured on can coexist with effective off (environment
 or unsupported platform). Preserve off reasons, degraded notes, unreadable state and provider pauses.
-For exact settings/sensor lines, save the captured JSON with Write to `<args-file>.snapshot.json`, then
-run this fixed formatter recipe (no backend probes). Remove that snapshot before the normal cleanup:
+For exact settings/sensor lines, pass the snapshot file directly to this fixed formatter recipe (no backend
+probes). Remove that snapshot before the normal cleanup, including on an error or early stop:
 
 ```bash
 node --input-type=module -e 'import fs from "node:fs"; import { pathToFileURL } from "node:url"; const { renderSetupPage } = await import(pathToFileURL(process.argv[1]).href); console.log(renderSetupPage(JSON.parse(fs.readFileSync(process.argv[2], "utf8"))));' "${CLAUDE_PLUGIN_ROOT}/scripts/lib/setup/page.mjs" "<args-file>.snapshot.json"
@@ -117,7 +119,7 @@ npm install -g @openai/codex
 - Then rerun:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-file "<args-file>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-file "<args-file>" > "<args-file>.snapshot.json"
 ```
 
 If Codex is already installed or npm is unavailable:

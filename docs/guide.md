@@ -156,29 +156,44 @@ and `/relay:result <job>` if none appears. Stopping a relay does not ask Claude 
 
 ## When a job waits
 
-`queued` means pending work, before a worker starts or between turns. Its block shows the reason; it is not a
-result. Keep the same waiter or resume the Workflow. A bare start without a worker can remain dormant until a
-wait, message or relay hook retries it; `status` only reads. Cancel, steer and continue still work by job id.
+A job's block can show `state: queued` and a `queued:` line explaining why it is waiting. This is pending work,
+before it starts or between turns. While its relay agent or the companion's `wait` command is waiting, the job
+starts by itself when the reason clears. Leave that call running; do not launch the job again. If you started a
+job directly without an agent or a `wait` call, ask Claude to wait for that job by its id. `/relay:status` shows
+progress but does not start waiting jobs. You can still cancel the job or send it a message by its id.
 
-The load guard shares starts and turns across this user's sessions: at least 5 seconds between grants and one
-quota of 2 very heavy jobs (GPT-6 Astra and Kimi K3 at every effort). Max/ultra effort on other models does not
-enter that pool. Memory, load and recognized provider pauses can also hold work. On macOS the host-byte reading
-uses `kern.memorystatus_level` free percentage, with `vm_stat` free+inactive as fallback and separate pressure.
-Only change the guard when the user asks. `/relay:setup` shows both configured and effective guard state.
+The load guard shares capacity across your sessions. By default, starts are spaced at least 5 seconds apart,
+with one shared quota of 2 very heavy jobs (GPT-6 Astra and Kimi K3 at every effort) running at once.
+Max/ultra effort on other models does not enter that pool. Low memory, high load or a backend's usage or rate
+limit can also delay a job; the queue reason tells you which. `/relay:setup` shows the saved settings and whether
+the guard is active.
+To turn it off, use `/relay:setup --admission off`; to limit very heavy jobs to one at a time, use
+`/relay:setup --max-very-heavy 1`. Use `--admission on` or `--max-very-heavy default` to restore those defaults.
 
-A relay holds its Claude agent and Workflow slot even while queued. Per run the documented Workflow cap is up to
-16 agents, fewer with fewer CPUs; `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` replaces it. Beyond-cap agents wait.
-At Claude's usage limit, plain Agent-tool relays fail while Workflows pause if auto-continue is on; backend jobs
-run on. Collect those jobs or resume with `resumeFromRunId`; never start them again.
+A queued job still occupies its Claude agent and, in a Workflow, one of that run's agent slots. A Workflow can
+run up to 16 agents at once, fewer with fewer CPUs; `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` changes that
+limit. Additional agents wait. At Claude's usage limit, Agent-tool relays fail; Workflows pause when
+auto-continue is on. Their backend jobs keep running. Ask Claude to collect those jobs or resume the paused
+Workflow with its `resumeFromRunId`, rather than launch the jobs again.
 
 ## Claude Code's sandbox
 
-After `EPERM`, `EROFS`, "operation not permitted" or "read-only file system", relay's instructions stop and leave
-the choice to you: allow the effective jobs home (`RELAY_JOBS_HOME`, default `~/.relay-jobs`) and admission home
-(`RELAY_ADMISSION_HOME`, default `~/.relay-jobs/admission`) in `sandbox.filesystem.allowWrite`, including both when
-distinct, or run relay without the sandbox. Changing jobs home does not move admission state. Backend-home writes
-and network access may still fail; full end-to-end sandbox operation is not measured. See the README's
-[sandbox instructions](../README.md#relay-and-claude-codes-sandbox).
+If a call fails with `EPERM`, `EROFS`, "operation not permitted" or "read-only file system", Claude stops and
+shows the error. The sandbox may be blocking relay from saving its jobs or shared queue settings. You can allow
+those folders in your user settings (`~/.claude/settings.json`). For the default folders, add:
+
+```json
+{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}
+```
+
+This also allows the queue settings stored in `~/.relay-jobs/admission`. If you set `RELAY_JOBS_HOME` or
+`RELAY_ADMISSION_HOME`, put the folders you chose in `allowWrite`, including both when they are separate.
+Changing the jobs folder does not move the queue settings. Then retry the failed call. You can instead choose
+to run relay without the sandbox; Claude should leave that choice to you.
+
+The backend may also need to write its own settings or reach the network, so allowing these folders alone does
+not guarantee the whole job will run inside the sandbox. See the README's
+[sandbox instructions](../README.md#relay-and-claude-codes-sandbox) for the other permission controls.
 
 ## When relay refuses a header
 
@@ -218,11 +233,11 @@ A job does not belong to the Claude session that started it. End the session, an
 in the same folder and `/relay:status` shows it, `/relay:result` its report. If the backend's server dies, or the
 worker dies while its agent waits, the job resumes its session once by itself.
 
-On macOS, with T3 Code, two things reach here. Quitting the T3 app has killed relay workers, for a reason not known
-yet: the job is then `dead`, and a message or the companion's `resume` continues it. And after a T3 restart, the old
-Claude processes kept working for minutes beside the resumed ones, so a side effect could happen twice; T3 may also
-say the background work was cancelled, which for relay jobs it was not. The [pre-release
-guide](mods/pre-release-3.0.md#issues-of-t3-code-on-every-cut) tracks them.
+On macOS, quitting T3 Code can leave a relay job `dead`; a message or the companion's `resume` continues it.
+After a T3 restart, earlier Claude processes have been observed running for several minutes alongside resumed
+ones, so work can happen twice. T3 may label background work cancelled even when relay jobs keep running.
+After a restart, check `/relay:status` and whether the earlier job is still running before resuming it or
+starting replacement work.
 
 ## Long orchestrations
 
@@ -289,7 +304,8 @@ counts them:
 ⚠ relay: 2 running · 1 queued (memory low) · 1 dead · 3 owed
 ```
 
-- `queued` counts pending jobs and shows a queue reason; a workerless admission wait is not dead.
+- `queued` counts pending jobs and shows a queue reason. A job waiting to start is queued, even before its
+  background process starts.
 - `running` counts the jobs that are starting or running.
 - `dead` counts jobs whose worker died or never came up; a message or the companion's `resume` continues a dead job
   (a review is run again instead).

@@ -238,8 +238,8 @@ session in `default` permission mode asks you about, and cancels a job by sendin
 message `cancel`, or, for a Workflow job, with `companion cancel <job>`.
 
 In the terminal, a status line under the prompt counts the repository's jobs while any are
-running or dead or owe messages: `relay: 2 running · 1 dead · 3 owed`. `/relay-board` opens a
-pane of the repository's jobs, where you steer, continue or cancel one
+queued, running or dead or owe messages: `relay: 2 running · 1 queued (memory low) · 1 dead · 3 owed`.
+`/relay-board` opens a pane of the repository's jobs, where you steer, continue or cancel one
 ([design.md](docs/design.md#the-board)); it takes keys between turns, and clicks in the
 fullscreen layout (`CLAUDE_CODE_NO_FLICKER=1`) at any time.
 
@@ -445,7 +445,7 @@ machine, for example with several suites running at once; each passes alone, so 
 an idle machine before reading it as a regression. Each test file's process keeps its temporary
 files under one `relay-test-run-*` directory in the temp directory, which `TMPDIR` points at, and
 removes it at exit once no test process runs from it. A directory whose run was killed by a signal
-is removed by the next run once its recorded owner is gone. `RELAY_TEST_KEEP_TMP=1 npm test` keeps
+is removed by the next run once its recorded process is gone. `RELAY_TEST_KEEP_TMP=1 npm test` keeps
 the directory of a file that failed; no later run removes it, so delete it yourself. `npm run check`
 type-checks the plugin's scripts (`plugins/relay/scripts/`) with TypeScript, without an installed Codex CLI.
 

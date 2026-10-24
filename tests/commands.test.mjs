@@ -556,6 +556,11 @@ test("review and adversarial-review are model-invocable; status, result, cancel 
     assert.ok(source.includes("begin your reply with exactly this line before the output: `Ran in the foreground: the default when Claude starts a review without --wait or --background.` That line is the only text allowed before the companion's verbatim output, and nothing follows the output except, after a sandbox error, the two choices above."), name);
     assert.ok(source.includes("- Do not paraphrase, summarize, or add commentary before or after it. The exceptions are the foreground line above, first, when you invoked the command yourself, and, after a sandbox error, the two choices above."), name);
     assert.ok(source.includes("relay refuses the file writes and terminal commands Kimi sends through the client. That is not an OS sandbox"), name);
+    const foreground = section(source, "Foreground flow:", "Background flow:");
+    for (const fact of ["the command waits by itself", "`relay review queued: <reason>` on stderr",
+      "no job id for a separate `wait`", "Do not start another review", "If the call was cut off, the review ended",
+      "tell the user and offer `--background`", "`timeout: 600000`"]) assert.ok(foreground.includes(fact), `${name}: ${fact}`);
+    assert.doesNotMatch(source, /keep waiting for the same job/);
     assert.match(frontmatter(name), /Codex, Grok, ZCode or Kimi|Grok, ZCode or Kimi/, name);
   }
   assert.match(frontmatter("adversarial-review"), /schema-checked JSON/);

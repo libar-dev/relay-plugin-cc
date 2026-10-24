@@ -71,7 +71,12 @@ Reject NUL-containing arguments with a usage error; do not normalize them or ret
 - If the user needs custom review instructions or more adversarial framing, they should use `/relay:adversarial-review`.
 
 Foreground flow:
-- Run:
+
+A foreground review can wait for the load guard before it starts: the command waits by itself and prints
+`relay review queued: <reason>` on stderr. This call provides no job id for a separate `wait` command.
+Do not start another review. If the call was cut off, the review ended; tell the user and offer `--background`.
+
+- Run with `Bash`, setting `timeout: 600000`:
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" review --args-file "<args-file>"
 ```
@@ -86,5 +91,3 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" review --args-file "<args-fil
 ```
 - Do not call `BashOutput` or wait for completion in this turn.
 - After launching the command, tell the user: "The review started in the background. Check `/relay:status` for progress."
-
-Foreground reviews also pass the load guard and can wait as `queued`; keep waiting for the same job.
