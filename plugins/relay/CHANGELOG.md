@@ -73,6 +73,19 @@ Pre-release cuts:
   - **A macOS pressure warning reads as a warning,** not "critical", in status and in the waited line.
   - **An admitted job keeps the reason it waited,** and a job cancelled while queued closes its admission record
     in `status --json`.
+- `3.0.0-pre.6` (2026-10-24, tag `v3.0.0-pre.6`): what it changes over pre.5. The details are in "Load guard",
+  "Fixes from the pre-releases" and "Docs".
+  - **The load guard has a guaranteed minimum again, and no very-heavy maximum.** The first two very-heavy jobs
+    (GPT-6 Astra, the Kimi K3 family) and the first three other jobs skip the host reserve and the busy-seat
+    allowance; only critical machine states, their own startup allowance, scope limits, provider pauses, ordering
+    and start pacing still hold them. More very-heavy jobs start like any other job. `--max-very-heavy` is removed.
+  - **A macOS pressure warning no longer holds anything;** critical pressure still does.
+  - **Turns of a running job are no longer paced and take no new memory hold;** only critical states and provider
+    pauses hold them. Replacement backends still pass the start checks.
+  - **The hand-back hint names the first line that differs,** outside the text the relay is told to copy.
+  - **The skills, agent text and a new user guide** describe Workflow jobs, queued work, the guard and setup as they
+    work now. `/relay:setup` writes its snapshot without a shell redirect, so it no longer prompts in manual mode or
+    fails in `dontAsk` mode.
 
 Phase 1, steer wake:
 
