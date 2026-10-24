@@ -254,18 +254,13 @@ test("first dispatch consumes its start grant once and preserves the actual queu
 });
 
 
-test("dormant workerless jobs stop deferring the repository review gate after fifteen minutes", async t => {
+test("workerless queues without a live launcher do not defer the review gate", async t => {
   const { findActiveJob } = await import("../plugins/relay/scripts/hooks/stop-review-gate.mjs");
   const s = seed(t), oldHome = process.env.RELAY_JOBS_HOME;
   process.env.RELAY_JOBS_HOME = s.ctx.env.RELAY_JOBS_HOME;
   t.after(() => { if (oldHome === undefined) delete process.env.RELAY_JOBS_HOME; else process.env.RELAY_JOBS_HOME = oldHome; });
-  const now = Date.now(), at = new Date(now).toISOString();
-  writeJob(s.dir, { ...readJob(s.dir), state: "queued", worker: null, admission: { waitKind: "worker", since: at, workerRetryAt: at } });
-  assert.equal(findActiveJob(s.ctx.work, now + 15 * 60000).id, readJob(s.dir).id);
-  assert.equal(findActiveJob(s.ctx.work, now + 15 * 60000 + 1), null);
-  const job = readJob(s.dir);
-  writeJob(s.dir, { ...job, admission: { ...job.admission, workerRetryAt: new Date(now + 15 * 60000 + 1).toISOString() } });
-  assert.equal(findActiveJob(s.ctx.work, now + 15 * 60000 + 1).id, job.id, "an adopter makes it active again");
+  writeJob(s.dir, { ...readJob(s.dir), state: "queued", worker: null, admission: { waitKind: "worker" } });
+  assert.equal(findActiveJob(s.ctx.work), null);
 });
 
 test("a heartbeat during slow probe startup releases the claim without provider success", async t => {

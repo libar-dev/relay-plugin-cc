@@ -250,3 +250,20 @@ export function messageAccount(jobDir) {
     .map(({ message, outcome }) => ({ id: message.id, reason: outcome.reason ?? "dropped" }));
   return { undelivered, dropped };
 }
+
+// Renaming races the worker's claim atomically. A refused message is retained for
+// inspection but never appears in pending/owed accounting or a future worker's input.
+export function withdrawMessage(jobDir, messageId) {
+  const paths = jobPaths(jobDir), directory = path.join(jobDir, "withdrawn");
+  fs.mkdirSync(directory, { recursive: true });
+  try { fs.renameSync(path.join(paths.inbox, `${messageId}.json`), path.join(directory, `${messageId}.json`)); }
+  catch (error) { if (error.code === "ENOENT") return fs.existsSync(path.join(directory, `${messageId}.json`)); throw error; }
+  const relay = path.join(paths.inbox, "relay");
+  let names;
+  try { names = fs.readdirSync(relay); } catch (error) { if (error.code !== "ENOENT") throw error; names = []; }
+  for (const name of names) {
+    const file = path.join(relay, name);
+    if (readJsonOrNull(file)?.messageId === messageId) fs.rmSync(file, { force: true });
+  }
+  return true;
+}

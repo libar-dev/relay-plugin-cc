@@ -698,7 +698,7 @@ for (const persisted of [false, true]) {
     assert.equal(fs.existsSync(path.join(ctx.binDir, "fake-codex-state.json")), false);
   });
 
-  test("automatic recovery's lease is no wait-false consumer", async t => {
+  test("automatic recovery's lease cannot accept a message before its worker owns it", async t => {
     const marker = path.join(makeTempDir("relay-recovery-marker-"), "term");
     const { identity } = await oldServer(t, { ignoreTerm: true, marker });
     const ctx = sweepJob({ server: identity, servers: [identity] });
@@ -726,11 +726,11 @@ for (const persisted of [false, true]) {
       const message = postInboxMessage(ctx.jobDir, { kind: "continue", text: "[quick] Arrived during recovery" });
       const delivered = await awaitOutcome(ctx.jobDir, message.id, { env, wait: false, timeoutMs: 50 });
       assert.equal(delivered.consumer, false);
-      assert.equal(delivered.outcome, null);
+      assert.equal(delivered.outcome.action, "not-started");
       assert.equal(readOutcome(ctx.jobDir, message.id), null);
       await recovering;
-      await waitFor(() => readOutcome(ctx.jobDir, message.id)?.action === "turn-started" && !readLease(ctx.jobDir));
-      assert.equal(ctx.fakeState().turnStarts.filter(turn => turn.prompt === message.text).length, 1);
+      await waitFor(() => !readLease(ctx.jobDir));
+      assert.equal(ctx.fakeState().turnStarts.filter(turn => turn.prompt === message.text).length, 0);
     } finally {
       await recovering;
     }

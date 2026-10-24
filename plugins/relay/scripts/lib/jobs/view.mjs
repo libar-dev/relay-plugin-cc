@@ -15,7 +15,8 @@ export const EXIT = {
   usage: 1,
   noReport: 3,
   running: 4,
-  cancelled: 5
+  cancelled: 5,
+  notStarted: 6
 };
 
 // How many times a view reads the job and its parts before it gives up on this call.
@@ -127,6 +128,7 @@ export function exitCodeFor(view) {
   if (view.state === "cancelled") {
     return EXIT.cancelled;
   }
+  if (view.job?.admission?.state === "not-started") return EXIT.notStarted;
   if (view.undelivered?.length > 0) {
     return EXIT.noReport;
   }
@@ -254,6 +256,7 @@ export function renderJobBlock(view) {
   } else if (job.errorMessage && view.state !== "completed") {
     lines.push(`error: ${String(job.errorMessage).replace(/\s+/g, " ").trim()}`);
   }
+  if (job.admission?.launchFailures) lines.push(`worker launch: ${job.admission.launchFailures} failed launch${job.admission.launchFailures === 1 ? "" : "es"} of 3${job.admission.launchError ? ` (${job.admission.launchError})` : ""}`);
   if (job.launch?.note) lines.push(`note: ${job.launch.note}`);
   // Cleanup still changes live accounting after a turn ends. A terminal result is copied
   // verbatim by relay agents, so do not include that changing measurement in its text.
@@ -489,7 +492,12 @@ export function computeJobView(job, options = {}) {
         state = "dead";
         deadReason = `worker ${job.worker.pid} is gone`;
       }
-    } else if (!(stored === "queued" && job?.admission?.waitKind === "worker")) {
+    } else if (stored === "queued" && job?.admission?.waitKind === "worker") {
+      if (!isWorkerAlive(job.admission.launcher)) {
+        state = "dead";
+        deadReason = job.admission.launcher ? "not started: the process starting it ended" : "queued by an older relay with nobody to start it";
+      }
+    } else {
       const created = Date.parse(job?.launchPendingAt ?? job?.createdAt ?? "");
       if (Number.isFinite(created) && now - created > (options.workerStartGraceMs ?? WORKER_START_GRACE_MS)) {
         state = "dead";

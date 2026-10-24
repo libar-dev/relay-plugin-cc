@@ -3,7 +3,8 @@
 import process from "node:process";
 import fs from "node:fs";
 import path from "node:path";
-import { releaseLeaseToConsumer, spawnWorker } from "./delivery.mjs";
+import { DEFAULTS } from "./admission.mjs";
+import { releaseLeaseToConsumer, startWithinWindow } from "./delivery.mjs";
 import { acquireWorkerLease, isWorkerAlive } from "../jobs/lease.mjs";
 import { computeJobView } from "../jobs/view.mjs";
 import { messageExists, newMessageId, postInboxMessage } from "../jobs/messages.mjs";
@@ -51,9 +52,11 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
   let launch = false;
   let cancelling = false;
   let cwd;
+  let original;
   try {
     let job = readJob(jobDir);
     if (computeJobView(job).state !== "dead" || (job.kind && job.kind !== "task")) return false;
+    original = job;
     const epoch = job.recoveryEpoch ?? "start";
     const previous = recoveryForEpoch(job);
     // A reservation interrupted before posting is repaired with the same message id.
@@ -64,26 +67,35 @@ export async function resumeDeadJobOnce(jobDir, env = process.env) {
     cancelling = cancelIsRunning(jobDir);
     if (cancelling) return "busy";
     if (previous && previous.state !== "reserved") {
-      writeJob(jobDir, { ...job, server: null, serverPid: null });
+      writeJob(jobDir, { ...job, server: null, serverPid: null,
+        automaticResumes: job.automaticResumes.map(entry => entry.id === previous.id ? previous : entry) });
       return false;
     }
-    const record = previous ?? { id: newMessageId(), epoch, at: nowIso(), fromAttempt: job.attempts?.length ?? 0, reason: "worker", state: "reserved" };
+    const record = previous ?? { id: newMessageId(), epoch, at: nowIso(), fromAttempt: job.attempts?.length ?? 0, fromWorkerCount: job.workers?.length ?? 0, reason: "worker", state: "reserved" };
     const records = previous ? job.automaticResumes : [...(job.automaticResumes ?? []), record];
     writeJob(jobDir, { ...job, automaticResumes: records });
     if (!messageExists(jobDir, record.id)) {
       postInboxMessage(jobDir, { id: record.id, kind: "resume", text: DEFAULT_RESUME_MESSAGE, isDefault: true, automatic: true });
     }
-    writeJob(jobDir, {
-      ...job, automaticResumes: records.map(entry => entry.id === record.id ? { ...entry, state: "launched" } : entry),
-      state: "starting", worker: null, server: null, serverPid: null, launchPendingAt: nowIso()
-    });
     cwd = job.request.cwd;
     launch = true;
   } finally {
     releaseLeaseToConsumer(jobDir, me, env, { spawn: !launch && !cancelling });
   }
-  if (launch) spawnWorker(jobDir, cwd, { ...env, RELAY_WORKER_TRIGGER: "recovery" });
-  return launch;
+  if (!launch) return false;
+  const result = await startWithinWindow(jobDir, cwd, { ...env, RELAY_WORKER_TRIGGER: "recovery" },
+    { windowMs: Number(env.RELAY_ADMISSION_POLL_MS) || DEFAULTS.pollMs, refuse: false });
+  // Workers update the job concurrently. Take its lease before changing the
+  // recovery record, or let the worker's own attempt bookkeeping be authoritative.
+  if (acquireWorkerLease(jobDir, me, "recovery")) {
+    try {
+      const job = readJob(jobDir), record = recoveryForEpoch(job);
+      if (!result.accepted && record?.state === "reserved") writeJob(jobDir, { ...job, state: original.state, worker: original.worker });
+      if (record?.state === "reserved" && result.accepted) writeJob(jobDir, { ...job,
+        automaticResumes: job.automaticResumes.map(entry => entry.id === record.id ? { ...entry, state: "launched" } : entry) });
+    } finally { releaseLeaseToConsumer(jobDir, me, env, { spawn: false }); }
+  }
+  return result.accepted;
 }
 
 // One automatic recovery per user-work epoch, shared by worker and app-server deaths.
@@ -91,5 +103,10 @@ export const DEFAULT_RESUME_MESSAGE = "Your session was cut off. Continue the ta
 
 export function recoveryForEpoch(job) {
   const epoch = job.recoveryEpoch ?? "start";
-  return (job.automaticResumes ?? []).find(entry => entry.epoch === epoch);
+  const record = (job.automaticResumes ?? []).find(entry => entry.epoch === epoch);
+  // Worker-owned history proves that a reservation was taken without a launcher
+  // overwriting job.json while the worker held it. Preserve the single retry epoch.
+  if (record?.state === "reserved" && ((job.attempts ?? []).some(a => a.messageId === record.id) ||
+      (record.fromWorkerCount != null && (job.workers?.length ?? 0) > record.fromWorkerCount))) return { ...record, state: "launched" };
+  return record;
 }

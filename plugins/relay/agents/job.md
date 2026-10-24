@@ -23,7 +23,7 @@ Run with Bash:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" start --from-relay
 ```
 
-If the output has a line `job: <id>`, remember the id and go to 2. Otherwise the start failed: hand back the start output at once, every line, nothing before it and nothing after it, and run nothing else, unless a hook's reason tells you to.
+If the output starts with `state: not started`, hand back that output at once, every line, and run nothing else. Otherwise, if the output has a line `job: <id>`, remember the id and go to 2. Otherwise the start failed: hand back the start output at once, every line, nothing before it and nothing after it, and run nothing else, unless a hook's reason tells you to.
 
 ## 2. Wait
 

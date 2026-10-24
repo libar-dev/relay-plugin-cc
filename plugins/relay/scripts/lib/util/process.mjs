@@ -433,7 +433,10 @@ export function readProcessTableCached({ home = null, maxAgeMs = 5000, now = Dat
   const cached = readJsonOrNull(file);
   if (cached && now >= cached.at && now - cached.at < maxAgeMs) return cached.rows;
   const lock = `${file}.lock`;
-  if (!acquireOwnership(lock)) return cached?.rows ?? null;
+  if (!acquireOwnership(lock)) {
+    if (maxAgeMs > 0 && cached && now >= cached.at && now - cached.at < 2 * maxAgeMs) return cached.rows;
+    return list();
+  }
   try {
     const rows = list();
     if (rows) writeJsonAtomic(file, { at: now, rows });
@@ -485,16 +488,19 @@ function scopeMemberStarted(row, execution) {
   return !row.startTime || !Number.isFinite(start) || row.startedAtMs >= Math.floor(start / 1000) * 1000;
 }
 
+// Independent of admission storage, including when the guard is explicitly off.
+export const independentWorkerRegistry = () => path.join("/tmp", `relay-workers-${process.getuid?.() ?? "user"}`);
+
 // Published workers form ownership boundaries, including during a nested launch handoff.
 function foreignWorkerPids(job, table) {
   const excluded = new Set();
-  for (const directory of new Set(executions(job).map(e => e.workerRegistry).filter(Boolean))) {
-    let names;
-    try { names = fs.readdirSync(directory); } catch { continue; }
-    for (const name of names) {
-      const worker = readJsonOrNull(path.join(directory, name));
-      if (worker?.jobDir !== job.jobDir && worker?.startTime && table.some(row =>
-        row.pid === worker.pid && row.startTime === worker.startTime && !row.zombie)) excluded.add(worker.pid);
+  for (const directory of new Set([independentWorkerRegistry(), ...executions(job).map(e => e.workerRegistry).filter(Boolean)])) {
+    // Lookup only current process ids. Historical crash records cannot increase
+    // sampling work, and a newly published nested worker is visible immediately.
+    for (const row of table) {
+      const worker = readJsonOrNull(path.join(directory, `${row.pid}.json`));
+      if (worker?.jobDir !== job.jobDir && worker?.startTime &&
+          row.startTime === worker.startTime && !row.zombie) excluded.add(row.pid);
     }
   }
   // Never walk through another job's worker to capture its backend or tools either.
@@ -551,6 +557,12 @@ export function executionMembers(job, table, { jobDir = job?.jobDir, excludeSelf
         const pids = new Set(fs.readFileSync(file, "utf8").trim().split(/\s+/).map(Number));
         entries.push(...table.filter(row => pids.has(row.pid) && !row.zombie &&
           scopeMemberStarted(row, execution)));
+        // Scope membership disproves emptiness even when the process table missed
+        // a concurrently forked pid. Never signal it without a verified identity.
+        for (const pid of pids) if (pid > 0 && !table.some(row => row.pid === pid)) {
+          entries.push({ pid, startTime: null, identityUnknown: true });
+          cause = "an execution scope member has no process identity";
+        }
       } catch (error) { if (error.code !== "ENOENT") cause = "the execution scope could not be read"; }
     }
     const leader = table.find(row => row.pid === execution.leader?.pid && row.startTime === execution.leader.startTime && !row.zombie);
@@ -562,7 +574,7 @@ export function executionMembers(job, table, { jobDir = job?.jobDir, excludeSelf
   const recorded = jobDir ? readJsonOrNull(path.join(jobDir, "processes.json"))?.members ?? [] : [];
   const knownRoots = verifiedRoots([...roots(job), ...recorded], table, excluded);
   entries.push(...roots(job), ...recorded, ...snapshotProcessTree(knownRoots.map(root => root.pid), { table, excludePids: excluded }));
-  const live = liveSnapshotMembers(entries, { table });
+  const live = [...liveSnapshotMembers(entries, { table }), ...entries.filter(entry => entry.identityUnknown && !entry.startTime && !table.some(row => row.pid === entry.pid))];
   const result = [...new Map(live.filter(entry => !excluded.has(entry.pid) && (!excludeSelf || entry.pid !== process.pid)).map(entry => [`${entry.pid}:${entry.startTime}`, entry])).values()];
   if (cause) Object.assign(result, { cause });
   return result;

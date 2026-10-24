@@ -4,8 +4,8 @@ import test from "node:test";
 import { computeJobView, exitCodeFor, isTerminalView, jobViewJson, renderJobBlock } from "../plugins/relay/scripts/lib/jobs/view.mjs";
 import { readProcessStartTime } from "../plugins/relay/scripts/lib/util/process.mjs";
 
-test("durable queued jobs without a worker stay pending, with reason and since", () => {
-  const job = { id: "job-queued", state: "queued", createdAt: "2025-01-01T00:00:00.000Z", admission: { state: "waiting", waitKind: "worker", reason: "memory low", since: "2025-01-01T00:00:00.000Z" } };
+test("workerless queued jobs stay pending only while their launcher lives", () => {
+  const job = { id: "job-queued", state: "queued", createdAt: "2025-01-01T00:00:00.000Z", admission: { launcher: { pid: process.pid, startTime: readProcessStartTime(process.pid) }, state: "waiting", waitKind: "worker", reason: "memory low", since: "2025-01-01T00:00:00.000Z" } };
   const view = { ...computeJobView(job), job, hasReport: false, paths: { brief: "/synthetic/absent" }, jobDir: "/synthetic/job-queued" };
   assert.equal(view.state, "queued");
   assert.equal(view.stalled, false);
@@ -19,4 +19,9 @@ test("resident queued jobs never stall; dead queued workers remain recoverable",
   assert.equal(computeJobView(job).state, "queued");
   assert.equal(computeJobView(job).stalled, false);
   assert.equal(computeJobView({ ...job, worker: { pid: 2147483647 } }).state, "dead");
+});
+
+test("legacy workerless queues are dead with an explicit no-dispatcher reason", () => {
+  const view = computeJobView({ state: "queued", admission: { waitKind: "worker" } });
+  assert.equal(view.state, "dead"); assert.match(view.deadReason, /older relay with nobody to start it/);
 });

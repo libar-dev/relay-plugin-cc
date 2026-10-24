@@ -280,6 +280,7 @@ test("domain ignores custom jobs homes; spawn reservations bound waiting workers
 
 test("Windows admission is a visible no-op even with stale files and failed sensors", t => {
   const s = setup(t), c = s.ctx();
+  writeJob(c.jobDir, { id: c.jobId, state: "starting", request: c.request });
   const before = fs.readdirSync(s.root);
   const deps = { ...s.deps, platform: "win32", readAdmissionConfig() { throw new Error("no config read"); }, readMachine() { throw new Error("no sensor read"); } };
   assert.match(admit(c, deps).record.notes.join(" "), /unsupported on win32/);
@@ -1059,6 +1060,7 @@ test("the environment off switch survives configuration read errors", t => {
   const s = setup(t), c = s.ctx(), env = { ...s.env, RELAY_ADMISSION: "off" };
   const deps = { ...s.deps, env, readAdmissionConfig: () => { throw new Error("unreadable configuration"); } };
   assert.equal(admit(c, deps).admit, true);
+  writeJob(c.jobDir, { id: c.jobId, state: "starting", request: c.request });
   assert.equal(spawnWithAdmission(c.jobDir, env, () => 42, deps), 42);
 });
 
@@ -1131,4 +1133,37 @@ test("a burst can reserve other seats while the first launch handshake is still 
   assert.equal(launches, jobs.length);
   assert.equal(sleeps, 0);
   assert.ok(jobs.every(c => readJob(c.jobDir).admission?.causeKind !== "lock"));
+});
+
+test('admitted records retain the longest hold instead of the last short pacing hold', t => {
+  const s = setup(t), c = s.ctx({ model: 'synthetic-model' });
+  s.setMachine({ availableBytes: 0 });
+  let result = admit(c, s.deps);
+  c.admission = result.record; c.waitingSince = result.record.since;
+  assert.equal(result.waitKind, 'critical');
+  s.tick(120000); s.setMachine({ availableBytes: 100 * GiB });
+  fs.writeFileSync(path.join(s.home, 'timing.json'), JSON.stringify({ lastStart: new Date(s.deps.now()).toISOString() }));
+  result = admit(c, s.deps); assert.equal(result.waitKind, 'stagger'); c.admission = result.record;
+  s.tick(D.spacingMs); result = admit(c, s.deps);
+  assert.equal(result.admit, true); assert.equal(result.record.waitKind, 'critical');
+  assert.match(result.record.reason, /memory/);
+  assert.equal(Object.values(result.record.waitTotals).find(x => x.kind === 'critical').ms, 120000);
+  assert.equal(Object.values(result.record.waitTotals).find(x => x.kind === 'stagger').ms, D.spacingMs);
+});
+
+test('slot cleaning and release require fresh live execution evidence even with a busy process cache', async t => {
+  const { executionAlive } = await import('../plugins/relay/scripts/lib/worker/admission.mjs');
+  const s = setup(t), c = s.ctx(), dir = c.jobDir, file = path.join(s.home, 'slots', `${c.jobId}.json`);
+  const leader = { pid: 600000000, startTime: 'linux:100' };
+  const tool = { pid: 600000001, ppid: 1, pgid: leader.pid, startTime: 'linux:200' };
+  writeJob(dir, { id: c.jobId, request: c.request, worker: leader, server: tool, state: 'running', execution: { leader, pgid: leader.pid } });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ v: 1, jobId: c.jobId, jobDir: dir, pid: leader.pid, processStart: leader.startTime,
+    backend: 'codex', class: 'light', state: 'running', since: new Date(s.deps.now()).toISOString() }));
+  fs.writeFileSync(path.join(s.home, '.ps-table.json'), JSON.stringify({ at: Date.now() - 60000, rows: [] }));
+  const lock = path.join(s.home, '.ps-table.json.lock'); assert.ok(acquireOwnership(lock)); t.after(() => releaseOwnership(lock));
+  const deps = { ...s.deps, listProcesses: () => [tool] };
+  assert.equal(executionAlive({ ...readJob(dir), jobDir: dir }, deps), true);
+  assert.equal(describeGuard(s.env, {}, deps).activeSeats, 1); assert.equal(fs.existsSync(file), true);
+  assert.equal(releaseSlot(s.home, c.jobId, leader, deps), false); assert.equal(fs.existsSync(file), true);
 });

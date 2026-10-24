@@ -60,8 +60,12 @@ test("corrupt stored settings normalize; JSON listing reads no sensors or lock",
 
 test("a worker-spawn failure is never retried as a guard failure", async t => {
   const { spawnWithAdmission } = await import("../plugins/relay/scripts/lib/worker/admission.mjs");
+  const ctx = setup(t);
+  const { createJobDir, writeJob } = await import("../plugins/relay/scripts/lib/jobs/store.mjs");
+  const { jobDir } = createJobDir(ctx.work, "spawn-failure", ctx.env);
+  writeJob(jobDir, { id: "spawn-failure", state: "starting", request: {} });
   let calls = 0;
-  assert.throws(() => spawnWithAdmission("/synthetic/absent", { RELAY_ADMISSION: "off" }, () => { calls++; throw new Error("synthetic spawn failure"); }), /synthetic spawn failure/);
+  assert.throws(() => spawnWithAdmission(jobDir, { RELAY_ADMISSION: "off" }, () => { calls++; throw new Error("synthetic spawn failure"); }), /synthetic spawn failure/);
   assert.equal(calls, 1);
 });
 

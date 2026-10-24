@@ -245,7 +245,7 @@ The plugin's hooks module answers `/relay:status`, `/relay:result`, `/relay:canc
 tokens spent. The answer starts with the command as you typed it, then the companion's lines in a
 code block, as it prints them, then a job's report as Markdown, or the job list as a table.
 `claude -p "/relay:result <job>"` exits with the companion's exit code (0 completed with a report;
-3 failed, dead, completed without a report, or messages not yet run; 4 queued or running; 5 cancelled), with
+3 failed, dead, completed without a report, or messages not yet run; 4 queued or running; 5 cancelled; 6 not started), with
 `--output-format text` or `json`; under `stream-json` Claude Code exits 0. These four run only when
 you type them. When you ask in plain words, Claude reads jobs with the companion in Bash, which a
 session in `default` permission mode asks you about, and cancels a job by sending its agent the
@@ -350,14 +350,12 @@ Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
   `max`/`ultra` on other models, never enters this pool. Opaque defaults remain unknown;
   only identified selections are covered.
 - At most `Q = max(8, 2F)` resident waiting workers, including workers being spawned, are kept.
-  Worker creation holds `64 MiB` for 30 seconds against the same host/scope budget. A full
-  worker budget or insufficient memory leaves durable work without a worker and returns its
-  original job ID. Keep calling `wait`: the submitter/adopter's wait, message or relay-hook
-  loop retries worker creation at most once per admission poll (3 seconds by default).
-  A bare `start` can remain dormant until someone waits; there is no background queue service.
-  `status` only reads jobs: use `wait <job>` to adopt deferred work. A workerless job with no
-  spawn retry for 15 minutes stops deferring the stop-time review gate; it remains adoptable.
-  The limit bounds workers, not all submissions, native transcripts or waiting clients.
+  Worker creation holds `64 MiB` for 30 seconds against the same host/scope budget.
+  A job is accepted only once its own worker owns it; a job that cannot get a worker within
+  a minute is reported as not started (exit 6), and nothing runs later. There is no durable queue.
+  Workflow relays wait at spawn as queued until a waiting place frees, without a model turn
+  or a job waiter. Plain `relay:job` calls wait up to 30 seconds, then report capacity.
+  Use a Workflow for large batches. Accepted jobs keep running after the caller ends.
 
 Linux reads `MemAvailable` (with a labelled Node >=22 fallback). macOS uses the
 `kern.memorystatus_level` percentage of total memory, with a labelled `vm_stat` free+inactive
@@ -436,8 +434,8 @@ the relay's final text against the job's result instead. The PostToolUse hook ca
 relay that `TaskStop` stopped. The hooks module (`hooks/mod/register.js`) adds an `agent.spawn` hook,
 which checks a `relay:job` prompt's header and refuses the spawn with the parser's message when the
 header is bad, and a `session.send` hook: when a message is sent to a relay, it ends the relay's
-current wait, and the guard delivers the message at the relay's next call. The module only checks
-headers and wakes a waiting relay: delivery runs on command hooks and the transcript. Its
+current wait, and the guard delivers the message at the relay's next call. The module checks
+headers, gates relay starts and wakes a waiting relay: delivery runs on command hooks and the transcript. Its
 `command.run` hooks answer `/relay:status`, `/relay:result`, `/relay:cancel` and `/relay:transfer`,
 and its status line counts the repository's running and dead jobs and owed messages
 ([design.md](docs/design.md#the-status-line)).

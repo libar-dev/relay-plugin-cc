@@ -29,7 +29,7 @@ The harness marks each `agent()` call by the key it writes to the run's `journal
 
 The relay reads two things Claude Code does not publish as an interface: the agent transcript and the Workflow tool's run journal (`journal.jsonl`). Its markers were read from Claude Code 2.1.287 and 2.1.288 (`scripts/lib/harness/workflow.mjs`), and its hooks need `SubagentHandback`. Its hooks module needs the `session.send`, `agent.spawn` and `command.run` events of the Mod API, so the floor is Claude Code 2.1.307. A Claude Code update can break it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json` must hold the call's key as `relay.journalKey` (once another relay has adopted the job, its `relay.json` holds the binding), and the script must get the state block back.
 
-The module only checks headers and wakes a waiting relay: delivery runs on command hooks and the transcript. When a message is sent to a relay, the module's `session.send` hook runs `wake --agent <id>`, which writes `relay-wake.json` in the job directory if that agent is the job's current relay, also when the job has ended, since a message can continue it. The guard passes each relay wait `--wake-after <boundary>`, the time of the last transcript entry before the assistant message that holds the call, where Claude Code last put queued messages into the relay's conversation. The wait returns within a second of a marker newer than that, and the hook delivers the message at the relay's next call. Nothing removes a marker; a marker covered by the next boundary ends no more waits.
+The module checks headers, gates relay starts and wakes a waiting relay: delivery runs on command hooks and the transcript. When a message is sent to a relay, the module's `session.send` hook runs `wake --agent <id>`, which writes `relay-wake.json` in the job directory if that agent is the job's current relay, also when the job has ended, since a message can continue it. The guard passes each relay wait `--wake-after <boundary>`, the time of the last transcript entry before the assistant message that holds the call, where Claude Code last put queued messages into the relay's conversation. The wait returns within a second of a marker newer than that, and the hook delivers the message at the relay's next call. Nothing removes a marker; a marker covered by the next boundary ends no more waits.
 
 Before a `relay:job` agent starts, the module's `agent.spawn` hook runs `check-header` on its prompt, the parser and request builder `start` uses, and denies the spawn with the parser's message when the header is bad. It leaves relative paths to `start`, since the relay's directory is not known at the spawn, and lets the spawn through when it cannot run the check, for a resumed agent, and for a Workflow agent whose prompt has no `---` line (a run that keeps its script from hooks puts a placeholder there); `start` checks again. A `PostToolUse` hook on `TaskStop` (`scripts/hooks/relay-stop.mjs`) takes the stopped agent's id from the tool's result and, when that agent is its job's current relay and the job has not ended, runs `cancel` and puts the result beside the TaskStop's; a failed cancel is a `relay-violation:`. A TaskStop on a whole Workflow cancels nothing, so a resume adopts the running jobs; the hook lists the run's jobs that keep running.
 
@@ -99,10 +99,16 @@ Grok home. A job keeps its tier even when the `fast-tier` setting changes while 
 
 The guard shares one admission home across this user's sessions, independently of jobs homes.
 For `C` CPU cores, the busy allowance is `F = min(16, max(2, C−2))`; the resident waiting-worker
-limit is `Q = max(8, 2F)`. A workerless queued job remains valid; a wait, message or relay hook
-retries its spawn at most once per admission poll, with a 64 MiB startup hold per waiting worker.
-A workerless job with no spawn retry for 15 minutes stops deferring the stop-time review gate;
-that changes gate deferral, not queue validity.
+limit is `Q = max(8, 2F)`. Reservations, spawning workers and resident waiting workers share Q.
+A reservation expires after 45 seconds and turns into a spawning slot atomically under the
+admission lock. `RELAY_MAX_WAITING_WORKERS` explicitly overrides Q; the default follows CPU count.
+Starts wait up to 60 seconds for a live worker lease or report not started (exit 6), with no later
+execution. Workflow relays wait at `agent.spawn` through host processes, plain relays refuse after
+30 seconds, and Workflow stall retries are gated at their first step. Every dispatch uses the
+short-lived launcher. Failed launches stop after three failures and show their error and count.
+A dead launcher or older workerless queue is dead, with explicit recovery through `wait --auto-resume`.
+Undelivered messages refused before claim move to `withdrawn/`; a claim racing that rename retains
+worker ownership. Admission keeps a tally of time per wait reason and reports the longest hold.
 
 Outside the minimum, new backend start admission requires `available − otherHolds − J ≥ R`, where `R = max(2 GiB, 0.15 × total)`.
 `J = 0.5 GiB` for Codex/Grok and `1 GiB` for Kimi/ZCode/unknown, held for 30 seconds without an

@@ -21,6 +21,7 @@ function renderDelivery(job, kind, delivery, state) {
     `message: ${kind} ${delivery.message.id}`,
     `outcome: ${delivery.outcome?.action ?? "pending (no worker has taken it yet)"}`
   ];
+  if (delivery.outcome?.action === "not-started") lines.push(`not delivered: ${delivery.outcome.reason}; send it again later`);
   if (delivery.outcome?.turnId) {
     lines.push(`turn: ${delivery.outcome.turnId}`);
   }
@@ -53,7 +54,8 @@ export async function handleSteerOrContinue(kind, argv) {
   const state = stateAfterDelivery(jobDir);
   if (options.json) printJson(kind, { job: job.id, ...delivery, state });
   else process.stdout.write(renderDelivery(job, kind, delivery, state));
-  if (!delivery.outcome) {
+  if (delivery.outcome?.action === "not-started") process.exitCode = EXIT.notStarted;
+  else if (!delivery.outcome) {
     process.exitCode = EXIT.running;
   }
 }
@@ -76,7 +78,8 @@ export async function handleResume(argv) {
   const state = stateAfterDelivery(jobDir);
   if (options.json) printJson("resume", { job: job.id, ...delivery, state });
   else process.stdout.write(renderDelivery(job, "resume", delivery, state));
-  if (!delivery.outcome) {
+  if (delivery.outcome?.action === "not-started") process.exitCode = EXIT.notStarted;
+  else if (!delivery.outcome) {
     process.exitCode = EXIT.running;
   }
 }

@@ -165,14 +165,16 @@ A Stop during the launch handoff may prevent dispatch; a later waiter can retry 
 
 ## When a job waits
 
-A job's block can show `state: queued` and a `queued:` line explaining why it is waiting. This is pending work,
-before it starts or between turns. While its relay agent or the companion's `wait` command is waiting, the job
-starts by itself when the reason clears. Leave that call running; do not launch the job again. If you started a
-job directly without an agent or a `wait` call, ask Claude to wait for that job by its id. `/relay:status` shows
-progress but does not start waiting jobs. You can still cancel the job or send it a message by its id.
+A job's block can show `state: queued` and a `queued:` line explaining why its live worker is
+waiting, before a backend starts or between turns. Its worker starts the work when the reason clears,
+even if you close the waiting call. Leave the job running; collect its result by id.
 
-In Claude Code's Workflow panel a relay agent can look idle for minutes: it sits in relay's `wait`
-call, which returns within seconds of the job ending.
+When relay's start queue is full, Workflow agents wait in the panel as queued, using no model tokens
+and creating no job waiter until a place frees. A plain `relay:job` call waits up to 30 seconds, then
+reports that relay is at capacity. Use a Workflow for large batches. A direct start that cannot get
+its own worker within a minute reports `state: not started` (exit 6); nothing runs later. Submit it
+again when capacity is available. A launcher that ends before handing off ownership shows as dead.
+A legacy workerless queue is also dead; `wait --auto-resume` can recover it explicitly.
 
 The load guard shares capacity across your sessions. New backend starts and replacements are spaced
 at least 5 seconds apart; turns on a running backend are not paced.
@@ -193,7 +195,7 @@ On macOS, tracking and cleanup use process groups plus sampled descendants; memo
 running tools are not paused or limited. A detached child that orphans between samples can escape
 tracking on systems without scopes.
 
-A queued job still occupies its Claude agent and, in a Workflow, one of that run's agent slots. A Workflow can
+After admission, a queued job occupies its Claude agent and one Workflow agent slot. A row held at spawn has no running relay model or waiter. A Workflow can
 run up to 16 agents at once, fewer with fewer CPUs; `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` changes that
 limit. Additional agents wait. At Claude's usage limit, Agent-tool relays fail; Workflows pause when
 auto-continue is on. Their backend jobs keep running. Ask Claude to collect those jobs or resume the paused
@@ -328,7 +330,7 @@ counts them:
 ⚠ relay: 2 running · 1 queued (memory low) · 1 dead · 3 owed
 ```
 
-- `queued` counts pending jobs and shows a queue reason. A job waiting to start is queued, even before its
+- `queued` counts pending jobs with a live worker and shows a queue reason. A job waiting to start is queued while its
   background process starts.
 - `running` counts the jobs that are starting or running.
 - `dead` counts jobs whose worker died or never came up; a message or the companion's `resume` continues a dead job
