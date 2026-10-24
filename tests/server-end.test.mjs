@@ -302,7 +302,10 @@ import { companion, jobDirOf, readJobJson, relayContext, waitFor as waitForForAp
   test("death during thread resume records partial bytes and exit details", async () => {
     const ctx = relayContext("job", { turnMs: 50 });
     const id = start(ctx);
-    await finish(ctx, id);
+    const first = await finish(ctx, id);
+    // The changed environment belongs to a new worker. A warm worker can still take
+    // a continue after publishing its terminal state, while its backend is closing.
+    await waitFor(() => !isWorkerAlive(first.worker), { timeoutMs: 15000 });
     ctx.env.FAKE_CODEX_RESUME_PARTIAL = "9";
     assert.equal(companion(ctx, ["continue", id, "--message", "Next task"]).status, 0);
     const job = await finish(ctx, id);
@@ -378,7 +381,8 @@ import { companion, jobDirOf, readJobJson, relayContext, waitFor as waitForForAp
   test("recovery keeps a continue owed when thread resume was cut off", async () => {
     const ctx = relayContext("job", { turnMs: 50 });
     const id = start(ctx);
-    await finish(ctx, id);
+    const first = await finish(ctx, id);
+    await waitFor(() => !isWorkerAlive(first.worker), { timeoutMs: 15000 });
     ctx.env.FAKE_CODEX_RESUME_PARTIAL = "2";
     assert.equal(companion(ctx, ["continue", id, "--message", "Owed next task"]).status, 0);
     const job = await finish(ctx, id);
