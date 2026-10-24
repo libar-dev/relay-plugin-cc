@@ -170,7 +170,7 @@ test('foreground task uses a detached worker rather than the waiting caller', as
 });
 
 test('a continuation interrupted at handoff is named as owed on the finished job and can retry', async t => {
-  const s = domain(t); s.ctx.env.RELAY_ADMISSION = 'off';
+  const s = domain(t); s.ctx.env.RELAY_ADMISSION = 'off'; s.ctx.env.RELAY_JOBS_ACK_TIMEOUT_MS = '5000';
   const started = companion(s.ctx, ['start', '--prompt-file', promptFile(s.ctx), '--json']);
   assert.equal(started.status, 0, started.stdout + started.stderr);
   const id = JSON.parse(started.stdout).jobId;
@@ -188,7 +188,7 @@ test('a continuation interrupted at handoff is named as owed on the finished job
 });
 
 test('a message racing warm-worker exit redispatches promptly after the lease disappears', async t => {
-  const s = domain(t); s.ctx.env.RELAY_ADMISSION = 'off'; s.ctx.env.RELAY_ADMISSION_POLL_MS = '3000';
+  const s = domain(t); s.ctx.env.RELAY_ADMISSION = 'off'; s.ctx.env.RELAY_JOBS_ACK_TIMEOUT_MS = '5000'; s.ctx.env.RELAY_ADMISSION_POLL_MS = '3000';
   const dir = job(s, 'job-warm-exit', 'completed');
   const leaseModule = new URL('../plugins/relay/scripts/lib/jobs/lease.mjs', import.meta.url).href;
   const processModule = new URL('../plugins/relay/scripts/lib/util/process.mjs', import.meta.url).href;
