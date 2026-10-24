@@ -370,7 +370,7 @@ function slots(home, deps, clean = true) {
     const job = readJob(s.jobDir);
     s.quotaHeavy = isVeryHeavy({ backend: s.backend, model: s.model, effort: s.effort }) || isVeryHeavy(job?.request);
     s.weight = WEIGHTS[s.class];
-    const backendLive = executionAlive({ ...job, jobDir: s.jobDir }, { ...deps, freshExecution: clean });
+    const backendLive = !live && executionAlive({ ...job, jobDir: s.jobDir }, { ...deps, freshExecution: clean });
     if (live || backendLive) result.push(!live && backendLive ? { ...s, state: "running" } : s);
     else if (clean) fs.rmSync(file, { force: true });
   }
