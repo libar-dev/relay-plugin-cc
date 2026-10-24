@@ -10,14 +10,19 @@ Changed:
 
 - Load guard errors hold new starts with the error and explicit off switch in the queue reason.
   `RELAY_ADMISSION=off` and `/relay:setup --admission off` still bypass the guard.
-- Provider pauses follow the selected account home. Grok recognizes explicit usage exhaustion,
+- Provider pauses follow the account home used by each worker attempt, including resumed jobs.
+  Pause status identifies the account. Grok recognizes explicit usage exhaustion,
   rate-limit text and provider 429 errors; its usage classifier is not yet verified against a live exhausted account.
   Admission pauses do not bound requests or retries inside running turns.
 
 Fixed:
 
-- Damaged slots count conservatively until quarantine; damaged pauses hold their account for 15 minutes.
-  Refusals received during admission-lock contention are saved and applied before another start.
+- Damaged slots count conservatively until quarantine; a damaged job slot cannot reuse a seat.
+  Damaged pauses and pending refusals hold the affected account or backend for at most 15 minutes
+  before quarantine. Refusals saved during admission-lock contention retain their original receipt
+  time and provider reset, so replay does not restart expired pauses.
+- Guard errors preserve finished jobs with empty inboxes. Repeated atomic-write errors use a stable
+  queue reason and one diagnostic per message change.
 - Only currently held seats are reused. Slotless live jobs count toward the worker minimum, and
   worker deferrals retain their original cause after admission. Clock corrections preserve startup
   holds and pacing. A live provider probe cannot expire just because it is old.

@@ -16,6 +16,7 @@ import path from "node:path";
 import process from "node:process";
 
 import { admit, admissionHome, releaseSlot, DEFAULTS, admissionEnabled, classifyRefusal, recordRefusal, probeSucceeded, releaseProbe, wasAdmitted } from "./admission.mjs";
+import { requestAccount } from "../jobs/request.mjs";
 import { backendFor } from "../backends/index.mjs";
 import { truncateCodePoints } from "../util/text.mjs";
 import { acquireWorkerLease, releaseWorkerLease, readLease } from "../jobs/lease.mjs";
@@ -173,8 +174,10 @@ async function runWorkerRound(jobDir, options, held) {
     throw new Error(`No job.json in ${jobDir}.`);
   }
 
+  const executionEnv = { ...process.env, ...options.env };
+  job = { ...job, request: { ...job.request, account: requestAccount(job.request, executionEnv) } };
   const backend = backendFor(job.request);
-  const admissionDeps = { env: { ...process.env, ...options.env }, ...options.admission };
+  const admissionDeps = { env: executionEnv, ...options.admission };
   const home = admissionHome(admissionDeps.env);
   let slot = null;
   const guardOn = admissionEnabled(admissionDeps.env, undefined, admissionDeps.platform ?? process.platform);
@@ -529,7 +532,7 @@ async function runWorkerRound(jobDir, options, held) {
     return backend.connect(request, {
       state: job.backendState ?? {},
       saveState(patch) { save({ backendState: { ...job.backendState, ...patch } }); },
-      env: { ...process.env, ...options.env },
+      env: executionEnv,
       onSpawn(proc) {
         serverIndex = job.attempts[attemptIndex].servers?.length ?? 0;
         const identity = { pid: proc.pid ?? null, startTime: proc.pid ? readProcessStartTime(proc.pid) : null, startedAt: nowIso() };

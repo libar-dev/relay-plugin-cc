@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULTS as D, admit, classifyRefusal, recordRefusal, probeSucceeded, releaseSlot, listPauses } from "../plugins/relay/scripts/lib/worker/admission.mjs";
+import { DEFAULTS as D, admit, classifyRefusal, recordRefusal, probeSucceeded, releaseSlot, listPauses, renderGuard } from "../plugins/relay/scripts/lib/worker/admission.mjs";
 import { kimiEnvironment } from "../plugins/relay/scripts/lib/backends/kimi/connection.mjs";
 import { acquireOwnership, releaseOwnership } from "../plugins/relay/scripts/lib/util/ownership.mjs";
 const GiB = 2 ** 30;
@@ -262,4 +262,74 @@ test("pending refusals are applied only to their account", t => {
   assert.equal(fs.readdirSync(pending).length, 1);
   assert.equal(admit({ ...s.ctx(2), request: { backend: "kimi", account } }, s.deps).waitKind, "pause");
   assert.equal(fs.readdirSync(pending).length, 0);
+});
+
+
+for (const contents of ["{", JSON.stringify({ account: "invalid", refusal: { kind: "rate" } })]) test(`damaged pending refusals hold only their backend and quarantine: ${contents}`, t => {
+  const s = setup(t), dir = path.join(s.root, "pauses", "pending"), file = path.join(dir, "codex-damaged.json");
+  fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, contents);
+  fs.utimesSync(file, s.deps.now() / 1000, s.deps.now() / 1000);
+  const held = admit(s.ctx(1), s.deps);
+  assert.equal(held.waitKind, "pause"); assert.match(held.reason, /codex pending refusal codex-damaged.json unreadable; holding until/);
+  assert.equal(admit({ ...s.ctx(3), request: { backend: "codex", account: "123456abcdef" } }, s.deps).waitKind, "pause");
+  const other = { ...s.ctx(2), request: { backend: "kimi" } };
+  assert.equal(admit(other, s.deps).admit, true, "damaged Codex claimant cannot block Kimi");
+  s.tick(D.maxRatePauseMs - 1); assert.equal(admit(s.ctx(1), s.deps).waitKind, "pause");
+  s.tick(1); assert.equal(admit(s.ctx(1), s.deps).admit, true);
+  assert.equal(fs.existsSync(file), false); assert.equal(fs.readdirSync(path.join(dir, "quarantine")).length, 1);
+});
+
+test("invalid pending refusal kinds hold only the identifiable account until quarantine", t => {
+  const s = setup(t), dir = path.join(s.root, "pauses", "pending"), file = path.join(dir, "codex-damaged.json"), account = "123456abcdef";
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ account, jobId: "old", refusal: { kind: "future-kind" } }));
+  fs.utimesSync(file, s.deps.now() / 1000, s.deps.now() / 1000);
+  const affected = { ...s.ctx(1), request: { backend: "codex", account } };
+  assert.equal(admit(affected, s.deps).waitKind, "pause");
+  assert.equal(admit(s.ctx(2), s.deps).admit, true);
+  s.tick(D.maxRatePauseMs); assert.equal(admit(affected, s.deps).admit, true);
+  assert.equal(fs.existsSync(file), false);
+});
+
+for (const kind of ["rate", "usage"]) test(`pending ${kind} refusals keep their receipt deadline after lock contention`, t => {
+  const s = setup(t), file = path.join(s.root, "admission.lock"), receivedAt = s.deps.now();
+  const resetAt = new Date(receivedAt + D.ratePauseMs).toISOString();
+  acquireOwnership(file, { pid: process.pid });
+  try { assert.deepEqual(recordRefusal(s.root, "codex", { kind, ...(kind === "usage" ? { resetAt } : {}) }, "old", { ...s.deps, lockSleep() {} }), { pending: true }); }
+  finally { releaseOwnership(file); }
+  const dir = path.join(s.root, "pauses", "pending");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0]))).receivedAt, new Date(receivedAt).toISOString());
+  s.tick(D.ratePauseMs + 1);
+  const result = admit(s.ctx(1), s.deps);
+  assert.equal(result.admit, true); assert.equal(result.slot.probe, true);
+  assert.equal(listPauses(s.env, s.deps)[0].until, resetAt);
+  assert.equal(probeSucceeded(s.root, "codex", "job-1", s.deps, result.slot.probeGeneration), true);
+  releaseSlot(s.root, "job-1", s.ctx(1).me, s.deps);
+  const legacy = path.join(dir, "codex-legacy.json");
+  fs.writeFileSync(legacy, JSON.stringify({ account: null, refusal: { kind }, jobId: "legacy" }));
+  fs.utimesSync(legacy, receivedAt / 1000, receivedAt / 1000);
+  s.tick(D.usagePauseMs);
+  assert.equal(admit(s.ctx(2), s.deps).admit, true, "legacy pending files use mtime as receipt time");
+});
+
+test("an already-expired explicit provider reset proceeds to a probe", t => {
+  const s = setup(t), resetAt = new Date(s.deps.now() - 1000).toISOString();
+  assert.equal(recordRefusal(s.root, "codex", { kind: "usage", resetAt }, "old", s.deps).until, resetAt);
+  assert.equal(admit(s.ctx(1), s.deps).slot.probe, true);
+});
+
+test("Grok ignores incidental status numbers and token limits but recognizes documented quota refusals", () => {
+  for (const message of ["Could not open document 429", "token usage limit exceeded", "context usage limit exceeded", "usage statistics exhausted"]) {
+    assert.equal(classifyRefusal("grok", { message }), null, message);
+  }
+  for (const message of ["HTTP 429", "429 Too Many Requests"]) assert.equal(classifyRefusal("grok", { message }).kind, "rate");
+  assert.equal(classifyRefusal("grok", { data: { statusCode: 429 } }).kind, "rate");
+  for (const message of ["usage limit exceeded", "usage pool exhausted", "credits depleted", "weekly limit reached"]) assert.equal(classifyRefusal("grok", { message }).kind, "usage");
+});
+
+test("guard status identifies each paused account", t => {
+  const s = setup(t), account = "123456abcdef";
+  recordRefusal(s.root, "kimi", { kind: "rate" }, "old", { ...s.deps, request: { account } });
+  const lines = renderGuard({ enabled: true, availableBytes: null, pauses: listPauses(s.env, s.deps) });
+  assert.ok(lines.some(line => line.includes(`kimi (account ${account}) paused:`)));
 });

@@ -194,7 +194,7 @@ test("guard failures hold visibly; corrupt slots do not crash", t => {
   const s = setup(t), c = s.ctx();
   const unknown = admit(c, { ...s.deps, readMachine() { throw new Error("synthetic sensor failure"); } });
   assert.equal(unknown.admit, false); assert.equal(unknown.waitKind, "guard-error");
-  assert.match(unknown.reason, /synthetic sensor failure.*RELAY_ADMISSION=off or setup --admission off/);
+  assert.match(unknown.reason, /synthetic sensor failure.*RELAY_ADMISSION=off or \/relay:setup --admission off/);
   s.tick();
   fs.mkdirSync(path.join(s.home, "slots"), { recursive: true });
   fs.writeFileSync(path.join(s.home, "slots", "corrupt.json"), "{");
@@ -943,7 +943,7 @@ for (const fault of ["readMachine", "writeSlot"]) test(`guard ${fault} exception
       const held = admit(c, deps);
       assert.equal(held.admit, false); assert.equal(held.waitKind, "guard-error");
       assert.equal(held.retryMs, D.pollMs);
-      assert.match(held.reason, /holding new starts.*RELAY_ADMISSION=off or setup --admission off/);
+      assert.match(held.reason, /holding starts and turns.*RELAY_ADMISSION=off or \/relay:setup --admission off/);
     }
     assert.equal(lines.length, 1);
     assert.equal(admit(c, { ...deps, env: { ...s.env, RELAY_ADMISSION: "off" } }).admit, true);
@@ -1056,4 +1056,54 @@ test("the environment off switch survives configuration read errors", t => {
   const deps = { ...s.deps, env, readAdmissionConfig: () => { throw new Error("unreadable configuration"); } };
   assert.equal(admit(c, deps).admit, true);
   assert.equal(spawnWithAdmission(c.jobDir, env, () => 42, deps), 42);
+});
+
+
+test("guard errors preserve terminal jobs with empty inboxes", t => {
+  const s = setup(t), c = s.ctx();
+  for (const state of ["completed", "failed", "cancelled"]) {
+    writeJob(c.jobDir, { id: c.jobId, state, request: c.request });
+    const before = fs.readFileSync(path.join(c.jobDir, "job.json"), "utf8");
+    assert.equal(spawnWithAdmission(c.jobDir, s.env, () => assert.fail("must not spawn"), {
+      ...s.deps, readMachine() { throw new Error("synthetic sensor failure"); }
+    }), null);
+    assert.equal(fs.readFileSync(path.join(c.jobDir, "job.json"), "utf8"), before);
+  }
+});
+
+test("atomic write errors normalize temporary paths and retain only the last diagnostic", t => {
+  const s = setup(t), c = s.ctx(), lines = [];
+  t.mock.method(process.stderr, "write", line => { lines.push(line); return true; });
+  let calls = 0, cause = "ENOSPC";
+  const deps = { ...s.deps, writeSlot() { throw new Error(`${cause}: open 'slot.json.123.${(++calls).toString(16)}.tmp'`); } };
+  const reasons = Array.from({ length: 5 }, () => admit(c, deps).reason);
+  assert.equal(new Set(reasons).size, 1);
+  assert.equal(lines.length, 1);
+  assert.doesNotMatch(reasons[0], /\.123\.[a-f0-9]+\.tmp/);
+  cause = "EACCES"; admit(c, deps);
+  cause = "ENOSPC"; admit(c, deps);
+  assert.equal(lines.length, 3, "returning to an earlier message logs again; only the last is retained");
+});
+
+test("lock-busy worker deferrals retain their cause through admission", t => {
+  const s = setup(t), c = s.ctx();
+  writeJob(c.jobDir, { id: c.jobId, state: "starting", request: c.request });
+  fs.mkdirSync(s.home, { recursive: true });
+  const file = path.join(s.home, "admission.lock");
+  acquireOwnership(file, { pid: process.pid });
+  try { spawnWithAdmission(c.jobDir, s.env, () => assert.fail("locked"), { ...s.deps, lockSleep() {} }); }
+  finally { releaseOwnership(file); }
+  const admission = readJob(c.jobDir).admission;
+  assert.equal(admission.causeKind, "lock");
+  assert.equal(admit({ ...c, admission, waitingSince: admission.since }, s.deps).record.waitKind, "lock");
+});
+
+test("a damaged own slot cannot reuse a busy seat or retain the damaged placeholder", t => {
+  const s = setup(t); fillOtherMinimum(s);
+  s.setMachine({ cores: 4, load5: 6 });
+  const c = s.ctx(), file = path.join(s.home, "slots", `${c.jobId}.json`);
+  fs.writeFileSync(file, "{"); fs.utimesSync(file, s.deps.now() / 1000, s.deps.now() / 1000);
+  assert.equal(admit({ ...c, turn: true }, s.deps).waitKind, "seats");
+  const slot = JSON.parse(fs.readFileSync(file));
+  assert.equal(slot.state, "waiting"); assert.equal(slot.damaged, undefined);
 });

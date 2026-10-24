@@ -225,6 +225,11 @@ export function buildLaunchRequest(values, options = {}) {
     notes
   };
   Object.assign(request, backend.request.complete(request, values, { env, userConfig }));
-  const home = backend.accountHome(request, env);
-  return Object.assign(request, { account: home ? createHash("sha256").update(home).digest("hex").slice(0, 12) : null });
+  return Object.assign(request, { account: requestAccount(request, env) });
+}
+
+// Resolve the execution account again when a worker resumes under a new environment.
+export function requestAccount(request, env = process.env) {
+  const home = backendNamed(request.backend ?? DEFAULT_BACKEND.name).accountHome(request, env);
+  return home ? createHash("sha256").update(home).digest("hex").slice(0, 12) : null;
 }

@@ -455,7 +455,7 @@ function jobAccount(home, jobId, deps) {
   return job?.request?.account ?? null;
 }
 const kindLabel = kind => ({ usage: "usage limit", rate: "rate limit", concurrency: "concurrent request limit" })[kind] ?? kind;
-function refusalReason(p) { if (p.reason) return p.reason; return `${p.backend} paused: ${kindLabel(p.kind)}${p.code ? ` (${p.code})` : ""} until ${p.until}`; }
+function refusalReason(p) { if (p.reason) return p.reason; return `${p.backend}${p.account ? ` (account ${p.account})` : ""} paused: ${kindLabel(p.kind)}${p.code ? ` (${p.code})` : ""} until ${p.until}`; }
 function recordFor(slot, notes, reason = null, waitKind = null) {
   return { state: reason ? "waiting" : "admitted", reason: reason ?? slot.waitReason ?? null, waitKind: waitKind ?? slot.waitKind ?? null, since: slot.waitingSince ?? null, admittedAt: reason ? null : slot.admittedAt ?? null, class: slot.class, weight: slot.weight, probe: Boolean(slot.probe), notes };
 }
@@ -465,12 +465,12 @@ function bypass(ctx, platform = process.platform) {
 }
 const guardErrors = new Map();
 function guardError(ctx, error, deps) {
-  const message = String(error?.message ?? error).replace(/[\r\n]+/g, " ");
-  const reason = `load guard error: ${message}; holding new starts. RELAY_ADMISSION=off or setup --admission off bypasses the guard`;
+  const message = String(error?.message ?? error).replace(/\.\d+\.[0-9a-f]+\.tmp\b/gi, "").replace(/[\r\n]+/g, " ");
+  const reason = `load guard error: ${message}; holding starts and turns. RELAY_ADMISSION=off or /relay:setup --admission off bypasses the guard`;
   const key = `${ctx.home ?? admissionHome(deps.env)}:${ctx.jobId}`;
-  const seen = guardErrors.get(key) ?? new Set();
-  if (!seen.has(message) && ctx.admission?.reason !== reason) {
-    seen.add(message); guardErrors.set(key, seen);
+  const previous = guardErrors.get(key);
+  guardErrors.set(key, message);
+  if (previous !== message && ctx.admission?.reason !== reason) {
     try { process.stderr.write(`relay load guard: job ${ctx.jobId}: ${reason}\n`); } catch {}
   }
   return { admit: false, waitKind: "guard-error", retryMs: Number(deps.env.RELAY_ADMISSION_POLL_MS) || DEFAULTS.pollMs, reason,
@@ -544,7 +544,7 @@ export function admit(ctx, injected = {}) {
       return { admit: false, reason, waitKind, retryMs: Number(deps.env.RELAY_ADMISSION_POLL_MS) || DEFAULTS.pollMs * (0.67 + 0.67 * deps.random()), slot, record: recordFor({ ...slot, waitingSince: mine.waitingSince }, [...notes, ...deps.notes], reason, waitKind) };
     };
     const decision = lock(home, deps, () => {
-      const all = slots(home, deps), own = all.find(s => s.jobId === ctx.jobId), existing = own?.state === "running" ? own : null;
+      const all = slots(home, deps), own = all.find(s => s.jobId === ctx.jobId), existing = own?.state === "running" && !own.damaged ? own : null;
       const warm = Boolean(existing);
       const retainedTurn = Boolean(ctx.turn && existing);
       mine.since = own?.since ?? mine.since;
@@ -553,7 +553,8 @@ export function admit(ctx, injected = {}) {
       const legacy = legacyJobs(ctx.jobId, all, candidates, deps);
       const active = [...running, ...legacy.map(j => ({ jobId: j.id, backend: j.request?.backend ?? "codex", quotaHeavy: isVeryHeavy(j.request) }))];
       const eligible = (candidate, candidateMachine, pending, reuseSeat = false, retained = false) => {
-        foldPending(home, candidate.backend, candidate.account ?? null, deps);
+        const damaged = foldPending(home, candidate.backend, candidate.account ?? null, deps);
+        if (damaged) return { reason: damaged.reason, kind: "pause" };
         const pause = pauseRead(home, candidate.backend, deps, true, false, candidate.account ?? null);
         if (pause && now < Date.parse(pause.until)) return { reason: refusalReason(pause), kind: "pause" };
         if (pause?.probe && (pause.probe.jobId !== candidate.jobId || pause.probe.pid !== candidate.pid || pause.probe.startTime !== candidate.processStart)) return { reason: `${candidate.backend} paused: waiting for probe job ${pause.probe.jobId}`, kind: "probe" };
@@ -648,8 +649,9 @@ export function classifyRefusal(backend, error) {
       const status = Number(error?.data?.details?.statusCode ?? error?.data?.statusCode ?? error?.data?.data?.details?.statusCode);
       code = Number.isFinite(status) ? String(status) : kind === "rate" ? "429" : "403";
     } else if (backend === "grok") {
-      kind = /(?:weekly|usage|credits?)[^.\n]*(?:exhaust|limit[ _-](?:reached|exceeded)|used up|depleted)|(?:exhaust|used up|depleted|reached|exceeded)[^.\n]*(?:weekly|usage|credits?)/i.test(text) ? "usage"
-        : /\b429\b|rate limit/i.test(text) || Number(error?.data?.statusCode ?? error?.data?.details?.statusCode ?? error?.code) === 429 ? "rate" : null;
+      const quotaText = text.replace(/\b(?:token|context)\s+usage\s+(?:limit|pool)\b/gi, "");
+      kind = /\b(?:weekly|credits?|usage (?:limit|pool))\b[^.\n]*(?:exhaust|reached|exceeded|used up|depleted)|(?:exhaust|used up|depleted|reached|exceeded)[^.\n]*\b(?:weekly|credits?|usage (?:limit|pool))\b/i.test(quotaText) ? "usage"
+        : /\bHTTP\s+429\b|\b429\s+Too Many Requests\b|rate limit/i.test(text) || Number(error?.data?.statusCode ?? error?.data?.details?.statusCode ?? error?.code) === 429 ? "rate" : null;
       code = kind === "rate" ? "429" : undefined;
     } else if (backend === "zcode") {
       code = /^\d{4}$/.test(String(error?.data?.code)) ? String(error.data.code) : /\[(\d{4})\]|\bcode (\d{4})\b/.exec(text)?.slice(1).find(Boolean);
@@ -664,37 +666,55 @@ function applyRefusal(old, refusal, jobId, now, backend, account) {
   const same = !old?.damaged && old?.kind === refusal.kind;
   const strikes = same ? (old.strikes ?? 1) + ((now >= Date.parse(old.until) || old.lastJobId !== jobId) ? 1 : 0) : 1;
   const reset = Date.parse(refusal.resetAt);
-  const provider = refusal.kind === "usage" && reset > now && reset <= now + DEFAULTS.pauseExpiryMs;
+  const provider = refusal.kind === "usage" && Number.isFinite(reset) && reset <= now + DEFAULTS.pauseExpiryMs;
   const duration = refusal.kind === "usage" ? DEFAULTS.usagePauseMs : refusal.kind === "concurrency" ? DEFAULTS.concurrencyPauseMs : Math.min(DEFAULTS.ratePauseMs * 2 ** Math.min(strikes - 1, 20), DEFAULTS.maxRatePauseMs);
   const until = Math.max(old?.damaged ? Date.parse(old.until) : 0, provider ? reset : now + Math.min(duration, DEFAULTS.pauseExpiryMs));
   return { v: 1, backend, account, ...refusal, since: same ? old.since : iso(now), updatedAt: iso(now), until: iso(until), strikes, resetSource: provider ? "provider" : "default", lastJobId: jobId, probe: null };
 }
 function foldPending(home, backend, account, deps) {
-  const dir = path.join(home, "pauses", "pending");
+  const dir = path.join(home, "pauses", "pending"), now = deps.now();
+  let damaged = null;
   for (const name of files(dir).sort()) {
     if (!name.startsWith(`${backend}-`) || !name.endsWith(".json")) continue;
-    const file = path.join(dir, name), pending = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!pending || (pending.account !== null && !/^[a-f0-9]{12}$/.test(pending.account)) || !["usage", "rate", "concurrency"].includes(pending.refusal?.kind) || typeof pending.jobId !== "string") throw new Error("invalid pending provider refusal");
-    if (pending.account !== account) continue;
+    const file = path.join(dir, name);
+    let pending;
+    try {
+      pending = JSON.parse(fs.readFileSync(file, "utf8"));
+      // A readable account scopes even a refusal kind from a newer version.
+      const knownAccount = pending && (pending.account === null || (typeof pending.account === "string" && /^[a-f0-9]{12}$/.test(pending.account)));
+      if (knownAccount && pending.account !== account) continue;
+      if (!knownAccount || !["usage", "rate", "concurrency"].includes(pending.refusal?.kind) || typeof pending.jobId !== "string" ||
+          (pending.receivedAt != null && !Number.isFinite(Date.parse(pending.receivedAt)))) throw new Error("invalid pending provider refusal");
+    } catch {
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      if (!stat) continue;
+      const until = stat.mtimeMs + DEFAULTS.maxRatePauseMs;
+      if (now >= until) quarantine(file, now, `${backend} pending refusal ${name} unreadable; quarantined`, deps);
+      else damaged ??= { reason: `${backend} pending refusal ${name} unreadable; holding until ${iso(until)}` };
+      continue;
+    }
+    // Older writers supplied only mtime; replay must never restart their cooldown.
+    const receivedAt = Math.min(now, pending.receivedAt == null ? fs.statSync(file).mtimeMs : Date.parse(pending.receivedAt));
     const old = pauseRead(home, backend, deps, true, false, account);
-    pauseWrite(home, backend, applyRefusal(old, pending.refusal, pending.jobId, deps.now(), backend, account), account);
+    pauseWrite(home, backend, applyRefusal(old, pending.refusal, pending.jobId, receivedAt, backend, account), account);
     fs.rmSync(file);
   }
+  return damaged;
 }
 export function recordRefusal(home, backend, refusal, jobId, injected = {}) {
   const deps = dependencies(injected);
   try {
     if (!["linux", "darwin"].includes(deps.platform) || !admissionEnabled(deps.env, deps.readAdmissionConfig(deps.env), deps.platform)) return null;
-    const account = jobAccount(home, jobId, deps);
+    const account = jobAccount(home, jobId, deps), receivedAt = deps.now();
     const result = retryLock(home, deps, () => {
       foldPending(home, backend, account, deps);
-      const p = applyRefusal(pauseRead(home, backend, deps, true, false, account), refusal, jobId, deps.now(), backend, account);
+      const p = applyRefusal(pauseRead(home, backend, deps, true, false, account), refusal, jobId, receivedAt, backend, account);
       pauseWrite(home, backend, p, account); return p;
     });
     if (result.locked) return result.value;
     const dir = path.join(home, "pauses", "pending");
     fs.mkdirSync(dir, { recursive: true });
-    writeJsonAtomic(path.join(dir, `${backend}-${randomUUID()}.json`), { backend, account, refusal, jobId });
+    writeJsonAtomic(path.join(dir, `${backend}-${randomUUID()}.json`), { backend, account, refusal, jobId, receivedAt: iso(receivedAt) });
     return { pending: true };
   } catch (e) { process.stderr.write(`relay load guard: provider pause for ${backend} not recorded (${e.message})\n`); return null; }
 }
@@ -810,7 +830,7 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
     if (!decision.locked) {
       const previousLock = job.admission?.waitKind === "worker" && /admission lock (busy|stuck)/.test(job.admission.reason);
       const lockSince = previousLock ? job.admission.lockSince ?? job.admission.since : iso(deps.now());
-      writeJob(jobDir, { ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker",
+      writeJob(jobDir, { ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker", causeKind: "lock",
         reason: lockReason(home, job.id, decision.holder, deps, lockSince), lockSince,
         since: job.admission?.since ?? iso(deps.now()), notes: [] } });
       return null;
@@ -820,7 +840,7 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
   } catch (e) {
     if (spawnAttempted) throw e;
     const job = readJob(jobDir);
-    if (job) {
+    if (job && !(TERMINAL_STATES.has(job.state) && pendingInboxMessages(jobDir).length === 0)) {
       const held = guardError({ jobId: job.id, home: admissionHome(env), waitingSince: job.admission?.since, admission: job.admission }, e, deps);
       try { writeJob(jobDir, { ...job, state: "queued", worker: null, admission: { ...held.record, waitKind: "worker", causeKind: "guard-error" } }); } catch {}
     }
