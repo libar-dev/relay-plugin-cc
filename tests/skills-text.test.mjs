@@ -185,6 +185,19 @@ test("AGENTS.md rule prose cannot enter the public content corpus", () => {
   assert.deepEqual(publicTextViolations(entries), ["docs/guide.md"]);
 });
 
+const orgGuidanceText = /\b(?:libar-infra|Greptile|CodeRabbit|model roster|do not use Fable|never use Fable)\b/i;
+
+test("built-in skills stay free of organisation-specific model and review policies", () => {
+  const skillFiles = filesBelow(path.join(plugin, "skills")).filter(file => file.endsWith(".md"));
+  assert.ok(skillFiles.length > 0);
+  for (const file of skillFiles) {
+    assert.doesNotMatch(fs.readFileSync(file, "utf8"), orgGuidanceText, path.relative(plugin, file));
+  }
+  for (const text of ["model roster: Astra high", "follow libar-infra", "ask Greptile", "do not use Fable"]) {
+    assert.ok(orgGuidanceText.test(text), text);
+  }
+});
+
 test("load guard documentation describes holds and the explicit off switch", () => {
   for (const file of ["README.md", "docs/guide.md", "plugins/relay/skills/jobs/internals.md", "plugins/relay/commands/setup.md"]) {
     const source = fs.readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
