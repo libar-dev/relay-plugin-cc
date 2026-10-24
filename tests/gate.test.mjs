@@ -240,6 +240,16 @@ test('a guard error is an error from the gate so hooks can fall back to bounded 
 
 test('a plain resume with no job bypasses the retry gate even if no waiting place is free', t => {
   const s = domain(t, 0);
-  const result = companion(s.ctx, ['gate', '--retry', '--agent', 'a-refused', '--wait-seconds', '30']);
+  const transcript = path.join(s.ctx.root, 'subagents', 'agent-a-refused.jsonl');
+  fs.mkdirSync(path.dirname(transcript)); fs.writeFileSync(transcript, '');
+  const result = companion(s.ctx, ['gate', '--retry', '--agent', 'a-refused', '--transcript', transcript, '--wait-seconds', '30']);
   assert.equal(result.status, 0); assert.equal(result.stdout, 'pass\n');
+});
+
+
+test('an unclassified retry with no transcript waits for capacity instead of bypassing the gate', t => {
+  const s = domain(t, 0);
+  const transcript = path.join(s.ctx.root, 'subagents', 'workflows', 'wf-test', 'agent-a-unknown.jsonl');
+  const result = companion(s.ctx, ['gate', '--retry', '--agent', 'a-unknown', '--transcript', transcript]);
+  assert.equal(result.status, 0); assert.match(result.stdout, /^hold waiting worker limit: 0 of 0/);
 });

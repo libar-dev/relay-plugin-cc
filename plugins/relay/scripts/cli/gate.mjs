@@ -8,12 +8,12 @@ import { findAdoptableRelayJob, findRelayJob, promptSha256, readJournalKey, read
 // A stalled Workflow attempt gets a fresh agent id without agent.spawn. At its
 // first step, reuse an existing job or reservation before asking for another place.
 function retryAlreadyCovered(agentId, transcriptPath, env) {
-  let workflow = false;
+  let workflow = false, plain = false;
   if (findRelayJob(env, agentId)) return true;
   for (const file of transcriptCandidates({ agent_id: agentId, transcript_path: transcriptPath })) {
     if (!fs.existsSync(file)) continue;
     const run = /[\\/]workflows[\\/]([^\\/]+)[\\/]agent-[^\\/]+\.jsonl$/.exec(file)?.[1];
-    if (!run) continue;
+    if (!run) { plain = true; continue; }
     workflow = true;
     const transcript = readRelayTranscript(file);
     let meta;
@@ -22,7 +22,7 @@ function retryAlreadyCovered(agentId, transcriptPath, env) {
       promptSha256: promptSha256(transcript.prompt?.text), label: meta?.description })) return true;
   }
   // Plain resumes are never capacity-gated, including a start previously refused.
-  return !workflow;
+  return plain && !workflow;
 }
 
 export async function handleGate(argv) {
