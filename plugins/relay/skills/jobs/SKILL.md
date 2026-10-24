@@ -171,7 +171,7 @@ dir: ~/.relay-jobs/<repo>/<job>
 <report>
 ```
 
-- `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the job has not ended, but its worker is gone, or none started within 60 s of the launch, except a workerless job queued for admission; whether a recovery was tried is another matter, shown by `automatic-resume:`), or `queued` (waiting for the load guard; `queued:` says why), `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
+- `state` is `completed`, `failed` (with `error:`), `cancelled`, `dead` (the job has not ended, but its worker is gone, or its launch process ended before ownership, whether a recovery was tried is another matter, shown by `automatic-resume:`), or `queued` (waiting for the load guard; `queued:` says why), `starting`/`running`. A failed start is `state: not started` with `error:`. A block with no `---` has no report.
 - `completed` means the job finished its answer, not that its commands passed. Read the report.
 - Before you act on a result or show it, load the `relay:result-handling` skill: it reads the state before the report.
 - Lines that may appear: `queued:`, `refusal:`, `backend:`, `grok-home:` and `kimi-home:` (see Grok jobs, GLM jobs and Kimi jobs), `kind:` (a review), `tier: fast`, `mcp-off:` (the MCP servers this job turned off), `relay:`, `note:`, `stalled:` (no event for ten minutes; information only), `capacity-retries:`, `automatic-resume:` (a recovery and its cause), `relay-adopted:`, `undelivered:` (messages to the job, acknowledged and not run yet; `resume` runs them; it says nothing about the report), `not-delivered:` (dropped, for example by a cancel), and `relay-violation:` (the hook let the relay go, or a delivery or a cancel failed; read the job yourself with `C result <job>`).
@@ -256,10 +256,12 @@ A person stopping a relay (`x`, Esc or the app's Stop) leaves its job running. S
 
 A wide fan-out that needs no steering can start its jobs with `C start` a few seconds apart and collect each with `C wait <job>`; `C status` only reads jobs and does not start deferred work; no Claude agent is held per job. Jobs started within the same second can hit a provider's request-rate limit. For Codex and Grok routes, the worker retries at 30, 60 and 120 s. ZCode and Kimi retry model calls themselves.
 
-A job can wait as `queued` before it starts or between turns. Keep calling `wait`: queued work
-remains pending and adoptable, including in a Workflow. Cancel, steer and continue still work.
-Jobs without a worker need a submitter/adopter's wait, message or relay hook to retry spawning;
-a bare `start` can stay dormant. `status` alone does not start deferred work: use `C wait <job>`.
+A job can wait as `queued` before its backend starts or between turns; its live worker owns that wait.
+When the start queue is full, Workflow agents wait at spawn as queued without model tokens or job
+waiters. A plain `relay:job` call waits up to 30 seconds then reports capacity. Use a Workflow for
+large batches. A direct start that cannot get a worker within a minute reports not started (exit 6);
+nothing runs later. A dead launch process or legacy workerless queue is dead and can be recovered
+with `C wait <job> --auto-resume`. Cancel, steer and continue still work for accepted jobs.
 The guard paces new backend starts and replacements 5 seconds apart across this user's sessions.
 Turns on a running backend are not paced and wait only for critical memory/pressure or provider pauses/probes.
 The first two identified very-heavy and first three other active jobs skip the host reserve and the busy-seat allowance, subject to critical checks, startup allowance, scope/fit limits, provider protection, ordering and start pacing. There is no very-heavy maximum.
@@ -269,20 +271,21 @@ A macOS pressure warning is shown but holds nothing. Memory and load can delay n
 healthy machines have no fixed active ceiling. Turn the guard off only when the user asks.
 Sensor details, small-host fit limits and formulas are in [internals.md](internals.md).
 
-`--json` prints one object whose first fields are `schema` (`relay.<command>/1`), `relayVersion` and `relayBuild`. An error under `--json` is that header with `error: { kind, message }` on stdout, `kind` one of `busy` (exit 4: try again), `not-found`, `usage`, `attempt-changed` or `error`. `C status --json` lists slim rows, newest first, 50 a page (`--limit N`, up to 200), with `nextCursor` for `--cursor`; `--active` lists only jobs that are queued, run, died or owe messages. One job (`C status <job> --json`, `result`, `wait`, `cancel`) has every field, among them `attemptRecords` and `messages`, each message with how the job took it.
+`--json` prints one object whose first fields are `schema` (`relay.<command>/1`), `relayVersion` and `relayBuild`. An error under `--json` is that header with `error: { kind, message }` on stdout, `kind` one of `busy` (exit 4: try again), `not-found`, `usage`, `attempt-changed`, `not-started` (exit 6) or `error`. `C status --json` lists slim rows, newest first, 50 a page (`--limit N`, up to 200), with `nextCursor` for `--cursor`; `--active` lists only jobs that are queued, run, died or owe messages. One job (`C status <job> --json`, `result`, `wait`, `cancel`) has every field, among them `attemptRecords` and `messages`, each message with how the job took it.
 
-Exit codes of `wait` and `result`: `0` completed with a report; `3` ended with no answer to take, which is `failed` or `dead` (even with a report), `completed` with no report, or messages not yet run (`undelivered:`), so read the state, then any report; `4` non-terminal (`queued`, `starting` or `running`); `5` cancelled, including with a pending continuation because cancellation takes precedence; `1` usage error.
+Exit codes of `wait` and `result`: `0` completed with a report; `3` ended with no answer to take, which is `failed` or `dead` (even with a report), `completed` with no report, or messages not yet run (`undelivered:`), so read the state, then any report; `4` non-terminal (`queued`, `starting` or `running`); `5` cancelled, including with a pending continuation because cancellation takes precedence; `6` not started; `1` usage error.
 
 ### Continue a job by its id
 
 `C steer`, `C continue` and `C resume` post a new message each time they run, and print a receipt: `job:`, `message: <kind> <id>`, `outcome:` and `state:`.
 
 - Exit `0`: the job recorded how it took the message, such as `steered`, `queued-next-turn`, `accepted-next-turn` or `turn-started`; `dropped` and `skipped` did not run, and `reason:` says why.
-- Exit `4`: the message was posted, but no outcome came within the acknowledgement window (60 s), so `outcome:` is `pending`. It stays in the job's inbox for a worker to take. That is neither a refusal nor a failure. (`resume` also exits 4 when the job is busy, before it posts anything.)
+- Exit `6`: no worker took the message within a minute. `not delivered: …; send it again later` means it was withdrawn before claim and will not run later.
+- Exit `4`: the message has a live worker or remains claimed, but no outcome came within the acknowledgement window (60 s), so `outcome:` is `pending`. That is neither a refusal nor a failure. (`resume` also exits 4 when the job is busy, before it posts anything.)
 - Exit `1` can also follow posting: delivery or the state read can fail before a receipt is printed. Absence of a receipt alone proves nothing. Only a known pre-post validation refusal (such as an empty message or unknown job) proves nothing was posted.
 - Whether the turn then failed is the job's state, which `wait` reports. Before you send again after any nonzero exit, read the job's `messages` in `C status <job> --json`: your message may have run since.
 
-For a workerless queued job, `queued-next-turn` with a queue `reason:` acknowledges the message; it does not mean it ran.
+Only a live worker writes `queued-next-turn` or `accepted-next-turn`. These receipts acknowledge ownership; they do not prove the turn ran.
 
 A continue, in full:
 

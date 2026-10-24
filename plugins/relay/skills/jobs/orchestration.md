@@ -28,7 +28,7 @@ outgrows the budget or finding counts keep rising. More rounds alone may not con
 | Claude-only side task | native `Agent` | one native agent |
 | Codex, Grok, ZCode or Kimi job needing messages | `relay:job` | one Haiku relay for the whole job |
 | Waves, branches, loops or recovery after caller loss | Workflow with `relay:job` | deterministic control flow and `resumeFromRunId` adoption |
-| Wide fan-out with no relay steering needed | `C start` then `C wait <job>` | no Claude agent held per job; keep a waiter for deferred work |
+| Wide fan-out with no relay steering needed | `C start` then `C wait <job>` | no Claude agent held per job; accepted jobs own their workers |
 
 A relay holds its Claude agent for the job's whole run, including queued waits, and spends some
 Claude usage. A Workflow slot stays occupied too. The documented per-run cap is up to 16 agents,
@@ -62,9 +62,13 @@ probe goes first; a live probe is never replaced because of its age. These are b
 That job may finish `failed`; inspect its report and use same-job recovery where appropriate. Newly
 queued work keeps waiting. Acknowledgement of a message is not evidence its next turn ran.
 
-`queued` is pending, never a result or a reason to submit the job again. Keep a wait/adopter:
-`status` only reads; a wait, message or relay hook retries a workerless queue. Control Workflow jobs
-by job id. Send a continue once, reconcile message records after uncertain errors, wait, then collect.
+`queued` is pending under a live worker, never a result or a reason to submit the job again.
+When the start queue is full, Workflow agents wait at spawn as queued, using no model tokens and
+creating no job waiter until a place frees. A plain `relay:job` call waits up to 30 seconds then
+reports capacity. Use a Workflow for large batches. A direct start without a worker after a minute
+reports not started (exit 6); nothing runs later. Submit it again when capacity frees.
+A dead launcher or an older workerless queue reads as dead; `wait --auto-resume` can recover it.
+Control Workflow jobs by job id. Send a continue once, reconcile message records after uncertain errors, wait, then collect.
 At Claude's usage limit plain relays fail; Workflow runs pause where auto-continue is on. Backend
 jobs run on. Collect with `C wait <job>` or resume the Workflow with `resumeFromRunId`, never restart
 those jobs. Provider subscription windows and API dollar costs are different constraints; check

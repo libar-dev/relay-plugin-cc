@@ -253,7 +253,7 @@ test("the jobs skill and design.md say a message that arrives while a turn is st
 
 test("dead and exit 3 are defined as view.mjs computes them, and the continue recipe waits within the Bash timeout", () => {
   const skill = flat(read("skills/jobs/SKILL.md"));
-  for (const fact of ["none started within 60 s of the launch", "except a workerless job queued for admission", "(even with a report)", "`completed` with no report",
+  for (const fact of ["its launch process ended before ownership", "not started (exit 6)", "(even with a report)", "`completed` with no report",
     "`completed` is only the first gate"]) {
     assert.ok(skill.includes(fact), fact);
   }
@@ -265,7 +265,7 @@ test("dead and exit 3 are defined as view.mjs computes them, and the continue re
   const recipe = section(skill, "### Continue a job by its id", "How the hook carries the relay");
   for (const fact of ["Exit `4`", "acknowledgement window (60 s)", "`skipped`", "--timeout-seconds 100",
     "the Bash tool's default timeout of 120 s", "the `undelivered` list", "After a `resume`, go back to step 2.",
-    "`report: none` is no new report", "Absence of a receipt alone proves nothing", "after any nonzero exit", "`queued-next-turn` with a queue `reason:`"]) {
+    "`report: none` is no new report", "Absence of a receipt alone proves nothing", "after any nonzero exit", "Only a live worker writes `queued-next-turn` or `accepted-next-turn`"]) {
     assert.ok(recipe.includes(fact), fact);
   }
   assert.doesNotMatch(recipe, /`no-op`/);
@@ -510,7 +510,7 @@ test("README carries the first hour, stop gate, Claude Code dependency and devel
     assert.match(source, /A Claude Code update can break it\./);
     assert.ok(source.includes("the job's `job.json` must hold the call's key as `relay.journalKey`"));
     assert.ok(source.includes("once another relay has adopted the job, its `relay.json` holds the binding"));
-    assert.match(source, /The module only checks headers and wakes a waiting relay: delivery runs on command hooks and the transcript/);
+    assert.match(source, /The module checks headers, gates relay starts and wakes a waiting relay: delivery runs on command hooks and the transcript/);
   }
   assert.ok(internals.includes("stores that key as `relay.journalKey` in the job's `job.json`"));
   assert.doesNotMatch(internals, /binds the job to that key in the job's `relay\.json`/);

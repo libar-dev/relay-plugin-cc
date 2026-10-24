@@ -165,6 +165,7 @@ function spawnEngine(on: any, check: () => unknown = () => ran(0, 'ok\n')) {
   const runs: any[] = []
   const spawns: unknown[] = []
   on('process.run', (_: unknown, e: any) => {
+    if (e.argv[2] === 'gate') return ran(0, 'pass\n')
     runs.push(e)
     return check()
   })
@@ -2890,4 +2891,69 @@ test('the board shows a closed wait with a fixed duration after admission', asyn
   expect(texts).toContain('waited 5.0s before admission')
   expect(texts).not.toContain('queued:')
   await ui.unmount()
+})
+
+function capacityEngine(on: any, answers: string[]) {
+  const gates: any[] = [], spawns: any[] = []
+  on('process.run', (_: unknown, e: any) => {
+    if (e.argv[2] === 'check-header') return ran(0, 'ok\n')
+    gates.push(e)
+    if (e.argv.includes('--bind')) return ran(0, 'bound\n')
+    return ran(0, answers.shift() ?? 'pass\n')
+  })
+  on('agent.spawn', (_: unknown, e: unknown) => { spawns.push(e); return STARTED })
+  return { gates, spawns }
+}
+
+test('Workflow admission waits on hold then binds the waiting place to the actual agent', async ($, on) => {
+  const id = '00000000-0000-4000-8000-000000000001'
+  const seen = capacityEngine(on, ['hold waiting worker limit: 2 of 2\n', `pass ${id}\n`])
+  expect(await $.agent.spawn(relay(GOOD, { workflow: { runId: 'wf-capacity', agentIndex: 1 } }) as any)).toEqual(STARTED)
+  expect(seen.spawns).toHaveLength(1)
+  expect(seen.gates).toHaveLength(3)
+  expect(seen.gates[0].argv.slice(2)).toEqual(['gate', '--wait-seconds', '540'])
+  expect(seen.gates[0].init).toEqual({ timeoutMs: 600000 })
+  expect(seen.gates[2].argv.slice(2)).toEqual(['gate', '--bind', id, '--agent', 'a-job'])
+})
+
+test('a plain relay refuses after its thirty-second gate with the capacity explanation', async ($, on) => {
+  const seen = capacityEngine(on, ['hold waiting worker limit: 2 of 2\n'])
+  expect(await $.agent.spawn(relay(GOOD))).toEqual({ deny: 'relay is at capacity: waiting worker limit: 2 of 2. Try again in a minute, or start these jobs from a Workflow, which waits for a place.' })
+  expect(seen.spawns).toHaveLength(0)
+  expect(seen.gates[0].argv.slice(2)).toEqual(['gate', '--wait-seconds', '30'])
+})
+
+test('an invalid gate answer falls back to the bounded start', async ($, on) => {
+  const seen = capacityEngine(on, ['not a verdict\n'])
+  expect(await $.agent.spawn(relay(GOOD))).toEqual(STARTED)
+  expect(seen.spawns).toHaveLength(1)
+})
+
+test('a resumed relay bypasses capacity admission', async ($, on) => {
+  const seen = capacityEngine(on, ['hold no place\n'])
+  expect(await $.agent.spawn(relay('Continue.', { resume: { agentId: 'a-job' } }) as any)).toEqual(STARTED)
+  expect(seen.gates).toHaveLength(0)
+})
+
+test('a resumed relay first step makes no capacity call even with no existing job', async ($, on) => {
+  const seen = capacityEngine(on, ['hold waiting worker limit: 2 of 2\n'])
+  on('classic.SubagentStart', () => ({}))
+  on('turn.step', async function* (_: any, e: any) {
+    yield { kind: 'text', index: 0, text: 'ok' }
+    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  await $.agent.spawn(relay('Continue.', { resume: { agentId: 'a-job' } }) as any)
+  await $.classic.SubagentStart({ agent_type: 'relay:job', agent_id: 'a-job' } as any)
+  const stream = $.turn.step({ turnId: 't-resumed', index: 0, model: 'claude-test', messageCount: 1, agentId: 'a-job' } as any)
+  let step = await stream.next(); while (step.done !== true) step = await stream.next()
+  expect(step.value.answer).toBe('ok')
+  expect(seen.gates).toHaveLength(0)
+})
+
+test('a binding failure after spawn keeps the admitted agent result', async ($, on) => {
+  let spawned = 0
+  on('process.run', (_: unknown, e: any) => e.argv.includes('--bind') ? { deny: 'synthetic bind failure' } : ran(0, e.argv[2] === 'check-header' ? 'ok\n' : 'pass 00000000-0000-4000-8000-000000000001\n'))
+  on('agent.spawn', () => { spawned++; return STARTED })
+  expect(await $.agent.spawn(relay(GOOD))).toEqual(STARTED)
+  expect(spawned).toBe(1)
 })

@@ -1,5 +1,6 @@
-import { jobPaths } from "./store.mjs";
+import { jobPaths, readJob } from "./store.mjs";
 import { acquireOwnership, readOwnership, releaseOwnership } from "../util/ownership.mjs";
+import { pendingInboxMessages, owedMessages } from "./messages.mjs";
 import { isProcessIdentityAlive } from "../util/process.mjs";
 
 
@@ -13,7 +14,16 @@ export const isWorkerAlive = isProcessIdentityAlive;
 // holder that consumes inbox messages, from a cancel or a recovery that takes the lease to
 // write job.json. `worker` in the release is kept for the callers' symmetry.
 export function acquireWorkerLease(jobDir, worker, role = "worker") {
-  return Boolean(acquireOwnership(jobPaths(jobDir).lease, { ...worker, role }));
+  const file = jobPaths(jobDir).lease;
+  if (!acquireOwnership(file, { ...worker, role })) return false;
+  // A dispatch already in flight may arrive after the submitting window closed.
+  // Under the same fence as refusal, prevent it from reviving an unstarted brief.
+  // A later explicit message is work the user has asked to submit again.
+  if (role === "worker" && readJob(jobDir)?.admission?.state === "not-started" &&
+      pendingInboxMessages(jobDir).length === 0 && owedMessages(jobDir).length === 0) {
+    releaseOwnership(file); return false;
+  }
+  return true;
 }
 
 

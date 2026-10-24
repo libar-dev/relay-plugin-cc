@@ -192,7 +192,7 @@ test("completed Workflow adoption consumes an early message with wait false", as
   assert.equal(runs(first, text), 1);
 });
 
-test("an acknowledgement timeout retries the original post exactly once and in order", async () => {
+test("an acknowledgement timeout under a live worker retries the original post exactly once and in order", async () => {
   const ctx = relayContext("job", { turnMs: 100 });
   const { jobId, dir } = await completed(ctx);
   const release = holdLease(dir);
@@ -513,7 +513,7 @@ test("wait false reports no consumer on timeout", async () => {
   const message = postInboxMessage(dir, { kind: "continue", text: "[quick] No consumer yet" });
   const result = await awaitOutcome(dir, message.id, { env: ctx.env, wait: false, timeoutMs: 0 });
   assert.equal(result.consumer, false);
-  assert.equal(result.outcome, null);
+  assert.equal(result.outcome.action, "not-started");
   assert.equal(runs(ctx, message.text), 0);
 });
 
@@ -623,12 +623,12 @@ fs.linkSync = function (from, to, ...rest) {
     fs.writeFileSync(go, "");
     await ended;
   }
-  assert.notEqual(receipt.status, "done", "a cancel holding the lease cannot acknowledge consumption");
-  // Released, the cancel read the inbox again and started a worker for the follow-up.
+  assert.equal(receipt, null, "a cancel lease cannot accept work; the refused mapping was removed");
+  assert.equal(runs(ctx, text), 0);
+  // The next hook posts the withdrawn message again and gets a real consumer.
+  await deliverRelayMessages(dir, [{ uuid: entry.uuid, text }], { env: ctx.env, wait: false });
   await waitFor(() => runs(ctx, text) === 1);
   await waitFor(() => readJobJson(ctx, jobId).state === "completed" && !readLease(dir));
-  // The next hook closes the receipt without running the message again.
-  await deliverRelayMessages(dir, [{ uuid: entry.uuid, text }], { env: ctx.env, wait: false });
   assert.equal(readLedger(dir, entry.uuid).status, "done");
   assert.equal(runs(ctx, text), 1);
 });

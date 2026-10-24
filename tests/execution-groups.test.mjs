@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { setup, startJob, readJob, jobDir, companion, waitFor, finishJob, ROOT } from "./support/job-helpers.mjs";
+import { setup, startJob, promptFile, jobDirs, readJob, jobDir, companion, waitFor, finishJob, ROOT } from "./support/job-helpers.mjs";
 import { listProcesses, executionMembers, sampleExecution, stopExecution, readProcessStartTime, isProcessIdentityAlive, readProcessTableCached } from "../plugins/relay/scripts/lib/util/process.mjs";
 import { describeGuard, renderGuard } from "../plugins/relay/scripts/lib/worker/admission.mjs";
 import { writeJob, readJob as readRecord } from "../plugins/relay/scripts/lib/jobs/store.mjs";
@@ -176,7 +176,19 @@ for (const phase of ["running", "admission", "recovery"]) test(`a long-lived wai
     ctx.env.RELAY_TEST_ADMISSION_READINGS = fixture;
     fs.writeFileSync(fixture, JSON.stringify({ totalBytes: 16 * 2 ** 30, availableBytes: 0, load5: 0, cores: 8 }));
   }
-  const { id } = startJob(ctx, undefined, "[long] Work");
+  let id;
+  if (phase === "recovery") ({ id } = startJob(ctx, undefined, "[long] Work"));
+  else {
+    // Model a launcher interrupted during its bounded start window, before receipt.
+    const { createJobDir, jobPaths } = await import("../plugins/relay/scripts/lib/jobs/store.mjs");
+    const { buildLaunchRequest } = await import("../plugins/relay/scripts/lib/jobs/request.mjs");
+    id = `job-deferred-${phase}`;
+    const { jobDir: dir } = createJobDir(ctx.work, id, ctx.env);
+    writeJob(dir, { id, kind: "task", state: "starting", createdAt: new Date().toISOString(), pendingFirstTurn: true, attempts: [],
+      request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: ctx.work }, { baseDir: ctx.work, env: ctx.env }) });
+    fs.writeFileSync(jobPaths(dir).brief, "[long] Work");
+    assert.equal(spawnWorker(dir, ctx.work, ctx.env), null);
+  }
   const dir = jobDir(ctx, id);
   let old = readJob(ctx, id);
   if (phase === "recovery") {
@@ -254,7 +266,8 @@ if(process.argv[1]?.endsWith('/launcher.mjs')) {
   // A pending handoff remains retryable. Concurrent waiters use the same lease fence.
   const waiters = Array.from({ length: 3 }, () => spawn(process.execPath, [script, "wait", id, "--timeout-seconds", "30"], { env: ctx.env, cwd: ctx.work, stdio: "ignore" }));
   t.after(() => { for (const waiter of waiters) { try { waiter.kill("SIGKILL"); } catch {} } });
-  await waitFor(() => readJob(ctx, id).worker?.pid && readJob(ctx, id).launch?.state === "acknowledged", 20000);
+  try { await waitFor(() => readJob(ctx, id).worker?.pid && readJob(ctx, id).launch?.state === "acknowledged", 20000); }
+  catch (error) { const job = readJob(ctx, id); throw new Error(`${error.message}: ${JSON.stringify({ state: job.state, worker: job.worker, admission: job.admission, launch: job.launch, error: job.errorMessage, intents: fs.readdirSync(dir).filter(name => name.startsWith("launch-")).map(name => JSON.parse(fs.readFileSync(path.join(dir, name)))) })}`); }
   assert.equal(readJob(ctx, id).workers.filter(w => w.pid !== old.worker.pid).length, 1);
   assert.ok(readJob(ctx, id).launches.some(launch => launch.state === "death-observed" && launch.deathObservedAt && !launch.endedAt));
 });
@@ -414,20 +427,19 @@ test("a nested worker and its backend are excluded even if sampled during handof
   assert.deepEqual(result.survivors, []);
 });
 
-test("a failed launch stays queued and plain wait dispatches it without auto-resume", async t => {
-  const ctx = setup(t, { env: { RELAY_WORKER_SCOPE: "off" } });
+for (const command of ["start", "task"]) test(`a permanently failing ${command} launcher stops after three failures and exposes its error`, async t => {
+  const ctx = setup(t, { env: { RELAY_WORKER_SCOPE: "off", RELAY_ADMISSION_POLL_MS: "20" } });
   const preload = path.join(ctx.root, "fail-launch.mjs");
-  fs.writeFileSync(preload, `if(process.argv[1]?.endsWith('/launcher.mjs')) process.exit(1);`);
-  const { id } = startJob(ctx, undefined, "[quick] Retry the launch.", { NODE_OPTIONS: `--import=${preload}` });
-  const queued = readJob(ctx, id);
-  assert.equal(queued.state, "queued");
-  assert.equal(queued.admission.causeKind, "launch");
-  assert.equal(queued.admission.waitKind, "worker");
-  assert.equal(companion(ctx, ["wait", id, "--timeout-seconds", "15"]).status, 0);
-  await finishJob(ctx, id);
-  assert.equal(readJob(ctx, id).attempts.length, 1);
-  assert.equal(readJob(ctx, id).workers.length, 1);
-  assert.equal(readJob(ctx, id).autoRecoveries?.length ?? 0, 0);
+  fs.writeFileSync(preload, `if(process.argv[1]?.endsWith('/launcher.mjs')) { console.error('synthetic launch failure'); process.exit(1); }`);
+  const result = companion(ctx, command === "start" ? ["start", "--prompt-file", promptFile(ctx)] : ["task", "[quick] Dummy task."], { NODE_OPTIONS: `--import=${preload}` });
+  assert.equal(result.status, 6, result.stdout + result.stderr);
+  const dir = jobDirs(ctx)[0], failed = JSON.parse(fs.readFileSync(path.join(dir, "job.json")));
+  assert.equal(failed.admission.launchFailures, 3); assert.match(failed.admission.launchError, /synthetic launch failure/);
+  const waited = companion(ctx, ["wait", failed.id, "--timeout-seconds", "1"]);
+  assert.equal(waited.status, 6); assert.match(waited.stdout, /3 failed launches of 3.*synthetic launch failure/);
+  assert.equal(fs.readdirSync(dir).filter(name => name.startsWith("launch-")).length, 3);
+  assert.equal(companion(ctx, ["resume", failed.id, "--message", "[quick] Retry explicitly."]).status, 0);
+  await finishJob(ctx, failed.id);
 });
 
 for (const cancel of [false, true]) test(`an actual nested task survives outer cleanup after sampling its launcher handoff (cancel=${cancel})`, async t => {
@@ -435,7 +447,7 @@ for (const cancel of [false, true]) test(`an actual nested task survives outer c
   const inner = setup(t, { turnMs: 30000, env: { RELAY_WORKER_SCOPE: "off" } });
   const shared = path.join(outer.root, "admission");
   outer.env.RELAY_ADMISSION_HOME = shared;
-  inner.env.RELAY_ADMISSION_HOME = shared;
+  inner.env.RELAY_ADMISSION_HOME = cancel ? "/dev/null/unwritable" : shared;
   const marker = path.join(outer.root, "nested-started"), blocked = path.join(inner.root, "blocked"), release = path.join(inner.root, "release");
   const preload = path.join(inner.root, "hold-launcher.mjs");
   fs.writeFileSync(preload, `import fs from 'node:fs';
@@ -486,7 +498,7 @@ test("scope cleanup excludes older members and preserves nested workers sharing 
   const scopeKills = [], signals = [];
   t.mock.method(fs, "readFileSync", (file, ...args) => {
     if (file === "/proc/sys/kernel/random/boot_id") return "current-boot\n";
-    if (file === `/sys/fs/cgroup${group}/cgroup.procs`) return `${older.pid}\n${worker.pid}\n${tool.pid}\n`;
+    if (file === `/sys/fs/cgroup${group}/cgroup.procs`) return table.map(row => row.pid).join("\n");
     return read(file, ...args);
   });
   t.mock.method(fs, "statSync", (file, ...args) => file === `/sys/fs/cgroup${group}` ? { ino: 37 } : stat(file, ...args));
@@ -501,4 +513,123 @@ test("scope cleanup excludes older members and preserves nested workers sharing 
   assert.deepEqual(signals, [tool.pid]);
   assert.deepEqual(scopeKills, []);
   assert.deepEqual(result.survivors, []);
+});
+
+test('scope-only pids absent from the process table remain unresolved and keep their seat', async t => {
+  const { executionAlive } = await import('../plugins/relay/scripts/lib/worker/admission.mjs');
+  const group = '/synthetic/relay-jobs.slice/run-unresolved.scope', leader = { pid: 600000000, startTime: 'linux:100' }, pid = 600000001;
+  const read = fs.readFileSync, stat = fs.statSync;
+  t.mock.method(fs, 'readFileSync', (file, ...args) => {
+    if (file === '/proc/sys/kernel/random/boot_id') return 'synthetic-boot\n';
+    if (file === `/sys/fs/cgroup${group}/cgroup.procs`) return `${pid}\n`;
+    return read(file, ...args);
+  });
+  t.mock.method(fs, 'statSync', (file, ...args) => file === `/sys/fs/cgroup${group}` ? { ino: 37 } : stat(file, ...args));
+  const job = { worker: leader, execution: { leader, pgid: leader.pid, cgroup: group, cgroupId: 37, bootId: 'synthetic-boot' } };
+  const members = executionMembers(job, []);
+  assert.deepEqual([...members], [{ pid, startTime: null, identityUnknown: true }]);
+  assert.equal(members.cause, undefined, "unknown scope pids retain capacity without suppressing verified signals");
+  assert.equal(executionAlive(job, { env: {}, listProcesses: () => [], isAlive: () => false }), true);
+});
+
+test('launch history and crash registry maintenance stay bounded without scanning history on sample', async t => {
+  const { pruneLaunches } = await import('../plugins/relay/scripts/lib/worker/delivery.mjs');
+  const { pruneWorkerRegistry } = await import('../plugins/relay/scripts/lib/worker/registry.mjs');
+  const ctx = setup(t), directory = path.join(ctx.root, 'launch-history'), registry = path.join(ctx.root, 'registry-history');
+  fs.mkdirSync(directory); fs.mkdirSync(registry);
+  for (let i = 0; i < 100; i++) {
+    fs.writeFileSync(path.join(directory, `launch-${i}.json`), JSON.stringify({ state: 'acknowledged', requestedAt: new Date(i * 1000).toISOString() }));
+    fs.writeFileSync(path.join(registry, `${600000000 + i}.json`), JSON.stringify({ pid: 600000000 + i, startTime: 'gone', jobDir: '/synthetic/other' }));
+  }
+  pruneLaunches(directory); assert.equal(fs.readdirSync(directory).length, 20);
+  let checks = 0;
+  while (pruneWorkerRegistry(registry, { limit: 16, isAlive: () => { checks++; return false; } })) {}
+  assert.equal(checks, 100); assert.equal(fs.readdirSync(registry).filter(name => /^\d/.test(name)).length, 0);
+  const readdir = fs.readdirSync;
+  t.mock.method(fs, 'readdirSync', (dir, ...args) => { assert.notEqual(dir, registry, 'sampling cannot enumerate historical workers'); return readdir(dir, ...args); });
+  const worker = { pid: 600000001, startTime: 'linux:200', ppid: 1, pgid: 600000001 };
+  fs.writeFileSync(path.join(registry, `${worker.pid}.json`), JSON.stringify({ ...worker, jobDir: '/synthetic/other' }));
+  assert.deepEqual(executionMembers({ jobDir: directory, server: worker, execution: { leader: worker, pgid: worker.pid, workerRegistry: registry } }, [worker]), []);
+});
+
+test('caller acknowledgement observation timeout never erases a live dispatched worker', async t => {
+  const ctx = setup(t, { env: { RELAY_WORKER_SCOPE: 'off' } });
+  const { createJobDir, jobPaths } = await import('../plugins/relay/scripts/lib/jobs/store.mjs');
+  const { buildLaunchRequest } = await import('../plugins/relay/scripts/lib/jobs/request.mjs');
+  const { startWithinWindow } = await import('../plugins/relay/scripts/lib/worker/delivery.mjs');
+  const { jobDir: dir } = createJobDir(ctx.work, 'job-delayed-observation', ctx.env);
+  writeJob(dir, { id: 'job-delayed-observation', kind: 'task', state: 'starting', createdAt: new Date().toISOString(), pendingFirstTurn: true, attempts: [],
+    request: buildLaunchRequest({ model: 'gpt-test', effort: 'low', cd: ctx.work }, { baseDir: ctx.work, env: ctx.env }) });
+  fs.writeFileSync(jobPaths(dir).brief, '[held] Wait for observation.');
+  const read = fs.readFileSync, now = Date.now; let offset = 0, delayed = false;
+  t.mock.method(fs, 'readFileSync', (file, ...args) => {
+    const result = read(file, ...args);
+    if (!delayed && String(file).startsWith(path.join(dir, 'launch-')) && String(result).includes('"acknowledged"')) {
+      delayed = true; offset = 11000;
+      return JSON.stringify({ ...JSON.parse(String(result)), state: 'pending' });
+    }
+    return result;
+  });
+  t.mock.method(Date, 'now', () => now() + offset);
+  const result = await startWithinWindow(dir, ctx.work, ctx.env, { windowMs: 20000 });
+  assert.equal(delayed, true); assert.equal(result.accepted, true);
+  const job = JSON.parse(fs.readFileSync(path.join(dir, 'job.json')));
+  assert.ok(job.worker?.pid); assert.notEqual(job.state, 'queued');
+  await waitFor(() => ctx.fakeState().appServerStarts === 1);
+  assert.equal(job.workers.length, 1); assert.equal(ctx.fakeState().appServerStarts, 1);
+  assert.equal(fs.readdirSync(dir).filter(name => /^launch-/.test(name)).length, 1);
+});
+
+test('a fork between process-table and scope reads does not stop cancellation of verified processes', { skip: process.platform !== 'linux' }, async t => {
+  const probe = spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--slice=relay-jobs.slice', '--', 'true']);
+  if (probe.status !== 0) return t.skip('user systemd manager unavailable');
+  const ctx = setup(t, { turnMs: 30000 });
+  const marker = path.join(ctx.root, 'fork-now'), childFile = path.join(ctx.root, 'forked-child.json');
+  const preload = path.join(ctx.root, 'fork-during-cancel.mjs');
+  const processModule = new URL('../plugins/relay/scripts/lib/util/process.mjs', import.meta.url).href;
+  fs.writeFileSync(preload, `import fs from 'node:fs'; import {spawn} from 'node:child_process';
+import {readProcessStartTime} from ${JSON.stringify(processModule)};
+const marker=${JSON.stringify(marker)}, childFile=${JSON.stringify(childFile)};
+if(process.argv[1]?.endsWith('/bin/codex')) {
+ let forked=false;
+ const timer=setInterval(()=>{if(!forked && fs.existsSync(marker)) {
+  forked=true; const child=spawn('sleep',['300'],{detached:true,stdio:'ignore'});
+  child.on('spawn',()=>{fs.writeFileSync(childFile,JSON.stringify({pid:child.pid,startTime:readProcessStartTime(child.pid)}));child.unref();});
+ }},5); timer.unref();
+}
+if(process.argv[2]==='cancel') {
+ const read=fs.readFileSync;
+ let paused=false;
+ fs.readFileSync=function(file,...args) {
+  if(!paused && String(file).endsWith('/cgroup.procs')) {
+   paused=true;fs.writeFileSync(marker,'fork'); const until=Date.now()+5000;
+   while(!fs.existsSync(childFile) && Date.now()<until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5);
+  }
+  return read(file,...args);
+ };
+}`);
+  ctx.env.NODE_OPTIONS = `--import=${preload}`;
+  const { id } = startJob(ctx, undefined, '[held] Fork while cancellation reads the scope.');
+  await waitFor(() => readJob(ctx, id).turnId);
+  assert.ok(readJob(ctx, id).execution.cgroup);
+  let child;
+  t.after(() => { if (child && isProcessIdentityAlive(child)) process.kill(child.pid, 'SIGKILL'); });
+  const cancelled = companion(ctx, ['cancel', id]);
+  child = JSON.parse(fs.readFileSync(childFile));
+  assert.equal(cancelled.status, 0, cancelled.stdout + cancelled.stderr);
+  assert.equal(readJob(ctx, id).state, 'cancelled');
+  await waitFor(() => !isProcessIdentityAlive(child));
+});
+
+test('worker identity storage rejects symlinks, shared modes and missing identities', async t => {
+  const { registerWorker } = await import('../plugins/relay/scripts/lib/worker/registry.mjs');
+  const ctx = setup(t), directory = path.join(ctx.root, 'identity-storage'), link = path.join(ctx.root, 'identity-link');
+  fs.mkdirSync(directory, { mode: 0o700 }); fs.symlinkSync(directory, link);
+  const worker = { pid: process.pid, startTime: readProcessStartTime(process.pid), jobDir: ctx.root };
+  assert.throws(() => registerWorker(worker, { directory: link }), /private.*symlink/);
+  fs.chmodSync(directory, 0o777);
+  assert.throws(() => registerWorker(worker, { directory }), /private.*symlink/);
+  fs.chmodSync(directory, 0o700);
+  assert.throws(() => registerWorker({ ...worker, startTime: null }, { directory }), /identity could not be read/);
+  const file = registerWorker(worker, { directory }); assert.equal(JSON.parse(fs.readFileSync(file)).startTime, worker.startTime);
 });

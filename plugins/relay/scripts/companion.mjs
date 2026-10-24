@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { handleGate } from "./cli/gate.mjs";
 import { handleStart } from "./cli/start.mjs";
 import { handleCheckHeader } from "./cli/check-header.mjs";
 import { handleWait } from "./cli/wait.mjs";
@@ -70,6 +71,9 @@ async function main() {
   }
 
   switch (subcommand) {
+    case "gate":
+      await handleGate(argv);
+      break;
     case "check-header":
       handleCheckHeader(argv);
       break;

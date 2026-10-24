@@ -3,10 +3,12 @@ import { readInputFile, createTaskJob, parseCommandInput, printJson } from "./sh
 import { default as fs } from "node:fs";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
-import { spawnWorker } from "../lib/worker/delivery.mjs";
+import { startWithinWindow } from "../lib/worker/delivery.mjs";
 import { appendRelayViolation } from "../lib/jobs/messages.mjs";
 import { nowIso, readJob } from "../lib/jobs/store.mjs";
 import { buildLaunchRequest, readLaunchPrompt, UsageError } from "../lib/jobs/request.mjs";
+import { readReservation, releaseReservation } from "../lib/worker/admission.mjs";
+import { resumeDeadJobOnce } from "../lib/worker/recovery.mjs";
 import { SCHEMA_SENTENCE } from "../lib/harness/workflow.mjs";
 import { backendJson, backendLines, backendSettingLines, EXIT, loadJobViewSettled as loadJobView, relayAdoptionLines } from "../lib/jobs/view.mjs";
 import { adoptRelayJob, deliverRelayMessages, findAdoptableRelayJob, promptSha256, readJournalKey, readRelayPointer, readRelayTranscript, writeRelayPointer } from "../lib/harness/relay.mjs";
@@ -154,7 +156,11 @@ async function handleStartFromRelay(options) {
     for (const problem of transcript.problems) {
       appendRelayViolation(adoptable, { kind: "transcript", reason: `messages could not be checked: ${problem}`, agentId });
     }
-    await deliverRelayMessages(adoptable, transcript.messages, { wait: false });
+    const reservation = readReservation(agentId);
+    try {
+      if (loadJobView(adoptable).state === "dead") await resumeDeadJobOnce(adoptable);
+      await deliverRelayMessages(adoptable, transcript.messages, { wait: false, reservation });
+    } finally { if (reservation) releaseReservation(reservation); }
     const adopted = readJob(adoptable);
     if (options.json) printJson("start", { jobId: adopted.id, state: loadJobView(adoptable).state, jobDir: adoptable, notes: adopted.request?.notes ?? [], ...backendJson(adopted.request) });
     else process.stdout.write(adoptedBlock(adopted, adoptable));
@@ -165,12 +171,15 @@ async function handleStartFromRelay(options) {
   });
   let job = readJob(jobDir);
   writeRelayPointer(process.env, { agentId, transcriptPath, jobId: job.id, jobDir, startError: null });
-  spawnWorker(jobDir, request.cwd);
+  await startWithinWindow(jobDir, request.cwd, process.env, { reservation: agentId ? readReservation(agentId) : null });
   job = readJob(jobDir);
   for (const problem of transcript.problems) {
     appendRelayViolation(jobDir, { kind: "transcript", reason: `messages could not be checked: ${problem}`, agentId });
   }
-  await deliverRelayMessages(jobDir, transcript.messages, { wait: false });
+  if (job.admission?.state !== "not-started") await deliverRelayMessages(jobDir, transcript.messages, { wait: false });
+  if (job.admission?.state === "not-started") {
+    fail(job.errorMessage, "not-started"); process.exitCode = EXIT.notStarted; return;
+  }
   if (options.json) printJson("start", { jobId: job.id, state: job.state, jobDir, notes: request.notes, ...backendJson(request) });
   else process.stdout.write(startBlock(job, jobDir, request, job.state));
 }
@@ -184,8 +193,14 @@ export async function handleStart(argv) {
   }
   const { request, brief } = readLaunchFromOptions(options);
   const jobDir = createTaskJob(request, brief);
-  spawnWorker(jobDir, request.cwd);
+  await startWithinWindow(jobDir, request.cwd);
   const job = readJob(jobDir);
+  if (job.admission?.state === "not-started") {
+    process.exitCode = EXIT.notStarted;
+    if (options.json) printJson("start", { jobId: job.id, state: "not started", jobDir, error: { kind: "not-started", message: job.errorMessage } });
+    else process.stdout.write(`state: not started\nerror: ${job.errorMessage}\n`);
+    return;
+  }
   if (options.json) {
     printJson("start", { jobId: job.id, state: job.state, jobDir, notes: request.notes, ...backendJson(request) });
     return;

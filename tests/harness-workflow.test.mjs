@@ -84,3 +84,115 @@ test("readWorkflowRunId returns null for absent or unreadable transcripts and ab
   }
   assert.equal(readWorkflowRunId(transcript([WORKFLOW_RESULT]), undefined), null);
 });
+
+// Exercise the module's admission hooks with the host API faked, including retries
+// that enter the first step without another agent.spawn event.
+import { register as registerHooks } from 'node:module';
+const modStub = 'data:text/javascript,' + encodeURIComponent('export const atom = (key, initial) => ({key, initial}); export const read = async () => null; export const update = async () => {};');
+registerHooks('data:text/javascript,' + encodeURIComponent(`export async function resolve(s, c, next) { return s === 'claude-code' ? {url: ${JSON.stringify(modStub)}, shortCircuit: true} : next(s, c); }`));
+const { register } = await import('../plugins/relay/hooks/mod/register.js');
+function hooks(answers) {
+  const handlers = {}, catches = {}, runs = [], calls = [];
+  register((event, filter, handler) => { handlers[event] = handler ?? filter; return { catch(fn) { catches[event] = fn; return this; } }; });
+  const $ = { plugin: { root: '/synthetic/plugin' }, session: { cwd: async () => '/synthetic/work' },
+    process: { run: async (argv, init) => {
+      runs.push({ argv, init });
+      if (argv[2] === 'check-header') return { exitCode: 0, stdout: 'ok\n' };
+      if (argv.includes('--bind')) return { exitCode: 0, stdout: 'bound\n' };
+      const answer = answers.shift(); if (answer instanceof Error) throw answer;
+      return { exitCode: 0, stdout: answer ?? 'pass\n' };
+    } } };
+  const next = async e => { calls.push(e); return { agentId: 'a-new' }; };
+  return { handlers, catches, runs, calls, $, next };
+}
+const spawnEvent = { subagentType: 'relay:job', prompt: 'model: synthetic\neffort: low\n---\nDummy.' };
+
+test('Workflow spawn holds through host waits and binds its reservation before the wrapper runs', async () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  const h = hooks(['hold waiting worker limit: 2 of 2', 'hold waiting worker limit: 2 of 2', `pass ${id}`]);
+  assert.deepEqual(await h.handlers['agent.spawn'](h.$, { ...spawnEvent, workflow: { runId: 'wf-one', agentIndex: 1 } }, h.next), { agentId: 'a-new' });
+  assert.equal(h.calls.length, 1);
+  const gate = h.runs.filter(r => r.argv[2] === 'gate'); assert.equal(gate.length, 4);
+  assert.equal(gate[0].init.timeoutMs, 600000); assert.ok(gate[0].argv.includes('540'));
+  assert.deepEqual(gate.at(-1).argv.slice(3), ['--bind', id, '--agent', 'a-new']);
+  assert.equal(typeof h.catches['agent.spawn'], 'function');
+});
+test('plain spawns wait at most 30 seconds then deny with the capacity reason', async () => {
+  const h = hooks(['hold waiting worker limit: 2 of 2']);
+  const result = await h.handlers['agent.spawn'](h.$, spawnEvent, h.next);
+  assert.match(result.deny, /relay is at capacity: waiting worker limit: 2 of 2/); assert.match(result.deny, /Workflow/);
+  assert.equal(h.calls.length, 0); assert.ok(h.runs.at(-1).argv.includes('30'));
+});
+test('a gate crash falls back to the bounded start, while cancellation is denied by catch', async () => {
+  const h = hooks([new Error('synthetic gate crash')]);
+  await h.handlers['agent.spawn'](h.$, spawnEvent, h.next); assert.equal(h.calls.length, 1);
+  const cancelled = hooks([new Error('process.run aborted')]);
+  await assert.rejects(cancelled.handlers['agent.spawn'](cancelled.$, spawnEvent, cancelled.next), /aborted/);
+  assert.ok(cancelled.catches['agent.spawn'](cancelled.$, spawnEvent, { called: false }).deny); assert.equal(cancelled.calls.length, 0);
+});
+test('resume spawns do not take another waiting place', async () => {
+  const h = hooks([]); await h.handlers['agent.spawn'](h.$, { ...spawnEvent, resume: { agentId: 'a-old' } }, h.next);
+  assert.equal(h.runs.length, 0); assert.equal(h.calls.length, 1);
+});
+test('a Workflow stall retry is gated at its first step even without agent.spawn', async () => {
+  const h = hooks(['hold waiting worker limit: 2 of 2', 'pass']);
+  await h.handlers['classic.SubagentStart'](h.$, { agent_type: 'relay:job', agent_id: 'a-retry', transcript_path: '/synthetic/session.jsonl' }, h.next);
+  h.calls.length = 0;
+  const step = h.handlers['turn.step'](h.$, { index: 0, agentId: 'a-retry', turnId: 'turn-retry' }, async function* (e) { return await h.next(e); });
+  await step.next();
+  assert.equal(h.calls.length, 1); assert.equal(h.runs.length, 2); assert.ok(h.runs.every(r => r.argv.includes('--retry') && r.argv.includes('a-retry')));
+});
+
+test('admission catches preserve a delegated result and never restart an already delegated step', async () => {
+  const h = hooks([]), result = { agentId: 'a-delegated' };
+  let calls = 0;
+  const next = async () => { calls++; return result; }; next.called = true;
+  assert.equal(await h.catches['agent.spawn'](h.$, spawnEvent, next), result); assert.equal(calls, 1);
+  const step = async function* () { throw new Error('synthetic model API error'); }; step.called = true;
+  const caught = h.catches['turn.step'](h.$, { index: 0, turnId: 't-error' }, step);
+  await assert.rejects(caught.next(), /synthetic model API error/);
+});
+test('a SendMessage resume skips the first-step gate even when its initial start had no job', async () => {
+  const h = hooks(['hold waiting worker limit: 2 of 2']);
+  await h.handlers['agent.spawn'](h.$, { ...spawnEvent, resume: { agentId: 'a-resumed' } }, h.next);
+  await h.handlers['classic.SubagentStart'](h.$, { agent_type: 'relay:job', agent_id: 'a-resumed' }, h.next);
+  const step = h.handlers['turn.step'](h.$, { index: 0, agentId: 'a-resumed', turnId: 't-resumed' }, async function* (e) { return await h.next(e); });
+  await step.next(); assert.equal(h.runs.length, 0);
+});
+
+for (const event of ['agent.spawn', 'turn.step']) test(`${event} gate storage uncertainty reaches bounded start and cannot admit a worker`, async t => {
+  const { setup, companion, promptFile, jobDirs } = await import('./support/job-helpers.mjs');
+  const { readJob } = await import('../plugins/relay/scripts/lib/jobs/store.mjs');
+  const { hasLiveWorker } = await import('../plugins/relay/scripts/lib/worker/delivery.mjs');
+  const ctx = setup(t, { env: { RELAY_ADMISSION: 'on', RELAY_ADMISSION_HOME: '/dev/null/unwritable', RELAY_JOBS_ACK_TIMEOUT_MS: '100', RELAY_ADMISSION_POLL_MS: '20' } });
+  const h = hooks([]);
+  const gateResults = [];
+  h.$.process.run = async argv => {
+    if (argv[2] === 'check-header') return { exitCode: 0, stdout: 'ok\n' };
+    const result = companion(ctx, argv.slice(2)); gateResults.push(result);
+    return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr };
+  };
+  let starts = 0;
+  const boundedStart = () => {
+    starts++;
+    const result = companion(ctx, ['start', '--prompt-file', promptFile(ctx)]);
+    assert.equal(result.status, 6, result.stdout + result.stderr);
+    assert.match(result.stdout, /state: not started/);
+    return { agentId: 'a-refused' };
+  };
+  if (event === 'agent.spawn') await h.handlers[event](h.$, { ...spawnEvent, workflow: { runId: 'wf-storage' } }, boundedStart);
+  else {
+    await h.handlers['classic.SubagentStart'](h.$, { agent_type: 'relay:job', agent_id: 'a-unknown', transcript_path: '/missing/workflows/wf-storage/agent-a-unknown.jsonl' }, h.next);
+    const step = h.handlers[event](h.$, { index: 0, agentId: 'a-unknown', turnId: 't-storage' }, async function* () { return boundedStart(); });
+    await step.next();
+  }
+  assert.equal(starts, 1);
+  assert.equal(gateResults.length, 1);
+  assert.equal(gateResults[0].status, 1);
+  assert.match(gateResults[0].stderr, /guard unavailable/);
+  for (const dir of jobDirs(ctx)) {
+    assert.equal(readJob(dir).admission.state, 'not-started');
+    assert.equal(hasLiveWorker(dir), false);
+    assert.equal(readJob(dir).attempts.length, 0);
+  }
+});

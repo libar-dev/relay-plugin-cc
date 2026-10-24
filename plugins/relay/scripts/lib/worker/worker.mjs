@@ -20,7 +20,7 @@ import { requestAccount } from "../jobs/request.mjs";
 import { backendFor } from "../backends/index.mjs";
 import { truncateCodePoints } from "../util/text.mjs";
 import { acquireWorkerLease, releaseWorkerLease, readLease } from "../jobs/lease.mjs";
-import { claimInboxMessages, CLOSED_ACTIONS, newMessageId, owedMessages, pendingInboxMessages, readOutcome, writeOutcome } from "../jobs/messages.mjs";
+import { InboxStorageError, claimInboxMessages, CLOSED_ACTIONS, newMessageId, owedMessages, pendingInboxMessages, readOutcome, writeOutcome } from "../jobs/messages.mjs";
 import { jobPaths, nowIso, readJob, writeFileAtomic, writeJob, readJsonOrNull, writeJsonAtomic } from "../jobs/store.mjs";
 import { PLUGIN_VERSION } from "../util/plugin.mjs";
 import { ownExecution, readProcessStartTime, listProcesses, readProcessTableCached, sampleExecution, executionBytes, isProcessIdentityAlive } from "../util/process.mjs";
@@ -187,6 +187,24 @@ export async function runWorker(jobDir, options = {}) {
         return result;
       }
     }
+  } catch (error) {
+    // A final handoff read can fail after the round saved its terminal state.
+    // Only this worker's lease authorizes correcting that provisional completion.
+    if (error instanceof InboxStorageError) {
+      const me = { pid: process.pid, startTime: readProcessStartTime(process.pid) };
+      const holder = readLease(jobDir);
+      const held = holder?.role === "worker" && sameProcess(holder, me);
+      // The final post-release read can also fail. Reacquire the fence before
+      // correcting our own completion; never overwrite a successor's record.
+      const acquired = !held && (!holder || !isProcessIdentityAlive(holder)) && acquireWorkerLease(jobDir, me, "storage");
+      if (held || acquired) {
+        try {
+          const job = readJob(jobDir);
+          if (held || sameProcess(job?.worker, me)) writeJob(jobDir, { ...job, state: "failed", errorMessage: error.message, completedAt: nowIso() });
+        } finally { releaseWorkerLease(jobDir, me); }
+      }
+    }
+    throw error;
   } finally {
     try { if (registryFile) fs.rmSync(registryFile, { force: true }); } catch {}
   }
@@ -916,6 +934,9 @@ async function runWorkerRound(jobDir, options, held) {
     }
 
     clearInterval(poller);
+    // A successful turn is not completion evidence for unreadable message storage.
+    pendingInboxMessages(jobDir);
+    owedMessages(jobDir);
     const last = job.attempts.at(-1);
     if (cancelRequested) {
       if (last && !TERMINAL.has(last.state)) {

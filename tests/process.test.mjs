@@ -304,3 +304,15 @@ test("Darwin cleanup of an otherwise empty worker group finds no phantom sampler
   const result = await stopExecution({ execution: { leader: identity, pgid } }, { listProcesses: list, graceMs: 0 });
   assert.deepEqual(result.survivors, []);
 });
+
+test('a busy process-cache lock never supplies stale rows to a fresh execution read', async t => {
+  const { readProcessTableCached } = await import('../plugins/relay/scripts/lib/util/process.mjs');
+  const { acquireOwnership, releaseOwnership } = await import('../plugins/relay/scripts/lib/util/ownership.mjs');
+  const home = makeTempDir('relay-fresh-cache-'), file = path.join(home, '.ps-table.json');
+  fs.writeFileSync(file, JSON.stringify({ at: Date.now() - 60000, rows: [] }));
+  assert.equal(Boolean(acquireOwnership(`${file}.lock`)), true);
+  t.after(() => releaseOwnership(`${file}.lock`));
+  const rows = [{ pid: 123, startTime: 'synthetic-live' }]; let reads = 0;
+  for (const maxAgeMs of [0, 5000]) assert.deepEqual(readProcessTableCached({ home, maxAgeMs, list: () => { reads++; return rows; } }), rows);
+  assert.equal(reads, 2);
+});

@@ -461,13 +461,20 @@ test("without SubagentHandback, SubagentStop still checks the final text", async
 });
 
 test("late unresolved cleanup preserves the copied result and stays visible in status", async () => {
-  const preload = path.join(makeTempDir(), "fail-launch.mjs");
-  fs.writeFileSync(preload, "if (process.argv[1]?.endsWith('/launcher.mjs')) process.exit(1);\n");
-  const ctx = relayContext("job", { turnMs: 50, env: { NODE_OPTIONS: `--import=${preload}` } });
-  const jobId = await startedRelay(ctx, QUICK);
-  assert.equal(readJobJson(ctx, jobId).state, "queued");
+  const ctx = relayContext("job", { turnMs: 50 });
+  const { createJobDir, writeJob, jobPaths } = await import("../plugins/relay/scripts/lib/jobs/store.mjs");
+  const { readLaunchPrompt } = await import("../plugins/relay/scripts/lib/jobs/request.mjs");
+  const { writeRelayPointer } = await import("../plugins/relay/scripts/lib/harness/relay.mjs");
   const { runWorker } = await import("../plugins/relay/scripts/lib/worker/worker.mjs");
   const { listProcesses } = await import("../plugins/relay/scripts/lib/util/process.mjs");
+  ctx.append(ctx.prompt(QUICK), ctx.systemReminder());
+  const jobId = "job-late-cleanup", { jobDir } = createJobDir(ctx.work, jobId, ctx.env);
+  const launch = readLaunchPrompt(QUICK, { baseDir: ctx.work, env: ctx.env });
+  const relay = { agentId: ctx.agentId, transcriptPath: ctx.transcript };
+  writeJob(jobDir, { id: jobId, kind: "task", state: "starting", createdAt: new Date().toISOString(),
+    pendingFirstTurn: true, attempts: [], request: launch.request, relay });
+  fs.writeFileSync(jobPaths(jobDir).brief, launch.brief);
+  writeRelayPointer(ctx.env, { ...relay, jobId, jobDir, startError: null });
   let copied;
   await runWorker(jobDirOf(ctx, jobId), {
     env: ctx.env,

@@ -8,6 +8,9 @@ its entries here.
 
 Changed:
 
+- Job acceptance requires a live worker lease within one minute; refused starts exit 6 and never run later.
+  Workflow relays wait at spawn for a waiting place, including stall retries at their first step;
+  plain relay calls report capacity after 30 seconds. Large batches should use Workflows.
 - Foreground `task` workers run independently of the caller; Ctrl-C leaves a dispatched job running.
 - Jobs own their execution groups and stop their tools at backend loss, cancellation and completion.
   Linux workers use per-job scopes whenever a user manager is available, and set OOM score 500.
@@ -21,6 +24,13 @@ Changed:
 
 Fixed:
 
+- Unreadable message storage fails explicitly and preserves owed work; it cannot be mistaken for an empty inbox at completion.
+- Continuations and recovery use the same bounded launch path. Undelivered pending messages are
+  withdrawn rather than acknowledged without a worker, and interrupted recovery keeps its message id.
+- Repeated launch failures stop after three attempts and show the error and count. Handoff retries
+  preserve owed continuations, and messages racing worker exit retry without a five-second delay.
+- Nested workers publish their identity independently of admission storage, including with the guard off.
+  Admission retains time per wait reason and reports the longest hold after admission.
 - Repeated cleanup preserves a predecessor's first observed death, keeping the recorded
   ordering of predecessor exit and replacement startup intact.
 - Worker heartbeats keep process accounting active with the load guard off without creating

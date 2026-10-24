@@ -4,10 +4,10 @@ import { default as fs } from "node:fs";
 import { default as path } from "node:path";
 import { default as process } from "node:process";
 import { readStdinIfPiped } from "../lib/util/fs.mjs";
-import { spawnWorker, retryQueuedWorker, hasLiveWorker } from "../lib/worker/delivery.mjs";
+import { startWithinWindow, hasLiveWorker } from "../lib/worker/delivery.mjs";
 import { requireJobDirInHome, jobPaths, readJob } from "../lib/jobs/store.mjs";
 import { buildLaunchRequest, UsageError } from "../lib/jobs/request.mjs";
-import { loadJobViewSettled as loadJobView, renderJobWithReport, isTerminalView } from "../lib/jobs/view.mjs";
+import { EXIT, loadJobViewSettled as loadJobView, renderJobWithReport, isTerminalView } from "../lib/jobs/view.mjs";
 import { runWorker } from "../lib/worker/worker.mjs";
 
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
@@ -49,16 +49,20 @@ export async function handleTask(argv) {
     prefix: "task",
     summary: prompt.includes(STOP_REVIEW_TASK_MARKER) ? `${backendWith("stopGate").label} Stop Gate Review` : null
   });
+  await startWithinWindow(jobDir, request.cwd);
+  const started = readJob(jobDir);
+  if (started.admission?.state === "not-started") {
+    if (options.json) printJson("task", { jobId: started.id, state: "not started", jobDir, errorMessage: started.errorMessage });
+    else process.stdout.write(`state: not started\nerror: ${started.errorMessage}\n`);
+    process.exitCode = EXIT.notStarted; return;
+  }
   if (options.background) {
-    spawnWorker(jobDir, request.cwd);
     const job = readJob(jobDir);
     if (options.json) printJson("task", { jobId: job.id, state: job.state, jobDir, backend: backendFor(request).name });
     else process.stdout.write(`job: ${job.id}\nstate: ${job.state}\ndir: ${jobDir}\n`);
     return;
   }
-  spawnWorker(jobDir, request.cwd);
   for (;;) {
-    retryQueuedWorker(jobDir);
     const current = loadJobView(jobDir);
     if (isTerminalView(current) && !hasLiveWorker(jobDir)) break;
     await sleep(50);

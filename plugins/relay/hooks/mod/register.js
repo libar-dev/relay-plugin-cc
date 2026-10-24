@@ -1040,6 +1040,30 @@ async function drawJob($, { Box, Text, Button, Input, Markdown }, job, board) {
   return h(Box, { flexDirection: "column", marginTop: 1 }, ...nodes);
 }
 
+// Host process waits do not spend the hook's ten-second JavaScript budget.
+// Cancellation must reach the registered catch: a swallowed abort could spawn work
+// after the user stopped it. Ordinary gate failures still fall back to start's bound.
+async function waitForPlace($, workflow, agentId, transcript) {
+  for (;;) {
+    const argv = ["node", $.plugin.root + "/scripts/companion.mjs", "gate", "--wait-seconds", workflow ? "540" : "30"];
+    if (agentId) argv.push("--agent", agentId, "--retry");
+    if (transcript) argv.push("--transcript", transcript);
+    let result;
+    try { result = await $.process.run(argv, { timeoutMs: workflow ? 600000 : 40000 }); }
+    catch (error) {
+      if (["abort", "cancelled", "timeout"].includes(error?.kind) || error?.name === "AbortError" || /abort|cancel|timeout/i.test(String(error?.message ?? error))) throw error;
+      return {};
+    }
+    if (result.exitCode !== 0) return {};
+    const output = String(result.stdout ?? "").trim();
+    const pass = /^pass(?: ([a-f0-9-]{36}))?$/.exec(output);
+    if (pass) return { reservation: pass[1] ?? null };
+    const hold = /^hold (.+)$/.exec(output);
+    if (!hold) return {};
+    if (!workflow) return { deny: "relay is at capacity: " + hold[1] + ". Try again in a minute, or start these jobs from a Workflow, which waits for a place." };
+  }
+}
+
 export function register(on) {
   // One timer and one read in flight per load of the module. `fastUntil` is the last tick of the
   // every-tick reads a relay event (a relay:job spawn, a wake, one of the commands below) asks for.
@@ -1089,25 +1113,58 @@ export function register(on) {
     return next(e);
   });
 
+  // In-memory identities only avoid duplicate hook work; all places and their
+  // expiry live under the coordinator's admission lock, never in mod counters.
+  const spawned = new Set();
+  const relayAgents = new Map();
+  const binding = new Map();
   on("agent.spawn", async ($, e, next) => {
-    if (e?.subagentType === "relay:job") {
-      poller.fastUntil = poller.ticks + CLEARED_TICKS;
+    if (e?.subagentType !== "relay:job") return next(e);
+    poller.fastUntil = poller.ticks + CLEARED_TICKS;
+    if (e.resume != null) { if (e.resume.agentId) spawned.add(e.resume.agentId); return next(e); }
+    if (isCheckedSpawn(e)) {
+      let refusal = null;
+      try { refusal = await headerRefusal($, e); } catch {}
+      if (refusal !== null) return { deny: refusal };
     }
-    if (!isCheckedSpawn(e)) {
-      return next(e);
+    const gate = await waitForPlace($, e.workflow != null);
+    if (gate.deny) return gate;
+    const result = await next(e);
+    if (result?.agentId) {
+      spawned.add(result.agentId);
+      if (gate.reservation) {
+        try {
+          const pending = $.process.run(["node", $.plugin.root + "/scripts/companion.mjs", "gate", "--bind", gate.reservation, "--agent", result.agentId], { timeoutMs: 10000 });
+          binding.set(result.agentId, pending);
+          await pending;
+        } catch {
+          // The agent is already running; start's bounded admission remains authoritative.
+        } finally { binding.delete(result.agentId); }
+      }
     }
-    let refusal = null;
-    try {
-      refusal = await headerRefusal($, e);
-    } catch {
-      // A check that could not run says nothing about the header; the relay's start checks it.
-      refusal = null;
-    }
-    if (refusal !== null) {
-      // Claude Code puts its own "spawn denied by a plugin" before the reason.
-      return { deny: refusal };
-    }
+    return result;
+  }).catch(($, e, next) => {
+    if (next.called) return next(e);
+    return { deny: "relay admission was interrupted. Try again, or resume the Workflow." };
+  });
+
+  // Workflow stall retries bypass agent.spawn. Track each actual attempt and
+  // hold its first model step using the same host-process gate.
+  on("classic.SubagentStart", async ($, e, next) => {
+    if (e.agent_type === "relay:job") relayAgents.set(e.agent_id, e.transcript_path);
     return next(e);
+  });
+  on("turn.step", async function* ($, e, next) {
+    if (e.index !== 0 || !relayAgents.has(e.agentId)) return yield* next(e);
+    if (binding.has(e.agentId)) { try { await binding.get(e.agentId); } catch {} }
+    if (!spawned.delete(e.agentId)) await waitForPlace($, true, e.agentId, relayAgents.get(e.agentId));
+    return yield* next(e);
+  }).catch(async function* ($, e, next) {
+    // The engine reuses an in-flight next result here; it does not run the model twice.
+    if (next.called) return yield* next(e);
+    const answer = "state: not started\nerror: relay admission was interrupted; resume the Workflow.";
+    yield { kind: "text", index: 0, text: answer };
+    return { turnId: e.turnId, index: e.index, answer, toolUses: [], stopReason: "end_turn", usage: null };
   });
 
   on("session.send", async ($, e, next) => {
@@ -1161,6 +1218,7 @@ export function register(on) {
   // after it has returned, and a slow or stuck listing never holds Claude Code's stop.
   on("turn.complete", async ($, e, next) => {
     const completed = await next(e);
+    if (e.agentId != null) { relayAgents.delete(e.agentId); spawned.delete(e.agentId); binding.delete(e.agentId); }
     if (e.agentId != null && e.reason === "aborted") {
       try {
         $.clock.after(0, () => {

@@ -7,7 +7,7 @@ import process from "node:process";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { listJobDirs, readJob, readJsonOrNull, writeJsonAtomic, writeJob, TERMINAL_STATES } from "../jobs/store.mjs";
-import { pendingInboxMessages } from "../jobs/messages.mjs";
+import { pendingInboxMessages, owedMessages } from "../jobs/messages.mjs";
 import { acquireOwnership, releaseOwnership, readOwnership } from "../util/ownership.mjs";
 import { executionMembers, readProcessTableCached, isProcessAlive, isProcessIdentityAlive, readProcessStartTime } from "../util/process.mjs";
 
@@ -24,7 +24,7 @@ export const DEFAULTS = Object.freeze({
   weights: Object.freeze({ light: 1, medium: 2, "very-heavy": 3 }),
   heavyModel: /astra/i, kimiHeavyModel: /(^|[^a-z0-9])k3([^a-z0-9]|$)/i,
   lightEfforts: ["low", "minimal", "none"], lightModel: /luna|flash|highspeed|-fast$/i,
-  pollMs: 3000, claimantPolls: 4, probeMs: 120000, sensorCacheMs: 2000, discoveryMs: 60000,
+  reservationMs: 45000, maxLaunchFailures: 3, pollMs: 3000, claimantPolls: 4, probeMs: 120000, sensorCacheMs: 2000, discoveryMs: 60000,
   sensorStaleMs: 10000, processCacheMs: 60000, spawnGraceMs: 10000, stuckLockMs: 60000,
   pauseExpiryMs: 6 * 3600000, clockSkewMs: 300000,
   usagePauseMs: 30 * 60000, ratePauseMs: 60000, maxRatePauseMs: 15 * 60000,
@@ -69,7 +69,7 @@ export function guardSettings(config = {}, machine = { totalBytes: os.totalmem()
   return { maxActive: DEFAULTS.maxActive, busySeats,
     guaranteedVeryHeavy: DEFAULTS.guaranteedVeryHeavy, guaranteedOther: DEFAULTS.guaranteedOther,
     headroomBytes: Math.max(DEFAULTS.headroomGiB * GiB, machine.totalBytes * DEFAULTS.headroomFraction),
-    maxWaitingWorkers: Math.max(DEFAULTS.minWaitingWorkers, DEFAULTS.waitingPerBusySeat * busySeats) };
+    maxWaitingWorkers: config.maxWaitingWorkers ?? Math.max(DEFAULTS.minWaitingWorkers, DEFAULTS.waitingPerBusySeat * busySeats) };
 }
 export function validModelClasses(entries) {
   return Array.isArray(entries) ? entries.filter(e => e && typeof e.pattern === "string" && /^[0-9A-Za-z._:/*-]{1,100}$/.test(e.pattern) && Object.hasOwn(WEIGHTS, e.class)) : [];
@@ -317,7 +317,7 @@ function slotFile(home, id) { if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(
 function writeSlot(home, slot) { fs.mkdirSync(path.join(home, "slots"), { recursive: true }); writeJsonAtomic(slotFile(home, slot.jobId), slot); }
 export function executionAlive(job, deps) {
   if (job?.execution || job?.worker) {
-    const members = executionMembers(job, readProcessTableCached({ home: admissionHome(deps.env), maxAgeMs: deps.freshExecution ? 0 : 5000 }), { jobDir: job.jobDir });
+    const members = executionMembers(job, (deps.listProcesses ? deps.listProcesses() : readProcessTableCached({ home: admissionHome(deps.env), maxAgeMs: deps.freshExecution ? 0 : 5000 })), { jobDir: job.jobDir });
     if (members.cause || members.some(p => p.pid !== job.worker?.pid)) return true;
   }
   return [job?.server, ...(job?.attempts ?? []).flatMap(a => a.servers ?? [])].some(s => s?.pid && !s.endedAt && deps.isAlive(s));
@@ -341,6 +341,12 @@ function slots(home, deps, clean = true) {
     if (name.endsWith(".tmp")) { if (clean && deps.now() - fs.statSync(file).mtimeMs > 60000) fs.rmSync(file, { force: true }); continue; }
     if (!/^[A-Za-z0-9_-]+\.json$/.test(name)) continue;
     const s = readJsonOrNull(file);
+    if (s?.v === 1 && s.state === "reserved" && s.jobId === name.slice(0, -5) &&
+        /^r-[a-f0-9-]{36}$/.test(s.jobId) && Number.isFinite(Date.parse(s.expiresAt))) {
+      if (deps.now() < Date.parse(s.expiresAt) && Date.parse(s.expiresAt) - deps.now() <= DEFAULTS.reservationMs + DEFAULTS.clockSkewMs) result.push(s);
+      else if (clean) fs.rmSync(file, { force: true });
+      continue;
+    }
     if (!s || s.v !== 1 || typeof s.jobDir !== "string" || s.jobId !== name.slice(0, -5) || !Object.hasOwn(WEIGHTS, s.class) || !["waiting", "running", "spawning"].includes(s.state) ||
       typeof s.backend !== "string" || !Number.isFinite(Date.parse(s.since)) ||
       (s.state !== "spawning" && (!Number.isInteger(s.pid) || s.pid <= 0)) ||
@@ -364,7 +370,7 @@ function slots(home, deps, clean = true) {
     const job = readJob(s.jobDir);
     s.quotaHeavy = isVeryHeavy({ backend: s.backend, model: s.model, effort: s.effort }) || isVeryHeavy(job?.request);
     s.weight = WEIGHTS[s.class];
-    const backendLive = executionAlive({ ...job, jobDir: s.jobDir }, deps);
+    const backendLive = !live && executionAlive({ ...job, jobDir: s.jobDir }, { ...deps, freshExecution: clean });
     if (live || backendLive) result.push(!live && backendLive ? { ...s, state: "running" } : s);
     else if (clean) fs.rmSync(file, { force: true });
   }
@@ -460,8 +466,25 @@ function jobAccount(home, jobId, deps) {
 }
 const kindLabel = kind => ({ usage: "usage limit", rate: "rate limit", concurrency: "concurrent request limit" })[kind] ?? kind;
 function refusalReason(p) { if (p.reason) return p.reason; return `${p.backend}${p.account ? ` (account ${p.account})` : ""} paused: ${kindLabel(p.kind)}${p.code ? ` (${p.code})` : ""} until ${p.until}`; }
+function waitHistory(admission, now) {
+  const totals = {};
+  // Reason text includes changing readings. Aggregate by cause, with bounded
+  // keys, rather than making a new durable entry for every sample.
+  for (const old of Object.values(admission?.waitTotals ?? {})) {
+    if (typeof old?.kind !== "string" || !Number.isFinite(old.ms) || old.ms < 0) continue;
+    totals[old.kind] = { ...old, ms: (totals[old.kind]?.ms ?? 0) + old.ms };
+  }
+  if (admission?.state === "waiting" && admission.reason) {
+    const from = Date.parse(admission.reasonSince ?? admission.since);
+    const elapsed = Number.isFinite(from) ? Math.max(0, now - from) : 0;
+    const kind = admission.causeKind ?? admission.waitKind ?? "unknown";
+    totals[kind] = { kind, reason: admission.reason, ms: (totals[kind]?.ms ?? 0) + elapsed };
+  }
+  return totals;
+}
+function mainWait(totals) { return Object.values(totals).sort((a, b) => b.ms - a.ms)[0]; }
 function recordFor(slot, notes, reason = null, waitKind = null) {
-  return { state: reason ? "waiting" : "admitted", reason: reason ?? slot.waitReason ?? null, waitKind: waitKind ?? slot.waitKind ?? null, since: slot.waitingSince ?? null, admittedAt: reason ? null : slot.admittedAt ?? null, class: slot.class, weight: slot.weight, probe: Boolean(slot.probe), notes };
+  return { waitTotals: slot.waitTotals ?? {}, reasonSince: slot.reasonSince ?? null, state: reason ? "waiting" : "admitted", reason: reason ?? slot.waitReason ?? null, waitKind: waitKind ?? slot.waitKind ?? null, since: slot.waitingSince ?? null, admittedAt: reason ? null : slot.admittedAt ?? null, class: slot.class, weight: slot.weight, probe: Boolean(slot.probe), notes };
 }
 function bypass(ctx, platform = process.platform) {
   const notes = [["linux", "darwin"].includes(platform) ? "load guard off" : `load guard bypassed: admission unsupported on ${platform}`];
@@ -543,6 +566,7 @@ export function admit(ctx, injected = {}) {
       mine.waitingSince ??= iso(now);
       const old = readJsonOrNull(slotFile(home, ctx.jobId));
       const slot = existing?.state === "running" ? { ...existing, checkedAt: iso(now) } : { ...mine, since: old?.since ?? mine.since, spawnAt: old?.spawnAt ?? null, holdAt: old?.holdAt ?? old?.spawnAt ?? null, holdBytes: old?.holdBytes ?? 0, state: "waiting", waitKind };
+      slot.waitTotals = waitHistory(ctx.admission, now); slot.reasonSince = iso(now);
       slot.waitReason = reason; slot.waitKind = waitKind;
       deps.writeSlot(home, slot);
       return { admit: false, reason, waitKind, retryMs: Number(deps.env.RELAY_ADMISSION_POLL_MS) || DEFAULTS.pollMs * (0.67 + 0.67 * deps.random()), slot, record: recordFor({ ...slot, waitingSince: mine.waitingSince }, [...notes, ...deps.notes], reason, waitKind) };
@@ -605,8 +629,9 @@ export function admit(ctx, injected = {}) {
         mine.probe = true; mine.probeGeneration = pause.probe.generation; mine.probeAt = pause.probe.at;
       }
       const previousWait = ctx.admission?.state === "admitted" ? ctx.admission : null;
-      const slot = { ...mine, waitingSince: ctx.waitingSince ?? previousWait?.since ?? null,
-        waitReason: ctx.admission?.reason ?? own?.waitReason ?? null, waitKind: (["worker", "spawned"].includes(ctx.admission?.waitKind) ? ctx.admission.causeKind : ctx.admission?.waitKind) ?? own?.waitKind ?? null,
+      const waitTotals = waitHistory(ctx.admission, now), longest = mainWait(waitTotals);
+      const slot = { ...mine, waitTotals, waitingSince: ctx.waitingSince ?? previousWait?.since ?? null,
+        waitReason: longest?.reason ?? ctx.admission?.reason ?? own?.waitReason ?? null, waitKind: longest?.kind ?? (["worker", "spawned"].includes(ctx.admission?.waitKind) ? ctx.admission.causeKind : ctx.admission?.waitKind) ?? own?.waitKind ?? null,
         spawnAt: own?.spawnAt ?? null, state: "running", admittedAt: ctx.waitingSince ? iso(now) : previousWait?.admittedAt ?? iso(now),
         holdAt: retainedTurn ? existing.holdAt : iso(now), holdBytes: retainedTurn ? existing.holdBytes : startupBytes(mine.backend) };
       deps.writeSlot(home, slot);
@@ -808,10 +833,15 @@ export function renderGuard(snapshot) {
 
 // Reserve a waiting-worker place and spawn while holding the admission lock. The
 // caller owns retries; completing workers never launch another session's jobs.
-export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
+export function spawnWithAdmission(jobDir, env, spawn, injected = {}, { reservation = null } = {}) {
   const deps = dependencies({ ...injected, env });
   let spawnAttempted = false;
-  const launch = () => { spawnAttempted = true; return spawn(); };
+  const launch = () => {
+    const job = readJob(jobDir);
+    if (!job || (TERMINAL_STATES.has(job.state) && pendingInboxMessages(jobDir).length === 0 && owedMessages(jobDir).length === 0)) return null;
+    spawnAttempted = true; return spawn();
+  };
+  const launcher = self(deps);
   try {
     const platform = deps.platform ?? process.platform;
     if (!["linux", "darwin"].includes(platform)) { process.stderr.write(`relay load guard: admission unsupported on ${platform}; worker bypassed\n`); return launch(); }
@@ -824,11 +854,15 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
       deps.lockSleep(25 + Math.floor(50 * deps.random()));
       machine = machineReading(home, deps);
     }
-    const settings = guardSettings(config, machine), job = readJob(jobDir), candidates = legacyCandidates(deps);
+    const settings = spawnSettings(config, machine, env), job = readJob(jobDir), candidates = legacyCandidates(deps);
     const decision = retryLock(home, deps, () => {
       const job = readJob(jobDir);
-      if (TERMINAL_STATES.has(job?.state) && pendingInboxMessages(jobDir).length === 0) return null;
-      const all = slots(home, deps), existing = all.find(s => s.jobId === job.id);
+      if (TERMINAL_STATES.has(job?.state) && pendingInboxMessages(jobDir).length === 0 && owedMessages(jobDir).length === 0) return null;
+      let all = slots(home, deps);
+      const reserved = all.find(s => s.state === "reserved" && s.jobId === `r-${reservation}`);
+      // Conversion is atomic with the spawning slot: nobody can take the place in between.
+      if (reserved) all = all.filter(s => s !== reserved);
+      const existing = all.find(s => s.jobId === job.id);
       if (existing && ((existing.state === "spawning" && recent(deps.now(), existing.since, DEFAULTS.spawnGraceMs)) || deps.isAlive({ pid: existing.pid, startTime: existing.processStart }))) return null;
       const waiting = all.filter(s => s.state !== "running").length;
       const cls = modelClass(job.request);
@@ -837,21 +871,22 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
       const check = memoryCheck(machine, settings, holds(all, job.id, deps.now()), DEFAULTS.workerBytes, guaranteed);
       const reason = check?.reason ?? (waiting >= settings.maxWaitingWorkers ? `waiting worker limit: ${waiting} of ${settings.maxWaitingWorkers}` : null);
       if (reason) {
-        writeJob(jobDir, { ...job, state: check?.permanent ? "failed" : "queued", ...(check?.permanent ? { completedAt: iso(deps.now()), errorMessage: reason } : {}), worker: null,
-          admission: { state: check?.permanent ? "failed" : "waiting", reason, waitKind: "worker", causeKind: check?.kind ?? "workers", since: job.admission?.state === "waiting" ? job.admission.since : iso(deps.now()), class: cls, weight: WEIGHTS[cls], notes: machine.notes } });
+        writeJob(jobDir, { ...job, state: check?.permanent ? "failed" : TERMINAL_STATES.has(job.state) ? job.state : "queued", ...(check?.permanent ? { completedAt: iso(deps.now()), errorMessage: reason } : {}), worker: null,
+          admission: { ...job.admission, waitTotals: waitHistory(job.admission, deps.now()), reasonSince: iso(deps.now()), launcher, state: check?.permanent ? "failed" : job.admission?.state === "not-started" ? "not-started" : "waiting", reason, waitKind: "worker", causeKind: check?.kind ?? "workers", since: job.admission?.state === "waiting" ? job.admission.since : iso(deps.now()), class: cls, weight: WEIGHTS[cls], notes: machine.notes } });
         return null;
       }
       const slot = { v: 1, jobId: job.id, jobDir, pid: null, processStart: null, backend: job.request.backend ?? "codex", account: job.request.account ?? null, class: cls, weight: WEIGHTS[cls], state: "spawning", spawnAt: iso(deps.now()), since: iso(deps.now()), holdAt: iso(deps.now()), holdBytes: DEFAULTS.workerBytes, holdGroup: machine.group, scopes: machine.scopes };
+      if (reserved) fs.rmSync(slotFile(home, reserved.jobId), { force: true });
       deps.writeSlot(home, slot);
       if (job.state === "queued" && job.admission?.waitKind === "worker")
         writeJob(jobDir, { ...job, state: "starting", worker: null, launchPendingAt: iso(deps.now()),
-          admission: { ...job.admission, waitKind: "spawned" } });
+          admission: { ...job.admission, launcher, waitKind: "spawned" } });
       return slot;
     });
     if (!decision.locked) {
       const previousLock = job.admission?.waitKind === "worker" && /admission lock (busy|stuck)/.test(job.admission.reason);
       const lockSince = previousLock ? job.admission.lockSince ?? job.admission.since : iso(deps.now());
-      writeJob(jobDir, { ...job, state: "queued", worker: null, admission: { state: "waiting", waitKind: "worker", causeKind: "lock",
+      writeJob(jobDir, { ...job, state: TERMINAL_STATES.has(job.state) ? job.state : "queued", worker: null, admission: { ...job.admission, launcher, state: "waiting", waitKind: "worker", causeKind: "lock",
         reason: lockReason(home, job.id, decision.holder, deps, lockSince), lockSince,
         since: job.admission?.since ?? iso(deps.now()), notes: [] } });
       return null;
@@ -871,10 +906,80 @@ export function spawnWithAdmission(jobDir, env, spawn, injected = {}) {
   } catch (e) {
     if (spawnAttempted) throw e;
     const job = readJob(jobDir);
-    if (job && !(TERMINAL_STATES.has(job.state) && pendingInboxMessages(jobDir).length === 0)) {
+    if (job && !(TERMINAL_STATES.has(job.state) && pendingInboxMessages(jobDir).length === 0 && owedMessages(jobDir).length === 0)) {
       const held = guardError({ jobId: job.id, home: admissionHome(env), waitingSince: job.admission?.since, admission: job.admission }, e, deps);
-      try { writeJob(jobDir, { ...job, state: "queued", worker: null, admission: { ...held.record, waitKind: "worker", causeKind: "guard-error" } }); } catch {}
+      try { writeJob(jobDir, { ...job, state: TERMINAL_STATES.has(job.state) ? job.state : "queued", worker: null, admission: { ...job.admission, ...held.record, launcher, waitKind: "worker", causeKind: "guard-error" } }); } catch {}
     }
     return null;
   }
+}
+
+// Waiting places live in the same lock domain as workers. An environment override is
+// useful for deliberately smaller queues; absent it, the generic CPU formula applies.
+function spawnSettings(config, machine, env) {
+  const value = env.RELAY_MAX_WAITING_WORKERS;
+  return guardSettings({ ...config, ...(value != null && /^\d+$/.test(value) ? { maxWaitingWorkers: Number(value) } : {}) }, machine);
+}
+const validReservation = id => typeof id === "string" && /^[a-f0-9-]{36}$/.test(id);
+const bindingFile = (env, agentId) => {
+  if (typeof agentId !== "string" || !/^[A-Za-z0-9_-]+$/.test(agentId)) throw new Error("invalid agent id");
+  return path.join(admissionHome(env), "bindings", `${agentId}.json`);
+};
+export function readReservation(agentId, env = process.env) {
+  const binding = readJsonOrNull(bindingFile(env, agentId));
+  return binding && Date.parse(binding.expiresAt) > Date.now() && validReservation(binding.reservation) ? binding.reservation : null;
+}
+export function bindReservation(reservation, agentId, env = process.env, injected = {}) {
+  if (!validReservation(reservation)) throw new Error("invalid reservation id");
+  const deps = dependencies({ ...injected, env }), home = admissionHome(env);
+  const result = retryLock(home, deps, () => {
+    const slot = slots(home, deps).find(s => s.jobId === `r-${reservation}` && s.state === "reserved");
+    if (!slot || (slot.agentId && slot.agentId !== agentId)) return false;
+    deps.writeSlot(home, { ...slot, agentId });
+    const file = bindingFile(env, agentId);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    writeJsonAtomic(file, { reservation, expiresAt: slot.expiresAt });
+    return true;
+  });
+  return result.value ?? false;
+}
+export function reserveWaitingPlace(env = process.env, injected = {}) {
+  const deps = dependencies({ ...injected, env });
+  try {
+    if (!admissionEnabled(env, undefined, deps.platform)) return { pass: true, reservation: null };
+    const home = admissionHome(env), machine = machineReading(home, deps);
+    const settings = spawnSettings({}, machine, env);
+    const result = retryLock(home, deps, () => {
+      const waiting = slots(home, deps).filter(s => s.state !== "running").length;
+      if (waiting >= settings.maxWaitingWorkers) return { pass: false, reason: `waiting worker limit: ${waiting} of ${settings.maxWaitingWorkers}` };
+      const reservation = randomUUID(), now = deps.now();
+      deps.writeSlot(home, { v: 1, jobId: `r-${reservation}`, state: "reserved", since: iso(now), expiresAt: iso(now + DEFAULTS.reservationMs) });
+      return { pass: true, reservation };
+    });
+    return result.locked ? result.value : { pass: false, reason: "admission lock busy" };
+  } catch (error) { return { pass: false, error: true, reason: `guard unavailable (${error.message})` }; }
+}
+
+// Called only under the job lease after its refusal has become terminal.
+export function discardSpawnReservation(jobDir, env = process.env) {
+  const deps = dependencies({ env }), home = admissionHome(env);
+  try {
+    if (!admissionEnabled(env)) return;
+    retryLock(home, deps, () => {
+      const job = readJob(jobDir), file = slotFile(home, job.id), slot = readJsonOrNull(file);
+      if (job.admission?.state === "not-started" && slot?.state === "spawning") fs.rmSync(file, { force: true });
+    });
+  } catch {}
+}
+
+export function releaseReservation(reservation, env = process.env) {
+  if (!validReservation(reservation)) return false;
+  const deps = dependencies({ env }), home = admissionHome(env);
+  try { return retryLock(home, deps, () => {
+    const file = slotFile(home, `r-${reservation}`), slot = readJsonOrNull(file);
+    if (slot?.state !== "reserved") return false;
+    fs.rmSync(file, { force: true });
+    if (slot.agentId) fs.rmSync(bindingFile(env, slot.agentId), { force: true });
+    return true;
+  }).value ?? false; } catch { return false; }
 }
