@@ -187,8 +187,9 @@ those folders in your user settings (`~/.claude/settings.json`). For the default
 ```
 
 This also allows the queue settings stored in `~/.relay-jobs/admission`. If you set `RELAY_JOBS_HOME` or
-`RELAY_ADMISSION_HOME`, put the folders you chose in `allowWrite`, including both when they are separate.
-Changing the jobs folder does not move the queue settings. Then retry the failed call. You can instead choose
+`RELAY_ADMISSION_HOME`, allow both relay's jobs folder and its queue folder in `allowWrite`. If you set only
+`RELAY_JOBS_HOME`, keep `~/.relay-jobs/admission` in the list too; `RELAY_ADMISSION_HOME` overrides that queue
+folder. Changing the jobs folder does not move the queue settings. Then retry the failed call. You can instead choose
 to run relay without the sandbox; Claude should leave that choice to you.
 
 The backend may also need to write its own settings or reach the network, so allowing these folders alone does

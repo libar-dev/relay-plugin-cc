@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { DEFAULTS, modelClass } from "../plugins/relay/scripts/lib/worker/admission.mjs";
+import { DEFAULTS, admissionHome, modelClass } from "../plugins/relay/scripts/lib/worker/admission.mjs";
 import { renderSetupPage } from "../plugins/relay/scripts/lib/setup/page.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -84,12 +85,26 @@ test("setup's captured-snapshot formatter preserves configured versus effective 
   const setup = read("commands/setup.md");
   assert.match(setup, /renderSetupPage\(JSON.parse/);
   assert.match(setup, /Never rerun setup just for formatting/);
-  const setupCalls = setup.split("\n").filter(line => line.startsWith('node ') && line.includes(' setup --json '));
+  const setupCalls = setup.split("\n").filter(line => line.startsWith('node ') && line.includes('companion.mjs'));
   assert.equal(setupCalls.length, 2);
-  for (const call of setupCalls) assert.ok(call.endsWith('--args-file "<args-file>" > "<args-file>.snapshot.json"'));
+  for (const call of setupCalls) {
+    assert.doesNotMatch(call.replaceAll("<args-file>", "args.txt"), /[<>|&]/, "snapshot writes must not use shell redirection");
+    assert.match(call, /fs\.openSync\(process\.argv\[3\], "w"\)/);
+    assert.ok(call.endsWith('"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" "<args-file>" "<args-file>.snapshot.json"'));
+  }
   assert.match(setup, /^allowed-tools:.*\bRead\b.*Bash\(node:\*\)/m);
   assert.match(setup, /Use `Read` on that file; never retype the JSON/);
   assert.doesNotMatch(setup, /save the captured JSON with Write/);
+});
+
+test("the guide keeps the default queue folder when only the jobs home changes", () => {
+  const defaultHome = admissionHome({});
+  assert.equal(admissionHome({ RELAY_JOBS_HOME: "/tmp/example-jobs" }), defaultHome);
+  assert.equal(defaultHome, path.join(os.homedir(), ".relay-jobs", "admission"));
+  assert.equal(admissionHome({ RELAY_ADMISSION_HOME: "/tmp/example-admission" }), "/tmp/example-admission");
+  const guide = fs.readFileSync(path.join(root, "docs/guide.md"), "utf8").replace(/\s+/g, " ");
+  assert.match(guide, /If you set only `RELAY_JOBS_HOME`, keep `~\/\.relay-jobs\/admission` in the list too/);
+  assert.match(guide, /`RELAY_ADMISSION_HOME` overrides that queue folder/);
 });
 
 test("the guide reconciles direct continuation, queued UI and conditional stop notices", () => {

@@ -58,9 +58,9 @@ for (const name of ["review", "adversarial-review", "setup"]) {
       const argv = process.argv.slice(2);
       const raw = fs.readFileSync(argv.includes("--args-file") ? argv[argv.indexOf("--args-file") + 1] : 0, "utf8");
       fs.writeFileSync("received.json", JSON.stringify({ argv, raw }));
-      process.stdout.write("companion output\\n  verbatim\\n");
+      process.stdout.write(argv[0] === "setup" ? JSON.stringify({ schema: "relay.setup/1", argv, raw }, null, 2) + "\\n" : "companion output\\n  verbatim\\n");
       process.stderr.write("companion stderr\\n");
-      process.exitCode = 7;
+      process.exitCode = Number(process.env.RELAY_TEST_EXIT_STATUS ?? 7);
     `);
     const samples = [
       "--wait `printf RELAY_PROBE; touch backtick-ran` $(touch substitution-ran) $RELAY_REVIEW_LITERAL \"double\" 'single'\nsecond line",
@@ -70,34 +70,39 @@ for (const name of ["review", "adversarial-review", "setup"]) {
     ];
     for (const recipe of commands) {
       for (const raw of samples) {
-        const argsFile = path.join(dir, "raw args.txt");
-        // Current recipes pass only a path; hostile text reaches the stub through Write.
-        // Substitution below exercises old/reintroduced recipes. Fixed argv and the audit
-        // guard the current recipes; the first sample exposes shell execution first.
-        fs.writeFileSync(argsFile, raw);
-        const snapshotFile = argsFile + ".snapshot.json";
-        if (name === "setup") fs.writeFileSync(snapshotFile, "stale snapshot");
-        const command = recipe.replaceAll("<args-file>", () => argsFile).replaceAll("$ARGUMENTS", () => raw);
-        const result = spawnSync("bash", ["-c", command], {
-          cwd: dir, env: { ...process.env, CLAUDE_PLUGIN_ROOT: dir, RELAY_REVIEW_LITERAL: "EXPANDED" },
-          encoding: "utf8", timeout: 10_000
-        });
-        assert.equal(result.error, undefined);
-        for (const marker of ["backtick-ran", "substitution-ran", "collision-ran"]) {
-          assert.equal(fs.existsSync(path.join(dir, marker)), false, `${marker}: text ran in Bash`);
+        for (const status of name === "setup" ? [0, 7] : [7]) {
+          const argsFile = path.join(dir, "raw args.txt");
+          // Current recipes pass only a path; hostile text reaches the stub through Write.
+          // Substitution below exercises old/reintroduced recipes. Fixed argv and the audit
+          // guard the current recipes; the first sample exposes shell execution first.
+          fs.writeFileSync(argsFile, raw);
+          const snapshotFile = argsFile + ".snapshot.json";
+          if (name === "setup") fs.writeFileSync(snapshotFile, "stale snapshot");
+          const command = recipe.replaceAll("<args-file>", () => argsFile).replaceAll("$ARGUMENTS", () => raw);
+          const result = spawnSync("bash", ["-c", command], {
+            cwd: dir, env: { ...process.env, CLAUDE_PLUGIN_ROOT: dir, RELAY_REVIEW_LITERAL: "EXPANDED", RELAY_TEST_EXIT_STATUS: String(status) },
+            encoding: "utf8", timeout: 10_000
+          });
+          assert.equal(result.error, undefined);
+          for (const marker of ["backtick-ran", "substitution-ran", "collision-ran"]) {
+            assert.equal(fs.existsSync(path.join(dir, marker)), false, `${marker}: text ran in Bash`);
+          }
+          assert.equal(result.status, status, result.stderr);
+          if (name === "setup") {
+            assert.equal(result.stdout, "");
+            const expected = { schema: "relay.setup/1", argv: ["setup", "--json", "--args-file", argsFile], raw };
+            const snapshot = fs.readFileSync(snapshotFile, "utf8");
+            assert.equal(snapshot, JSON.stringify(expected, null, 2) + "\n");
+            assert.deepEqual(JSON.parse(snapshot), expected);
+          } else {
+            assert.equal(result.stdout, "companion output\n  verbatim\n");
+          }
+          assert.equal(result.stderr, "companion stderr\n");
+          const received = JSON.parse(fs.readFileSync(path.join(dir, "received.json"), "utf8"));
+          assert.deepEqual(received.argv, [name, ...(name === "setup" ? ["--json"] : []),
+            ...(recipe.includes("--estimate") ? ["--estimate"] : []), "--args-file", argsFile]);
+          assert.equal(received.raw, raw);
         }
-        assert.equal(result.status, 7, result.stderr);
-        if (name === "setup") {
-          assert.equal(result.stdout, "");
-          assert.equal(fs.readFileSync(snapshotFile, "utf8"), "companion output\n  verbatim\n");
-        } else {
-          assert.equal(result.stdout, "companion output\n  verbatim\n");
-        }
-        assert.equal(result.stderr, "companion stderr\n");
-        const received = JSON.parse(fs.readFileSync(path.join(dir, "received.json"), "utf8"));
-        assert.deepEqual(received.argv, [name, ...(name === "setup" ? ["--json"] : []),
-          ...(recipe.includes("--estimate") ? ["--estimate"] : []), "--args-file", argsFile]);
-        assert.equal(received.raw, raw);
       }
     }
     assert.match(source, /^allowed-tools:.*\bWrite\b/m);

@@ -438,7 +438,7 @@ test("setup command can offer Codex install and still points users to codex logi
   assert.match(setup, /^description: Check every backend.*load guard$/m);
   assert.match(setup, /AskUserQuestion/);
   assert.match(setup, /npm install -g @openai\/codex/);
-  assert.match(setup, /companion\.mjs" setup --json --args-file "<args-file>"/);
+  assert.match(setup, /spawnSync\(process\.execPath, \[process\.argv\[1\], "setup", "--json", "--args-file", process\.argv\[2\]\]/);
   assert.match(setup, /Render one table, one row per block, in the command's order/);
   assert.match(setup, /Never add rows for node or npm\./);
   assert.match(readme, /!codex login/);

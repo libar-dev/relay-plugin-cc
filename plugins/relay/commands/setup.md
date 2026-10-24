@@ -30,12 +30,13 @@ Setup uses relay's raw-argument grammar. `$VAR`, command substitutions and globs
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-file "<args-file>" > "<args-file>.snapshot.json"
+node --input-type=module -e 'import fs from "node:fs"; import { spawnSync } from "node:child_process"; const out = fs.openSync(process.argv[3], "w"); const r = spawnSync(process.execPath, [process.argv[1], "setup", "--json", "--args-file", process.argv[2]], { stdio: ["ignore", out, "inherit"] }); process.exit(r.status ?? 1);' "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" "<args-file>" "<args-file>.snapshot.json"
 ```
 
 The call writes one JSON object (`schema: "relay.setup/1"`) straight to `<args-file>.snapshot.json`.
 Use `Read` on that file; never retype the JSON. When it holds `error`, print its `message` and stop.
-The quoted redirection uses only the generated path and keeps the command under `Bash(node:*)`.
+Node writes the snapshot itself, with no shell redirect; the fixed invocation is covered by `Bash(node:*)`.
+The companion's exit status passes through; a signal or spawn failure returns 1.
 
 With no `--backend`, setup checks every backend home it finds and exits 0 whatever it finds: the
 Codex home (`~/.codex` or `CODEX_HOME`), `~/.grok` and every `~/.grok-<name>`, ZCode, and
@@ -119,7 +120,7 @@ npm install -g @openai/codex
 - Then rerun:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" setup --json --args-file "<args-file>" > "<args-file>.snapshot.json"
+node --input-type=module -e 'import fs from "node:fs"; import { spawnSync } from "node:child_process"; const out = fs.openSync(process.argv[3], "w"); const r = spawnSync(process.execPath, [process.argv[1], "setup", "--json", "--args-file", process.argv[2]], { stdio: ["ignore", out, "inherit"] }); process.exit(r.status ?? 1);' "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" "<args-file>" "<args-file>.snapshot.json"
 ```
 
 If Codex is already installed or npm is unavailable:

@@ -399,7 +399,6 @@ Docs:
   relay agent, not its job, and that the agent's view has no input box.
 - [docs/guide.md](../../docs/guide.md): a walk through relay the way a user meets it, from the install to the status
   line and the board, with Claude Code 2.1.309's keys, and links to the README and desktop.md for the reference.
-- Pre-release guidance covers known issues, checks after installation and expected behaviour while working.
 
 ## 2.2.0 (2026-10-22)
 
