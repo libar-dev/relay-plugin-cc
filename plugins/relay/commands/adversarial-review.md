@@ -1,6 +1,6 @@
 ---
 description: Run a read-only review that challenges the local diff's approach and design, on Codex, Grok, ZCode or Kimi (pick one with --backend); its findings come back as schema-checked JSON
-argument-hint: '[--wait|--background] [--backend codex|grok|zcode|kimi] [--model <m>] [--effort <e>] [--grok-home H] [--kimi-home H] [--base <ref>] [--scope auto|working-tree|branch] [focus ...]'
+argument-hint: '[--wait|--background] [--backend codex|grok|zcode|kimi] [--model <m>] [--effort <e>] [--grok-home H] [--kimi-home H] [--base <ref>] [--scope auto|working-tree|branch] [focus ... (quotes and apostrophes group words and are removed)]'
 allowed-tools: Write, Read, Glob, Grep, Bash(node:*), AskUserQuestion
 ---
 
@@ -16,8 +16,12 @@ Core constraint:
 - Your only job is to run the review and return the companion's output verbatim to the user.
 - Keep the framing focused on whether the current approach is the right one, what assumptions it depends on, and where the design could fail under real-world conditions.
 
+Claude Code's sandbox:
+- Never run a companion call again with `dangerouslyDisableSandbox` unless the user asked for that.
+- If a call fails with `EPERM` or "operation not permitted" (macOS), or `EROFS` or "read-only file system" (Linux), the sandbox most likely kept the companion from writing, usually to the jobs home. Stop. Return its output, then tell the user the two choices, the one text allowed after it: Allow the effective jobs home (`$RELAY_JOBS_HOME`, default `~/.relay-jobs`) and the effective admission home (`$RELAY_ADMISSION_HOME`, default `~/.relay-jobs/admission`) in `sandbox.filesystem.allowWrite`; include both when distinct. For the defaults, use `{"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}` in `~/.claude/settings.json`. Changing the jobs home does not move admission state. Backend-home writes and network access may still need permissions; full end-to-end sandbox operation is not measured. Or run the review without the sandbox.
+
 Execution mode rules:
-- If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground, as with `--wait`, and begin your reply with exactly this line before the output: `Ran in the foreground: the default when Claude starts a review without --wait or --background.` That line is the only text allowed before the companion's verbatim output, and nothing follows the output.
+- If you invoked this command yourself, rather than the user typing it, never use `AskUserQuestion`: with neither `--wait` nor `--background`, run the review in the foreground, as with `--wait`, and begin your reply with exactly this line before the output: `Ran in the foreground: the default when Claude starts a review without --wait or --background.` That line is the only text allowed before the companion's verbatim output, and nothing follows the output except, after a sandbox error, the two choices above.
 - If the raw arguments include `--wait`, do not ask. Run in the foreground.
 - If the raw arguments include `--background`, do not ask. Run in a Claude background task.
 - Otherwise, when the user typed the command, estimate the review size before asking:
@@ -70,12 +74,17 @@ Reject NUL-containing arguments with a usage error; do not normalize them or ret
 - Unlike `/relay:review`, it can still take extra focus text after the flags.
 
 Foreground flow:
-- Run:
+
+A foreground review can wait for the load guard before it starts: the command waits by itself and prints
+`relay review queued: <reason>` on stderr. This call provides no job id for a separate `wait` command.
+Do not start another review. If the call was cut off, the review ended; tell the user and offer `--background`.
+
+- Run with `Bash`, setting `timeout: 600000`:
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs" adversarial-review --args-file "<args-file>"
 ```
 - Return the command stdout verbatim, exactly as-is.
-- Do not paraphrase, summarize, or add commentary before or after it. The one exception is the foreground line above, first, when you invoked the command yourself.
+- Do not paraphrase, summarize, or add commentary before or after it. The exceptions are the foreground line above, first, when you invoked the command yourself, and, after a sandbox error, the two choices above.
 - Do not fix any issues mentioned in the review output.
 
 Background flow:

@@ -76,18 +76,19 @@ Pre-release cuts:
 
 Phase 1, steer wake:
 
-- A message to a running `relay:job` agent reaches the job within seconds. The plugin has a hooks
-  module, `hooks/mod/register.js`, with one `session.send` hook: when a message is sent to a relay,
-  from the main thread, a subagent or another plugin, it runs `companion wake`, and the relay's
-  current wait returns. The guard then delivers the message as before. Until now a message waited
-  for the wait to end, up to two minutes.
+- A message to a running `relay:job` agent started with the Agent tool reaches the job within seconds. The
+  plugin has a hooks module, `hooks/mod/register.js`, with one `session.send` hook: when a message is sent to
+  a relay, from the main thread, a subagent or another plugin, it runs `companion wake`, and the relay's
+  current wait returns. The guard then delivers the message as before. Until now a message waited for the wait
+  to end, up to two minutes.
 - A relay waits on its job in steps of up to 540 s (Bash timeout 600 s) instead of 120 s, so a long
   job costs its Haiku relay about a quarter of the model calls.
 - A `SendMessage` from another agent, such as an orchestrator subagent or a Workflow agent, now
-  reaches the relay's job, while it runs and after it ended. The guard took only the main thread's
-  messages; Claude Code marks another agent's as `peer`, and the guard dropped it without a record.
-  The Phase 1 live check found it. A relay that lived through the update delivers the peer messages
-  it received before it, since none of them has a delivery record.
+  reaches the job of a relay the Agent tool started, while it runs and after it ended. The guard took
+  only the main thread's messages; Claude Code marks another agent's as `peer`, and the guard dropped
+  it without a record. The Phase 1 live check found it. A relay that lived through the update delivers
+  the peer messages it received before it, since none of them has a delivery record. A message to a
+  relay that a Workflow script started is another matter: see "Fixes from the pre-releases".
 - Needs Claude Code 2.1.307 or later, for the module's `session.send` event.
 
 Phase 2, commands answered by the module:
@@ -122,8 +123,9 @@ Phase 3, spawn and stop like a Claude agent:
   leaves its job running, so a `resumeFromRunId` after a stopped Workflow still adopts its jobs; a
   TaskStop on a Workflow comes back with the list of its jobs that keep running. A cancel the hook
   could not finish is told to the caller and shown as a `relay-violation:` line. The
-  message `cancel` still cancels a job and lets its relay hand back the cancelled state; it is also
-  how to cancel one Workflow agent's job, since TaskStop has no task for one agent of a Workflow.
+  message `cancel` still cancels a job and lets its relay hand back the cancelled state. TaskStop has no
+  task for one agent of a Workflow, except a second loop that a message to it started; cancel such a job
+  with `C cancel <job>`.
 - **A bad header fails at the spawn.** The hooks module has an `agent.spawn` hook: before a
   `relay:job` agent starts, it runs the new `companion check-header`, the parser and request
   builder `start` uses, and refuses the spawn with the parser's message. The Agent call fails, or a
@@ -248,9 +250,10 @@ Load guard:
     `vm_stat` free plus inactive pages as a fallback, and a pressure warning holds new jobs.
   - Pacing: one start or turn every 5 s across all sessions. There is no fixed job ceiling on a healthy machine.
     When the 5-minute load is high or memory can't be read, new jobs stop at `min(16, max(2, CPUs − 2))`.
-  - Quota: at most 2 very heavy models (Astra and the Kimi K3 family, at any effort) run at once. This is a quota
-    limit, not a memory one.
-  - Provider refusals: a usage limit, rate limit or concurrency refusal pauses that backend. After the pause, one
+  - Quota: at most 2 very heavy jobs (GPT-6 Astra and Kimi K3, at any effort) run at once across backends.
+    Effort alone on other models never enters the pool. This quota is independent of memory.
+  - Provider refusals: recognized Codex/Kimi/ZCode usage or rate errors, and Kimi concurrency refusals,
+    pause that backend; Grok has no classifier coverage. A pause does not resume the failed job. After the pause, one
     probe job goes first. Only while the guard is on, Kimi defaults to 3 total attempts per step unless
     `KIMI_LOOP_MAX_ATTEMPTS_PER_STEP` is set; this default does not apply with the guard off or on native Windows.
 - A job that waits shows `queued` with its reason in status, `--json`, the status line and the board, and can be
@@ -324,10 +327,51 @@ Fixes from the pre-releases:
   backslashes. Empty quoted values are missing-value errors. Use absolute or `~/` paths.
   Commands with `--cwd` also accept `~/` and bare `~`. NUL is rejected. Long input uses the same file.
 - Grok and Kimi sign-in advice quotes home paths for safe copying into a shell.
+- The docs no longer promise for a relay a Workflow script started what holds for one the Agent tool started.
+  A message to a running Workflow relay's agent id starts a second loop of it. In the one run measured for each, a
+  steer reached the job through that loop, and a `cancel` through the first loop's guard. But Claude Code can then
+  write the relay's later entries to a transcript the guard does not read, and a message there never reaches the
+  job. A message after a Workflow relay ended fails, or resumes a general-purpose agent that answers in its place.
+  Steer, continue and cancel a Workflow job by its job id: `C steer`, `C continue` and `C cancel`, as the board's
+  live check did on all four backends. After its relay ended, a continue by id runs an attempt no relay hands back,
+  so `status` marks it `not handed back`; its report is in `C result`.
+- The jobs skill and the design say that a message reaching a job while a turn is starting (for example its first
+  turn, or a continue or resume it accepted, before the backend began that turn) runs as the next turn, after that
+  whole turn.
+- The jobs skill's continue recipe goes on to the result: send once, wait for the job to end in waits that fit the
+  Bash tool's timeout, read its state and its open messages, run an owed message with `resume` and wait again,
+  then collect the new report. `C steer`, `C continue` and `C resume` exit 4 when the message was posted but no
+  outcome came within 60 s. Exit 1 can also occur after posting, before a receipt is printed; after any nonzero
+  exit read the job's messages before sending again, since every call posts a new one.
+- The Workflow example in the jobs skill refuses `report: none` for a step that reads the report, and says that
+  `completed` is only the first gate.
+- `dead` and exit 3 are defined as the code has them: `dead` is a job that has not ended whose worker is gone or
+  never started within 60 s, except a workerless admission wait; exit 3 also covers a failed or dead job with a report, and a
+  completed job without one.
+- The `result-handling` skill reads the state before the report, and keeps a command's verbatim output apart from
+  a result Claude uses: Claude adds no line of its own after a command's verbatim output. Any review the user asked
+  for, by a command, `C review`, a `relay:job` brief or a Workflow step, is review-only unless the same request
+  asked for fixes; otherwise Claude goes on with work the user already asked for. It now loads for relay results,
+  state blocks, failed jobs and report files.
+- The `codex-prompting` skill says a relay job cannot ask its caller anything: settle questions before launch, or
+  ask for a blocked report that names the missing decision.
+- A relay whose start failed hands back the start output at once, instead of first running `result` with no job
+  id, which the hook refused.
+- `/relay:setup` shows each backend's binary path under the table. For a signed-out or missing backend it prints
+  the sign-in `detail`, which can hold a fenced command, below the table instead of in a cell; for a block with an
+  error it prints `error:` with the error below the table, and keeps the sign-in the check read.
+- **Relay never leaves Claude Code's sandbox unasked.** Under the sandbox the companion fails with `EPERM`
+  when it writes the jobs home, and Claude ran a review's companion call again with `dangerouslyDisableSandbox`
+  without asking: the commands' `Bash(node:*)` grant approves that retry. The review and setup commands, the relay
+  agent and the jobs skill now say never to retry without the sandbox unless the user asked, and to offer the two
+  choices: allow the effective jobs and admission homes in `sandbox.filesystem.allowWrite`, including both
+  when distinct, or run without the sandbox. Backend-home and network access remain separate caveats.
+- `/relay:adversarial-review`'s argument hint says that quotes and apostrophes in the focus text group words and
+  are removed, as before the argument file.
 - When a person stops a relay from Claude Code's own controls (`x to stop` in the agent list, Esc at the relay's
   view prompt, ctrl+x ctrl+k, the desktop app's Stop button), its job keeps running, as before, and relay now
   says so: a line in the transcript and a toast name the job, with `/relay:cancel <job>` to cancel it and
-  `/relay:result <job>` to read it (D96). Until now the job ran on with no word. `TaskStop` and the message
+  `/relay:result <job>` to read it. Until now the job ran on with no word. `TaskStop` and the message
   `cancel` still cancel the job, and show no notice. Checked live with `x to stop` and Esc; ctrl+x ctrl+k and
   the desktop app's Stop button are expected to behave the same but are not checked live yet. A Workflow's
   relays, which Claude Code does not list, get no notice, and none is shown where nothing draws the session
@@ -335,9 +379,29 @@ Fixes from the pre-releases:
 
 Docs:
 
+- The installed jobs skill now includes a light orchestration guide and a dated model/benchmark/price snapshot
+  with public sources, cache-write costs, distinct benchmark task bases, and a minor-release refresh procedure.
+  It describes one shared quota of two very heavy jobs (GPT-6 Astra and Kimi K3, any effort); effort alone on
+  other models does not enter the pool.
+- The skill/guide quota agreement checks now run against model-only admission, including max/ultra effort
+  on other models; the shared quota remains two Astra/Kimi K3 jobs at any effort.
+- The user guide covers queued work, conditional stop notices, Workflow job-id control and direct continuation,
+  queued status-line/board controls, and both sandbox storage paths. Relay requires no external search or
+  scraping service; optional services are the user's configuration.
+- Setup renders configured and effective guard state from one captured JSON snapshot, including domain settings,
+  off reasons, degraded/unreadable readings and provider pauses, without another backend probe.
+
+- The README has a section on Claude Code's sandbox, with the setting that allows the jobs home and
+  `sandbox.allowUnsandboxedCommands`; says that the review and setup commands ask no permission for their own
+  steps, and why; and says that `/relay:review` on Codex prints Codex's own stderr, which
+  `/relay:setup --job-mcp-off <name>` quiets for a noisy MCP server, for Codex jobs and reviews alike.
 - [docs/desktop.md](../../docs/desktop.md): relay in the Code tab of the Claude desktop app. It covers what runs
   there, installing with the CLI (the app loads what the CLI installs), the permission modes, a check that it works,
-  and how to try a build in one folder. Checked on a Mac in Claude for Mac 3.6556.1 with relay 3.0.0-dev.4.
+  and how to try a build in one folder. Checked on a Mac in Claude for Mac 3.6556.1 with relay 3.0.0-dev.4; later
+  checks there ran `/relay:cancel` and `/relay:transfer`, and found that the Background tasks Stop button ends the
+  relay agent, not its job, and that the agent's view has no input box.
+- [docs/guide.md](../../docs/guide.md): a walk through relay the way a user meets it, from the install to the status
+  line and the board, with Claude Code 2.1.309's keys, and links to the README and desktop.md for the reference.
 
 ## 2.2.0 (2026-10-22)
 

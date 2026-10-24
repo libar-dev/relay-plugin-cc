@@ -11,8 +11,8 @@ the agent waits on it, the job resumes its session once. The agent returns the r
 with a state block that says what happened.
 
 `relay` started as a fork of [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc)
-1.0.6. [NOTICE](NOTICE) keeps the attribution and license terms. [docs/design.md](docs/design.md)
-explains the design.
+1.0.6. [NOTICE](NOTICE) keeps the attribution and license terms. [docs/guide.md](docs/guide.md)
+walks through using relay, and [docs/design.md](docs/design.md) explains the design.
 
 ## Backends
 
@@ -83,6 +83,34 @@ as `Agent(relay:job)` does not help here, because Claude Code drops `Agent` allo
 session enters auto mode. If the classifier still blocks a launch, ask for the launch in your own
 message, or leave auto mode for that step.
 
+### Relay and Claude Code's sandbox
+
+Relay keeps its jobs in `~/.relay-jobs`, or in `$RELAY_JOBS_HOME` when you set it. Claude Code's
+sandbox lets a Bash command write, by default, only the working directory, a temporary directory and
+directories you added, so under it the companion fails with `EPERM` ("operation not permitted") on
+macOS, or `EROFS` ("read-only file system") on Linux, when
+it writes the jobs home, as a review does. In a check on 23 October 2026, on Claude Code 2.1.309,
+Claude then ran the review's companion call again with `dangerouslyDisableSandbox`, outside the
+sandbox, and did not ask: an allow rule that matches a command also approves its unsandboxed retry,
+and the review and setup commands allow `Bash(node:*)`. Relay's commands, its relay agent and the
+`relay:jobs` skill now tell Claude to stop at such an error and leave the choice to you:
+
+- Allow the jobs home in the sandbox, in your user settings (`~/.claude/settings.json`); name your
+  `$RELAY_JOBS_HOME` when set, and also the admission home (`$RELAY_ADMISSION_HOME`, default
+  `~/.relay-jobs/admission`) when distinct. Changing jobs home does not move admission state:
+
+  ```json
+  {"sandbox": {"filesystem": {"allowWrite": ["~/.relay-jobs"]}}}
+  ```
+
+- Or run relay without the sandbox.
+
+With the jobs and admission homes allowed, a job or review whose backend writes its own home (`~/.codex`,
+`~/.grok`, `~/.kimi-code`, ZCode's) or needs the network may still fail inside the sandbox: that is
+not measured. To forbid every unsandboxed retry, set `sandbox.allowUnsandboxedCommands` to `false`,
+Claude Code's strict sandbox mode; to be asked each time instead, add an ask rule for
+`Bash(dangerouslyDisableSandbox:true)`.
+
 ## The first hour
 
 **Check the backends.** Run `/relay:setup`. It finds every backend home on the machine (the
@@ -111,8 +139,8 @@ Write only under src/ and tests/. Report the cause, the change and the test run.
 ```
 
 The header sets the job. `model:` and `effort:` are required, and `default` takes the home's own
-setting. The brief after `---` reaches the job byte for byte. When the job ends, the agent returns
-a state block and the report:
+setting (ZCode's effort excepted: relay uses `high` where ZCode's own is `max`). The brief after `---`
+reaches the job byte for byte. When the job ends, the agent returns a state block and the report:
 
 ```
 state: completed
@@ -134,21 +162,25 @@ relay: <the relay's agent id>
 
 `completed` means the job finished its answer, not that its commands passed. Read the report.
 
-**Talk to it.** A message reaches the job within seconds. The relay agent waits on the job in steps
-of up to nine minutes, so Claude Code's stall timer never fires on a long job. A message sent to it
-ends the current step, and its hook delivers the message at the next. Send the agent "Also check the retry path in
-src/net/client.mjs." with `SendMessage` while the job runs, and Codex gets it inside the running
-turn. Sent after the job has ended, the same message starts a new turn on the same session, and the
-agent returns the new report. The message `cancel` cancels the job. In the terminal, a line you type into the agent's
-own view (↓ in the footer, Enter, then ↑ to its prompt) reaches the job too, at the relay's next step: up
-to nine minutes later, or as a new turn once the job has ended. Esc at that prompt, or `x` in the agent
-list, stops the relay agent and leaves the job running, and for a relay the Agent tool started, relay shows
-a notice naming the job, with `/relay:cancel` and `/relay:result` (none where nothing draws the session, such as T3
-Code or `claude -p`); a line typed right after Esc resumes the relay
-and reaches the job at once, steering it while it runs. `/relay:cancel <job>` cancels the job.
+**Talk to it.** Started with the Agent tool, as here, a relay agent brings a message to its job
+within seconds; a message that arrives while the job's turn is still starting runs as its next turn.
+The relay agent waits on the job in steps of up to nine minutes, so Claude Code's stall timer never
+fires on a long job. A message sent to it ends the current step, and its hook delivers the message
+at the next. Send the agent "Also check the retry path in src/net/client.mjs." with `SendMessage`
+while the job runs, and Codex gets it inside the running turn. Sent after the job has ended, the
+same message starts a new turn on the same session, and the agent returns the new report. The
+message `cancel` cancels the job. In the terminal, a line you type into the agent's own view (↓ in
+the footer, Enter, then ↑ to its prompt) reaches the job too, at the relay's next step: up to nine
+minutes later, or as a new turn once the job has ended. Esc at that prompt, or `x` in the agent
+list, stops the relay agent and leaves the job running. For supported Agent-tool relays, a notice names the job when it can be found; use `/relay:status` if no notice appears; a line typed right after Esc resumes the
+relay and reaches the job at once, steering it while it runs. `/relay:cancel <job>` cancels the job.
 
 **In a workflow.** A Workflow script runs a job with `agent(prompt, { agentType: 'relay:job' })` and
-gets the state block back as a string. The `relay:jobs` skill has the rules, and the section
+gets the state block back as a string. A message to a Workflow relay's agent id is not a sure way to
+its job: while it runs, it starts a second loop of the relay; after it ends, it reaches no job.
+Steer, continue or cancel a Workflow job by its job id with the companion (`steer`, `continue`,
+`cancel`), as the board does: job-id control works on all four backends. The `relay:jobs` skill
+has the rules, and the section
 [What the relay depends on in Claude Code](#what-the-relay-depends-on-in-claude-code) says what a
 Claude Code update can break.
 
@@ -185,9 +217,9 @@ message: a message sent while it runs becomes the next turn.
 |---|---|
 | `/relay:setup` | every backend home in one shape; `--backend codex\|grok\|zcode\|kimi [--grok-home H\|--kimi-home H]` checks one and exits non-zero when it is not ready |
 | `/relay:setup --fast-tier allowed\|off` | with `off`, the default, jobs ignore `fast: true`; with `allowed`, it asks for the priority tier |
-| `/relay:setup --job-mcp-off name,...\|none` | Codex jobs turn off these MCP servers |
+| `/relay:setup --job-mcp-off name,...\|none` | Codex jobs and reviews turn off these MCP servers |
 | `/relay:rescue <task>` | hand an investigation or a fix to a `relay:job` agent; `--backend`, `--model`, `--effort`, `--grok-home`, `--kimi-home`, `--read-only` and `--write` become its header, `--background` runs the agent in the background |
-| `/relay:status [job] [--all]` | this repository's newest 20 jobs, every repository's with `--all`, or one job's state block |
+| `/relay:status [job] [--all] [--workflow <run>]` | this repository's newest 20 jobs, every repository's with `--all`, every job of one Workflow run with `--workflow`, or one job's state block |
 | `/relay:result [job]` | a job's state block and report; without a job, the newest finished job of this repository |
 | `/relay:cancel [job]` | interrupt the turn; the worker is killed if the job has not ended 10 s later; without a job, the only active job of this repository |
 | `/relay:review` | a review of the working tree or of a branch, on Codex's own reviewer or, with `--backend grok\|zcode\|kimi`, the plugin's prompt |
@@ -198,15 +230,16 @@ The plugin's hooks module answers `/relay:status`, `/relay:result`, `/relay:canc
 `/relay:transfer` itself: it runs the companion and shows its output, with no model turn and no
 tokens spent. The answer starts with the command as you typed it, then the companion's lines in a
 code block, as it prints them, then a job's report as Markdown, or the job list as a table.
-`claude -p "/relay:result <job>"` exits with the companion's exit code (0 completed, 3 ended
-without a report, 4 running, 5 cancelled), with `--output-format text` or `json`; under
-`stream-json` Claude Code exits 0. These four run only when you type them. When you ask
-in plain words, Claude reads jobs with the companion in Bash, which a session in `default`
-permission mode asks you about, and cancels a job by sending its agent the message `cancel`.
+`claude -p "/relay:result <job>"` exits with the companion's exit code (0 completed with a report;
+3 failed, dead, completed without a report, or messages not yet run; 4 queued or running; 5 cancelled), with
+`--output-format text` or `json`; under `stream-json` Claude Code exits 0. These four run only when
+you type them. When you ask in plain words, Claude reads jobs with the companion in Bash, which a
+session in `default` permission mode asks you about, and cancels a job by sending its agent the
+message `cancel`, or, for a Workflow job, with `companion cancel <job>`.
 
 In the terminal, a status line under the prompt counts the repository's jobs while any are
-running or dead or owe messages: `relay: 2 running · 1 dead · 3 owed`. `/relay-board` opens a
-pane of the repository's jobs, where you steer, continue or cancel one
+queued, running or dead or owe messages: `relay: 2 running · 1 queued (memory low) · 1 dead · 3 owed`.
+`/relay-board` opens a pane of the repository's jobs, where you steer, continue or cancel one
 ([design.md](docs/design.md#the-board)); it takes keys between turns, and clicks in the
 fullscreen layout (`CLAUDE_CODE_NO_FLICKER=1`) at any time.
 
@@ -217,6 +250,15 @@ Claude Code treats each of these runs as a Skill call. A session in `default` pe
 you before Claude runs one, and `claude -p` refuses the call unless it is allowed. To run the two
 reviews without a prompt, allow `Skill(relay:review)` and `Skill(relay:adversarial-review)`, in
 `permissions.allow` or with `claude -p --allowedTools`.
+
+Once it runs, `/relay:review`, `/relay:adversarial-review` or `/relay:setup` shows no permission
+prompt for its own steps: a check in `default` permission mode on Claude Code 2.1.309 saw none.
+Their `allowed-tools` grant `Write`, for the temporary file that carries your arguments, and
+`Bash(node:*)`, for the companion (setup adds `Bash(npm:*)`, for the Codex install it offers).
+`Write` is not yet scoped to a path: the grant would let the command write any file, though its
+instructions name only that temporary one. The same
+`Bash(node:*)` grant is why Claude could run the companion again outside Claude Code's sandbox
+without asking you (see [Relay and Claude Code's sandbox](#relay-and-claude-codes-sandbox)).
 
 Every job has its own directory under `$RELAY_JOBS_HOME` (default `~/.relay-jobs`), its own
 worker and its own server process. Jobs belong to no Claude session and survive its end. The skill's
@@ -241,6 +283,11 @@ is recorded as a job, so `/relay:status` lists it.
 Grok, ZCode and Kimi read only the diff inlined in their prompt, so they refuse a change above two files
 or 256 KiB before anything starts. An adversarial answer that does not match the review schema
 fails the review with the raw answer in the report.
+
+`/relay:review` on Codex prints Codex's own stderr after the review, under `stderr:`. An MCP server
+of your Codex home can show there, for example one whose OAuth refresh failed. That is Codex's
+output, not a finding: `/relay:setup --job-mcp-off <name>` turns that server off for Codex jobs and
+reviews alike.
 
 ### The stop-time review gate
 
@@ -284,8 +331,8 @@ Defaults use physical total memory `T` in bytes, `GiB = 2^30` bytes and
   those next turns too, with a visible reason. Host load is skipped with a note when its
   CPU scope differs from available CPUs.
 - The very-heavy-model **quota** is two concurrent participating jobs total across backends:
-  GPT-6 Astra and the Kimi K3 family, at any effort. This is a quota/token limit,
-  independent of RAM; other models stay outside it at every effort. Opaque default selections
+  GPT-6 Astra and the Kimi K3 family at any effort. This is a quota/token limit, independent
+  of RAM. Effort alone, including `max`/`ultra` on other models, never enters this pool. Opaque default selections
   remain unknown, so only identified selections are covered.
 - At most `Q = max(8, 2F)` resident waiting workers, including workers being spawned, are kept.
   Worker creation holds `64 MiB` for 30 seconds against the same host/scope budget. A full
@@ -349,7 +396,7 @@ hooks need `SubagentHandback`. Its hooks module needs the `session.send`, `agent
 the Mod API, so the floor is Claude Code 2.1.307. A Claude Code update can break it. The check after an update is one workflow that runs a `relay:job` agent: the job's `job.json`
 must hold the call's key as `relay.journalKey` (once another relay has adopted the job, its
 `relay.json` holds the binding), and the script must get the state block back. Repeat this check
-after a Claude Code update. It was last run in full on Claude Code 2.1.302, on Fedora, for the 2.1.0
+after a Claude Code update. It was last run in full on Claude Code 2.1.302, on Linux, for the 2.1.0
 release, on Codex, Grok, ZCode and Kimi: a foreground `relay:job` agent's hand-back, a Workflow
 call's state-block return with its `relay.journalKey`, a relay restarted with `TaskStop` and
 `resumeFromRunId` that adopted its running job, a background agent steered and then continued with
@@ -371,7 +418,7 @@ and its status line counts the repository's running and dead jobs and owed messa
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.18. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 3.0.0-dev.19. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
@@ -398,7 +445,7 @@ machine, for example with several suites running at once; each passes alone, so 
 an idle machine before reading it as a regression. Each test file's process keeps its temporary
 files under one `relay-test-run-*` directory in the temp directory, which `TMPDIR` points at, and
 removes it at exit once no test process runs from it. A directory whose run was killed by a signal
-is removed by the next run once its recorded owner is gone. `RELAY_TEST_KEEP_TMP=1 npm test` keeps
+is removed by the next run once its recorded process is gone. `RELAY_TEST_KEEP_TMP=1 npm test` keeps
 the directory of a file that failed; no later run removes it, so delete it yourself. `npm run check`
 type-checks the plugin's scripts (`plugins/relay/scripts/`) with TypeScript, without an installed Codex CLI.
 
