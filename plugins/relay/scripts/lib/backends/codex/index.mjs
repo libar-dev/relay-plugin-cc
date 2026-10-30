@@ -57,11 +57,16 @@ export const codexBackend = {
       const mcpOff = /** @type {string[] | undefined} */ (request.mcpOff);
       return [
         ...(mcpOff?.length > 0 ? [`mcp-off: ${mcpOff.join(", ")}`] : []),
-        ...(request.toolOutputTokenLimit != null ? [`tool-output-token-limit: ${request.toolOutputTokenLimit}`] : [])
+        ...(request.toolOutputPreset || request.toolOutputTokenLimit != null ? [`tool-output-token-limit: ${[request.toolOutputPreset, request.toolOutputTokenLimit].filter(part => part != null).join(" ")}`] : [])
       ];
     },
     lines() { return []; },
-    json(request) { return request.toolOutputTokenLimit == null ? {} : { toolOutputTokenLimit: request.toolOutputTokenLimit }; },
+    json(request) {
+      return {
+        ...(request.toolOutputTokenLimit == null ? {} : { toolOutputTokenLimit: request.toolOutputTokenLimit }),
+        ...(request.toolOutputPreset ? { toolOutputPreset: request.toolOutputPreset } : {})
+      };
+    },
     completionInferenceLine(inference, { sessionId, turnId }) {
       if (inference.threadId !== sessionId || inference.turnId !== turnId) return null;
       return `note: turn completion inferred; Codex sent no turn/completed${inference.reason ? `; thread/read: ${inference.reason}` : ""}`;

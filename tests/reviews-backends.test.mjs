@@ -69,6 +69,10 @@ function kimi(t, options = {}, files, untracked) {
 // The fake each review test reads its turns from.
 const turnsOf = (ctx, backend) => ({ zcode: () => ctx.zcode().turns, grok: () => ctx.grok().turns, kimi: () => ctx.kimi().turns })[backend]();
 
+// A Codex review says first which tool-output budget Relay chose.
+const NO_BUDGET = model => `tool-output-token-limit: 65536, Relay's deep budget for ${model} (context window not reported, 272000 assumed).`;
+const lead = backend => backend === "codex" ? `note: ${NO_BUDGET("the default model")}\n\n` : "";
+
 function codex(t, behavior = "review-ok") {
   const ctx = setup(t, { behavior });
   repo(ctx);
@@ -148,7 +152,7 @@ test("Codex adversarial review keeps outputSchema and its prompt, and passes --m
   assert.deepEqual(state.threadStarts.map(start => start.model), ["gpt-adversarial-pick"]);
   assert.equal(state.lastTurnStart.model, "gpt-adversarial-pick");
   assert.equal(payload.result.findings[0].title, "Missing empty-state guard");
-  assert.deepEqual(payload.notes, []);
+  assert.deepEqual(payload.notes, [NO_BUDGET("gpt-adversarial-pick")]);
   const turn = ctx.fakeState().lastTurnStart;
   assert.equal(turn.effort, "xhigh");
   assert.match(turn.prompt, /^<role>\nYou are Codex performing an adversarial software review\./);
@@ -326,7 +330,7 @@ test("invalid review JSON fails the review on every backend and keeps the raw an
     const ctx = make();
     const result = companion(ctx, ["adversarial-review", "--backend", backend]);
     assert.equal(result.status, 1, `${backend}: ${result.stdout}`);
-    assert.match(result.stdout, new RegExp(`^# ${label} Adversarial Review\n`), backend);
+    assert.ok(result.stdout.startsWith(`${lead(backend)}# ${label} Adversarial Review\n`), `${backend}: ${result.stdout}`);
     assert.ok(result.stdout.includes(`Raw final message:\n\n\`\`\`text\n${raw[backend]}\n\`\`\``), result.stdout);
     const job = onlyJob(ctx);
     assert.equal(job.state, "failed", backend);
@@ -353,7 +357,7 @@ test("a failed adversarial-review turn says the turn failed with the backend's e
     const ctx = make();
     const result = companion(ctx, ["adversarial-review", "--backend", backend]);
     assert.equal(result.status, 1, `${backend}: ${result.stdout}`);
-    assert.ok(result.stdout.startsWith(`# ${label} Adversarial Review\n\nTarget: working tree diff\n\nThe ${label} turn failed: ${error}\n`), `${backend}: ${result.stdout}`);
+    assert.ok(result.stdout.startsWith(`${lead(backend)}# ${label} Adversarial Review\n\nTarget: working tree diff\n\nThe ${label} turn failed: ${error}\n`), `${backend}: ${result.stdout}`);
     assert.doesNotMatch(result.stdout, /structured JSON|Parse error|no valid review JSON|unexpected review shape|^Verdict:/m, backend);
     if (backend === "codex") assert.ok(result.stdout.includes(`Raw final message:\n\n\`\`\`text\n{"verdict":"needs-attention"`), result.stdout);
     const job = onlyJob(ctx);

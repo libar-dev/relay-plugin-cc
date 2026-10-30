@@ -1,0 +1,36 @@
+{
+  "version": "2026-10-30",
+  "unit": "tokens retained in model history per tool result (Codex tool_output_token_limit)",
+  "basis": "Codex's own default keeps 10000 tokens of each result. These rows are reviewed values for named models; every other model gets the formula in request.mjs (deep = context window / 4 to the nearest power of two, balanced = deep / 2, compact = deep / 4, default deep). Proposed engineering values, not vendor settings or measured optima; context is the window Codex's model catalog advertised on the review date.",
+  "status": "proposed",
+  "models": {
+    "gpt-6-astra": {
+      "context": 272000,
+      "compact": 32768,
+      "balanced": 65536,
+      "deep": 131072,
+      "default": "balanced"
+    },
+    "gpt-6.1-sol": {
+      "context": 500000,
+      "compact": 32768,
+      "balanced": 65536,
+      "deep": 131072,
+      "default": "deep"
+    },
+    "gpt-6.1-terra": {
+      "context": 500000,
+      "compact": 32768,
+      "balanced": 65536,
+      "deep": 131072,
+      "default": "deep"
+    },
+    "gpt-6-luna": {
+      "context": 272000,
+      "compact": 16384,
+      "balanced": 32768,
+      "deep": 65536,
+      "default": "deep"
+    }
+  }
+}

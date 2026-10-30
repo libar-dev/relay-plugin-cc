@@ -1,15 +1,23 @@
 # Changelog
 
+## 2.2.1 (2026-10-30)
+
+- Codex jobs and reviews no longer lose the middle of large tool results. Codex keeps 10,000
+  tokens of each result by default, which cut review diffs and logs short. Every Codex job now gets
+  a budget unless it or the Codex configuration sets one: the model's `deep` preset, a quarter of
+  its context window to the nearest power of two (65536 for 272k, 131072 for 500k). `balanced` is
+  half of that and `compact` a quarter. Hand-reviewed models override the formula: gpt-6-astra
+  defaults to `balanced` (65536) with `deep` at 131072.
+- Codex jobs accept `tool-output-token-limit` in the header, or `--tool-output-token-limit` on
+  start, task and review commands: a preset, a number of tokens, or `inherit`. The budget is stored
+  with the job and reapplied on continue, resume and recovery. Other backends reject it.
+  `/relay:setup` shows the budget a job gets and its source, without changing configuration.
+
 ## 2.2.0 (2026-10-22)
 
 From a survey of every T3 Code thread on three machines, about 360 relay jobs from 17 to 22 October,
 most of them run by Workflow scripts ([docs/thread-surveys.md](../../docs/thread-surveys.md)).
 
-- Codex jobs accept `tool-output-token-limit` in the header, or `--tool-output-token-limit` on
-  start, task and review commands. The per-result history budget is stored with the job and
-  reapplied on continue, resume and recovery. Omitting it preserves Codex configuration.
-  Setup reports the inherited value and source, or an unreported model default, without
-  changing configuration. Other backends reject the Codex-only option.
 - A Kimi job no longer ends `completed` with `report: none`. Kimi can write a turn's `turn.ended`
   before the engine's last batch of messages, the final answer included; relay dropped every message
   after `turn.ended`. A message now goes to the prompt turn of the engine turn running (for a

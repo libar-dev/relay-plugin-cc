@@ -65,7 +65,7 @@ test("the overview shows shared backend fields and Codex budget metadata, ready,
   // The app-server reads the home's config.toml.
   assert.equal(codex.model, "gpt-default");
   assert.equal(codex.effort, "high");
-  assert.deepEqual(codex.toolOutputTokenLimit, { value: null, source: "model default (numeric budget not reported)" });
+  assert.deepEqual(codex.toolOutputTokenLimit, { value: 65536, source: "Relay's deep budget for gpt-default (context window not reported, 272000 assumed)" });
   assert.deepEqual(codex.models, [{ id: "gpt-fake-sol", efforts: ["low", "medium", "high"], defaultEffort: "low" }, { id: "gpt-fake-luna", efforts: ["low", "medium"], defaultEffort: "medium" }]);
   assert.equal(codex.can.stopGate, true);
   // Reviews run on Grok, ZCode and Kimi; the stop gate and transfer require Codex.

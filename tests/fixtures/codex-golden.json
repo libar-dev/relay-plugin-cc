@@ -15,7 +15,8 @@
           "approvalPolicy": "never",
           "sandbox": "danger-full-access",
           "config": {
-            "web_search": "live"
+            "web_search": "live",
+            "tool_output_token_limit": 65536
           },
           "serviceName": "claude_code_codex_plugin",
           "ephemeral": false
@@ -66,7 +67,8 @@
           "approvalPolicy": "never",
           "sandbox": "danger-full-access",
           "config": {
-            "web_search": "live"
+            "web_search": "live",
+            "tool_output_token_limit": 65536
           }
         }
       },
@@ -100,7 +102,8 @@
           "approvalPolicy": "never",
           "sandbox": "danger-full-access",
           "config": {
-            "web_search": "live"
+            "web_search": "live",
+            "tool_output_token_limit": 65536
           }
         }
       },
@@ -129,7 +132,7 @@
     "snapshots": [
       {
         "phase": "start-and-steer",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 1\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 1\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nnote: tool-output-token-limit: 65536, Relay's deep budget for gpt-test (context window not reported, 272000 assumed).\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",
@@ -198,7 +201,7 @@
       },
       {
         "phase": "continue",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 2\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 2\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nnote: tool-output-token-limit: 65536, Relay's deep budget for gpt-test (context window not reported, 272000 assumed).\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",
@@ -292,7 +295,7 @@
       },
       {
         "phase": "resume",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 3\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 3\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nnote: tool-output-token-limit: 65536, Relay's deep budget for gpt-test (context window not reported, 272000 assumed).\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",
@@ -427,7 +430,8 @@
           "approvalPolicy": "never",
           "sandbox": "danger-full-access",
           "config": {
-            "web_search": "live"
+            "web_search": "live",
+            "tool_output_token_limit": 65536
           },
           "serviceName": "claude_code_codex_plugin",
           "ephemeral": false
@@ -478,7 +482,8 @@
           "approvalPolicy": "never",
           "sandbox": "danger-full-access",
           "config": {
-            "web_search": "live"
+            "web_search": "live",
+            "tool_output_token_limit": 65536
           }
         }
       },
@@ -512,7 +517,8 @@
           "approvalPolicy": "never",
           "sandbox": "danger-full-access",
           "config": {
-            "web_search": "live"
+            "web_search": "live",
+            "tool_output_token_limit": 65536
           }
         }
       },
@@ -541,7 +547,7 @@
     "snapshots": [
       {
         "phase": "start-and-steer",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 1\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 1\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nnote: tool-output-token-limit: 65536, Relay's deep budget for gpt-test (context window not reported, 272000 assumed).\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",
@@ -610,7 +616,7 @@
       },
       {
         "phase": "continue",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 2\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 2\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nnote: tool-output-token-limit: 65536, Relay's deep budget for gpt-test (context window not reported, 272000 assumed).\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",
@@ -704,7 +710,7 @@
       },
       {
         "phase": "resume",
-        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 3\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\n",
+        "block": "state: completed\njob: <job>\nsession: thr_1\nmodel: gpt-test\neffort: low\nduration: <duration>\nattempts: 3\nreport: <tmp>/jobs/<repo>/<job>/report.md\ndir: <tmp>/jobs/<repo>/<job>\nmode: yolo\nweb-search: live\ncwd: <tmp>/work\nnote: tool-output-token-limit: 65536, Relay's deep budget for gpt-test (context window not reported, 272000 assumed).\n",
         "status": {
           "jobsHome": "<tmp>/jobs",
           "repoSlug": "<repo>",

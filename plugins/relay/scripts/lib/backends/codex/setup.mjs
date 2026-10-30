@@ -1,6 +1,6 @@
 import { SpawnedServerClient } from "../transport/stdio-rpc.mjs";
 import { codexBackend } from "./index.mjs";
-import { codexDefaultHome } from "./request.mjs";
+import { budgetsFor, codexDefaultHome } from "./request.mjs";
 import { emptyBlock, notInstalled, isScript, firstLine, lastLine, seconds, closeWithin, effortName, executablesOnPath, versionOf } from "../setup.mjs";
 
 // One app-server in the Codex home: `account/read`, `config/read`, `model/list`. No thread is opened.
@@ -23,7 +23,7 @@ async function askCodexServer(cwd, home, env, limitMs) {
     await client.initialize();
     const account = await client.request("account/read", { refreshToken: false });
     answer.account = account && typeof account === "object" ? account : null;
-    const result = await client.request("config/read", { includeLayers: true, cwd });
+    const result = await client.request("config/read", { includeLayers: false, cwd });
     const config = result?.config;
     answer.config = config && typeof config === "object" ? config : {};
     answer.toolOutputOrigin = result?.origins?.tool_output_token_limit?.name ?? null;
@@ -107,8 +107,10 @@ async function checkCodexHome(cwd, home, env, shared, limits) {
   const budget = answer.config.tool_output_token_limit;
   const origin = answer.toolOutputOrigin;
   const location = origin?.file ?? origin?.dotCodexFolder;
+  const model = answer.config.model;
+  const budgets = budgetsFor(model, { config: answer.config, codexHome: home.home });
   block.toolOutputTokenLimit = budget == null
-    ? { value: null, source: "model default (numeric budget not reported)" }
+    ? { value: budgets[budgets.default], source: `Relay's ${budgets.default} budget for ${model ?? "the default model"} (${budgets.basis})` }
     : Number.isSafeInteger(budget) && budget >= 0
       ? { value: budget, source: origin?.type ? `${origin.type} configuration${location ? ` (${location})` : ""}` : "configuration (source not reported)" }
       : { value: null, source: "unknown (unrecognized configured budget)" };

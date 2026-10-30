@@ -159,7 +159,7 @@ Claude Code update can break.
 | `fast` | `true` asks OpenAI for its priority tier after `/relay:setup --fast-tier allowed` | `false` |
 | `network` | `true`, `false`; `write` and `read-only` only | `false` |
 | `web-search` | `live`, `cached`, `disabled` | `live` |
-| `tool-output-token-limit` | Codex only: positive integer, tokens retained per tool result | inherited from Codex |
+| `tool-output-token-limit` | Codex only: `compact`, `balanced`, `deep`, `inherit` or a positive integer of tokens retained per tool result | Codex configuration, else the model's default Relay budget (`deep`: a quarter of its context window) |
 | `cd` | absolute working directory | the agent's directory |
 | `add-dir` | absolute extra writable root, repeatable; Codex `write` only | none |
 | `brief` | absolute path of the brief file; nothing follows `---` | the text after `---` |
@@ -252,21 +252,42 @@ model_reasoning_effort = "high"
 Your Codex sign-in, API key and provider configuration apply as they do in the Codex CLI.
 
 Codex's `tool_output_token_limit` controls how much of each tool result is retained in model
-history. Relay inherits it on each new job launch. `/relay:setup` reports the configured value
-and its source; when unset, it reports a model default without guessing its numeric budget.
-Setup reads this configuration; it does not write or freeze a default.
+history. Codex's own default keeps 10,000 tokens, which cuts the middle out of a review's diff or a
+long log, so Relay gives every Codex job a budget. Each model has three presets, in tokens per tool
+result:
 
-To override the budget for one job, add `tool-output-token-limit: 65536` to its header.
-The same `--tool-output-token-limit 65536` flag works with `start`, `task`, `review` and
-`adversarial-review`. The override is stored with the job, shown in its state and JSON status,
-and reapplied on continue, resume and worker recovery. Omit it to inherit Codex configuration.
-Other backends reject this option.
+- `deep`: a quarter of the model's context window, to the nearest power of two (65536 for a 272k
+  window, 131072 for 500k). This is the default.
+- `balanced`: half of `deep`.
+- `compact`: a quarter of `deep`.
 
-The example is a workload choice, not a model recommendation. Larger results use more context
-and can cause earlier compaction. This budget does not increase the model's context window or
-generated-answer limit, and cannot restore output already truncated by a tool. Keep model-specific
-budgets in the configuration or workflow that chooses the model. Codex CLI and Relay update
-independently; a Relay update does not replace the `codex` executable used by jobs.
+The window comes from Codex's `model_context_window` setting, else from Codex's model catalog
+cache; when neither reports it, 272000 is assumed. Models reviewed by hand override the formula in
+[`tool-output-budgets.json`](plugins/relay/scripts/lib/backends/codex/tool-output-budgets.json):
+
+| Model | `compact` | `balanced` | `deep` | Default |
+| --- | ---: | ---: | ---: | --- |
+| `gpt-6-astra` | 32768 | 65536 | 131072 | `balanced` |
+| `gpt-6.1-sol` | 32768 | 65536 | 131072 | `deep` |
+| `gpt-6.1-terra` | 32768 | 65536 | 131072 | `deep` |
+| `gpt-6-luna` | 16384 | 32768 | 65536 | `deep` |
+
+The values are proposed engineering judgments, not vendor settings or measured optima. A job that
+sets no budget gets the Codex configuration's `tool_output_token_limit` when there is one, else its
+model's default, and its state block names the budget and its basis. `/relay:setup` shows the
+budget a job on the default model gets and where it comes from. Setup never writes it.
+
+To choose for one job, add `tool-output-token-limit:` to its header with `compact`, `balanced`,
+`deep`, a number of tokens, or `inherit` to send no budget and leave Codex's configuration or default
+in charge. The same `--tool-output-token-limit` flag works with `start`, `task`, `review` and
+`adversarial-review`. A chosen budget is resolved for the job's model at launch, stored with the
+job, shown in its state and JSON status, and reapplied on continue, resume and worker recovery.
+A preset on `model: default` resolves when the thread opens. Other backends reject this option.
+
+Larger results use more context and can bring compaction forward. This budget does not increase
+the model's context window or generated-answer limit, and cannot restore output already
+truncated by a tool. Codex CLI and Relay update independently; a Relay update does not replace the
+`codex` executable used by jobs.
 
 ## What the relay depends on in Claude Code
 

@@ -5,15 +5,24 @@ import assert from "node:assert/strict";
 import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
 import { companion, finishJob, HEADER, makeHome, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 import { initGitRepo } from "./support/helpers.mjs";
+import { TOOL_OUTPUT_BUDGETS } from "../plugins/relay/scripts/lib/backends/codex/request.mjs";
+
+const VERSION = TOOL_OUTPUT_BUDGETS.version;
 
 test("Codex budgets validate before launch and are refused by other backends", t => {
   const ctx = setup(t);
   const build = value => buildLaunchRequest({ model: "gpt-test", effort: "low", toolOutputTokenLimit: value }, { baseDir: ctx.work, env: ctx.env });
-  for (const value of ["", "0", "-1", "1.5", "1e5", "Infinity", "NaN", "9007199254740992", "default"]) {
-    assert.throws(() => build(value), /tool-output-token-limit must be a positive safe integer/);
+  for (const value of ["", "0", "-1", "1.5", "1e5", "Infinity", "NaN", "9007199254740992", "default", "maximum"]) {
+    assert.throws(() => build(value), /tool-output-token-limit must be compact, balanced, deep, inherit or a positive safe integer/);
   }
   assert.equal(build("65536").toolOutputTokenLimit, 65536);
   assert.equal(Object.hasOwn(build(undefined), "toolOutputTokenLimit"), false);
+  assert.deepEqual(["compact", "balanced", "deep"].map(preset => build(preset).toolOutputTokenLimit), [16384, 32768, 65536]);
+  const named = (model, value) => buildLaunchRequest({ model, effort: "low", toolOutputTokenLimit: value }, { baseDir: ctx.work, env: ctx.env });
+  assert.deepEqual([named("gpt-6.1-sol", "Deep").toolOutputTokenLimit, named("gpt-6-astra", "balanced").toolOutputTokenLimit, named("gpt-6-luna", "compact").toolOutputTokenLimit], [131072, 65536, 16384]);
+  assert.equal(named("gpt-6.1-sol", "deep").toolOutputPreset, "deep");
+  assert.equal(named("default", "deep").toolOutputTokenLimit, undefined);
+  assert.equal(named("gpt-test", "inherit").toolOutputPreset, "inherit");
   const { header } = parseHeaderPrompt(`${HEADER}\ntool-output-token-limit: 131072 # tokens\n---\nReview`);
   assert.equal(buildLaunchRequest(header, { baseDir: ctx.work, env: ctx.env }).toolOutputTokenLimit, 131072);
   for (const backend of ["grok", "zcode", "kimi"]) {
@@ -42,16 +51,54 @@ test("an explicit budget is stored, visible, and passed on start, continue and r
   assert.match(companion(ctx, ["result", id, "--state-only"]).stdout, /^tool-output-token-limit: 131072$/m);
 });
 
-test("an omitted budget leaves Codex configuration in control on start and resume", async t => {
+test("without a budget, a table model gets its default budget on start and resume, with a note", async t => {
   const ctx = setup(t);
-  const { id } = startJob(ctx);
+  const { id } = startJob(ctx, "model: gpt-6.1-sol\neffort: low");
   await finishJob(ctx, id);
   assert.equal(companion(ctx, ["resume", id, "--message", "[quick] Continue."]).status, 0);
   await finishJob(ctx, id);
   assert.equal(Object.hasOwn(readJob(ctx, id).request, "toolOutputTokenLimit"), false);
-  for (const r of ctx.fakeState().requests.filter(r => ["thread/start", "thread/resume"].includes(r.method))) {
-    assert.equal(Object.hasOwn(r.params.config, "tool_output_token_limit"), false);
-  }
+  const opens = ctx.fakeState().requests.filter(r => ["thread/start", "thread/resume"].includes(r.method));
+  assert.deepEqual(opens.map(r => r.params.config.tool_output_token_limit), [131072, 131072]);
+  const state = companion(ctx, ["result", id, "--state-only"]).stdout;
+  assert.equal(state.match(/^note: tool-output-token-limit: .*$/gm).join("\n"), `note: tool-output-token-limit: 131072, Relay's deep budget for gpt-6.1-sol (reviewed ${VERSION}).`);
+});
+
+for (const [label, header, configRead, expected] of [
+  ["Astra's default is balanced", "model: gpt-6-astra", { config: {} }, 65536],
+  ["Luna's default is deep", "model: gpt-6-luna", { config: {} }, 65536],
+  ["a default-model job takes the configured model's default", "model: default", { config: { model: "gpt-6.1-terra" } }, 131072],
+  ["a default-model job resolves its preset when the thread opens", "model: default\ntool-output-token-limit: compact", { config: { model: "gpt-6-luna" } }, 16384],
+  ["a budget in the Codex configuration wins over the default", "model: gpt-6.1-sol", { config: { tool_output_token_limit: 8192 } }, undefined],
+  ["a preset wins over the Codex configuration", "model: gpt-6.1-sol\ntool-output-token-limit: balanced", { config: { tool_output_token_limit: 8192 } }, 65536],
+  ["inherit sends no budget", "model: gpt-6.1-sol\ntool-output-token-limit: inherit", { config: {} }, undefined],
+  ["an unreviewed model without a known window", "model: gpt-test", { config: {} }, 65536],
+  ["an unreviewed model's catalog window", "model: gpt-wide", { config: {} }, 131072],
+  ["an unreviewed model's preset", "model: gpt-small\ntool-output-token-limit: compact", { config: {} }, 8192],
+  ["the configured context window", "model: gpt-test", { config: { model_context_window: 1000000 } }, 262144]
+]) {
+  test(`budget: ${label}`, async t => {
+    const ctx = setup(t, { env: { FAKE_CODEX_CONFIG_READ: JSON.stringify(configRead) } });
+    fs.writeFileSync(path.join(makeHome(ctx), "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-wide", context_window: 500000 }, { slug: "gpt-small", context_window: 128000 }] }));
+    const { id } = startJob(ctx, `${header}\neffort: low`);
+    await finishJob(ctx, id);
+    assert.equal(ctx.fakeState().threadStarts[0].config.tool_output_token_limit, expected);
+    if (label.includes("without a known window")) {
+      assert.match(companion(ctx, ["result", id, "--state-only"]).stdout, /^note: tool-output-token-limit: 65536, Relay's deep budget for gpt-test \(context window not reported, 272000 assumed\)\.$/m);
+    }
+    if (label.includes("catalog window")) {
+      assert.match(companion(ctx, ["result", id, "--state-only"]).stdout, /^note: tool-output-token-limit: 131072, Relay's deep budget for gpt-wide \(context 500000 \/ 4\)\.$/m);
+    }
+  });
+}
+
+test("a native review without a budget gets the configured model's default", t => {
+  const ctx = setup(t, { behavior: "default", env: { FAKE_CODEX_CONFIG_READ: JSON.stringify({ config: { model: "gpt-6-astra" } }) } });
+  initGitRepo(ctx.work);
+  fs.writeFileSync(path.join(ctx.work, "sample.txt"), "synthetic review input\n");
+  const result = companion(ctx, ["review", "--scope", "working-tree"]);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(ctx.fakeState().threadStarts[0].config.tool_output_token_limit, 65536);
 });
 
 test("a replacement worker restores the stored budget after worker death", async t => {
@@ -96,7 +143,8 @@ for (const [label, response, expected] of [
   ["user", { config: { tool_output_token_limit: 65536 }, origins: { tool_output_token_limit: { name: { type: "user", file: "/synthetic/config.toml" } } } }, { value: 65536, source: "user configuration (/synthetic/config.toml)" }],
   ["project", { config: { tool_output_token_limit: 131072 }, origins: { tool_output_token_limit: { name: { type: "project", dotCodexFolder: "/synthetic/project/.codex" } } } }, { value: 131072, source: "project configuration (/synthetic/project/.codex)" }],
   ["missing origin", { config: { tool_output_token_limit: 32768 } }, { value: 32768, source: "configuration (source not reported)" }],
-  ["model default", { config: {} }, { value: null, source: "model default (numeric budget not reported)" }],
+  ["unset on a table model", { config: { model: "gpt-6.1-sol" } }, { value: 131072, source: `Relay's deep budget for gpt-6.1-sol (reviewed ${VERSION})` }],
+  ["unset on another model", { config: {} }, { value: 65536, source: "Relay's deep budget for the default model (context window not reported, 272000 assumed)" }],
   ["zero", { config: { tool_output_token_limit: 0 } }, { value: 0, source: "configuration (source not reported)" }],
   ["invalid", { config: { tool_output_token_limit: "bad" } }, { value: null, source: "unknown (unrecognized configured budget)" }]
 ]) {
@@ -114,6 +162,6 @@ for (const [label, response, expected] of [
     assert.equal(fs.readFileSync(path.join(home, "config.toml"), "utf8"), before);
     assert.equal(ctx.fakeState().threadStarts?.length ?? 0, 0);
     assert.equal(fs.realpathSync(ctx.fakeState().configReads[0].cwd), fs.realpathSync(ctx.work));
-    assert.equal(ctx.fakeState().configReads[0].includeLayers, true);
+    assert.equal(ctx.fakeState().configReads[0].includeLayers, false);
   });
 }
