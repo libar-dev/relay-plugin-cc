@@ -74,7 +74,9 @@ for (const [label, header, configRead, expected] of [
   ["the configured context window", "model: gpt-test", { config: { model_context_window: 1000000 } }, 262144],
   ["the configured context window under a named model's preset", "model: gpt-custom\ntool-output-token-limit: deep", { config: { model_context_window: 32768 } }, 8192],
   ["the configured context window under a default model's preset", "model: default\ntool-output-token-limit: deep", { config: { model: "gpt-custom", model_context_window: 32768 } }, 8192],
-  ["the configured context window over a conflicting catalog entry", "model: gpt-wide\ntool-output-token-limit: deep", { config: { model_context_window: 32768 } }, 8192]
+  ["the configured context window over a conflicting catalog entry", "model: gpt-wide\ntool-output-token-limit: deep", { config: { model_context_window: 32768 } }, 8192],
+  ["the configured context window over a reviewed model's values", "model: gpt-6.1-sol\ntool-output-token-limit: deep", { config: { model_context_window: 32768 } }, 8192],
+  ["a reviewed model's default under a configured context window", "model: gpt-6-astra", { config: { model_context_window: 1000000 } }, 262144]
 ]) {
   test(`budget: ${label}`, async t => {
     const ctx = setup(t, { env: { FAKE_CODEX_CONFIG_READ: JSON.stringify(configRead) } });

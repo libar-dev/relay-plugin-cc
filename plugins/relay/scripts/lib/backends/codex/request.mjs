@@ -49,9 +49,12 @@ function contextWindowFor(model, config, codexHome) {
   }
 }
 
-// A model's presets, its default preset and where they come from.
+// A model's presets, its default preset and where they come from. A configured
+// `model_context_window` wins over the reviewed values, which assume the catalog's window.
+/** @param {string | null | undefined} model @param {{ config?: Record<string, any>, codexHome: string }} options */
 export function budgetsFor(model, { config = {}, codexHome }) {
-  if (model && Object.hasOwn(TOOL_OUTPUT_BUDGETS.models, model)) {
+  const configured = Number.isSafeInteger(config?.model_context_window) && config.model_context_window > 0;
+  if (!configured && model && Object.hasOwn(TOOL_OUTPUT_BUDGETS.models, model)) {
     return { ...TOOL_OUTPUT_BUDGETS.models[model], basis: `reviewed ${TOOL_OUTPUT_BUDGETS.version}` };
   }
   const window = contextWindowFor(model, config, codexHome);

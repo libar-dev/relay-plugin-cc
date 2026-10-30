@@ -497,7 +497,8 @@ binaries and never start a real backend.
   `balanced` half of `deep`, `compact` a quarter. The window is `model_context_window`, else the
   model's entry in Codex's `models_cache.json`, else 272000; `model/list` reports neither window
   nor budget. `codex/tool-output-budgets.json` holds hand-reviewed values that replace the formula
-  for named models, with a version. A job's `tool-output-token-limit` takes a preset, a number or
+  for named models, with a version, unless `model_context_window` is configured: the reviewed
+  values assume the catalog's window. A job's `tool-output-token-limit` takes a preset, a number or
   `inherit`. A preset resolves at each thread open, after `config/read`, so a configured
   `model_context_window` bounds it whether or not the job names its model. The number
   is sent as `config.tool_output_token_limit` on thread start and resume, including recovery, and on

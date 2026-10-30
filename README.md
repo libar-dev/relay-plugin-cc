@@ -262,7 +262,8 @@ result:
 - `compact`: a quarter of `deep`.
 
 The window comes from Codex's `model_context_window` setting, else from Codex's model catalog
-cache; when neither reports it, 272000 is assumed. Models reviewed by hand override the formula in
+cache; when neither reports it, 272000 is assumed. Unless `model_context_window` is configured,
+models reviewed by hand override the formula in
 [`tool-output-budgets.json`](plugins/relay/scripts/lib/backends/codex/tool-output-budgets.json):
 
 | Model | `compact` | `balanced` | `deep` | Default |
