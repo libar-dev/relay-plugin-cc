@@ -164,3 +164,48 @@ for (const [label, response, expected] of [
     assert.equal(ctx.fakeState().configReads[0].includeLayers, false);
   });
 }
+
+for (const [label, header, configRead, expected] of [
+  ["a budget above code mode's default tells the model how to ask for it", "model: gpt-6.1-sol", { config: {} }, { has: "\"max_output_tokens\": 131072" }],
+  ["a configured budget reaches code mode, after the user's developer instructions", "model: gpt-6.1-sol", { config: { tool_output_token_limit: 65536, developer_instructions: "Keep answers short." } }, { starts: "Keep answers short.\n\n", has: "\"max_output_tokens\": 65536" }],
+  ["a budget at or below code mode's default adds no instructions", "model: gpt-6.1-sol\ntool-output-token-limit: 8192", { config: {} }, null],
+  ["inherit without a configured budget adds no instructions", "model: gpt-6.1-sol\ntool-output-token-limit: inherit", { config: {} }, null]
+]) {
+  test(`code mode: ${label}`, async t => {
+    const ctx = setup(t, { env: { FAKE_CODEX_CONFIG_READ: JSON.stringify(configRead) } });
+    const { id } = startJob(ctx, `${header}\neffort: low`);
+    await finishJob(ctx, id);
+    assert.equal(companion(ctx, ["resume", id, "--message", "[quick] Continue."]).status, 0);
+    await finishJob(ctx, id);
+    const opens = ctx.fakeState().requests.filter(r => ["thread/start", "thread/resume"].includes(r.method));
+    for (const open of opens) {
+      const instructions = open.params.developerInstructions;
+      if (!expected) { assert.equal(instructions, undefined, open.method); continue; }
+      assert.ok(instructions.includes(expected.has), instructions);
+      assert.match(instructions, /`wait`/);
+      if (expected.starts) assert.ok(instructions.startsWith(expected.starts), instructions);
+    }
+  });
+}
+
+test("a budget flag beside a prompt file wins over the file's header", async t => {
+  const ctx = setup(t);
+  const file = path.join(ctx.root, "prompt.md");
+  fs.writeFileSync(file, `${HEADER}\ntool-output-token-limit: 131072\n---\n[quick] Read the synthetic input.`);
+  const result = companion(ctx, ["start", "--prompt-file", file, "--tool-output-token-limit", "65536", "--json"]);
+  assert.equal(result.status, 0, result.stderr);
+  const started = JSON.parse(result.stdout);
+  assert.equal(started.toolOutputTokenLimit, 65536);
+  await finishJob(ctx, started.jobId);
+  assert.equal(ctx.fakeState().threadStarts[0].config.tool_output_token_limit, 65536);
+});
+
+test("a native review prints the budget Relay chose and passes code mode's instructions", t => {
+  const ctx = setup(t, { behavior: "default", env: { FAKE_CODEX_CONFIG_READ: JSON.stringify({ config: { model: "gpt-6.1-sol" } }) } });
+  initGitRepo(ctx.work);
+  fs.writeFileSync(path.join(ctx.work, "sample.txt"), "synthetic review input\n");
+  const result = companion(ctx, ["review", "--scope", "working-tree"]);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, new RegExp(`^note: tool-output-token-limit: 131072, Relay's deep budget for gpt-6.1-sol \\(reviewed ${VERSION}\\)\\.$`, "m"));
+  assert.ok(ctx.fakeState().threadStarts[0].developerInstructions.includes("\"max_output_tokens\": 131072"));
+});

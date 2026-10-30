@@ -12,9 +12,11 @@ async function runAppServerReview(cwd, options = {}) {
 
   return withAppServer(cwd, async (client) => {
     const budget = await toolOutputTokenLimitFor(client, options.request);
+    if (budget.note) options.request.notes.push(budget.note);
     const thread = await startThread(client, cwd, {
       model: options.model,
       config: budget.limit == null ? undefined : { tool_output_token_limit: budget.limit },
+      developerInstructions: budget.developerInstructions,
       sandbox: "read-only",
       ephemeral: true
     });

@@ -284,6 +284,12 @@ in charge. The same `--tool-output-token-limit` flag works with `start`, `task`,
 and reapplied on continue, resume and worker recovery. A preset resolves each time the thread
 opens, after Relay reads the Codex configuration, and the state block names its value. Other backends reject this option.
 
+Codex's code mode, which current models use for every tool call, returns 10,000 tokens of each
+`exec` or `wait` result unless the call asks for more, whatever the budget is; no setting changes
+that. When a job's effective budget (its own, the Codex configuration's, or Relay's default) is
+above 10,000, Relay adds a developer instruction with the budget and the
+`// @exec: {"max_output_tokens": N}` pragma, after any developer instructions you configured.
+
 Larger results use more context and can bring compaction forward. This budget does not increase
 the model's context window or generated-answer limit, and cannot restore output already
 truncated by a tool. Codex CLI and Relay update independently; a Relay update does not replace the

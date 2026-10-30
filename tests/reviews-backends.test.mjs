@@ -107,7 +107,7 @@ test("Codex review runs in the Codex home with the job MCP list; --effort on the
 
   const result = companion(ctx, ["review", "--effort", "high", "--model", "gpt-review-pick"]);
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout.startsWith("note: effort high is ignored: Codex's native review takes no effort.\n\n# Codex Review\n"), result.stdout);
+  assert.ok(result.stdout.startsWith(`note: effort high is ignored: Codex's native review takes no effort.\nnote: ${NO_BUDGET("gpt-review-pick")}\n\n# Codex Review\n`), result.stdout);
   assert.match(result.stdout, /Reviewed uncommitted changes/);
   const state = ctx.fakeState();
   // The caller's environment, unchanged: no CODEX_HOME is added.

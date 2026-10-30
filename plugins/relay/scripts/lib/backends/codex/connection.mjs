@@ -33,7 +33,7 @@ class CodexConnection {
       threadId: sessionId, threadName: sessionName, ephemeral,
       model: request.model, serviceTier: request.fast ? "priority" : null,
       sandbox: sandboxFor(request), approvalPolicy: approvalPolicyFor(),
-      config
+      config, developerInstructions: budget.developerInstructions
     });
     this.sessionId = opened.threadId;
     this.deliveredIds = clientIdsInThread(opened.response);

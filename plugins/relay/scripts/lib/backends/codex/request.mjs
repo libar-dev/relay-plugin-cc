@@ -76,23 +76,37 @@ function toolOutputFields(value) {
   return { toolOutputTokenLimit: limit };
 }
 
-// The budget a thread opens with, and a note when Relay chose it: the job's number; none for
-// `inherit` or when the Codex configuration sets one; else the job's preset or the model's
-// default. A failed `config/read` counts as no configured budget.
+// Code mode returns 10,000 tokens of each `exec` or `wait` result unless the call asks for more,
+// whatever the history budget is, and no setting changes that default. A thread whose budget is
+// larger tells the model how to ask, after the developer instructions the user configured.
+const CODE_MODE_DEFAULT_TOKENS = 10000;
+
+function developerInstructionsFor(limit, config) {
+  if (!(limit > CODE_MODE_DEFAULT_TOKENS)) return null;
+  const relay = `Tool output: this job keeps up to ${limit} tokens of each tool result. In code mode, \`exec\` and \`wait\` return only ${CODE_MODE_DEFAULT_TOKENS} tokens of output by default and cut the middle. When a command can print more (a diff, a log, a whole file), start the exec input with \`// @exec: {"max_output_tokens": ${limit}}\`, or pass \`max_tokens: ${limit}\` to \`wait\`, rather than working from a truncated result.`;
+  return [typeof config.developer_instructions === "string" ? config.developer_instructions : null, relay].filter(Boolean).join("\n\n");
+}
+
+// The budget a thread opens with, a note when Relay chose it, and the developer instructions that
+// carry it into code mode: the job's number; none for `inherit` or when the Codex configuration
+// sets one; else the job's preset or the model's default. A failed `config/read` counts as no
+// configured budget.
 export async function toolOutputTokenLimitFor(client, request, env = process.env) {
-  if (request.toolOutputTokenLimit != null) return { limit: request.toolOutputTokenLimit, note: null };
-  if (request.toolOutputPreset === "inherit") return { limit: null, note: null };
   let config = {};
   try {
     config = (await client.request("config/read", { includeLayers: false, cwd: request.cwd }))?.config ?? {};
   } catch {
     config = {};
   }
-  if (!request.toolOutputPreset && config.tool_output_token_limit != null) return { limit: null, note: null };
+  const configured = Number.isSafeInteger(config.tool_output_token_limit) ? config.tool_output_token_limit : null;
+  const result = (limit, note) => ({ limit, note, developerInstructions: developerInstructionsFor(limit ?? configured, config) });
+  if (request.toolOutputTokenLimit != null) return result(request.toolOutputTokenLimit, null);
+  if (request.toolOutputPreset === "inherit") return result(null, null);
+  if (!request.toolOutputPreset && config.tool_output_token_limit != null) return result(null, null);
   const model = request.model && request.model !== "default" ? request.model : config.model;
   const budgets = budgetsFor(model, { config, codexHome: codexDefaultHome(env) });
   const preset = request.toolOutputPreset ?? budgets.default;
-  return { limit: budgets[preset], note: `tool-output-token-limit: ${budgets[preset]}, Relay's ${preset} budget for ${model ?? "the default model"} (${budgets.basis}).` };
+  return result(budgets[preset], `tool-output-token-limit: ${budgets[preset]}, Relay's ${preset} budget for ${model ?? "the default model"} (${budgets.basis}).`);
 }
 
 // thread/start and thread/resume `config` overrides for a request.

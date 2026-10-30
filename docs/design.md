@@ -503,7 +503,11 @@ binaries and never start a real backend.
   is sent as `config.tool_output_token_limit` on thread start and resume, including recovery, and on
   a native review's source thread. Without a choice, each thread open asks `config/read`: a
   configured budget stays Codex's; otherwise Relay sends the model's default and writes a `note:`
-  naming the value and its basis.
+  naming the value and its basis. Code mode cuts each `exec` and `wait` result to 10,000 tokens
+  unless the call asks for more (`max_output_tokens`, `max_tokens`), whatever the budget; no
+  setting changes that default. So when the effective budget is above 10,000, the thread opens
+  with `developerInstructions` naming the budget and the pragma, appended to the configured
+  `developer_instructions`.
   See [Codex configuration](../README.md#codex-configuration) for usage and limits.
 - **Job MCP servers off.** `setup --job-mcp-off name,...` stores a user-level list. A job passes
   `-c mcp_servers.<name>.enabled=false` for each listed name the home's `config.toml` defines and
