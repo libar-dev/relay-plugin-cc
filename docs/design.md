@@ -491,6 +491,11 @@ binaries and never start a real backend.
   writes nothing there. `default` takes the configured `model` and `model_reasoning_effort`. Sign-in
   is the CLI's: ChatGPT, an API key, or none when the configured provider needs no OpenAI sign-in
   (setup's `not-needed`, from openai/codex-plugin-cc#177).
+- **Tool-output budget.** A job's optional `tool-output-token-limit` is stored in its launch
+  request and sent as `config.tool_output_token_limit` on thread start and resume, including
+  recovery. Native reviews pass it on their source thread too. Omission preserves Codex
+  configuration; setup reports the configured value and source through `config/read`.
+  See [Codex configuration](../README.md#codex-configuration) for usage and limits.
 - **Job MCP servers off.** `setup --job-mcp-off name,...` stores a user-level list. A job passes
   `-c mcp_servers.<name>.enabled=false` for each listed name the home's `config.toml` defines and
   skips any other name with a `note:`, because Codex refuses to start on a setting for a server its

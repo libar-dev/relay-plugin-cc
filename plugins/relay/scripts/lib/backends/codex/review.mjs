@@ -12,6 +12,7 @@ async function runAppServerReview(cwd, options = {}) {
   return withAppServer(cwd, async (client) => {
     const thread = await startThread(client, cwd, {
       model: options.model,
+      config: options.config,
       sandbox: "read-only",
       ephemeral: true
     });
@@ -62,7 +63,9 @@ export const reviewSupport = {
     ensureAvailable(request.cwd);
     const result = await runAppServerReview(request.cwd, {
       target: target.mode === "working-tree" ? { type: "uncommittedChanges" } : { type: "baseBranch", branch: target.baseRef },
-      model: request.model, notificationTap: hooks.tap, ...codexServerArgs(request)
+      model: request.model,
+      config: request.toolOutputTokenLimit == null ? undefined : { tool_output_token_limit: request.toolOutputTokenLimit },
+      notificationTap: hooks.tap, ...codexServerArgs(request)
     });
     return {
       status: result.status, sessionId: result.threadId, sourceSessionId: result.sourceThreadId,

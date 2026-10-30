@@ -310,6 +310,8 @@ export interface SetupProbe {
   check(home: SetupHome, shared: unknown, context: SetupContext): Promise<SetupBlock>;
   /** The sign-in line, where the generic wording does not fit; null keeps the generic one. */
   signInText?(block: SetupBlock): string | null;
+  /** Additional configuration facts reported by this backend. */
+  settingLines?(block: SetupBlock): string[];
   /** What to do next for this block; empty when nothing is needed. */
   nextSteps(block: SetupBlock, context: SetupContext): string[];
   /** The page offers this backend's optional stop gate when it is off. */
@@ -331,6 +333,7 @@ export interface SetupHome {
 }
 
 export interface SetupBlock extends SetupHome {
+  toolOutputTokenLimit?: { value: number | null, source: string };
   binary: string | null;
   binaryIsScript: boolean;
   realBinary: string | null;

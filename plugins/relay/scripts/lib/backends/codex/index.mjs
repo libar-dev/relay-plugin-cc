@@ -55,10 +55,13 @@ export const codexBackend = {
   view: {
     settingLines(request) {
       const mcpOff = /** @type {string[] | undefined} */ (request.mcpOff);
-      return mcpOff?.length > 0 ? [`mcp-off: ${mcpOff.join(", ")}`] : [];
+      return [
+        ...(mcpOff?.length > 0 ? [`mcp-off: ${mcpOff.join(", ")}`] : []),
+        ...(request.toolOutputTokenLimit != null ? [`tool-output-token-limit: ${request.toolOutputTokenLimit}`] : [])
+      ];
     },
     lines() { return []; },
-    json() { return {}; },
+    json(request) { return request.toolOutputTokenLimit == null ? {} : { toolOutputTokenLimit: request.toolOutputTokenLimit }; },
     completionInferenceLine(inference, { sessionId, turnId }) {
       if (inference.threadId !== sessionId || inference.turnId !== turnId) return null;
       return `note: turn completion inferred; Codex sent no turn/completed${inference.reason ? `; thread/read: ${inference.reason}` : ""}`;

@@ -5,7 +5,7 @@ import { emptyBlock, notInstalled, isScript, firstLine, lastLine, seconds, close
 
 // One app-server in the Codex home: `account/read`, `config/read`, `model/list`. No thread is opened.
 async function askCodexServer(cwd, home, env, limitMs) {
-  const answer = { account: null, config: null, models: null, modelsError: null, error: null, warnings: [] };
+  const answer = { account: null, config: null, toolOutputOrigin: null, models: null, modelsError: null, error: null, warnings: [] };
   let stderr = "";
   // `account/read`, `config/read` and `model/list` are outside the typed method map.
   const client = /** @type {any} */ (new SpawnedServerClient(cwd, {
@@ -23,8 +23,10 @@ async function askCodexServer(cwd, home, env, limitMs) {
     await client.initialize();
     const account = await client.request("account/read", { refreshToken: false });
     answer.account = account && typeof account === "object" ? account : null;
-    const config = (await client.request("config/read", { includeLayers: false, cwd }))?.config;
+    const result = await client.request("config/read", { includeLayers: true, cwd });
+    const config = result?.config;
     answer.config = config && typeof config === "object" ? config : {};
+    answer.toolOutputOrigin = result?.origins?.tool_output_token_limit?.name ?? null;
     try {
       const models = [];
       let cursor = null;
@@ -102,6 +104,14 @@ async function checkCodexHome(cwd, home, env, shared, limits) {
   }
   const signIn = codexSignIn(answer.account, answer.config);
   block.signIn = signIn;
+  const budget = answer.config.tool_output_token_limit;
+  const origin = answer.toolOutputOrigin;
+  const location = origin?.file ?? origin?.dotCodexFolder;
+  block.toolOutputTokenLimit = budget == null
+    ? { value: null, source: "model default (numeric budget not reported)" }
+    : Number.isSafeInteger(budget) && budget >= 0
+      ? { value: budget, source: origin?.type ? `${origin.type} configuration${location ? ` (${location})` : ""}` : "configuration (source not reported)" }
+      : { value: null, source: "unknown (unrecognized configured budget)" };
   const catalog = (answer.models ?? []).filter(isCatalogModel).filter(model => !model.hidden);
   block.models = catalog.map(model => ({
     id: model.id ?? model.model,
@@ -130,6 +140,10 @@ export const setupProbe = {
     return { binary, version: versionOf(binary, "codex", cwd, env, limits) };
   },
   check(home, shared, { cwd, env, limits }) { return checkCodexHome(cwd, home, env, shared, limits); },
+  settingLines(block) {
+    const budget = block.toolOutputTokenLimit;
+    return budget ? [`tool-output-token-limit: ${budget.value == null ? budget.source : `${budget.value} (${budget.source})`}`] : [];
+  },
   signInText({ signIn: { state, method, detail } }) {
     if (state !== "signed-in") return null;
     if (method === "chatgpt") return `signed in (ChatGPT${detail?.includes(" for ") ? `, ${detail.split(" for ").pop()}` : ""})`;

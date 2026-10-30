@@ -47,11 +47,13 @@ cd: /abs/path/to/repo
 | `mode` | no | `yolo` (no sandbox, no approvals), `write` (`workspace-write`), `read-only` | `yolo` |
 | `network` | no | `true`, `false`; `write` and `read-only` only | `false` |
 | `web-search` | no | `live`, `cached`, `disabled` | `live` |
+| `tool-output-token-limit` | no | Codex only: positive integer, tokens retained per tool result; stored and reapplied on continue, resume and recovery | inherited from Codex |
 | `cd` | no | absolute directory the job works in | the agent's directory |
 | `add-dir` | no | absolute extra writable root, repeatable; `write` only | none |
 | `brief` | no | absolute path of the brief file; nothing follows the dashes | none |
 
 - A model named like another backend's (`glm-*`, `grok-*`, `kimi-code/*`) with no `backend:` is refused before launch, since the job would run on Codex. `backend: codex` sends it to Codex as written.
+- For a Codex tool-output budget, use the value requested by the user or supplied by the workflow; otherwise omit the header to inherit Codex configuration. `/relay:setup` reports that configuration's value and source. The budget cannot recover output truncated by a tool before it returns, and is separate from context size and answer length.
 - Ask a `read-only` job for its report as its final answer, not in a file it writes. Codex and Grok hold `read-only` with a sandbox: their commands run and cannot write. Kimi and ZCode have no sandbox: `read-only` takes their shell and write tools away, and what they start themselves (hooks, MCP servers, Kimi's own operations) can still write. See Kimi jobs and GLM jobs.
 - In Codex `mode: write`, a command that keeps its own state under `~` (a CLI's sign-in file, say) cannot write it there. Name that directory with `add-dir:`. Grok's `write` takes no `add-dir:`; such a job needs `mode: yolo`.
 - `yolo` is the default, so existing headers keep running as they did. `mode: write` with `network: true` covers web search, installs, commits and child processes on Codex and Grok, but not `ps` or writes outside the working directory. `yolo` ignores `network` and `add-dir` and the state block says so. The brief is then the only fence: name where the job may write.

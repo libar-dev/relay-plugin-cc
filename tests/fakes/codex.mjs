@@ -501,8 +501,13 @@ rl.on("line", (line) => {
         break;
 
       case "config/read":
+        record("configReads", message.params);
         if (BEHAVIOR === "config-read-fails") {
           throw new Error("config/read failed for cwd");
+        }
+        if (process.env.FAKE_CODEX_CONFIG_READ) {
+          send({ id: message.id, result: JSON.parse(process.env.FAKE_CODEX_CONFIG_READ) });
+          break;
         }
         if (BEHAVIOR === "home-probe") {
           const homeValue = key => new RegExp(key + '\\\\s*=\\\\s*"([^"]+)"').exec(homeConfig)?.[1] ?? null;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { UsageError } from "../../util/errors.mjs";
 
 const MODES = new Map([
   ["yolo", "danger-full-access"],
@@ -29,6 +30,7 @@ export function codexDefaultHome(env = process.env) {
 // thread/start and thread/resume `config` overrides for a request.
 export function threadConfigFor(request) {
   const config = { web_search: request.webSearch };
+  if (request.toolOutputTokenLimit != null) config.tool_output_token_limit = request.toolOutputTokenLimit;
   if (request.mode === "write") {
     config.sandbox_workspace_write = {
       writable_roots: request.writableRoots,
@@ -65,15 +67,23 @@ export function approvalPolicyFor() { return "never"; }
 
 /** @type {import("../types").RequestRules} */
 export const requestRules = {
-  headerKeys: {},
+  headerKeys: { "tool-output-token-limit": "toolOutputTokenLimit" },
   defaultSource: "let the Codex config decide",
   defaultEffort: null,
   refusals: {},
-  complete(request, _values, { env, userConfig }) {
+  complete(request, values, { env, userConfig }) {
+    const value = values.toolOutputTokenLimit;
+    const toolOutputTokenLimit = value == null ? null : Number(value);
+    if (value != null && (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(toolOutputTokenLimit) || toolOutputTokenLimit <= 0)) {
+      throw new UsageError("tool-output-token-limit must be a positive safe integer (tokens).");
+    }
     const defined = mcpServersInConfig(codexDefaultHome(env));
     for (const name of userConfig.mcpOff.filter(name => !defined.has(name))) {
       request.notes.push(`job-mcp-off skips ${name}: it is not in this home's config.toml.`);
     }
-    return { mcpOff: userConfig.mcpOff.filter(name => defined.has(name)) };
+    return {
+      mcpOff: userConfig.mcpOff.filter(name => defined.has(name)),
+      ...(toolOutputTokenLimit == null ? {} : { toolOutputTokenLimit })
+    };
   }
 };

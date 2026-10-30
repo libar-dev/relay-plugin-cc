@@ -159,6 +159,7 @@ Claude Code update can break.
 | `fast` | `true` asks OpenAI for its priority tier after `/relay:setup --fast-tier allowed` | `false` |
 | `network` | `true`, `false`; `write` and `read-only` only | `false` |
 | `web-search` | `live`, `cached`, `disabled` | `live` |
+| `tool-output-token-limit` | Codex only: positive integer, tokens retained per tool result | inherited from Codex |
 | `cd` | absolute working directory | the agent's directory |
 | `add-dir` | absolute extra writable root, repeatable; Codex `write` only | none |
 | `brief` | absolute path of the brief file; nothing follows `---` | the text after `---` |
@@ -249,6 +250,23 @@ model_reasoning_effort = "high"
 ```
 
 Your Codex sign-in, API key and provider configuration apply as they do in the Codex CLI.
+
+Codex's `tool_output_token_limit` controls how much of each tool result is retained in model
+history. Relay inherits it on each new job launch. `/relay:setup` reports the configured value
+and its source; when unset, it reports a model default without guessing its numeric budget.
+Setup reads this configuration; it does not write or freeze a default.
+
+To override the budget for one job, add `tool-output-token-limit: 65536` to its header.
+The same `--tool-output-token-limit 65536` flag works with `start`, `task`, `review` and
+`adversarial-review`. The override is stored with the job, shown in its state and JSON status,
+and reapplied on continue, resume and worker recovery. Omit it to inherit Codex configuration.
+Other backends reject this option.
+
+The example is a workload choice, not a model recommendation. Larger results use more context
+and can cause earlier compaction. This budget does not increase the model's context window or
+generated-answer limit, and cannot restore output already truncated by a tool. Keep model-specific
+budgets in the configuration or workflow that chooses the model. Codex CLI and Relay update
+independently; a Relay update does not replace the `codex` executable used by jobs.
 
 ## What the relay depends on in Claude Code
 

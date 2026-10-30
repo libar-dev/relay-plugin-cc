@@ -5,6 +5,11 @@
 From a survey of every T3 Code thread on three machines, about 360 relay jobs from 17 to 22 October,
 most of them run by Workflow scripts ([docs/thread-surveys.md](../../docs/thread-surveys.md)).
 
+- Codex jobs accept `tool-output-token-limit` in the header, or `--tool-output-token-limit` on
+  start, task and review commands. The per-result history budget is stored with the job and
+  reapplied on continue, resume and recovery. Omitting it preserves Codex configuration.
+  Setup reports the inherited value and source, or an unreported model default, without
+  changing configuration. Other backends reject the Codex-only option.
 - A Kimi job no longer ends `completed` with `report: none`. Kimi can write a turn's `turn.ended`
   before the engine's last batch of messages, the final answer included; relay dropped every message
   after `turn.ended`. A message now goes to the prompt turn of the engine turn running (for a
