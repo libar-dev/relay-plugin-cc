@@ -1,4 +1,4 @@
-import { backendNamed, backendWith } from "../lib/backends/index.mjs";
+import { backendNamed, backendWith, BACKEND_HEADER_KEYS, backendHeaderValues } from "../lib/backends/index.mjs";
 import { parseCommandInput, resolveCommandCwd, createTaskJob, outputResult } from "./shared.mjs";
 import { default as fs } from "node:fs";
 import { default as path } from "node:path";
@@ -18,7 +18,7 @@ const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude t
 
 export async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["backend", "model", "effort", "mode", "cwd", "cd", "prompt-file", "web-search", "network"],
+    valueOptions: ["backend", "model", "effort", "mode", "cwd", "cd", "prompt-file", "web-search", "network", ...Object.keys(BACKEND_HEADER_KEYS)],
     booleanOptions: ["json", "write", "background"],
     aliasMap: { m: "model" }
   });
@@ -35,6 +35,7 @@ export async function handleTask(argv) {
   const request = buildLaunchRequest(
     {
       backend: options.backend == null ? undefined : backendNamed(options.backend).name,
+      ...backendHeaderValues(options),
       model: options.model ?? "default",
       effort: options.effort ?? "default",
       mode: options.write ? "write" : options.mode,

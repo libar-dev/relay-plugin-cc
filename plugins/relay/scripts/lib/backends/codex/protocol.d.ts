@@ -24,6 +24,7 @@ export interface ThreadStartParams {
   approvalPolicy?: AskForApproval | null;
   sandbox?: SandboxMode | null;
   config?: { [key: string]: JsonValue } | null;
+  developerInstructions?: string | null;
   serviceName?: string | null;
   ephemeral?: boolean | null;
 }
@@ -35,6 +36,7 @@ export interface ThreadResumeParams {
   approvalPolicy?: AskForApproval | null;
   sandbox?: SandboxMode | null;
   config?: { [key: string]: JsonValue } | null;
+  developerInstructions?: string | null;
 }
 export interface Thread {
   id: string;

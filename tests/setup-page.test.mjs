@@ -41,7 +41,7 @@ function page(ctx, args = [], env = {}) {
   return { status: result.status, stderr: result.stderr, page: result.stdout ? JSON.parse(result.stdout) : null };
 }
 
-test("the overview shows every backend home in one shape, ready, with no thread, kept session or agent", t => {
+test("the overview shows shared backend fields and Codex budget metadata, ready, with no thread, kept session or agent", t => {
   const ctx = everyBackend(t, "home-probe");
   const { status, page: report } = page(ctx);
   assert.equal(status, 0);
@@ -53,7 +53,8 @@ test("the overview shows every backend home in one shape, ready, with no thread,
     ["codex", null, true], ["grok", null, true], ["grok", "jobs", true], ["zcode", null, true], ["kimi", null, true]
   ]);
   for (const block of report.backends) {
-    assert.deepEqual(Object.keys(block).sort(), BLOCK_KEYS, block.backend);
+    const keys = block.backend === "codex" ? [...BLOCK_KEYS, "toolOutputTokenLimit"].sort() : BLOCK_KEYS;
+    assert.deepEqual(Object.keys(block).sort(), keys, block.backend);
     assert.deepEqual(Object.keys(block.signIn).sort(), ["detail", "method", "state"]);
     assert.deepEqual(Object.keys(block.can).sort(), ["adversarialReview", "modes", "resume", "review", "steer", "stopGate", "transfer", "webSearchOff"]);
   }
@@ -64,6 +65,7 @@ test("the overview shows every backend home in one shape, ready, with no thread,
   // The app-server reads the home's config.toml.
   assert.equal(codex.model, "gpt-default");
   assert.equal(codex.effort, "high");
+  assert.deepEqual(codex.toolOutputTokenLimit, { value: 65536, source: "Relay's deep budget for gpt-default (context window not reported, 272000 assumed)" });
   assert.deepEqual(codex.models, [{ id: "gpt-fake-sol", efforts: ["low", "medium", "high"], defaultEffort: "low" }, { id: "gpt-fake-luna", efforts: ["low", "medium"], defaultEffort: "medium" }]);
   assert.equal(codex.can.stopGate, true);
   // Reviews run on Grok, ZCode and Kimi; the stop gate and transfer require Codex.

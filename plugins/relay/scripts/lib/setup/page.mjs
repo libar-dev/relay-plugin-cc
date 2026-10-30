@@ -141,6 +141,7 @@ function renderBlock(block, env) {
   const effort = block.effort ? `${block.effort}${block.effortNote ? ` (${block.effortNote})` : ""}` : (block.effortNote ?? "unknown");
   const model = block.model ? `${block.model}${block.modelNote ? ` (${block.modelNote})` : ""}` : null;
   lines.push(model ? `model: ${model}  effort: ${effort}` : `model: unknown (${block.modelsReason ?? "not reported"})`);
+  lines.push(...(backendFor(block).setup.settingLines?.(block) ?? []));
   if (block.signIn.state !== "signed-out" && block.signIn.state !== "unknown") {
     const names = block.models.map(model => model.id).join(", ");
     lines.push(`models: ${names || "none listed"}${block.modelsReason ? `  (${block.modelsReason})` : ""}`);

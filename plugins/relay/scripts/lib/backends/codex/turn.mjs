@@ -2,7 +2,7 @@
  * @typedef {import("./protocol").AppServerNotification} AppServerNotification
  * @typedef {import("./protocol").ThreadResumeParams} ThreadResumeParams
  * @typedef {import("./protocol").ThreadStartParams} ThreadStartParams
- * @typedef {Pick<ThreadStartParams, "model" | "serviceTier" | "sandbox" | "approvalPolicy" | "config" | "ephemeral"> & { threadName?: string | null }} ThreadOpenOptions
+ * @typedef {Pick<ThreadStartParams, "model" | "serviceTier" | "sandbox" | "approvalPolicy" | "config" | "ephemeral" | "developerInstructions"> & { threadName?: string | null }} ThreadOpenOptions
  * @typedef {import("./protocol").Turn} Turn
  * @typedef {import("./protocol").UserInput} UserInput
  * @typedef {{
@@ -72,6 +72,7 @@ function buildThreadParams(cwd, options = {}) {
     approvalPolicy: options.approvalPolicy ?? "never",
     sandbox: options.sandbox ?? "read-only",
     ...(options.config ? { config: options.config } : {}),
+    ...(options.developerInstructions ? { developerInstructions: options.developerInstructions } : {}),
     serviceName: SERVICE_NAME,
     ephemeral: options.ephemeral ?? true
   };
@@ -87,7 +88,8 @@ function buildResumeParams(threadId, cwd, options = {}) {
     ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
     approvalPolicy: options.approvalPolicy ?? "never",
     sandbox: options.sandbox ?? "read-only",
-    ...(options.config ? { config: options.config } : {})
+    ...(options.config ? { config: options.config } : {}),
+    ...(options.developerInstructions ? { developerInstructions: options.developerInstructions } : {})
   };
 }
 

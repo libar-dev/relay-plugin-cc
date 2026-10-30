@@ -36,6 +36,12 @@ or `not-installed`, print its `detail` and the command it names, and go on; only
 install offer below. Print every entry of a block's `warnings`; for Grok, a warning that the binary
 is a script names the real binary and `GROK_BINARY`.
 
+When a Codex block has `toolOutputTokenLimit`, show its `value` and `source` below the table.
+For a null value, show the source text alone. This is the budget a job on the default model
+gets: the Codex configuration's, else the model's default Relay budget (`deep`, a quarter of its
+context window, or its reviewed value). Setup only reads it. A job's `tool-output-token-limit`
+header (`compact`, `balanced`, `deep`, `inherit` or a number) overrides it for that job.
+
 `--job-mcp-off <name,name...>` stores a user-level list. A Codex job passes
 `mcp_servers.<name>.enabled=false` for each name the Codex home's `config.toml` defines as
 `[mcp_servers.<name>]`; it skips an undefined name with a note and never passes it. Use

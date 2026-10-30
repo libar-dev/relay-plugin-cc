@@ -1,5 +1,6 @@
 import { getCodexAvailability } from "./account.mjs";
 import { codexServerArgs } from "./connection.mjs";
+import { toolOutputTokenLimitFor } from "./request.mjs";
 import { withAppServer, startThread, captureTurn, buildResultStatus, cleanCodexStderr, connectOptions } from "./turn.mjs";
 
 
@@ -10,8 +11,12 @@ async function runAppServerReview(cwd, options = {}) {
   }
 
   return withAppServer(cwd, async (client) => {
+    const budget = await toolOutputTokenLimitFor(client, options.request);
+    if (budget.note) options.request.notes.push(budget.note);
     const thread = await startThread(client, cwd, {
       model: options.model,
+      config: budget.limit == null ? undefined : { tool_output_token_limit: budget.limit },
+      developerInstructions: budget.developerInstructions,
       sandbox: "read-only",
       ephemeral: true
     });
@@ -62,7 +67,8 @@ export const reviewSupport = {
     ensureAvailable(request.cwd);
     const result = await runAppServerReview(request.cwd, {
       target: target.mode === "working-tree" ? { type: "uncommittedChanges" } : { type: "baseBranch", branch: target.baseRef },
-      model: request.model, notificationTap: hooks.tap, ...codexServerArgs(request)
+      model: request.model, request,
+      notificationTap: hooks.tap, ...codexServerArgs(request)
     });
     return {
       status: result.status, sessionId: result.threadId, sourceSessionId: result.sourceThreadId,

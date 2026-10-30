@@ -491,6 +491,25 @@ binaries and never start a real backend.
   writes nothing there. `default` takes the configured `model` and `model_reasoning_effort`. Sign-in
   is the CLI's: ChatGPT, an API key, or none when the configured provider needs no OpenAI sign-in
   (setup's `not-needed`, from openai/codex-plugin-cc#177).
+- **Tool-output budget.** Codex keeps 10,000 tokens of each tool result by default, which truncates
+  a review's diff, so every Codex job gets a Relay budget. Presets are formulas of the model's
+  context window: `deep` is a quarter of it to the nearest power of two and the default,
+  `balanced` half of `deep`, `compact` a quarter. The window is `model_context_window`, else the
+  model's entry in Codex's `models_cache.json`, else 272000; `model/list` reports neither window
+  nor budget. `codex/tool-output-budgets.json` holds hand-reviewed values that replace the formula
+  for named models, with a version, unless `model_context_window` is configured: the reviewed
+  values assume the catalog's window. A job's `tool-output-token-limit` takes a preset, a number or
+  `inherit`. A preset resolves at each thread open, after `config/read`, so a configured
+  `model_context_window` bounds it whether or not the job names its model. The number
+  is sent as `config.tool_output_token_limit` on thread start and resume, including recovery, and on
+  a native review's source thread. Without a choice, each thread open asks `config/read`: a
+  configured budget stays Codex's; otherwise Relay sends the model's default and writes a `note:`
+  naming the value and its basis. Code mode cuts each `exec` and `wait` result to 10,000 tokens
+  unless the call asks for more (`max_output_tokens`, `max_tokens`), whatever the budget; no
+  setting changes that default. So when the effective budget is above 10,000, the thread opens
+  with `developerInstructions` naming the budget and the pragma, appended to the configured
+  `developer_instructions`.
+  See [Codex configuration](../README.md#codex-configuration) for usage and limits.
 - **Job MCP servers off.** `setup --job-mcp-off name,...` stores a user-level list. A job passes
   `-c mcp_servers.<name>.enabled=false` for each listed name the home's `config.toml` defines and
   skips any other name with a `note:`, because Codex refuses to start on a setting for a server its

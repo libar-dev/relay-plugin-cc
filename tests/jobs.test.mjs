@@ -236,7 +236,7 @@ test("the default header starts a yolo session: danger-full-access, never, live 
   const state = ctx.fakeState();
   assert.equal(state.threadStarts[0].sandbox, "danger-full-access");
   assert.equal(state.threadStarts[0].approvalPolicy, "never");
-  assert.deepEqual(state.threadStarts[0].config, { web_search: "live" });
+  assert.deepEqual(state.threadStarts[0].config, { web_search: "live", tool_output_token_limit: 65536 });
   assert.equal(state.threadStarts[0].ephemeral, false);
   assert.deepEqual(state.turnStarts[0].sandboxPolicy, { type: "dangerFullAccess" });
   assert.match(waited.stdout, /^state: completed$/m);
@@ -250,7 +250,7 @@ test("a read-only header still starts a read-only thread", async () => {
   assert.equal(waitJob(ctx, jobId).status, 0);
   const state = ctx.fakeState();
   assert.equal(state.threadStarts[0].sandbox, "read-only");
-  assert.deepEqual(state.threadStarts[0].config, { web_search: "disabled" });
+  assert.deepEqual(state.threadStarts[0].config, { web_search: "disabled", tool_output_token_limit: 65536 });
   assert.deepEqual(state.turnStarts[0].sandboxPolicy, { type: "readOnly", networkAccess: false });
 });
 

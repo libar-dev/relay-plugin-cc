@@ -27,6 +27,7 @@ function printUsage() {
       "  companion.mjs start --model <m> --effort <e> [--mode yolo|write|read-only] [--network true|false]",
       `                            [--fast] [--backend ${names}] ${homeFlags} [--web-search live|cached|disabled]`,
       "                            [--cd <dir>] [--add-dir <dir>]... --brief-file <f>",
+      "  Codex start/task/review/adversarial-review: [--tool-output-token-limit compact|balanced|deep|inherit|<tokens>]",
       "  companion.mjs wait <job> [--timeout-seconds N] [--state-only] [--exit-zero-while-running] [--json]",
       "  companion.mjs status [<job>] [--all] [--json]",
       "  companion.mjs result <job> [--state-only] [--json]",

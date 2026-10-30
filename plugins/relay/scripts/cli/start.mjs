@@ -27,7 +27,10 @@ function readLaunchFromPrompt(text) {
 
 function readLaunchFromOptions(options) {
   if (options["prompt-file"]) {
-    return readLaunchFromPrompt(readInputFile(options["prompt-file"]));
+    // A backend flag given beside a prompt file wins over the same key in its header.
+    const launch = readLaunchFromPrompt(readInputFile(options["prompt-file"]));
+    const flags = Object.entries(backendHeaderValues(options)).filter(([, value]) => value != null);
+    return { ...launch, values: { ...launch.values, ...Object.fromEntries(flags) } };
   }
   if (!options["brief-file"]) {
     throw new UsageError("start needs --prompt-file <file>, or header options and --brief-file <file>.");

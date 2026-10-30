@@ -1,7 +1,7 @@
 /** @typedef {import("../types").Connection} Connection */
 import { CodexAppServerClient } from "./client.mjs";
 import { clientIdsInThread, openThread, runTurnOnThread } from "./turn.mjs";
-import { approvalPolicyFor, sandboxFor, sandboxPolicyFor, threadConfigFor } from "./request.mjs";
+import { approvalPolicyFor, sandboxFor, sandboxPolicyFor, threadConfigFor, toolOutputTokenLimitFor } from "./request.mjs";
 
 // The Codex app-server's arguments for a request: the job MCP servers it turns off.
 export function codexServerArgs(request) {
@@ -12,9 +12,10 @@ export function codexServerArgs(request) {
 /** @implements {Connection} */
 class CodexConnection {
   /** @param {import("../types").LaunchRequest} request */
-  constructor(client, request) {
+  constructor(client, request, env) {
     this.client = client;
     this.request = request;
+    this.env = env;
     this.sessionId = null;
     this.deliveredIds = new Set();
     this.steerTracker = { turnSteerHandler: null };
@@ -25,15 +26,18 @@ class CodexConnection {
   /** @param {import("../types").OpenOptions} options */
   async open({ sessionId, sessionName, ephemeral }) {
     const request = this.request;
+    const config = threadConfigFor(request);
+    const budget = await toolOutputTokenLimitFor(this.client, request, this.env);
+    if (budget.limit != null) config.tool_output_token_limit = budget.limit;
     const opened = await openThread(this.client, request.cwd, {
       threadId: sessionId, threadName: sessionName, ephemeral,
       model: request.model, serviceTier: request.fast ? "priority" : null,
       sandbox: sandboxFor(request), approvalPolicy: approvalPolicyFor(),
-      config: threadConfigFor(request)
+      config, developerInstructions: budget.developerInstructions
     });
     this.sessionId = opened.threadId;
     this.deliveredIds = clientIdsInThread(opened.response);
-    return { sessionId: opened.threadId, resumed: opened.resumed, serviceTier: opened.response.serviceTier ?? null };
+    return { sessionId: opened.threadId, resumed: opened.resumed, serviceTier: opened.response.serviceTier ?? null, notes: budget.note ? [budget.note] : [] };
   }
 
   /** @param {Pick<import("../types").WorkItem, "clientId" | "recoveryCandidate">} item */
@@ -87,7 +91,7 @@ export async function connect(request, hooks) {
     env: hooks.env, onSpawn: hooks.onSpawn, onStderr: hooks.onStderr, onEnd: hooks.onEnd,
     notificationTap: hooks.tap, ...codexServerArgs(request)
   });
-  return new CodexConnection(client, request);
+  return new CodexConnection(client, request, hooks.env);
 }
 
 // Request limits retry; usage and quota limits do not. The protocol kind is authoritative

@@ -58,7 +58,7 @@ lib/backends/
 | `backendFor(request)` | the backend of a stored request; a request without `backend` is the default's |
 | `backendWith(capability)` | the one backend that has a capability; it throws unless exactly one has it |
 | `BACKEND_HEADER_KEYS` | every backend's own header keys, mapped to their request fields |
-| `backendHeaderValues(options)` | those keys read from command flags, so `start` and the reviews take `--grok-home` and `--kimi-home` |
+| `backendHeaderValues(options)` | those keys read from command flags for `start`, `task` and reviews |
 
 `task --backend <name>` checks the name with `backendNamed` and stores it in the request. The stop
 gate picks its backend with `backendWith("stopGate")`: it probes that backend, starts its review
@@ -115,9 +115,11 @@ Generic code derives the rest:
   backend but the default. Grok prints `grok-home:` for a home other than `~/.grok`, and Kimi
   `kimi-home:` for one other than `~/.kimi-code`.
 - `view.settingLines?(request)` supplies backend settings at the settings position of the launch
-  block and the state block, after `tier: fast`. Codex uses it for `mcp-off:`.
+  block and the state block, after `tier: fast`. Codex uses it for `mcp-off:` and an explicit
+  `tool-output-token-limit:`.
 - `view.json(request)` supplies the backend's fields for `status --json` and `start --json`,
-  beside `backend`. Grok adds `grokHome` and Kimi `kimiHome`. A setting line adds no JSON field.
+  beside `backend`. Grok adds `grokHome`, Kimi `kimiHome`, and Codex an explicit
+  `toolOutputTokenLimit`. A setting line does not automatically add a JSON field.
 - `view.completionInferenceLine?(inference, { sessionId, turnId })` formats the current attempt's
   recorded inference as a `note:` line, or returns null when it does not apply. Generic code
   passes the inference as backend data and does not read it. Codex checks the inference's thread
