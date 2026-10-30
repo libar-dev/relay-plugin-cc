@@ -62,17 +62,13 @@ export function budgetsFor(model, { config = {}, codexHome }) {
   };
 }
 
-// A header value: a positive token count, a preset, or `inherit` (no override). A preset on a
-// named model resolves now, so a later table or catalog change does not move the job; on the
-// default model it resolves when the thread opens.
-function toolOutputFields(value, model, codexHome) {
+// A header value: a positive token count, a preset, or `inherit` (no override). A preset
+// resolves when the thread opens, after `config/read`, so a configured `model_context_window`
+// bounds it whether or not the job names its model.
+function toolOutputFields(value) {
   if (value == null) return {};
   const text = String(value).trim().toLowerCase();
-  if (text === "inherit") return { toolOutputPreset: "inherit" };
-  if (TOOL_OUTPUT_PRESETS.includes(text)) {
-    if (!model) return { toolOutputPreset: text };
-    return { toolOutputPreset: text, toolOutputTokenLimit: budgetsFor(model, { codexHome })[text] };
-  }
+  if (text === "inherit" || TOOL_OUTPUT_PRESETS.includes(text)) return { toolOutputPreset: text };
   const limit = Number(text);
   if (!/^\d+$/.test(text) || !Number.isSafeInteger(limit) || limit <= 0) {
     throw new UsageError(`tool-output-token-limit must be compact, balanced, deep, inherit or a positive safe integer (tokens), not "${value}".`);
@@ -144,7 +140,7 @@ export const requestRules = {
   defaultEffort: null,
   refusals: {},
   complete(request, values, { env, userConfig }) {
-    const budget = toolOutputFields(values.toolOutputTokenLimit, request.model && request.model !== "default" ? request.model : null, codexDefaultHome(env));
+    const budget = toolOutputFields(values.toolOutputTokenLimit);
     const defined = mcpServersInConfig(codexDefaultHome(env));
     for (const name of userConfig.mcpOff.filter(name => !defined.has(name))) {
       request.notes.push(`job-mcp-off skips ${name}: it is not in this home's config.toml.`);

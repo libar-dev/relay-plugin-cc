@@ -280,9 +280,9 @@ budget a job on the default model gets and where it comes from. Setup never writ
 To choose for one job, add `tool-output-token-limit:` to its header with `compact`, `balanced`,
 `deep`, a number of tokens, or `inherit` to send no budget and leave Codex's configuration or default
 in charge. The same `--tool-output-token-limit` flag works with `start`, `task`, `review` and
-`adversarial-review`. A chosen budget is resolved for the job's model at launch, stored with the
-job, shown in its state and JSON status, and reapplied on continue, resume and worker recovery.
-A preset on `model: default` resolves when the thread opens. Other backends reject this option.
+`adversarial-review`. A chosen budget is stored with the job, shown in its state and JSON status,
+and reapplied on continue, resume and worker recovery. A preset resolves each time the thread
+opens, after Relay reads the Codex configuration, and the state block names its value. Other backends reject this option.
 
 Larger results use more context and can bring compaction forward. This budget does not increase
 the model's context window or generated-answer limit, and cannot restore output already

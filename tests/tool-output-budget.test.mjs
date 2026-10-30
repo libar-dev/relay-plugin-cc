@@ -17,12 +17,8 @@ test("Codex budgets validate before launch and are refused by other backends", t
   }
   assert.equal(build("65536").toolOutputTokenLimit, 65536);
   assert.equal(Object.hasOwn(build(undefined), "toolOutputTokenLimit"), false);
-  assert.deepEqual(["compact", "balanced", "deep"].map(preset => build(preset).toolOutputTokenLimit), [16384, 32768, 65536]);
-  const named = (model, value) => buildLaunchRequest({ model, effort: "low", toolOutputTokenLimit: value }, { baseDir: ctx.work, env: ctx.env });
-  assert.deepEqual([named("gpt-6.1-sol", "Deep").toolOutputTokenLimit, named("gpt-6-astra", "balanced").toolOutputTokenLimit, named("gpt-6-luna", "compact").toolOutputTokenLimit], [131072, 65536, 16384]);
-  assert.equal(named("gpt-6.1-sol", "deep").toolOutputPreset, "deep");
-  assert.equal(named("default", "deep").toolOutputTokenLimit, undefined);
-  assert.equal(named("gpt-test", "inherit").toolOutputPreset, "inherit");
+  // A preset is stored as chosen and resolved when the thread opens.
+  assert.deepEqual(["Compact", "balanced", "deep", "inherit"].map(preset => [build(preset).toolOutputPreset, build(preset).toolOutputTokenLimit]), [["compact", undefined], ["balanced", undefined], ["deep", undefined], ["inherit", undefined]]);
   const { header } = parseHeaderPrompt(`${HEADER}\ntool-output-token-limit: 131072 # tokens\n---\nReview`);
   assert.equal(buildLaunchRequest(header, { baseDir: ctx.work, env: ctx.env }).toolOutputTokenLimit, 131072);
   for (const backend of ["grok", "zcode", "kimi"]) {
@@ -75,7 +71,10 @@ for (const [label, header, configRead, expected] of [
   ["an unreviewed model without a known window", "model: gpt-test", { config: {} }, 65536],
   ["an unreviewed model's catalog window", "model: gpt-wide", { config: {} }, 131072],
   ["an unreviewed model's preset", "model: gpt-small\ntool-output-token-limit: compact", { config: {} }, 8192],
-  ["the configured context window", "model: gpt-test", { config: { model_context_window: 1000000 } }, 262144]
+  ["the configured context window", "model: gpt-test", { config: { model_context_window: 1000000 } }, 262144],
+  ["the configured context window under a named model's preset", "model: gpt-custom\ntool-output-token-limit: deep", { config: { model_context_window: 32768 } }, 8192],
+  ["the configured context window under a default model's preset", "model: default\ntool-output-token-limit: deep", { config: { model: "gpt-custom", model_context_window: 32768 } }, 8192],
+  ["the configured context window over a conflicting catalog entry", "model: gpt-wide\ntool-output-token-limit: deep", { config: { model_context_window: 32768 } }, 8192]
 ]) {
   test(`budget: ${label}`, async t => {
     const ctx = setup(t, { env: { FAKE_CODEX_CONFIG_READ: JSON.stringify(configRead) } });
