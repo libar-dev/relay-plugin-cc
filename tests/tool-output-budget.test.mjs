@@ -169,6 +169,8 @@ for (const [label, response, expected] of [
 
 for (const [label, header, configRead, expected] of [
   ["a budget above code mode's default tells the model how to ask for it", "model: gpt-6.1-sol", { config: {} }, { has: "\"max_output_tokens\": 131072" }],
+  ["the instruction says the nested value alone is not enough, and to read what a truncation names", "model: gpt-6.1-sol", { config: {} }, { has: "alone does not change that" }],
+  ["the instruction tells the model to read large evidence by range", "model: gpt-6.1-sol", { config: {} }, { has: "read the omitted part before relying on it" }],
   ["a configured budget reaches code mode, after the user's developer instructions", "model: gpt-6.1-sol", { config: { tool_output_token_limit: 65536, developer_instructions: "Keep answers short." } }, { starts: "Keep answers short.\n\n", has: "\"max_output_tokens\": 65536" }],
   ["a budget at or below code mode's default adds no instructions", "model: gpt-6.1-sol\ntool-output-token-limit: 8192", { config: {} }, null],
   ["inherit without a configured budget adds no instructions", "model: gpt-6.1-sol\ntool-output-token-limit: inherit", { config: {} }, null]

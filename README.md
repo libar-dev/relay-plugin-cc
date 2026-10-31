@@ -218,8 +218,8 @@ is recorded as a job, so `/relay:status` lists it.
 | `--wait`, `--background` | run in the foreground, or as a Claude background task; without either, a review you type asks, and a review Claude starts runs in the foreground |
 | `[focus]` | text after the flags; `/relay:adversarial-review` only |
 
-Grok, ZCode and Kimi read only the diff inlined in their prompt, so they refuse a change above two files
-or 256 KiB before anything starts. An adversarial answer that does not match the review schema
+Grok, ZCode and Kimi read only the diff inlined in their prompt, so they refuse a change above 256 KiB
+before anything starts. An adversarial answer that does not match the review schema
 fails the review with the raw answer in the report.
 
 ### The stop-time review gate
@@ -319,7 +319,7 @@ runs on command hooks and the transcript.
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.2.0. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.2.2. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
@@ -347,6 +347,8 @@ them); the version named above in this section is set by hand.
 
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
 [docs/backends.md](docs/backends.md) for the backend contract,
-[docs/design.md](docs/design.md) for the behavior and the reasons behind it, and
-[docs/kimi.md](docs/kimi.md) for what the Kimi backend rests on and how to check a new Kimi version, and
-[docs/thread-surveys.md](docs/thread-surveys.md) for the surveys of real use that fixes came from.
+[docs/design.md](docs/design.md) for the behavior and the reasons behind it,
+[docs/kimi.md](docs/kimi.md) for what the Kimi backend rests on and how to check a new Kimi version,
+[docs/thread-surveys.md](docs/thread-surveys.md) for the surveys of real use that fixes came from, and
+[docs/relay-2.2.2-validation.md](docs/relay-2.2.2-validation.md) for this release's review findings,
+regressions and live-validation evidence.

@@ -34,6 +34,9 @@ export const RELAY_BLOCK_BUDGET = 8;
 
 const COORDINATOR_PREFIX = "The coordinator sent a message while you were working:\n";
 const COORDINATOR_SUFFIX = "\n\nAddress this before completing your current task.";
+// Claude Code's wrapper around what a person types into a running agent.
+const HUMAN_PREFIX = "The user sent a new message while you were working:\n";
+const HUMAN_SUFFIX = "\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.";
 
 function envNumber(env, name, fallback) {
   const value = Number(env[name]);
@@ -131,12 +134,29 @@ function unwrapCoordinator(text) {
   return text;
 }
 
+// A message from another agent of the session has origin kind `peer`. The harness wraps its text
+// in an envelope naming the sender and keeps the text as sent in `origin.body`, which the job gets.
+function peerBody(origin) {
+  return typeof origin?.body === "string" ? origin.body : null;
+}
+
+function humanText(content, where, problems) {
+  if (!Array.isArray(content)) return textOfContent(content);
+  const nonText = content.filter((block) => block?.type !== "text" && block?.type !== "tool_result").length;
+  if (nonText) {
+    problems.push(`${where} is a typed message with ${nonText} block(s) that are not text; the job gets its text only`);
+  }
+  return textOfContent(content.filter((block) => block?.type === "text"));
+}
+
 // The relay's first prompt and every message it received after it, in order. A message is
 // recognised by its entry type and origin, never by its text:
-// - an `attachment` entry of type `queued_command` whose origin is the coordinator
-//   (SendMessage while the relay works);
-// - a `user` entry whose origin is the coordinator (a message that resumes a relay that
-//   has handed back), unwrapped from the harness's fixed wrapper when it has one;
+// - an `attachment` entry of type `queued_command` whose origin is the coordinator, another
+//   agent (`peer`) or a person (`human`), sent while the relay works;
+// - a `user` entry of one of those origins (a message that resumes a relay that has handed
+//   back), unwrapped from the harness's fixed wrapper when it has one;
+// A task notification is the harness's own and never a message; any other origin is a problem,
+// so a message nobody can deliver is reported rather than lost.
 // - a plain `user` turn that is not metadata (`isMeta`) and not a tool result.
 // Under the Workflow tool the harness's two user entries are recognised by their marker line
 // (workflow-harness.mjs): the user request is skipped, the computed task is the prompt,
@@ -186,23 +206,32 @@ export function parseRelayTranscript(text) {
     };
 
     if (entry.type === "attachment" && entry.attachment?.type === "queued_command") {
-      const origin = entry.attachment.origin?.kind ?? entry.origin?.kind ?? null;
-      if (origin !== "coordinator") {
-        if (origin == null) {
-          problems.push(`${where} is a queued command with no origin`);
-        }
+      const originEntry = entry.attachment.origin ?? entry.origin ?? null;
+      const origin = originEntry?.kind;
+      if (originEntry != null && typeof origin !== "string") {
+        problems.push(`${where} has an origin with no kind`);
+        return;
+      }
+      if (origin === "task-notification") {
+        return;
+      }
+      if (origin !== "coordinator" && origin !== "peer" && origin !== "human") {
+        problems.push(originEntry == null ? `${where} is a queued command with no origin`
+          : `${where} is a queued command of origin ${origin}, which the relay does not deliver`);
         return;
       }
       if (prompt == null) {
         problems.push(`${where} is a message that came before the prompt`);
         return;
       }
-      const messageText = typeof entry.attachment.prompt === "string" ? entry.attachment.prompt : textOfContent(entry.attachment.prompt);
+      const messageText = origin === "peer" ? peerBody(originEntry)
+        : origin === "human" ? humanText(entry.attachment.prompt, where, problems)
+        : typeof entry.attachment.prompt === "string" ? entry.attachment.prompt : textOfContent(entry.attachment.prompt);
       if (messageText == null) {
         problems.push(`${where} is a queued message whose text could not be read`);
         return;
       }
-      addMessage(messageText, "queued_command");
+      addMessage(messageText, origin === "coordinator" ? "queued_command" : origin);
       return;
     }
 
@@ -222,11 +251,36 @@ export function parseRelayTranscript(text) {
     if (!isUser || !message) {
       return;
     }
-    if (isToolResult(message.content)) {
+    const origin = entry.origin?.kind;
+    const hasTextBlock = Array.isArray(message.content)
+      && message.content.some((block) => block?.type === "text");
+    // A tool-result-only entry is the harness's own. If it also carries text, validate the
+    // origin before deciding whether the text is a message, including an unsupported origin.
+    if (isToolResult(message.content) && !hasTextBlock) {
       return;
     }
-    const fromCoordinator = entry.origin?.kind === "coordinator";
+    const fromCoordinator = origin === "coordinator";
+    const fromPeer = origin === "peer";
+    const fromHuman = origin === "human";
+    if (entry.origin != null && typeof origin !== "string") {
+      problems.push(`${where} has an origin with no kind`);
+      return;
+    }
+    if (origin === "task-notification") {
+      return;
+    }
+    if (entry.origin != null && !fromCoordinator && !fromPeer && !fromHuman) {
+      problems.push(`${where} is a user entry of origin ${origin}, which the relay does not deliver`);
+      return;
+    }
+    if (isToolResult(message.content) && !fromCoordinator && !fromPeer && !fromHuman) {
+      return;
+    }
     if (prompt == null) {
+      if (fromPeer || fromHuman) {
+        problems.push(`${where} is a message that came before the prompt`);
+        return;
+      }
       if (entry.isMeta || fromCoordinator) {
         return;
       }
@@ -249,10 +303,33 @@ export function parseRelayTranscript(text) {
       prompt = { uuid: entry.uuid ?? null, text: promptText, notes: [], framed: false };
       return;
     }
-    if (entry.isMeta && !fromCoordinator) {
+    if (entry.isMeta && entry.origin == null) {
       return; // harness metadata, marked as such by the entry itself
     }
-    const messageText = textOfContent(message.content);
+    if (fromPeer) {
+      const body = peerBody(entry.origin);
+      if (body == null) {
+        problems.push(`${where} is a message from another agent whose text could not be read`);
+        return;
+      }
+      addMessage(body, "peer");
+      return;
+    }
+    if (fromHuman) {
+      let body = humanText(message.content, where, problems);
+      if (body == null) {
+        problems.push(`${where} is a message whose text could not be read`);
+        return;
+      }
+      if (entry.isMeta && body.startsWith(HUMAN_PREFIX) && body.endsWith(HUMAN_SUFFIX) && body.length >= HUMAN_PREFIX.length + HUMAN_SUFFIX.length) {
+        body = body.slice(HUMAN_PREFIX.length, body.length - HUMAN_SUFFIX.length);
+      }
+      addMessage(body, "human");
+      return;
+    }
+    const messageText = fromCoordinator && Array.isArray(message.content)
+      ? textOfContent(message.content.filter((block) => block?.type === "text"))
+      : textOfContent(message.content);
     if (messageText == null) {
       problems.push(`${where} is a message whose text could not be read`);
       return;

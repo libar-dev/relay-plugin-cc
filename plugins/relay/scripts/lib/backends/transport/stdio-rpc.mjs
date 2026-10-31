@@ -281,7 +281,7 @@ export class SpawnedServerClient extends AppServerClientBase {
         partialStdoutBytes: this.partialStdoutBytes ?? 0,
         stderrTail: this.stderr
       };
-      this.options.onEnd?.(this.exitInfo);
+      if (!this.abandoned) this.options.onEnd?.(this.exitInfo);
       this.handleExit(this.spawnError ?? createProtocolError(serverEndMessage(this.exitInfo, this.options.backendName)));
       this.resolveProcessEnd();
     });
@@ -313,24 +313,36 @@ export class SpawnedServerClient extends AppServerClientBase {
     this.proc.stderr.destroy();
   }
 
+  // Bounded: a backend that ignores EOF and SIGTERM gets SIGKILL, and one that survives that is
+  // given up on, so the worker's cleanup never waits on it forever. A process given up on is not
+  // reported as ended: it is still running, its record stays open for the next worker's sweep, and
+  // its exit, if it ever comes, must not write to a job another worker may own by then.
   async close() {
-    if (this.closed) {
-      await this.processEndPromise;
-      return;
-    }
-
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
-
-    if (this.proc && !this.proc.killed) {
+    this.closePromise = (async () => {
+      if (!this.proc) return;
+      const ended = ms => new Promise(resolve => {
+        const timer = setTimeout(() => resolve(false), ms);
+        this.processEndPromise.then(() => { clearTimeout(timer); resolve(true); });
+      });
+      // ChildProcess.killed means a signal was sent, not that the process exited.
+      const signal = name => { if (!this.exitSeen) this.proc.kill(name); };
       this.proc.stdin.end();
-      setTimeout(() => {
-        if (this.proc && !this.proc.killed && this.proc.exitCode === null) {
-          this.proc.kill("SIGTERM");
-        }
-      }, 50).unref?.();
-    }
-
-    await this.processEndPromise;
+      if (await ended(50)) return;
+      signal("SIGTERM");
+      if (await ended(this.options.closeGraceMs ?? 4950)) return;
+      signal("SIGKILL");
+      if (await ended(this.options.closeKillWaitMs ?? 5000)) return;
+      this.abandoned = true;
+      this.exitInfo = { pid: this.proc.pid ?? null, code: null, signal: null, closeTimedOut: true, stderrTail: this.stderr };
+      this.proc.stdin.destroy();
+      this.proc.stdout.destroy();
+      this.proc.stderr.destroy();
+      this.proc.unref(); // or the survivor keeps the worker's process alive
+      this.handleExit(createProtocolError(`${this.options.backendName ?? "codex"} did not exit after SIGKILL`));
+    })();
+    return this.closePromise;
   }
 
   sendMessage(message) {

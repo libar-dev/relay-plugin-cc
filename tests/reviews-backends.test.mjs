@@ -9,6 +9,7 @@ import { installFakeGrok } from "./fakes/grok.mjs";
 import { installFakeZcode } from "./fakes/zcode.mjs";
 import { installFakeKimi } from "./fakes/kimi.mjs";
 import { initGitRepo, run } from "./support/helpers.mjs";
+import { collectReviewContext } from "../plugins/relay/scripts/lib/review/git.mjs";
 
 const VERDICT = {
   verdict: "needs-attention",
@@ -374,56 +375,105 @@ test("a failed adversarial-review turn says the turn failed with the backend's e
 const LIMIT = 256 * 1024;
 const refusal = (what, label) => `The diff is ${what}; a ${label} review reads only an inlined diff. Narrow it with --base or --scope, or run it on Codex.\n`;
 
-test("the inline limits are exact: two files and 256 KiB pass, a third file or one byte more is refused before a job or a server", t => {
-  // Two changed files pass; a third is refused.
-  const ctx = zcode(t, {}, { "src/a.js": "a\n", "src/b.js": "b\n" });
+test("the inline limit is exact: any number of files within 256 KiB passes, one byte more is refused before a job or a server", t => {
+  // The number of files is not a limit: all of them reach the prompt.
+  const ctx = zcode(t, {}, Object.fromEntries(Array.from({ length: 12 }, (_, index) => [`src/file${index}.js`, `export const FILE_MARKER_${index} = 1;\n`])));
   assert.equal(companion(ctx, ["review", "--backend", "zcode"]).status, 0);
-  fs.writeFileSync(path.join(ctx.work, "src", "app.js"), "c\n");
-  const before = jobDirs(ctx);
-  const three = companion(ctx, ["review", "--backend", "zcode"]);
-  assert.equal(three.status, 1);
-  assert.equal(three.stderr, refusal("3 files / 1 KiB", "ZCode"));
-  assert.deepEqual(jobDirs(ctx), before);
-  assert.equal(ctx.zcode().starts.length, 1);
+  for (let index = 0; index < 12; index++) assert.match(ctx.zcode().turns[0].text, new RegExp(`FILE_MARKER_${index} `));
 
-  // A binary untracked file is named, not inlined, and counts as a file; its size, here above
-  // the byte limit, does not count, since nothing of it reaches the prompt.
+  // A binary untracked file is named, not inlined; its size, here above the byte limit, does
+  // not count, since nothing of it reaches the prompt.
   const binary = zcode(t, { answer: JSON.stringify(VERDICT) }, undefined, { "src/blob.bin": Buffer.concat([Buffer.from([0, 1, 2, 0]), Buffer.alloc(300 * 1024, 7)]) });
+  let binaryReads = 0;
+  const readBinary = fs.readFileSync;
+  t.mock.method(fs, "readFileSync", (file, ...args) => {
+    if (String(file).endsWith("src/blob.bin")) binaryReads += 1;
+    return readBinary(file, ...args);
+  });
+  const binaryContext = collectReviewContext(binary.work, { mode: "working-tree", label: "working tree diff" }, { untrackedInFull: true, maxInlineFiles: Infinity });
+  assert.match(binaryContext.content, /### src\/blob\.bin\n\(skipped: binary file\)/);
+  assert.equal(binaryReads, 0, "the binary sample is enough; the whole file is never read");
   assert.equal(companion(binary, ["adversarial-review", "--backend", "zcode"]).status, 0);
   assert.match(binary.zcode().turns[0].text, /### src\/blob\.bin\n\(skipped: binary file\)/);
-  fs.writeFileSync(path.join(binary.work, "src", "c.js"), "c\n");
-  assert.equal(companion(binary, ["adversarial-review", "--backend", "zcode"]).stderr, refusal("3 files / 1 KiB", "ZCode"));
   assert.equal(binary.zcode().starts.length, 1);
 
-  // Working tree: an untracked file of exactly 256 KiB is inlined whole; one byte more is refused.
-  const bytes = grok(t, {}, {}, { "src/new.txt": sized(LIMIT, "WHOLE_FILE_END") });
+  const inlineContext = (cwd, target = { mode: "working-tree", label: "working tree diff" }) =>
+    collectReviewContext(cwd, target, { untrackedInFull: true, maxInlineFiles: Infinity });
+
+  // Working tree: the serialized context, names and section text included, fills exactly 256 KiB.
+  const bytes = grok(t, {}, {}, { "src/new.txt": "" });
+  const contextBytes = () => Buffer.byteLength(inlineContext(bytes.work).content, "utf8");
+  const fits = LIMIT - contextBytes() + 1;
+  fs.writeFileSync(path.join(bytes.work, "src", "new.txt"), sized(fits, "WHOLE_FILE_END"));
+  assert.equal(contextBytes(), LIMIT);
   assert.equal(companion(bytes, ["review", "--backend", "grok"]).status, 0);
-  assert.ok(bytes.grok().turns[0].text.includes(sized(LIMIT, "WHOLE_FILE_END").trimEnd()));
-  fs.writeFileSync(path.join(bytes.work, "src", "new.txt"), sized(LIMIT + 1, "WHOLE_FILE_END"));
+  assert.ok(bytes.grok().turns[0].text.includes(sized(fits, "WHOLE_FILE_END").trimEnd()));
+  fs.writeFileSync(path.join(bytes.work, "src", "new.txt"), sized(fits + 1, "WHOLE_FILE_END"));
   const over = companion(bytes, ["review", "--backend", "grok"]);
   assert.equal(over.status, 1);
   assert.equal(over.stderr, refusal("1 file / more than 256 KiB", "Grok"));
   assert.equal(jobDirs(bytes).length, 1);
   assert.equal(bytes.grok().starts.length, 1);
 
-  // Branch: a diff of exactly 256 KiB against --base passes; one byte more is refused.
+  // File names alone can pass the limit: many empty or binary files are refused, not sent.
+  const names = Object.fromEntries(Array.from({ length: 1400 }, (_, index) => [`src/${"long-file-name-".repeat(6)}${index}.txt`, ""]));
+  const empties = grok(t, {}, {}, names);
+  const refusedNames = companion(empties, ["review", "--backend", "grok"]);
+  assert.equal(refusedNames.status, 1);
+  assert.equal(refusedNames.stderr, refusal("1400 files / more than 256 KiB", "Grok"));
+  assert.equal(empties.grok().starts.length, 0);
+
+  // Git status octal-escapes non-ASCII names. Raw-name accounting passes this set; its rendered
+  // context is over the limit, so the final serialized-size check must refuse it.
+  const quotedNames = Object.fromEntries(Array.from({ length: 3000 }, (_, index) => [`café-日本語-${index}.txt`, ""]));
+  const quoted = grok(t, {}, {}, quotedNames);
+  assert.equal(companion(quoted, ["review", "--backend", "grok"]).status, 1);
+  assert.equal(quoted.grok().starts.length, 0);
+  assert.equal(jobDirs(quoted).length, 0);
+
+  // Bytes that decode to U+FFFD can triple the rendered size without containing NUL.
+  const invalid = grok(t, {}, {}, {});
+  fs.writeFileSync(path.join(invalid.work, "invalid.bin"), Buffer.alloc(100000, 0xff));
+  assert.equal(companion(invalid, ["review", "--backend", "grok"]).status, 1);
+  assert.equal(invalid.grok().starts.length, 0);
+  assert.equal(jobDirs(invalid).length, 0);
+
+  // A file already known to be over the limit is named in the lightweight context, never read.
+  const large = grok(t, {}, {}, { "src/large.txt": sized(300 * 1024, "MUST_NOT_BE_READ") });
+  let largeReads = 0;
+  const readFile = fs.readFileSync;
+  t.mock.method(fs, "readFileSync", (file, ...args) => {
+    if (String(file).endsWith("src/large.txt")) largeReads += 1;
+    return readFile(file, ...args);
+  });
+  const lightweight = inlineContext(large.work);
+  assert.equal(lightweight.inputMode, "self-collect");
+  assert.equal(largeReads, 0);
+  assert.doesNotMatch(lightweight.content, /MUST_NOT_BE_READ/);
+
+  // A non-ASCII name is read, not skipped as unreadable: Git would quote it without `-z`.
+  const accented = grok(t, {}, {}, { "src/café-日本語.txt": "ACCENTED_NAME_CONTENT\n" });
+  assert.equal(companion(accented, ["review", "--backend", "grok"]).status, 0);
+  assert.match(accented.grok().turns[0].text, /### src\/café-日本語\.txt\n```\nACCENTED_NAME_CONTENT/);
+
+  // Branch: the serialized context also has an exact boundary, including its log and section text.
   const branch = zcode(t, { answer: JSON.stringify(VERDICT) }, null);
   const git = (...args) => assert.equal(run("git", args, { cwd: branch.work }).status, 0, args.join(" "));
   initGitRepo(branch.work);
   fs.writeFileSync(path.join(branch.work, "base.txt"), "base\n");
   git("add", "."); git("commit", "-m", "base"); git("checkout", "-b", "feature");
-  const diffBytes = () => Buffer.byteLength(run("git", ["diff", "--binary", "--no-ext-diff", "--submodule=diff", "main..HEAD"], { cwd: branch.work }).stdout);
+  const branchBytes = () => Buffer.byteLength(inlineContext(branch.work, { mode: "branch", label: "branch diff", baseRef: "main" }).content, "utf8");
   const commitBig = (length, amend) => {
     fs.writeFileSync(path.join(branch.work, "big.txt"), `${"y".repeat(length - 1)}\n`);
     git("add", "."); git("commit", ...(amend ? ["--amend"] : []), "-m", "big");
   };
   commitBig(1000, false);
-  const content = 1000 + LIMIT - diffBytes();
+  const content = 1000 + LIMIT - branchBytes();
   commitBig(content, true);
-  assert.equal(diffBytes(), LIMIT);
+  assert.equal(branchBytes(), LIMIT);
   assert.equal(companion(branch, ["adversarial-review", "--backend", "zcode", "--base", "main"]).status, 0);
   commitBig(content + 1, true);
-  assert.equal(diffBytes(), LIMIT + 1);
+  assert.equal(branchBytes(), LIMIT + 1);
   assert.equal(companion(branch, ["adversarial-review", "--backend", "zcode", "--base", "main"]).stderr, refusal("1 file / more than 256 KiB", "ZCode"));
   assert.equal(jobDirs(branch).length, 1);
   assert.equal(branch.zcode().starts.length, 1);

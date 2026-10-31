@@ -273,8 +273,12 @@ async function runWorkerRound(jobDir, options, held) {
   honourTeardowns();
 
   // Work: the first brief if it never started, then messages a dead worker claimed but
-  // never delivered, then new inbox messages.
-  if (job.pendingFirstTurn) {
+  // never delivered, then new inbox messages. A job cancelled before its first turn never runs
+  // its brief later, so its claim on it ends here, before a `resume` can take the job out of
+  // `cancelled`; a failed first turn keeps it for `resume`.
+  if (job.pendingFirstTurn && job.state === "cancelled") {
+    save({ pendingFirstTurn: false });
+  } else if (job.pendingFirstTurn) {
     queue.push({ prompt: fs.readFileSync(paths.brief, "utf8"), source: "brief", message: null, clientId: `brief-${job.id}`, recoveryCandidate: true });
   }
   accept(owedMessages(jobDir), true);
@@ -312,7 +316,7 @@ async function runWorkerRound(jobDir, options, held) {
     if (cancelRequested) {
       if (!TERMINAL.has(job.state)) {
         outcome(cancelMessage, { action: "cancelled" });
-        return releaseAndReturn({ ...me_record, state: "cancelled", completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
+        return releaseAndReturn({ ...me_record, state: "cancelled", pendingFirstTurn: false, completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
       }
       outcome(cancelMessage, { action: "nothing-to-cancel", state: job.state });
       return releaseAndReturn(me_record);
@@ -322,7 +326,7 @@ async function runWorkerRound(jobDir, options, held) {
   if (cancelRequested) {
     outcome(cancelMessage, { action: "cancelled" });
     dropQueued("the job was cancelled");
-    return releaseAndReturn({ ...me_record, state: "cancelled", completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
+    return releaseAndReturn({ ...me_record, state: "cancelled", pendingFirstTurn: false, completedAt: nowIso(), errorMessage: "Cancelled before a turn ran." });
   }
 
   // Begin an attempt: nonterminal state, attempt record and report ownership are written
@@ -634,7 +638,10 @@ async function runWorkerRound(jobDir, options, held) {
             }
 
             if (result.turnStatus !== "completed" && connection.server.exitInfo) {
-              throw new Error(backend.endMessage(connection.server.exitInfo));
+              const end = connection.server.exitInfo;
+              throw new Error(end.closeTimedOut
+                ? connection.server.exitError?.message ?? result.error?.message ?? `${backend.label} did not exit after SIGKILL`
+                : backend.endMessage(end));
             }
 
             const finalMessage = String(result.finalMessage ?? "");
@@ -734,7 +741,7 @@ async function runWorkerRound(jobDir, options, held) {
       if (last && !TERMINAL.has(last.state)) {
         updateAttempt({ state: "cancelled", endedAt: nowIso() });
       }
-      save({ state: "cancelled", errorMessage: "Cancelled.", completedAt: nowIso() });
+      save({ state: "cancelled", pendingFirstTurn: false, errorMessage: "Cancelled.", completedAt: nowIso() });
     } else {
       save({ state: last?.state ?? "failed", errorMessage: last?.errorMessage ?? null, completedAt: nowIso() });
     }

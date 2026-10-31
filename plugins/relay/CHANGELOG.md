@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.2.2 (2026-10-31)
+
+The stable 2.x line, maintained for current users.
+
+- Relay jobs work when the plugin is reached through a symlinked folder. Node gives the hook its real
+  path, so the guard never ran and every `relay:job` failed with `The hook did not run`.
+- A message from another agent, or one a person types into a running agent, reaches the job. Only the
+  parent's did; the others were dropped with nothing recorded, a typed `cancel` included. Coordinator,
+  peer and human text all survive a shared text/tool-result entry. A task notification stays out, and
+  a message of any other origin is reported, whether or not the entry is metadata.
+- A backend that ignores EOF and SIGTERM gets SIGKILL within about five seconds, and one that survives
+  that is given up on after another five seconds, so a worker's cleanup no longer waits forever. It is
+  not recorded as ended, so the next worker's sweep still finds it, and its close timeout is reported
+  as a timeout rather than an unknown exit.
+- A job cancelled before its first turn never runs its brief, whether its worker arrives late or the job
+  is resumed later.
+- Reviews on Grok, ZCode and Kimi take any number of files within the 256 KiB limit. A third file used
+  to be refused however small the diff. The limit applies to the actual serialized repository context,
+  including Git's quoted names and decoded file contents; a non-ASCII name no longer drops the file's
+  contents from the review. An oversized untracked file is named without being read when the review is
+  already refused.
+- Codex's developer instructions say that `max_output_tokens` on a nested `exec_command` alone leaves
+  the 10,000-token cap in place, that large evidence is better read by line range, and to read what a
+  truncation notice names before relying on the result.
+- Grok jobs get a larger MCP result budget, 262,144 bytes, unless the environment or the home names one.
+  Detection distinguishes actual settings from lookalikes in TOML strings and handles quoted, dotted
+  and inline-table keys.
+- Setup warns when Grok refuses its `read-only` profile on the machine, which fails read-only jobs and
+  every Grok review.
+- [docs/harness-output-limits.md](../../docs/harness-output-limits.md) records every harness's limits, and
+  `scripts/tool-output-probe.mjs` writes the marker file for measuring them again after an upgrade.
+- [docs/relay-2.2.2-validation.md](../../docs/relay-2.2.2-validation.md) records the independent review,
+  the defects it found and their regressions, and the live backend, fan-out and dynamic-Workflow checks.
+
 ## 2.2.1 (2026-10-30)
 
 - Codex jobs and reviews no longer lose the middle of large tool results. Codex keeps 10,000

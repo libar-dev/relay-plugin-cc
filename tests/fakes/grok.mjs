@@ -44,6 +44,8 @@ function endAnswered(turn, reason) {
 fs.appendFileSync(file + '.invocations', JSON.stringify({ args: process.argv.slice(2), env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('GROK_'))) }) + '\\n');
 if (process.argv[2] === '--version' && options.versionFail) { console.error('VERSION DENIED'); process.exit(9); }
 if (process.argv[2] === '--version') { console.log('grok 1.0.fake'); process.exit(0); }
+if (process.argv[2] === 'models' && options.refuseReadOnly && process.env.GROK_SANDBOX === 'read-only') { console.error('error: sandbox profile resolve failed: socket deny resolution failed'); console.error('error: this sandbox could not enforce its deny list. Refusing to start with denied paths unprotected.'); process.exit(1); }
+if (process.argv[2] === 'models' && options.networkFailsUnderReadOnly && process.env.GROK_SANDBOX === 'read-only') { console.error('error: request to sandbox.example.invalid failed'); process.exit(1); }
 if (process.argv[2] === 'models' && options.modelsHangMs) { setTimeout(() => process.exit(0), options.modelsHangMs); return; }
 if (process.argv[2] === 'models') { console.log(options.signedOut ? 'Not signed in' : 'You are logged in with grok.com.\\n\\nDefault model: grok-4.7\\n\\nAvailable models:\\n  * grok-4.7 (default)\\n  - grok-4.6'); process.exit(options.signedOut ? 1 : 0); }
 state.starts.push({ args: process.argv.slice(2), env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('GROK_'))), cwd: process.cwd() }); save();

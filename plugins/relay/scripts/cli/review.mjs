@@ -139,19 +139,17 @@ function buildReviewRequest(options, cwd, reviewName) {
 }
 
 
-// An inline review needs the whole diff. Untracked files count toward the limits and are
-// inlined whole; a refusal precedes job creation and starting a backend process.
+// An inline review needs the whole diff, and its serialized repository context must fit the byte
+// limit: Git quotes names in status, and decoding can change a file's byte length. A refusal
+// precedes job creation and starting a backend process.
 function inlineReviewContext(cwd, target, backend) {
-  const context = collectReviewContext(cwd, target, { untrackedInFull: true });
-  if (context.inputMode === "inline-diff") {
+  const context = collectReviewContext(cwd, target, { untrackedInFull: true, maxInlineFiles: Infinity });
+  if (context.inputMode === "inline-diff" && Buffer.byteLength(context.content, "utf8") <= DEFAULT_INLINE_DIFF_MAX_BYTES) {
     return context;
   }
   const files = `${context.fileCount} file${context.fileCount === 1 ? "" : "s"}`;
-  const size = context.diffBytes > DEFAULT_INLINE_DIFF_MAX_BYTES
-    ? `more than ${DEFAULT_INLINE_DIFF_MAX_BYTES / 1024} KiB`
-    : `${Math.ceil(context.diffBytes / 1024)} KiB`;
   throw new UsageError(
-    `The diff is ${files} / ${size}; a ${backend.label} review reads only an inlined diff. Narrow it with --base or --scope, ${backend.review.inlineDiffAdvice}`
+    `The diff is ${files} / more than ${DEFAULT_INLINE_DIFF_MAX_BYTES / 1024} KiB; a ${backend.label} review reads only an inlined diff. Narrow it with --base or --scope, ${backend.review.inlineDiffAdvice}`
   );
 }
 

@@ -17,6 +17,15 @@ function grokConfigDefaults(grokHome) {
   }
 }
 
+// The first line of Grok's error when it refused a sandbox profile, which it ends with "Refusing to
+// start with"; null for anything else, such as a network failure under the profile, which says
+// nothing about whether the profile can run.
+function sandboxRefusal(result) {
+  const text = String(result?.stderr ?? "");
+  if (result?.timedOut || result?.error || result?.status === 0 || !/Refusing to start with/.test(text)) return null;
+  return firstLine(text);
+}
+
 function parseGrokModels(text) {
   const lines = String(text ?? "").split(/\r?\n/);
   const signedIn = /logged in with\s+([^\s.]+(?:\.[^\s.]+)*)/i.exec(text ?? "");
@@ -85,6 +94,11 @@ async function checkGrokHome(cwd, home, env, shared, limits) {
     return block;
   }
   block.signIn = { state: "signed-in", method: parsed.signedIn, detail: firstLine(listing.stdout) };
+  // The same command under the read-only profile: Grok refuses a profile it cannot enforce before
+  // it does anything else, and makes no model call either way.
+  const sandboxed = await runLimited(shared.binary, ["models"], { cwd, env: grokEnvironment({ grokHome: home.home, mode: "read-only" }, env), timeoutMs: limits.commandMs });
+  const refusal = sandboxRefusal(sandboxed);
+  if (refusal) block.warnings.push(`Grok refuses its read-only profile on this machine, so read-only jobs and every Grok review fail; yolo uses no profile and still runs. Grok said: ${refusal}`);
   block.models = parsed.models.map(id => ({ id, efforts: null, defaultEffort: null }));
   block.modelsReason = "efforts need grok agent; not probed";
   block.ready = !failure;

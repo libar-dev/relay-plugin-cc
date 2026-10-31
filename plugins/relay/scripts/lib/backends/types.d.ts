@@ -178,6 +178,7 @@ export interface Connection {
 
 export interface ServerState {
   readonly exitInfo: ExitInfo | null;
+  readonly exitError: Error | null;
   /** The process exited; its pipes may still be draining. */
   readonly exitSeen: boolean;
   /** The end is recorded and every pending request has failed. */
@@ -191,7 +192,8 @@ export interface ExitInfo {
   pid: number | null;
   code: number | null;
   signal: string | null;
-  endedAt: string;
+  endedAt?: string;
+  closeTimedOut?: boolean;
   stdoutClosedBeforeExit: boolean;
   partialStdoutBytes: number;
   stderrTail: string;

@@ -20,11 +20,187 @@ export function resolveGrokBinary(env = process.env) {
   throw new Error(`Grok binary is not executable: ${binary}`);
 }
 
+// Grok shows the model 20,000 bytes of an MCP result, from its start, and saves the rest to a file,
+// so a job gets a larger budget unless the environment or the home's `[mcp] max_output_bytes` names
+// one: a quarter of its 256k-token window at four bytes per token.
+const GROK_MCP_OUTPUT_BYTES = 262144;
+
+// Mask comments and multiline strings, whose contents can look like tables and settings. Ordinary
+// quoted keys stay intact for `tomlKeyPath`; this is key detection, not a general TOML parser.
+function maskTomlMultilineStrings(text) {
+  let out = "";
+  let quote = null;
+  let multiline = false;
+  for (let index = 0; index < text.length;) {
+    const char = text[index];
+    if (quote && multiline) {
+      if (char === quote) {
+        let end = index;
+        while (text[end] === quote) end += 1;
+        if (end - index >= 3) {
+          out += " ".repeat(end - index);
+          index = end;
+          quote = null;
+          multiline = false;
+          continue;
+        }
+      }
+      if (char === "\\" && quote === '"' && index + 1 < text.length) {
+        out += "  ";
+        index += 2;
+        continue;
+      }
+      out += char === "\n" ? "\n" : " ";
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      out += char;
+      index += 1;
+      if (char === "\\" && quote === '"' && index < text.length) {
+        out += text[index];
+        index += 1;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "#") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+      continue;
+    }
+    if ((char === '"' || char === "'") && text.slice(index, index + 3) === char.repeat(3)) {
+      quote = char;
+      multiline = true;
+      out += "   ";
+      index += 3;
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    out += char;
+    index += 1;
+  }
+  return out;
+}
+
+/** @returns {string[] | null} */
+function tomlKeyPath(text) {
+  const raw = [];
+  let part = "";
+  let quote = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      part += char;
+      if (char === "\\" && quote === '"') part += text[++index] ?? "";
+      else if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      part += char;
+    } else if (char === ".") {
+      raw.push(part);
+      part = "";
+    } else {
+      part += char;
+    }
+  }
+  if (quote) return null;
+  raw.push(part);
+  const parts = [];
+  for (const item of raw) {
+    const key = item.trim();
+    if (!key) return null;
+    if (key.startsWith("'") && key.endsWith("'")) parts.push(key.slice(1, -1));
+    else if (key.startsWith('"') && key.endsWith('"')) {
+      try { parts.push(JSON.parse(key)); } catch { return null; }
+    } else parts.push(key);
+  }
+  return parts;
+}
+
+function tomlEntry(line) {
+  let quote = null;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quote) {
+      if (char === "\\" && quote === '"') index += 1;
+      else if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") quote = char;
+    else if (char === "=") return [line.slice(0, index), line.slice(index + 1)];
+  }
+  return null;
+}
+
+function inlineTableSetsMcpOutput(value) {
+  const text = value.trim();
+  if (!text.startsWith("{") || !text.endsWith("}")) return false;
+  const entries = [];
+  let entry = "";
+  let quote = null;
+  let depth = 0;
+  const inner = text.slice(1, -1);
+  for (let index = 0; index < inner.length; index += 1) {
+    const char = inner[index];
+    if (quote) {
+      entry += char;
+      if (char === "\\" && quote === '"') entry += inner[++index] ?? "";
+      else if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      entry += char;
+    } else if (char === "{" || char === "[") {
+      depth += 1;
+      entry += char;
+    } else if (char === "}" || char === "]") {
+      depth -= 1;
+      entry += char;
+    } else if (char === "," && depth === 0) {
+      entries.push(entry);
+      entry = "";
+    } else entry += char;
+  }
+  entries.push(entry);
+  return entries.some((item) => {
+    const pair = tomlEntry(item);
+    const key = pair ? tomlKeyPath(pair[0]) : null;
+    return key?.length === 1 && key[0] === "max_output_bytes";
+  });
+}
+
+function grokHomeSetsMcpOutput(grokHome) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(grokHome, "config.toml"), "utf8");
+  } catch {
+    return false;
+  }
+  /** @type {string[] | null} */
+  let table = [];
+  for (const line of maskTomlMultilineStrings(text).split(/\r?\n/)) {
+    const header = /^\s*\[(\[?)([^\[\],]*)\]\]?\s*$/.exec(line);
+    if (header) {
+      table = header[1] ? null : tomlKeyPath(header[2]);
+      continue;
+    }
+    const entry = tomlEntry(line);
+    if (!entry || table === null) continue;
+    const key = tomlKeyPath(entry[0]);
+    if (!key) continue;
+    const path = [...table, ...key];
+    if (path.length === 2 && path[0] === "mcp" && path[1] === "max_output_bytes") return true;
+    if (path.length === 1 && path[0] === "mcp" && inlineTableSetsMcpOutput(entry[1])) return true;
+  }
+  return false;
+}
+
 export function grokEnvironment(request, env = process.env) {
   /** @type {NodeJS.ProcessEnv} */
   const result = { ...env, GROK_HOME: request.grokHome, GROK_MEMORY: "0" };
   for (const source of ["CLAUDE", "CURSOR"]) {
     for (const kind of ["HOOKS", "SKILLS", "MCPS", "RULES", "AGENTS", "SESSIONS"]) result[`GROK_${source}_${kind}_ENABLED`] = "0";
+  }
+  if (env.GROK_MAX_MCP_OUTPUT_BYTES == null && env.MAX_MCP_OUTPUT_BYTES == null && !grokHomeSetsMcpOutput(request.grokHome)) {
+    result.GROK_MAX_MCP_OUTPUT_BYTES = String(GROK_MCP_OUTPUT_BYTES);
   }
   delete result.GROK_SANDBOX;
   if (request.mode !== "yolo") result.GROK_SANDBOX = request.mode === "write" ? "workspace" : "read-only";
