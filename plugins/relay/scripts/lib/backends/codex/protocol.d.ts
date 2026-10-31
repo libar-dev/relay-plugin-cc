@@ -142,6 +142,9 @@ export type ServerNotification =
 
 export interface ServerClientOptions {
   backendName?: string;
+  /** How long after SIGTERM, and then after SIGKILL, `close` waits for the process to end. */
+  closeGraceMs?: number;
+  closeKillWaitMs?: number;
   env?: NodeJS.ProcessEnv;
   clientInfo?: ClientInfo;
   capabilities?: InitializeCapabilities;

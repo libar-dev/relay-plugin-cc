@@ -357,6 +357,56 @@ import { companion, jobDirOf, readJobJson, relayContext, waitFor as waitForForAp
     assert.equal(ctx.fakeState().appServerStarts, 1);
   });
 
+  test("close escalates to SIGKILL when a backend ignores EOF and SIGTERM", async (t) => {
+    const dir = makeTempDir();
+    const script = path.join(dir, "stubborn.mjs");
+    fs.writeFileSync(script, `process.on("SIGTERM", () => {});
+let buffer = "";
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  for (const line of buffer.split("\\n").slice(0, -1)) process.stdout.write(JSON.stringify({ id: JSON.parse(line).id, result: {} }) + "\\n");
+  buffer = buffer.slice(buffer.lastIndexOf("\\n") + 1);
+});
+process.stdin.on("end", () => {});
+setInterval(() => {}, 1000);
+`);
+    const ends = [];
+    const client = new SpawnedServerClient(dir, {
+      binary: process.execPath, args: [script], closeGraceMs: 100, closeKillWaitMs: 2000, onEnd: info => ends.push(info)
+    });
+    t.after(() => { try { client.proc?.kill("SIGKILL"); } catch {} });
+    await client.initialize();
+    const started = Date.now();
+    await client.close();
+    assert.ok(Date.now() - started < 2000, "close did not wait for the grace period only");
+    assert.equal(ends.at(-1).signal, "SIGKILL");
+    assert.equal(await client.close(), undefined, "a second close settles too");
+  });
+
+  test("close gives up when the process survives SIGKILL, and rejects what is pending", async () => {
+    const dir = makeTempDir();
+    const script = path.join(dir, "fake.mjs");
+    fs.writeFileSync(script, `process.stdin.on("data", (chunk) => { for (const line of String(chunk).split("\\n").filter(Boolean)) { const { id, method } = JSON.parse(line); if (method === "initialize") process.stdout.write(JSON.stringify({ id, result: {} }) + "\\n"); } });
+setInterval(() => {}, 1000);
+`);
+    const ends = [];
+    const client = new SpawnedServerClient(dir, {
+      binary: process.execPath, args: [script], closeGraceMs: 10, closeKillWaitMs: 50, onEnd: info => ends.push(info)
+    });
+    await client.initialize();
+    const pending = client.request("never/answered", {}).then(() => null, error => error);
+    // Stands in for a process no signal can end: signals are dropped, so `close` runs out its time.
+    const kill = client.proc.kill.bind(client.proc);
+    client.proc.kill = () => false;
+    try {
+      await client.close();
+      assert.equal(ends.at(-1).closeTimedOut, true);
+      assert.match((await pending).message, /did not exit after SIGKILL/);
+    } finally {
+      kill("SIGKILL");
+    }
+  });
+
   test("multi-megabyte resume and MCP lines remain intact", async (t) => {
     const ctx = relayContext("job", { turnMs: 50, env: { FAKE_CODEX_LARGE_LINES: "1" } });
     const id = start(ctx);

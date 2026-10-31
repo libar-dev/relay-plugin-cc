@@ -1,3 +1,23 @@
+test("a worker that arrives after the cancel does not run the brief", async () => {
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "job", { turnMs: 50 });
+  const work = makeTempDir("relay-work-cancelled-");
+  const home = makeTempDir("relay-jobs-cancelled-");
+  const jobId = `job-cancelled-${Date.now()}`;
+  const { jobDir } = createJobDir(work, jobId, { RELAY_JOBS_HOME: home });
+  fs.writeFileSync(path.join(jobDir, "brief.md"), "Must never run.\n");
+  writeJob(jobDir, {
+    id: jobId, kind: "task", state: "cancelled", createdAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+    errorMessage: "Cancelled before a turn ran.",
+    request: buildLaunchRequest({ model: "gpt-test", effort: "low", cd: work }), pendingFirstTurn: true, attempts: []
+  });
+  const job = await runWorker(jobDir, { env: { ...buildEnv(binDir), RELAY_JOBS_POLL_MS: "50" } });
+  const after = JSON.parse(fs.readFileSync(path.join(jobDir, "job.json"), "utf8"));
+  assert.equal(after.state, "cancelled");
+  assert.deepEqual(after.attempts, [], "no attempt began");
+  assert.ok(job == null || job.state === "cancelled");
+});
+
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";

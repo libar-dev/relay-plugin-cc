@@ -62,6 +62,7 @@ function markCancelledAfterKill(jobDir, reason) {
       ...job,
       attempts,
       state: "cancelled",
+      pendingFirstTurn: false,
       errorMessage: reason,
       completedAt: nowIso(),
       cancelledBy: "cancel command"
