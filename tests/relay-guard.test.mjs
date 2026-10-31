@@ -1287,3 +1287,19 @@ test("a relay that never runs start gets its job started by the hook: at its han
     assert.equal(updated(handback).message, resultOf(ctx, jobId), `${what}: the hand-back is the job's result`);
   }
 });
+
+test("a plugin reached through a symlinked folder: the hook runs, and knows the companion by either path", () => {
+  // Claude Code can install a plugin through a symlinked config folder. Node gives the hook its real path, while the
+  // hook is run and the relay names the companion through the symlink.
+  const link = path.join(makeTempDir("relay-link-"), "plugin");
+  fs.symlinkSync(PLUGIN_ROOT, link);
+  assert.deepEqual(parseCompanionCommand(`node "${path.join(link, "scripts", "companion.mjs")}" start --from-relay`),
+    { subcommand: "start", jobId: null, fromRelay: true });
+
+  const ctx = relayContext("job");
+  const input = hookInput(ctx, "PreToolUse", { tool_name: "Bash", tool_input: { command: "sw_vers -productVersion" } });
+  const r = spawnSync("node", [path.join(link, "scripts", "hooks", "relay-guard.mjs")],
+    { input: JSON.stringify(input), env: ctx.env, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
+});
