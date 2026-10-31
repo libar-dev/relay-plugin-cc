@@ -1,0 +1,65 @@
+name: PR review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Opus then Astra
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      REPOSITORY: ${{ github.repository }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login || github.actor }}
+      REVIEW_WORK_DIR: ${{ runner.temp }}/relay-pr-review
+
+    steps:
+      - name: Check out the base repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+
+      - name: Install review CLIs
+        run: npm install -g @anthropic-ai/claude-code@2.1.316 @openai/codex@0.166.0
+
+      - name: Collect the pull request diff
+        run: node scripts/pr-review.mjs collect
+
+      - name: Review with Claude Opus 5.5 high
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node scripts/pr-review.mjs review --reviewer opus
+
+      - name: Review with GPT-6 Astra high
+        if: always()
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node scripts/pr-review.mjs review --reviewer astra
+
+      - name: Publish the Opus review
+        if: always()
+        run: node scripts/pr-review.mjs post --reviewer opus
+
+      - name: Publish the Astra review
+        if: always()
+        run: node scripts/pr-review.mjs post --reviewer astra
