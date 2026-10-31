@@ -404,6 +404,7 @@ setInterval(() => {}, 1000);
       assert.equal(client.exitInfo.closeTimedOut, true);
       assert.match((await pending).message, /did not exit after SIGKILL/);
     } finally {
+      client.proc.ref(); // `close` let go of it, and this test still waits for its exit
       kill("SIGKILL");
     }
     // Its exit, when it comes, writes nothing: another worker may own the job by then.

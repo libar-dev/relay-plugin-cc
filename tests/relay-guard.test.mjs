@@ -170,13 +170,15 @@ test("a user entry from another agent or a person reaches the job unwrapped, aft
     user("peer-2", "No body.", { kind: "peer" }),
     user("human-1", wrapped, { kind: "human" }, { isMeta: true }),
     user("human-2", [{ type: "text", text: "Typed." }, { type: "image", source: {} }], { kind: "human" }),
+    user("human-3", [{ type: "tool_result", tool_use_id: "t", content: "x" }, { type: "text", text: "cancel" }], { kind: "human" }),
+    user("human-4", [{ type: "tool_result", tool_use_id: "t", content: "x" }], { kind: "human" }),
     user("notice-1", "A task ended.", { kind: "task-notification" }),
     user("meta-1", "Odd metadata.", { kind: "mystery" }, { isMeta: true })
   ];
   const parsed = parseRelayTranscript(entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
   assert.equal(parsed.prompt.text, PROMPT);
   assert.deepEqual(parsed.messages.map((message) => [message.text, message.shape]), [
-    ["The body.", "peer"], ["Stop now.", "human"], ["Typed.", "human"]
+    ["The body.", "peer"], ["Stop now.", "human"], ["Typed.", "human"], ["cancel", "human"]
   ]);
   assert.deepEqual(parsed.problems, [
     "entry early-1 is a message that came before the prompt",

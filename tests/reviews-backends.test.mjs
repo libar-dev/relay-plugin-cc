@@ -387,16 +387,31 @@ test("the inline limit is exact: any number of files within 256 KiB passes, one 
   assert.match(binary.zcode().turns[0].text, /### src\/blob\.bin\n\(skipped: binary file\)/);
   assert.equal(binary.zcode().starts.length, 1);
 
-  // Working tree: an untracked file of exactly 256 KiB is inlined whole; one byte more is refused.
-  const bytes = grok(t, {}, {}, { "src/new.txt": sized(LIMIT, "WHOLE_FILE_END") });
+  // Working tree: an untracked file filling 256 KiB with its name is inlined whole; one byte more
+  // is refused. The name counts twice, in Git's status and its heading, with 32 bytes around it.
+  const fits = LIMIT - (2 * "src/new.txt".length + 32);
+  const bytes = grok(t, {}, {}, { "src/new.txt": sized(fits, "WHOLE_FILE_END") });
   assert.equal(companion(bytes, ["review", "--backend", "grok"]).status, 0);
-  assert.ok(bytes.grok().turns[0].text.includes(sized(LIMIT, "WHOLE_FILE_END").trimEnd()));
-  fs.writeFileSync(path.join(bytes.work, "src", "new.txt"), sized(LIMIT + 1, "WHOLE_FILE_END"));
+  assert.ok(bytes.grok().turns[0].text.includes(sized(fits, "WHOLE_FILE_END").trimEnd()));
+  fs.writeFileSync(path.join(bytes.work, "src", "new.txt"), sized(fits + 1, "WHOLE_FILE_END"));
   const over = companion(bytes, ["review", "--backend", "grok"]);
   assert.equal(over.status, 1);
   assert.equal(over.stderr, refusal("1 file / more than 256 KiB", "Grok"));
   assert.equal(jobDirs(bytes).length, 1);
   assert.equal(bytes.grok().starts.length, 1);
+
+  // File names alone can pass the limit: many empty or binary files are refused, not sent.
+  const names = Object.fromEntries(Array.from({ length: 1400 }, (_, index) => [`src/${"long-file-name-".repeat(6)}${index}.txt`, ""]));
+  const empties = grok(t, {}, {}, names);
+  const refusedNames = companion(empties, ["review", "--backend", "grok"]);
+  assert.equal(refusedNames.status, 1);
+  assert.equal(refusedNames.stderr, refusal("1400 files / more than 256 KiB", "Grok"));
+  assert.equal(empties.grok().starts.length, 0);
+
+  // A non-ASCII name is read, not skipped as unreadable: Git would quote it without `-z`.
+  const accented = grok(t, {}, {}, { "src/café-日本語.txt": "ACCENTED_NAME_CONTENT\n" });
+  assert.equal(companion(accented, ["review", "--backend", "grok"]).status, 0);
+  assert.match(accented.grok().turns[0].text, /### src\/café-日本語\.txt\n```\nACCENTED_NAME_CONTENT/);
 
   // Branch: a diff of exactly 256 KiB against --base passes; one byte more is refused.
   const branch = zcode(t, { answer: JSON.stringify(VERDICT) }, null);

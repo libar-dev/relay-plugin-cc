@@ -15,7 +15,9 @@ The last release of this line.
 - A job cancelled before its first turn never runs its brief, whether its worker arrives late or the job
   is resumed later.
 - Reviews on Grok, ZCode and Kimi take any number of files within the 256 KiB limit. A third file used
-  to be refused however small the diff.
+  to be refused however small the diff. An untracked file's name now counts toward the limit, so many
+  empty or binary files can't grow the prompt past it, and a non-ASCII name no longer drops the file's
+  contents from the review.
 - Codex's developer instructions say that `max_output_tokens` on a nested `exec_command` alone leaves
   the 10,000-token cap in place, that large evidence is better read by line range, and to read what a
   truncation notice names before relying on the result.

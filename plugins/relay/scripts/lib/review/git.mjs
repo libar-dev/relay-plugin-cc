@@ -7,6 +7,7 @@ import { formatCommandFailure, runCommand, runCommandChecked } from "../util/pro
 const MAX_UNTRACKED_BYTES = 24 * 1024;
 const DEFAULT_INLINE_DIFF_MAX_FILES = 2;
 export const DEFAULT_INLINE_DIFF_MAX_BYTES = 256 * 1024;
+const UNTRACKED_ENTRY_BYTES = 32; // what surrounds a name: status code, heading, the note or fence
 
 // Repository-derived arguments must reach Git literally, without shell expansion.
 function git(cwd, args, options = {}) {
@@ -122,7 +123,8 @@ function getCurrentBranch(cwd) {
 function getWorkingTreeState(cwd) {
   const staged = gitChecked(cwd, ["diff", "--cached", "--name-only"]).stdout.trim().split("\n").filter(Boolean);
   const unstaged = gitChecked(cwd, ["diff", "--name-only"]).stdout.trim().split("\n").filter(Boolean);
-  const untracked = gitChecked(cwd, ["ls-files", "--others", "--exclude-standard"]).stdout.trim().split("\n").filter(Boolean);
+  // `-z`: without it Git quotes a non-ASCII name, and the file could not be read for the review.
+  const untracked = gitChecked(cwd, ["ls-files", "-z", "--others", "--exclude-standard"]).stdout.split("\0").filter(Boolean);
 
   return {
     staged,
@@ -290,13 +292,15 @@ function collectBranchContext(cwd, baseRef, options = {}) {
   };
 }
 
-// The bytes an inline context adds for untracked files: each readable text file's size. A
-// directory, an unreadable file or a binary file is named, not inlined, and adds nothing.
-// Stops counting once the total passes `maxBytes`.
+// The bytes an inline context adds for untracked files: every file's name, in Git's status and in
+// its own heading, plus each readable text file's size. A directory, an unreadable file or a
+// binary file is named, not inlined, so only its name counts. Stops counting once the total
+// passes `maxBytes`.
 function measureUntrackedTextBytes(cwd, files, maxBytes) {
   let total = 0;
   for (const relativePath of files) {
     if (total > maxBytes) break;
+    total += 2 * Buffer.byteLength(relativePath) + UNTRACKED_ENTRY_BYTES;
     const absolutePath = path.join(cwd, relativePath);
     let fd = null;
     try {

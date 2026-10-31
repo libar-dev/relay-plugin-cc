@@ -142,7 +142,7 @@ function peerBody(origin) {
 
 function humanText(content, where, problems) {
   if (!Array.isArray(content)) return textOfContent(content);
-  const nonText = content.filter((block) => block?.type !== "text").length;
+  const nonText = content.filter((block) => block?.type !== "text" && block?.type !== "tool_result").length;
   if (nonText) {
     problems.push(`${where} is a typed message with ${nonText} block(s) that are not text; the job gets its text only`);
   }
@@ -251,10 +251,11 @@ export function parseRelayTranscript(text) {
     if (!isUser || !message) {
       return;
     }
-    if (isToolResult(message.content)) {
+    const origin = entry.origin?.kind;
+    // A tool result is the harness's own, but text a person typed can share its entry.
+    if (isToolResult(message.content) && !(origin === "human" && message.content.some((block) => block?.type === "text"))) {
       return;
     }
-    const origin = entry.origin?.kind;
     const fromCoordinator = origin === "coordinator";
     const fromPeer = origin === "peer";
     const fromHuman = origin === "human";
