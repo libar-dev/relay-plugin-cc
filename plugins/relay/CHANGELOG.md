@@ -23,7 +23,7 @@ The last release of this line.
 - Setup warns when Grok refuses its `read-only` profile on the machine, which fails read-only jobs and
   every Grok review.
 - [docs/harness-output-limits.md](../../docs/harness-output-limits.md) records every harness's limits, and
-  `scripts/tool-output-probe.mjs` measures them after an upgrade.
+  `scripts/tool-output-probe.mjs` writes the marker file for measuring them again after an upgrade.
 
 ## 2.2.1 (2026-10-30)
 

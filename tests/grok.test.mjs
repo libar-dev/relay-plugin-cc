@@ -176,6 +176,7 @@ test('setup warns when Grok refuses its read-only profile, and stays ready; anot
   const warnings = block.warnings.filter(warning => /read-only profile/.test(warning));
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /refuses its read-only profile.*every Grok review fail.*sandbox profile resolve failed/);
+  assert.doesNotMatch(warnings[0], /write/);
   const other = fixture(t, { networkFailsUnderReadOnly: true });
   assert.deepEqual(JSON.parse(companion(other, ['setup', '--backend', 'grok', '--json']).stdout).backends[0].warnings.filter(warning => /read-only profile/.test(warning)), []);
 });
@@ -201,6 +202,16 @@ test('a Grok job gets a larger MCP budget, unless the environment or the home na
     fs.writeFileSync(path.join(ctx.user, '.grok', 'config.toml'), '[other]\nmax_output_bytes = 3000\n');
   });
   assert.equal(elsewhere.GROK_MAX_MCP_OUTPUT_BYTES, '262144');
+  const withConfig = text => budget(ctx => {
+    fs.mkdirSync(path.join(ctx.user, '.grok'), { recursive: true });
+    fs.writeFileSync(path.join(ctx.user, '.grok', 'config.toml'), text);
+  });
+  for (const text of ['[mcp] # budget\nmax_output_bytes = 3000\n', '[ mcp ]\n"max_output_bytes" = 3000\n', '["mcp"]\r\nmax_output_bytes=3000\r\n', 'mcp.max_output_bytes = 3000\n', 'mcp = { max_output_bytes = 3000 }\n']) {
+    assert.equal((await withConfig(text)).GROK_MAX_MCP_OUTPUT_BYTES, undefined, text);
+  }
+  for (const text of ['[mcp]\n# max_output_bytes = 3000\n', '[mcp.server]\nmax_output_bytes = 3000\n', '[mcp]\ntimeout = 1\n[other]\nmax_output_bytes = 3000\n']) {
+    assert.equal((await withConfig(text)).GROK_MAX_MCP_OUTPUT_BYTES, '262144', text);
+  }
 });
 
 for (const home of ['default', 'jobs']) test(`Workflow retry adopts the same Grok job with ${home} home and returns its state block`, async () => {

@@ -25,14 +25,31 @@ export function resolveGrokBinary(env = process.env) {
 // one: a quarter of its 256k-token window at four bytes per token.
 const GROK_MCP_OUTPUT_BYTES = 262144;
 
+// A missed setting would be overridden, so this reads every form TOML has for the key: a spaced or
+// commented `[mcp]` header, a quoted or dotted key, and an inline table.
 function grokHomeSetsMcpOutput(grokHome) {
+  let text;
   try {
-    const text = fs.readFileSync(path.join(grokHome, "config.toml"), "utf8");
-    const section = /^\s*\[mcp\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text)?.[1] ?? "";
-    return /^\s*max_output_bytes\s*=/m.test(section);
+    text = fs.readFileSync(path.join(grokHome, "config.toml"), "utf8");
   } catch {
     return false;
   }
+  const plain = (/** @type {string} */ name) => name.replace(/["'\s]/g, "");
+  /** @type {string | null} */
+  let table = "";
+  for (const line of text.split(/\r?\n/)) {
+    const header = /^\s*\[(\[?)([^\[\],]*)\]\]?\s*(?:#.*)?$/.exec(line);
+    if (header) {
+      table = header[1] ? null : plain(header[2]);
+      continue;
+    }
+    const entry = /^\s*([^=#\s][^=#]*?)\s*=\s*(.*)$/.exec(line);
+    if (!entry || table === null) continue;
+    const key = plain(table ? `${table}.${entry[1]}` : entry[1]);
+    if (key === "mcp.max_output_bytes") return true;
+    if (key === "mcp" && /\bmax_output_bytes["']?\s*=/.test(entry[2])) return true;
+  }
+  return false;
 }
 
 export function grokEnvironment(request, env = process.env) {
