@@ -638,7 +638,10 @@ async function runWorkerRound(jobDir, options, held) {
             }
 
             if (result.turnStatus !== "completed" && connection.server.exitInfo) {
-              throw new Error(backend.endMessage(connection.server.exitInfo));
+              const end = connection.server.exitInfo;
+              throw new Error(end.closeTimedOut
+                ? connection.server.exitError?.message ?? result.error?.message ?? `${backend.label} did not exit after SIGKILL`
+                : backend.endMessage(end));
             }
 
             const finalMessage = String(result.finalMessage ?? "");

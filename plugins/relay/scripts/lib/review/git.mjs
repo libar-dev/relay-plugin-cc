@@ -355,7 +355,11 @@ export function collectReviewContext(cwd, target, options = {}) {
       options.includeDiff ??
       (listUniqueFiles(state.staged, state.unstaged, state.untracked).length <= maxInlineFiles &&
         diffBytes <= maxInlineDiffBytes);
-    details = collectWorkingTreeContext(repoRoot, state, { includeDiff, untrackedMaxBytes: options.untrackedInFull ? Infinity : MAX_UNTRACKED_BYTES });
+    details = collectWorkingTreeContext(repoRoot, state, {
+      includeDiff,
+      // A refused inline review names its untracked files without reading them.
+      untrackedMaxBytes: options.untrackedInFull ? (includeDiff ? Infinity : 0) : MAX_UNTRACKED_BYTES
+    });
   } else {
     const comparison = buildBranchComparison(repoRoot, target.baseRef);
     const fileCount = gitChecked(repoRoot, ["diff", "--name-only", comparison.commitRange]).stdout.trim().split("\n").filter(Boolean).length;

@@ -1,5 +1,14 @@
 # Relay and Claude Code Mods: the plan
 
+## Current project direction
+
+Decided 31 October 2026: the 2.x line remains the supported workhorse. The 3.0.0.pre implementation did not
+establish the required Claude Mods architecture and is not a basis for further implementation; the active
+rearchitecture follows Claude Mods standards. Both 2.x and 3.x are reference inputs to `cc-agents`. Keep this
+material while it remains useful to that work, and clean it up only when it no longer informs it. The rest of this
+document is a historical plan, not a release roadmap. The root `AGENTS.md` carries the same decision for future
+sessions.
+
 Written 22 October 2026 against relay 2.2.0 (main @ f1283c9) and Claude Code 2.1.307. It combines three
 independent plans in this directory:
 

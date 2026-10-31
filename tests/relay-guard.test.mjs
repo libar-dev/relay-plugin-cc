@@ -159,31 +159,39 @@ test("a queued message from another agent or a person reaches the job; a task no
   ]);
 });
 
-test("a user entry from another agent or a person reaches the job unwrapped, after the prompt only", () => {
+test("coordinator, peer and human entries reach the job; unknown origins are reported, never delivered", () => {
   const ctx = relayContext();
   const user = (uuid, content, origin, extra = {}) => ({ type: "user", uuid, origin, message: { role: "user", content }, ...extra });
   const wrapped = `The user sent a new message while you were working:\nStop now.\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.`;
+  const mixed = [{ type: "tool_result", tool_use_id: "t", content: "x" }, { type: "text", text: "cancel" }];
   const entries = [
     user("early-1", "Too early.", { kind: "peer", body: "Too early." }),
+    user("early-mystery", "Not the prompt.", { kind: "mystery" }),
     ctx.prompt(PROMPT),
     user("peer-1", "<agent-message>Envelope.</agent-message>", { kind: "peer", body: "The body." }, { isMeta: true }),
     user("peer-2", "No body.", { kind: "peer" }),
     user("human-1", wrapped, { kind: "human" }, { isMeta: true }),
     user("human-2", [{ type: "text", text: "Typed." }, { type: "image", source: {} }], { kind: "human" }),
-    user("human-3", [{ type: "tool_result", tool_use_id: "t", content: "x" }, { type: "text", text: "cancel" }], { kind: "human" }),
+    user("human-3", mixed, { kind: "human" }),
     user("human-4", [{ type: "tool_result", tool_use_id: "t", content: "x" }], { kind: "human" }),
+    user("peer-mixed", mixed, { kind: "peer", body: "cancel" }),
+    user("coordinator-mixed", mixed, { kind: "coordinator" }),
+    user("mystery-2", "Not a plain user message.", { kind: "mystery" }),
     user("notice-1", "A task ended.", { kind: "task-notification" }),
     user("meta-1", "Odd metadata.", { kind: "mystery" }, { isMeta: true })
   ];
   const parsed = parseRelayTranscript(entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
   assert.equal(parsed.prompt.text, PROMPT);
   assert.deepEqual(parsed.messages.map((message) => [message.text, message.shape]), [
-    ["The body.", "peer"], ["Stop now.", "human"], ["Typed.", "human"], ["cancel", "human"]
+    ["The body.", "peer"], ["Stop now.", "human"], ["Typed.", "human"], ["cancel", "human"],
+    ["cancel", "peer"], ["cancel", "coordinator"]
   ]);
   assert.deepEqual(parsed.problems, [
     "entry early-1 is a message that came before the prompt",
+    "entry early-mystery is a user entry of origin mystery, which the relay does not deliver",
     "entry peer-2 is a message from another agent whose text could not be read",
     "entry human-2 is a typed message with 1 block(s) that are not text; the job gets its text only",
+    "entry mystery-2 is a user entry of origin mystery, which the relay does not deliver",
     "entry meta-1 is a user entry of origin mystery, which the relay does not deliver"
   ]);
 });

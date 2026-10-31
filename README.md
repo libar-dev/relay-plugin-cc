@@ -319,7 +319,7 @@ runs on command hooks and the transcript.
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.2.0. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.2.2. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
@@ -347,6 +347,8 @@ them); the version named above in this section is set by hand.
 
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
 [docs/backends.md](docs/backends.md) for the backend contract,
-[docs/design.md](docs/design.md) for the behavior and the reasons behind it, and
-[docs/kimi.md](docs/kimi.md) for what the Kimi backend rests on and how to check a new Kimi version, and
-[docs/thread-surveys.md](docs/thread-surveys.md) for the surveys of real use that fixes came from.
+[docs/design.md](docs/design.md) for the behavior and the reasons behind it,
+[docs/kimi.md](docs/kimi.md) for what the Kimi backend rests on and how to check a new Kimi version,
+[docs/thread-surveys.md](docs/thread-surveys.md) for the surveys of real use that fixes came from, and
+[docs/relay-2.2.2-validation.md](docs/relay-2.2.2-validation.md) for this release's review findings,
+regressions and live-validation evidence.

@@ -206,10 +206,29 @@ test('a Grok job gets a larger MCP budget, unless the environment or the home na
     fs.mkdirSync(path.join(ctx.user, '.grok'), { recursive: true });
     fs.writeFileSync(path.join(ctx.user, '.grok', 'config.toml'), text);
   });
-  for (const text of ['[mcp] # budget\nmax_output_bytes = 3000\n', '[ mcp ]\n"max_output_bytes" = 3000\n', '["mcp"]\r\nmax_output_bytes=3000\r\n', 'mcp.max_output_bytes = 3000\n', 'mcp = { max_output_bytes = 3000 }\n']) {
+  for (const text of [
+    '[mcp] # budget\nmax_output_bytes = 3000\n',
+    '[ mcp ]\n"max_output_bytes" = 3000\n',
+    '[mcp]\n\'max_output_bytes\' = 3000\n',
+    '["mcp"]\r\nmax_output_bytes=3000\r\n',
+    'mcp.max_output_bytes = 3000\n',
+    '"mcp"."max_output_bytes" = 3000\n',
+    '"m\\u0063p".max_output_bytes = 3000\n',
+    'mcp = { max_output_bytes = 3000 }\n',
+    'mcp = { note = "x", "max_output_bytes" = 3000 }\n'
+  ]) {
     assert.equal((await withConfig(text)).GROK_MAX_MCP_OUTPUT_BYTES, undefined, text);
   }
-  for (const text of ['[mcp]\n# max_output_bytes = 3000\n', '[mcp.server]\nmax_output_bytes = 3000\n', '[mcp]\ntimeout = 1\n[other]\nmax_output_bytes = 3000\n']) {
+  for (const text of [
+    '[mcp]\n# max_output_bytes = 3000\n',
+    '[mcp.server]\nmax_output_bytes = 3000\n',
+    '[mcp]\ntimeout = 1\n[other]\nmax_output_bytes = 3000\n',
+    '[other]\ntext = """\n[mcp]\nmax_output_bytes = 3000\n"""\n',
+    "[other]\ntext = '''\n[mcp]\nmax_output_bytes = 3000\n'''\n",
+    'mcp = { note = "max_output_bytes = 3000" }\n',
+    '"mcp.max_output_bytes" = 3000\n',
+    '"m c p".max_output_bytes = 3000\n'
+  ]) {
     assert.equal((await withConfig(text)).GROK_MAX_MCP_OUTPUT_BYTES, '262144', text);
   }
 });

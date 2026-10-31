@@ -9,6 +9,7 @@ import { installFakeGrok } from "./fakes/grok.mjs";
 import { installFakeZcode } from "./fakes/zcode.mjs";
 import { installFakeKimi } from "./fakes/kimi.mjs";
 import { initGitRepo, run } from "./support/helpers.mjs";
+import { collectReviewContext } from "../plugins/relay/scripts/lib/review/git.mjs";
 
 const VERDICT = {
   verdict: "needs-attention",
@@ -387,10 +388,15 @@ test("the inline limit is exact: any number of files within 256 KiB passes, one 
   assert.match(binary.zcode().turns[0].text, /### src\/blob\.bin\n\(skipped: binary file\)/);
   assert.equal(binary.zcode().starts.length, 1);
 
-  // Working tree: an untracked file filling 256 KiB with its name is inlined whole; one byte more
-  // is refused. The name counts twice, in Git's status and its heading, with 32 bytes around it.
-  const fits = LIMIT - (2 * "src/new.txt".length + 32);
-  const bytes = grok(t, {}, {}, { "src/new.txt": sized(fits, "WHOLE_FILE_END") });
+  const inlineContext = (cwd, target = { mode: "working-tree", label: "working tree diff" }) =>
+    collectReviewContext(cwd, target, { untrackedInFull: true, maxInlineFiles: Infinity });
+
+  // Working tree: the serialized context, names and section text included, fills exactly 256 KiB.
+  const bytes = grok(t, {}, {}, { "src/new.txt": "" });
+  const contextBytes = () => Buffer.byteLength(inlineContext(bytes.work).content, "utf8");
+  const fits = LIMIT - contextBytes() + 1;
+  fs.writeFileSync(path.join(bytes.work, "src", "new.txt"), sized(fits, "WHOLE_FILE_END"));
+  assert.equal(contextBytes(), LIMIT);
   assert.equal(companion(bytes, ["review", "--backend", "grok"]).status, 0);
   assert.ok(bytes.grok().turns[0].text.includes(sized(fits, "WHOLE_FILE_END").trimEnd()));
   fs.writeFileSync(path.join(bytes.work, "src", "new.txt"), sized(fits + 1, "WHOLE_FILE_END"));
@@ -408,29 +414,57 @@ test("the inline limit is exact: any number of files within 256 KiB passes, one 
   assert.equal(refusedNames.stderr, refusal("1400 files / more than 256 KiB", "Grok"));
   assert.equal(empties.grok().starts.length, 0);
 
+  // Git status octal-escapes non-ASCII names. Raw-name accounting passes this set; its rendered
+  // context is over the limit, so the final serialized-size check must refuse it.
+  const quotedNames = Object.fromEntries(Array.from({ length: 3000 }, (_, index) => [`café-日本語-${index}.txt`, ""]));
+  const quoted = grok(t, {}, {}, quotedNames);
+  assert.equal(companion(quoted, ["review", "--backend", "grok"]).status, 1);
+  assert.equal(quoted.grok().starts.length, 0);
+  assert.equal(jobDirs(quoted).length, 0);
+
+  // Bytes that decode to U+FFFD can triple the rendered size without containing NUL.
+  const invalid = grok(t, {}, {}, {});
+  fs.writeFileSync(path.join(invalid.work, "invalid.bin"), Buffer.alloc(100000, 0xff));
+  assert.equal(companion(invalid, ["review", "--backend", "grok"]).status, 1);
+  assert.equal(invalid.grok().starts.length, 0);
+  assert.equal(jobDirs(invalid).length, 0);
+
+  // A file already known to be over the limit is named in the lightweight context, never read.
+  const large = grok(t, {}, {}, { "src/large.txt": sized(300 * 1024, "MUST_NOT_BE_READ") });
+  let largeReads = 0;
+  const readFile = fs.readFileSync;
+  t.mock.method(fs, "readFileSync", (file, ...args) => {
+    if (String(file).endsWith("src/large.txt")) largeReads += 1;
+    return readFile(file, ...args);
+  });
+  const lightweight = inlineContext(large.work);
+  assert.equal(lightweight.inputMode, "self-collect");
+  assert.equal(largeReads, 0);
+  assert.doesNotMatch(lightweight.content, /MUST_NOT_BE_READ/);
+
   // A non-ASCII name is read, not skipped as unreadable: Git would quote it without `-z`.
   const accented = grok(t, {}, {}, { "src/café-日本語.txt": "ACCENTED_NAME_CONTENT\n" });
   assert.equal(companion(accented, ["review", "--backend", "grok"]).status, 0);
   assert.match(accented.grok().turns[0].text, /### src\/café-日本語\.txt\n```\nACCENTED_NAME_CONTENT/);
 
-  // Branch: a diff of exactly 256 KiB against --base passes; one byte more is refused.
+  // Branch: the serialized context also has an exact boundary, including its log and section text.
   const branch = zcode(t, { answer: JSON.stringify(VERDICT) }, null);
   const git = (...args) => assert.equal(run("git", args, { cwd: branch.work }).status, 0, args.join(" "));
   initGitRepo(branch.work);
   fs.writeFileSync(path.join(branch.work, "base.txt"), "base\n");
   git("add", "."); git("commit", "-m", "base"); git("checkout", "-b", "feature");
-  const diffBytes = () => Buffer.byteLength(run("git", ["diff", "--binary", "--no-ext-diff", "--submodule=diff", "main..HEAD"], { cwd: branch.work }).stdout);
+  const branchBytes = () => Buffer.byteLength(inlineContext(branch.work, { mode: "branch", label: "branch diff", baseRef: "main" }).content, "utf8");
   const commitBig = (length, amend) => {
     fs.writeFileSync(path.join(branch.work, "big.txt"), `${"y".repeat(length - 1)}\n`);
     git("add", "."); git("commit", ...(amend ? ["--amend"] : []), "-m", "big");
   };
   commitBig(1000, false);
-  const content = 1000 + LIMIT - diffBytes();
+  const content = 1000 + LIMIT - branchBytes();
   commitBig(content, true);
-  assert.equal(diffBytes(), LIMIT);
+  assert.equal(branchBytes(), LIMIT);
   assert.equal(companion(branch, ["adversarial-review", "--backend", "zcode", "--base", "main"]).status, 0);
   commitBig(content + 1, true);
-  assert.equal(diffBytes(), LIMIT + 1);
+  assert.equal(branchBytes(), LIMIT + 1);
   assert.equal(companion(branch, ["adversarial-review", "--backend", "zcode", "--base", "main"]).stderr, refusal("1 file / more than 256 KiB", "ZCode"));
   assert.equal(jobDirs(branch).length, 1);
   assert.equal(branch.zcode().starts.length, 1);

@@ -82,7 +82,7 @@ Sources: [truncate.rs](https://github.com/openai/codex/blob/main/codex-rs/utils/
 | Limit | Default | Cut | How to set it |
 | --- | --- | --- | --- |
 | Shell preview | 20,000 characters | middle | `[toolset.bash] output_byte_limit` in the home's `config.toml`, read at launch. The name says bytes; the count is of characters. No flag or environment variable, and `GROK_CONFIG` refuses the key. |
-| MCP result | 20,000 bytes | head; the full output is saved and the notice names the file | `GROK_MAX_MCP_OUTPUT_BYTES` (wins over `MAX_MCP_OUTPUT_BYTES`), or `[mcp] max_output_bytes` |
+| MCP result | 20,000 bytes | head; on a successful write the full output is saved and the notice names the file | `GROK_MAX_MCP_OUTPUT_BYTES` (wins over `MAX_MCP_OUTPUT_BYTES`), or `[mcp] max_output_bytes` |
 | File read | 1,000 lines and 25,000 estimated tokens per call | head; a range over the token cap is an error | per call only (`offset`, `limit`) |
 | Grep | 200 lines in content mode | head | per call only (`head_limit`) |
 | Web fetch | 3% of the estimated context | head | runtime parameters only; the relay does not set them. The page is saved as an artifact |
@@ -151,8 +151,9 @@ Sources: [configuration files](https://www.kimi.com/code/docs/en/kimi-code-cli/c
   256k window at four bytes per token, unless the environment or the home's `[mcp] max_output_bytes`
   names a value. The variable is read from Grok's source; a live check could not reach an MCP server
   from a job, so its effect has not been measured.
-- **Reviews on Grok, ZCode and Kimi:** the diff goes inline in the prompt, up to 256 KiB, so these limits
-  do not cut it; above that the review is refused. Later file reads are limited as above.
+- **Reviews on Grok, ZCode and Kimi:** the serialized repository context goes inline in the prompt, up
+  to 256 KiB including Git's rendered names and decoded file contents; above that the review is
+  refused. Later file reads are limited as above.
 - **Setup:** warns when Grok refuses its `read-only` profile.
 
 The relay does not change Grok's shell preview or Kimi's file reads, which live only in a home's

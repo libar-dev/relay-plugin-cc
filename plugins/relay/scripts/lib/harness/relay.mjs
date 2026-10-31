@@ -252,8 +252,11 @@ export function parseRelayTranscript(text) {
       return;
     }
     const origin = entry.origin?.kind;
-    // A tool result is the harness's own, but text a person typed can share its entry.
-    if (isToolResult(message.content) && !(origin === "human" && message.content.some((block) => block?.type === "text"))) {
+    // A tool result is the harness's own, but a received message can share its entry.
+    const carriesMessageText = ["coordinator", "peer", "human"].includes(origin)
+      && Array.isArray(message.content)
+      && message.content.some((block) => block?.type === "text");
+    if (isToolResult(message.content) && !carriesMessageText) {
       return;
     }
     const fromCoordinator = origin === "coordinator";
@@ -266,7 +269,7 @@ export function parseRelayTranscript(text) {
     if (origin === "task-notification") {
       return;
     }
-    if (entry.isMeta && entry.origin != null && !fromCoordinator && !fromPeer && !fromHuman) {
+    if (entry.origin != null && !fromCoordinator && !fromPeer && !fromHuman) {
       problems.push(`${where} is a user entry of origin ${origin}, which the relay does not deliver`);
       return;
     }
@@ -321,7 +324,9 @@ export function parseRelayTranscript(text) {
       addMessage(body, "human");
       return;
     }
-    const messageText = textOfContent(message.content);
+    const messageText = fromCoordinator && Array.isArray(message.content)
+      ? textOfContent(message.content.filter((block) => block?.type === "text"))
+      : textOfContent(message.content);
     if (messageText == null) {
       problems.push(`${where} is a message whose text could not be read`);
       return;
