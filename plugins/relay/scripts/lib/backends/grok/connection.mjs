@@ -20,11 +20,29 @@ export function resolveGrokBinary(env = process.env) {
   throw new Error(`Grok binary is not executable: ${binary}`);
 }
 
+// Grok shows the model 20,000 bytes of an MCP result, from its start, and saves the rest to a file,
+// so a job gets a larger budget unless the environment or the home's `[mcp] max_output_bytes` names
+// one: a quarter of its 256k-token window at four bytes per token.
+const GROK_MCP_OUTPUT_BYTES = 262144;
+
+function grokHomeSetsMcpOutput(grokHome) {
+  try {
+    const text = fs.readFileSync(path.join(grokHome, "config.toml"), "utf8");
+    const section = /^\s*\[mcp\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text)?.[1] ?? "";
+    return /^\s*max_output_bytes\s*=/m.test(section);
+  } catch {
+    return false;
+  }
+}
+
 export function grokEnvironment(request, env = process.env) {
   /** @type {NodeJS.ProcessEnv} */
   const result = { ...env, GROK_HOME: request.grokHome, GROK_MEMORY: "0" };
   for (const source of ["CLAUDE", "CURSOR"]) {
     for (const kind of ["HOOKS", "SKILLS", "MCPS", "RULES", "AGENTS", "SESSIONS"]) result[`GROK_${source}_${kind}_ENABLED`] = "0";
+  }
+  if (env.GROK_MAX_MCP_OUTPUT_BYTES == null && env.MAX_MCP_OUTPUT_BYTES == null && !grokHomeSetsMcpOutput(request.grokHome)) {
+    result.GROK_MAX_MCP_OUTPUT_BYTES = String(GROK_MCP_OUTPUT_BYTES);
   }
   delete result.GROK_SANDBOX;
   if (request.mode !== "yolo") result.GROK_SANDBOX = request.mode === "write" ? "workspace" : "read-only";

@@ -218,8 +218,8 @@ is recorded as a job, so `/relay:status` lists it.
 | `--wait`, `--background` | run in the foreground, or as a Claude background task; without either, a review you type asks, and a review Claude starts runs in the foreground |
 | `[focus]` | text after the flags; `/relay:adversarial-review` only |
 
-Grok, ZCode and Kimi read only the diff inlined in their prompt, so they refuse a change above two files
-or 256 KiB before anything starts. An adversarial answer that does not match the review schema
+Grok, ZCode and Kimi read only the diff inlined in their prompt, so they refuse a change above 256 KiB
+before anything starts. An adversarial answer that does not match the review schema
 fails the review with the raw answer in the report.
 
 ### The stop-time review gate

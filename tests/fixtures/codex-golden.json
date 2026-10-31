@@ -20,7 +20,7 @@
           },
           "serviceName": "claude_code_codex_plugin",
           "ephemeral": false,
-          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}`, or pass `max_tokens: 65536` to `wait`, rather than working from a truncated result."
+          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle, and `max_output_tokens` on a nested `exec_command` alone does not change that. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}` and pass the same value to the nested `exec_command`, or pass `max_tokens: 65536` to `wait`. A result that large fills much of the context, so read a large file or diff by line range where you can. When a result says it was truncated, read the omitted part before relying on it."
         }
       },
       {
@@ -71,7 +71,7 @@
             "web_search": "live",
             "tool_output_token_limit": 65536
           },
-          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}`, or pass `max_tokens: 65536` to `wait`, rather than working from a truncated result."
+          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle, and `max_output_tokens` on a nested `exec_command` alone does not change that. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}` and pass the same value to the nested `exec_command`, or pass `max_tokens: 65536` to `wait`. A result that large fills much of the context, so read a large file or diff by line range where you can. When a result says it was truncated, read the omitted part before relying on it."
         }
       },
       {
@@ -107,7 +107,7 @@
             "web_search": "live",
             "tool_output_token_limit": 65536
           },
-          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}`, or pass `max_tokens: 65536` to `wait`, rather than working from a truncated result."
+          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle, and `max_output_tokens` on a nested `exec_command` alone does not change that. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}` and pass the same value to the nested `exec_command`, or pass `max_tokens: 65536` to `wait`. A result that large fills much of the context, so read a large file or diff by line range where you can. When a result says it was truncated, read the omitted part before relying on it."
         }
       },
       {
@@ -438,7 +438,7 @@
           },
           "serviceName": "claude_code_codex_plugin",
           "ephemeral": false,
-          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}`, or pass `max_tokens: 65536` to `wait`, rather than working from a truncated result."
+          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle, and `max_output_tokens` on a nested `exec_command` alone does not change that. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}` and pass the same value to the nested `exec_command`, or pass `max_tokens: 65536` to `wait`. A result that large fills much of the context, so read a large file or diff by line range where you can. When a result says it was truncated, read the omitted part before relying on it."
         }
       },
       {
@@ -489,7 +489,7 @@
             "web_search": "live",
             "tool_output_token_limit": 65536
           },
-          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}`, or pass `max_tokens: 65536` to `wait`, rather than working from a truncated result."
+          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle, and `max_output_tokens` on a nested `exec_command` alone does not change that. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}` and pass the same value to the nested `exec_command`, or pass `max_tokens: 65536` to `wait`. A result that large fills much of the context, so read a large file or diff by line range where you can. When a result says it was truncated, read the omitted part before relying on it."
         }
       },
       {
@@ -525,7 +525,7 @@
             "web_search": "live",
             "tool_output_token_limit": 65536
           },
-          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}`, or pass `max_tokens: 65536` to `wait`, rather than working from a truncated result."
+          "developerInstructions": "Tool output: this job keeps up to 65536 tokens of each tool result. In code mode, `exec` and `wait` return only 10000 tokens of output by default and cut the middle, and `max_output_tokens` on a nested `exec_command` alone does not change that. When a command can print more (a diff, a log, a whole file), start the exec input with `// @exec: {\"max_output_tokens\": 65536}` and pass the same value to the nested `exec_command`, or pass `max_tokens: 65536` to `wait`. A result that large fills much of the context, so read a large file or diff by line range where you can. When a result says it was truncated, read the omitted part before relying on it."
         }
       },
       {

@@ -383,7 +383,7 @@ setInterval(() => {}, 1000);
     assert.equal(await client.close(), undefined, "a second close settles too");
   });
 
-  test("close gives up when the process survives SIGKILL, and rejects what is pending", async () => {
+  test("close gives up when the process survives SIGKILL, rejects what is pending, and never reports it ended", async () => {
     const dir = makeTempDir();
     const script = path.join(dir, "fake.mjs");
     fs.writeFileSync(script, `process.stdin.on("data", (chunk) => { for (const line of String(chunk).split("\\n").filter(Boolean)) { const { id, method } = JSON.parse(line); if (method === "initialize") process.stdout.write(JSON.stringify({ id, result: {} }) + "\\n"); } });
@@ -400,11 +400,15 @@ setInterval(() => {}, 1000);
     client.proc.kill = () => false;
     try {
       await client.close();
-      assert.equal(ends.at(-1).closeTimedOut, true);
+      assert.deepEqual(ends, [], "the process is still running, so its record stays open for the sweep");
+      assert.equal(client.exitInfo.closeTimedOut, true);
       assert.match((await pending).message, /did not exit after SIGKILL/);
     } finally {
       kill("SIGKILL");
     }
+    // Its exit, when it comes, writes nothing: another worker may own the job by then.
+    await client.processEndPromise;
+    assert.deepEqual(ends, []);
   });
 
   test("multi-megabyte resume and MCP lines remain intact", async (t) => {

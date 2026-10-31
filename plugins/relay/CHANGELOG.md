@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.2.2 (2026-10-31)
+
+The last release of this line.
+
+- Relay jobs work when the plugin is reached through a symlinked folder. Node gives the hook its real
+  path, so the guard never ran and every `relay:job` failed with `The hook did not run`.
+- A message from another agent, or one a person types into a running agent, reaches the job. Only the
+  parent's did; the others were dropped with nothing recorded, a typed `cancel` included. A task
+  notification stays out, and a message of any other origin is reported.
+- A backend that ignores EOF and SIGTERM gets SIGKILL within about five seconds, and one that survives
+  that is given up on, so a worker's cleanup no longer waits forever. It is not recorded as ended, so
+  the next worker's sweep still finds it.
+- A job cancelled before its first turn never runs its brief, whether its worker arrives late or the job
+  is resumed later.
+- Reviews on Grok, ZCode and Kimi take any number of files within the 256 KiB limit. A third file used
+  to be refused however small the diff.
+- Codex's developer instructions say that `max_output_tokens` on a nested `exec_command` alone leaves
+  the 10,000-token cap in place, that large evidence is better read by line range, and to read what a
+  truncation notice names before relying on the result.
+- Grok jobs get a larger MCP result budget, 262,144 bytes, unless the environment or the home names one.
+- Setup warns when Grok refuses its `read-only` profile on the machine, which fails read-only jobs and
+  every Grok review.
+- [docs/harness-output-limits.md](../../docs/harness-output-limits.md) records every harness's limits, and
+  `scripts/tool-output-probe.mjs` measures them after an upgrade.
+
 ## 2.2.1 (2026-10-30)
 
 - Codex jobs and reviews no longer lose the middle of large tool results. Codex keeps 10,000

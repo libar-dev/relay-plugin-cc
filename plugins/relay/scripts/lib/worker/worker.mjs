@@ -274,8 +274,11 @@ async function runWorkerRound(jobDir, options, held) {
 
   // Work: the first brief if it never started, then messages a dead worker claimed but
   // never delivered, then new inbox messages. A job cancelled before its first turn never runs
-  // its brief later; a failed first turn keeps it for `resume`.
-  if (job.pendingFirstTurn && job.state !== "cancelled") {
+  // its brief later, so its claim on it ends here, before a `resume` can take the job out of
+  // `cancelled`; a failed first turn keeps it for `resume`.
+  if (job.pendingFirstTurn && job.state === "cancelled") {
+    save({ pendingFirstTurn: false });
+  } else if (job.pendingFirstTurn) {
     queue.push({ prompt: fs.readFileSync(paths.brief, "utf8"), source: "brief", message: null, clientId: `brief-${job.id}`, recoveryCandidate: true });
   }
   accept(owedMessages(jobDir), true);
@@ -735,7 +738,7 @@ async function runWorkerRound(jobDir, options, held) {
       if (last && !TERMINAL.has(last.state)) {
         updateAttempt({ state: "cancelled", endedAt: nowIso() });
       }
-      save({ state: "cancelled", errorMessage: "Cancelled.", completedAt: nowIso() });
+      save({ state: "cancelled", pendingFirstTurn: false, errorMessage: "Cancelled.", completedAt: nowIso() });
     } else {
       save({ state: last?.state ?? "failed", errorMessage: last?.errorMessage ?? null, completedAt: nowIso() });
     }

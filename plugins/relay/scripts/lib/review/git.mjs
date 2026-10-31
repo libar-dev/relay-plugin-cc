@@ -23,7 +23,7 @@ function listUniqueFiles(...groups) {
 
 function normalizeMaxInlineFiles(value) {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  if (Number.isNaN(parsed) || parsed < 0) {
     return DEFAULT_INLINE_DIFF_MAX_FILES;
   }
   return Math.floor(parsed);

@@ -374,25 +374,17 @@ test("a failed adversarial-review turn says the turn failed with the backend's e
 const LIMIT = 256 * 1024;
 const refusal = (what, label) => `The diff is ${what}; a ${label} review reads only an inlined diff. Narrow it with --base or --scope, or run it on Codex.\n`;
 
-test("the inline limits are exact: two files and 256 KiB pass, a third file or one byte more is refused before a job or a server", t => {
-  // Two changed files pass; a third is refused.
-  const ctx = zcode(t, {}, { "src/a.js": "a\n", "src/b.js": "b\n" });
+test("the inline limit is exact: any number of files within 256 KiB passes, one byte more is refused before a job or a server", t => {
+  // The number of files is not a limit: all of them reach the prompt.
+  const ctx = zcode(t, {}, Object.fromEntries(Array.from({ length: 12 }, (_, index) => [`src/file${index}.js`, `export const FILE_MARKER_${index} = 1;\n`])));
   assert.equal(companion(ctx, ["review", "--backend", "zcode"]).status, 0);
-  fs.writeFileSync(path.join(ctx.work, "src", "app.js"), "c\n");
-  const before = jobDirs(ctx);
-  const three = companion(ctx, ["review", "--backend", "zcode"]);
-  assert.equal(three.status, 1);
-  assert.equal(three.stderr, refusal("3 files / 1 KiB", "ZCode"));
-  assert.deepEqual(jobDirs(ctx), before);
-  assert.equal(ctx.zcode().starts.length, 1);
+  for (let index = 0; index < 12; index++) assert.match(ctx.zcode().turns[0].text, new RegExp(`FILE_MARKER_${index} `));
 
-  // A binary untracked file is named, not inlined, and counts as a file; its size, here above
-  // the byte limit, does not count, since nothing of it reaches the prompt.
+  // A binary untracked file is named, not inlined; its size, here above the byte limit, does
+  // not count, since nothing of it reaches the prompt.
   const binary = zcode(t, { answer: JSON.stringify(VERDICT) }, undefined, { "src/blob.bin": Buffer.concat([Buffer.from([0, 1, 2, 0]), Buffer.alloc(300 * 1024, 7)]) });
   assert.equal(companion(binary, ["adversarial-review", "--backend", "zcode"]).status, 0);
   assert.match(binary.zcode().turns[0].text, /### src\/blob\.bin\n\(skipped: binary file\)/);
-  fs.writeFileSync(path.join(binary.work, "src", "c.js"), "c\n");
-  assert.equal(companion(binary, ["adversarial-review", "--backend", "zcode"]).stderr, refusal("3 files / 1 KiB", "ZCode"));
   assert.equal(binary.zcode().starts.length, 1);
 
   // Working tree: an untracked file of exactly 256 KiB is inlined whole; one byte more is refused.

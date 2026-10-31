@@ -704,11 +704,11 @@ or `adversarial-review`, so `status` lists it. A Codex review turns off the job 
   ZCode and Kimi, which have no schema parameter, get it in the prompt. A Grok review always runs
   under Grok's `read-only` profile, and a Kimi review refuses the file writes and terminal
   commands Kimi sends through the client, which is not an OS sandbox (Known limits, Kimi).
-- **Inline limits.** A Grok, ZCode or Kimi review reads only the inlined change (read-only ZCode and
+- **Inline limit.** A Grok, ZCode or Kimi review reads only the inlined change (read-only ZCode and
   Kimi have no shell to run git), so it sees the whole change or does not start. Untracked files count toward
-  the limits and are inlined whole, and a binary file is named and counts as a file. Above two files
-  or 256 KiB, the review is refused before any job or process exists, with a message naming
-  `--base`, `--scope` and Codex. A Codex adversarial review above the limits gets a summary and
+  the limit and are inlined whole, and a binary file is named. Above 256 KiB, the review is refused
+  before any job or process exists, with a message naming `--base`, `--scope` and Codex. A Codex
+  adversarial review above two files or 256 KiB gets a summary and
   reads the diff itself with read-only git commands; untracked files there are cut at 24 KiB each.
 - **The schema.** An adversarial answer counts only if it matches
   `schemas/review-output.schema.json`: types, enums, required fields, ranges, array items and no
