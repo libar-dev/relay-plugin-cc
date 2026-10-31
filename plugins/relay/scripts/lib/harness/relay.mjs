@@ -252,11 +252,11 @@ export function parseRelayTranscript(text) {
       return;
     }
     const origin = entry.origin?.kind;
-    // A tool result is the harness's own, but a received message can share its entry.
-    const carriesMessageText = ["coordinator", "peer", "human"].includes(origin)
-      && Array.isArray(message.content)
+    const hasTextBlock = Array.isArray(message.content)
       && message.content.some((block) => block?.type === "text");
-    if (isToolResult(message.content) && !carriesMessageText) {
+    // A tool-result-only entry is the harness's own. If it also carries text, validate the
+    // origin before deciding whether the text is a message, including an unsupported origin.
+    if (isToolResult(message.content) && !hasTextBlock) {
       return;
     }
     const fromCoordinator = origin === "coordinator";
@@ -271,6 +271,9 @@ export function parseRelayTranscript(text) {
     }
     if (entry.origin != null && !fromCoordinator && !fromPeer && !fromHuman) {
       problems.push(`${where} is a user entry of origin ${origin}, which the relay does not deliver`);
+      return;
+    }
+    if (isToolResult(message.content) && !fromCoordinator && !fromPeer && !fromHuman) {
       return;
     }
     if (prompt == null) {

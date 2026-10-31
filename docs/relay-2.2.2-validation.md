@@ -35,6 +35,11 @@ each included finding below was independently reproduced or checked against sour
 | Close-timeout reporting | A worker could replace `did not exit after SIGKILL` with `server ended ... (exit unknown)` although the process might still run. | `lib/worker/worker.mjs` preserves the timeout error. `server-end.test.mjs` exercises the in-process worker path. |
 | Documentation | The design page described only the 50 ms SIGTERM stage and coordinator/plain-user messages. Grok's MCP save was described as unconditional, and the README named 2.2.0. | The design now describes the five-second SIGTERM stage, five-second SIGKILL wait, abandonment and current message filtering. Grok's save is described as best-effort. Release metadata is aligned. |
 
+A post-push CodeRabbit review found two remaining cases, also fixed: an unknown origin carrying both text
+and a tool result now reaches origin validation and records a violation, while a tool-result-only entry stays
+out; and an early-NUL binary file is rejected from its 4 KiB sample without a full `readFileSync`. Both have
+regressions, including a no-full-read assertion for a 300 KiB binary file.
+
 The original mixed-human-entry, non-ASCII file-read, pre-first-turn cancellation, symlink and SIGTERM→SIGKILL
 fixes were also checked. The live peer and coordinator checks below exercise their ordinary delivery paths;
 the mixed text/tool-result shapes remain synthetic edge cases, not shapes observed in those live runs.

@@ -213,10 +213,17 @@ function formatUntrackedFile(cwd, relativePath, maxBytes = MAX_UNTRACKED_BYTES) 
   }
 
   let buffer;
+  let fd = null;
   try {
+    fd = fs.openSync(absolutePath, "r");
+    const sample = Buffer.alloc(Math.min(stat.size, 4096));
+    fs.readSync(fd, sample, 0, sample.length, 0);
+    if (!isProbablyText(sample)) return `### ${relativePath}\n(skipped: binary file)`;
     buffer = fs.readFileSync(absolutePath);
   } catch {
     return `### ${relativePath}\n(skipped: broken symlink or unreadable file)`;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
   }
   if (!isProbablyText(buffer)) {
     return `### ${relativePath}\n(skipped: binary file)`;

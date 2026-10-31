@@ -177,6 +177,8 @@ test("coordinator, peer and human entries reach the job; unknown origins are rep
     user("peer-mixed", mixed, { kind: "peer", body: "cancel" }),
     user("coordinator-mixed", mixed, { kind: "coordinator" }),
     user("mystery-2", "Not a plain user message.", { kind: "mystery" }),
+    user("mystery-mixed", mixed, { kind: "mystery" }),
+    user("mystery-tool-only", [{ type: "tool_result", tool_use_id: "t", content: "x" }], { kind: "mystery" }),
     user("notice-1", "A task ended.", { kind: "task-notification" }),
     user("meta-1", "Odd metadata.", { kind: "mystery" }, { isMeta: true })
   ];
@@ -192,6 +194,7 @@ test("coordinator, peer and human entries reach the job; unknown origins are rep
     "entry peer-2 is a message from another agent whose text could not be read",
     "entry human-2 is a typed message with 1 block(s) that are not text; the job gets its text only",
     "entry mystery-2 is a user entry of origin mystery, which the relay does not deliver",
+    "entry mystery-mixed is a user entry of origin mystery, which the relay does not deliver",
     "entry meta-1 is a user entry of origin mystery, which the relay does not deliver"
   ]);
 });
