@@ -74,7 +74,7 @@ uses `read-only`. A profile Grok refuses fails the job with Grok's error; there 
 fallback. On macOS, Grok can refuse `read-only` when `/var/run/docker.sock` is a symlink. On
 Linux, it refuses `read-only` when it cannot reach a runtime socket it denies, such as
 `/run/podman/podman.sock` under a root-only `/run/podman`; `write` still runs. Setup warns when this
-happens here. A job gets `GROK_MAX_MCP_OUTPUT_BYTES=262144`, unless the environment, home or project config
+happens here. A job gets `GROK_MAX_MCP_OUTPUT_BYTES=262144`, unless the environment, managed policy, home or project config
 sets the cap. Grok applies a project’s `[mcp] max_output_bytes` according to its trust settings.
 Grok's macOS profiles do not enforce child-process network restrictions. `network` on a
 sandboxed job prints a note.

@@ -23,7 +23,7 @@ export function resolveGrokBinary(env = process.env) {
 }
 
 // Grok shows the model 20,000 bytes of an MCP result, from its start, and saves the rest to a file,
-// so a job gets a larger budget unless the environment, home or project configuration names
+// so a job gets a larger budget unless the environment, managed, home or project configuration names
 // one: a quarter of its 256k-token window at four bytes per token.
 const GROK_MCP_OUTPUT_BYTES = 262144;
 
@@ -169,11 +169,11 @@ function inlineTableSetsMcpOutput(value) {
   });
 }
 
-function configSetsMcpOutput(directory) {
+function configSetsMcpOutput(file) {
   let text;
   let fd;
   try {
-    fd = fs.openSync(path.join(directory, "config.toml"), fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
     const stat = fs.fstatSync(fd);
     // Leave unusual configs to Grok instead of blocking or allocating an unbounded buffer.
     if (!stat.isFile() || stat.size > 1024 * 1024) return true;
@@ -213,11 +213,11 @@ function projectSetsMcpOutput(cwd, env) {
   const relative = path.relative(root, directory);
   // A caller's Git environment can point at a different checkout.
   if (relative.startsWith(".." + path.sep) || relative === ".." || path.isAbsolute(relative)) {
-    return configSetsMcpOutput(path.join(directory, ".grok"));
+    return configSetsMcpOutput(path.join(directory, ".grok", "config.toml"));
   }
   let current = directory;
   while (true) {
-    if (configSetsMcpOutput(path.join(current, ".grok"))) return true;
+    if (configSetsMcpOutput(path.join(current, ".grok", "config.toml"))) return true;
     if (current === root) return false;
     current = path.dirname(current);
   }
@@ -230,7 +230,9 @@ export function grokEnvironment(request, env = process.env) {
     for (const kind of ["HOOKS", "SKILLS", "MCPS", "RULES", "AGENTS", "SESSIONS"]) result[`GROK_${source}_${kind}_ENABLED`] = "0";
   }
   if (env.GROK_MAX_MCP_OUTPUT_BYTES == null && env.MAX_MCP_OUTPUT_BYTES == null &&
-      !configSetsMcpOutput(request.grokHome) && !projectSetsMcpOutput(request.cwd, env)) {
+      !configSetsMcpOutput(path.join(request.grokHome, "config.toml")) &&
+      !configSetsMcpOutput(path.join(request.grokHome, "managed_config.toml")) &&
+      !configSetsMcpOutput("/etc/grok/managed_config.toml") && !projectSetsMcpOutput(request.cwd, env)) {
     result.GROK_MAX_MCP_OUTPUT_BYTES = String(GROK_MCP_OUTPUT_BYTES);
   }
   delete result.GROK_SANDBOX;

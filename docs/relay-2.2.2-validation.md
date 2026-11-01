@@ -109,3 +109,6 @@ actual transcript origins were checked, not only the Claude sessions' final pros
   serialized context was 262,037 bytes. Removing the guessed overhead per file leaves the
   final UTF-8 byte check authoritative for headings and fences. The regression verifies a
   multi-file context of exactly 262,144 bytes reaches the backend.
+- A home-managed MCP cap of 4,000 bytes also produced a Relay override of 262,144. The launcher
+  now checks `managed_config.toml` in the Grok home and the system config directory. The tests
+  exercise both layers without modifying machine policy.
