@@ -20,11 +20,12 @@ The stable 2.x line, maintained for current users.
   to be refused however small the diff. The limit applies to the actual serialized repository context,
   including Git's quoted names and decoded file contents; a non-ASCII name no longer drops the file's
   contents from the review. An oversized untracked file is named without being read when the review is
-  already refused.
+  already refused. Reviews name untracked symbolic links without reading their targets.
 - Codex's developer instructions say that `max_output_tokens` on a nested `exec_command` alone leaves
   the 10,000-token cap in place, that large evidence is better read by line range, and to read what a
   truncation notice names before relying on the result.
-- Grok jobs get a larger MCP result budget, 262,144 bytes, unless the environment or the home names one.
+- Grok jobs get a larger MCP result budget, 262,144 bytes, unless the environment, home or project
+  configuration names one.
   Detection distinguishes actual settings from lookalikes in TOML strings and handles quoted, dotted
   and inline-table keys.
 - Setup warns when Grok refuses its `read-only` profile on the machine, which fails read-only jobs and

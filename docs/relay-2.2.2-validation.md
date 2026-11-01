@@ -5,7 +5,7 @@ the independent follow-up review, the defects that review found, and the live ch
 fixtures were synthetic. Session ids, job ids, local paths, credentials and private logs are deliberately
 not part of this record.
 
-Evidence is current through 31 October 2026. This document does not claim approval from the final Opus and
+The evidence below was collected on 31 October 2026 unless otherwise dated. This document does not claim approval from the final Opus and
 Astra reviews reserved for the next review sequence.
 
 ## Review provenance
@@ -94,3 +94,14 @@ exact tokens; a dynamic Workflow returned both computed jobs with exact tokens, 
 and a real peer correction was delivered exactly once and returned `POST_FIX_PEER_OK`. All five isolated jobs
 completed with no active jobs and no relay violations. The caller-visible Workflow output, report files and
 actual transcript origins were checked, not only the Claude sessions' final prose.
+
+
+## Review follow-up on 1 November 2026
+
+- With only a project `[mcp] max_output_bytes = 4096`, Relay injected a higher-priority environment
+  value of 262144. The launcher now leaves the cap to Grok when a project file declares one. A
+  fake-backend job started below the Git root checks that the environment has no Relay override.
+  A second job checks that a config above the checkout does not suppress the default.
+- An untracked symbolic link included the contents of its external target in a working-tree
+  review. The collector now names the link and skips its contents in both review modes. The
+  regression uses a synthetic marker outside the repository and checks the serialized context.

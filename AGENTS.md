@@ -23,13 +23,8 @@ tests, fixtures, docs, skills, CHANGELOG entries, commit messages and pull reque
   `npm run check-version` checks them.
 - The CHANGELOG groups entries under the release heading. Don't add a heading per development version.
 
-## Release lines and future work
+## Release maintenance
 
-- The 2.x line is the supported workhorse. Keep it reliable for current users and validate its Claude Code
-  integration after harness upgrades.
-- The 3.0.0.pre line did not establish the required Claude Mods architecture and is not a basis for further
-  implementation. The active rearchitecture follows Claude Mods standards.
-- Both 2.x and 3.x are reference inputs to `cc-agents`. Keep 3.x material while it remains useful to that work;
-  clean it up only after it has no remaining value as an input.
-- Read [the current-direction note](docs/mods/plan.md#current-project-direction) before changing 3.x or
-  `cc-agents`, and before deleting legacy implementation or design material.
+The supported 2.x line receives maintenance fixes. Validate its integration in Claude Code after
+harness upgrades. See [the Mods plan](docs/mods/plan.md#current-project-direction) for the status
+of the prerelease work.

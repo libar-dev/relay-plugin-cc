@@ -181,7 +181,7 @@ test('setup warns when Grok refuses its read-only profile, and stays ready; anot
   assert.deepEqual(JSON.parse(companion(other, ['setup', '--backend', 'grok', '--json']).stdout).backends[0].warnings.filter(warning => /read-only profile/.test(warning)), []);
 });
 
-test('a Grok job gets a larger MCP budget, unless the environment or the home names one', async t => {
+test('a Grok job gets a larger MCP budget, unless the environment, home or project names one', async t => {
   const budget = async (prepare) => {
     const ctx = fixture(t);
     prepare?.(ctx);
@@ -197,6 +197,16 @@ test('a Grok job gets a larger MCP budget, unless the environment or the home na
     fs.writeFileSync(path.join(ctx.user, '.grok', 'config.toml'), '[mcp]\nmax_output_bytes = 3000\n');
   });
   assert.equal(configured.GROK_MAX_MCP_OUTPUT_BYTES, undefined);
+  // A job in a subdirectory inherits the project cap. A config above its checkout is unrelated.
+  const projectConfig = (ctx, directory) => {
+    initGitRepo(ctx.work);
+    fs.mkdirSync(path.join(directory, '.grok'), { recursive: true });
+    fs.writeFileSync(path.join(directory, '.grok', 'config.toml'), '[mcp]\nmax_output_bytes = 4000\n');
+    ctx.work = path.join(ctx.work, 'nested');
+    fs.mkdirSync(ctx.work);
+  };
+  assert.equal((await budget(ctx => projectConfig(ctx, ctx.work))).GROK_MAX_MCP_OUTPUT_BYTES, undefined);
+  assert.equal((await budget(ctx => projectConfig(ctx, ctx.root))).GROK_MAX_MCP_OUTPUT_BYTES, '262144');
   const elsewhere = await budget(ctx => {
     fs.mkdirSync(path.join(ctx.user, '.grok'), { recursive: true });
     fs.writeFileSync(path.join(ctx.user, '.grok', 'config.toml'), '[other]\nmax_output_bytes = 3000\n');

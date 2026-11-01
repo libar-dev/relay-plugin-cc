@@ -61,7 +61,7 @@ async function checkGrokHome(cwd, home, env, shared, limits) {
   const script = grokScriptNote(shared.binary, env);
   block.realBinary = script.realBinary;
   if (script.note) block.warnings.push(script.note);
-  const grokEnv = grokEnvironment({ grokHome: home.home, mode: "yolo" }, env);
+  const grokEnv = grokEnvironment({ cwd, grokHome: home.home, mode: "yolo" }, env);
   const [version, listing] = await Promise.all([
     shared.version,
     runLimited(shared.binary, ["models"], { cwd, env: grokEnv, timeoutMs: limits.commandMs })
@@ -96,7 +96,7 @@ async function checkGrokHome(cwd, home, env, shared, limits) {
   block.signIn = { state: "signed-in", method: parsed.signedIn, detail: firstLine(listing.stdout) };
   // The same command under the read-only profile: Grok refuses a profile it cannot enforce before
   // it does anything else, and makes no model call either way.
-  const sandboxed = await runLimited(shared.binary, ["models"], { cwd, env: grokEnvironment({ grokHome: home.home, mode: "read-only" }, env), timeoutMs: limits.commandMs });
+  const sandboxed = await runLimited(shared.binary, ["models"], { cwd, env: grokEnvironment({ cwd, grokHome: home.home, mode: "read-only" }, env), timeoutMs: limits.commandMs });
   const refusal = sandboxRefusal(sandboxed);
   if (refusal) block.warnings.push(`Grok refuses its read-only profile on this machine, so read-only jobs and every Grok review fail; yolo uses no profile and still runs. Grok said: ${refusal}`);
   block.models = parsed.models.map(id => ({ id, efforts: null, defaultEffort: null }));
@@ -127,7 +127,7 @@ export const setupProbe = {
   },
   prepare({ cwd, env, limits }) {
     const binary = tryResolve(resolveGrokBinary, env);
-    return { binary, version: versionOf(binary, "grok", cwd, grokEnvironment({ grokHome: path.join(userDir(env), ".grok"), mode: "yolo" }, env), limits) };
+    return { binary, version: versionOf(binary, "grok", cwd, grokEnvironment({ cwd, grokHome: path.join(userDir(env), ".grok"), mode: "yolo" }, env), limits) };
   },
   check(home, shared, { cwd, env, limits }) { return checkGrokHome(cwd, home, env, shared, limits); },
   signInText(block) { return block.signIn.state === "signed-out" ? `signed out: ${block.signIn.detail}` : null; },

@@ -201,12 +201,18 @@ function formatUntrackedFile(cwd, relativePath, maxBytes = MAX_UNTRACKED_BYTES) 
   const absolutePath = path.join(cwd, relativePath);
   let stat;
   try {
-    stat = fs.statSync(absolutePath);
+    stat = fs.lstatSync(absolutePath);
   } catch {
     return `### ${relativePath}\n(skipped: broken symlink or unreadable file)`;
   }
   if (stat.isDirectory()) {
     return `### ${relativePath}\n(skipped: directory)`;
+  }
+  if (stat.isSymbolicLink()) {
+    return `### ${relativePath}\n(skipped: symbolic link)`;
+  }
+  if (!stat.isFile()) {
+    return `### ${relativePath}\n(skipped: not a regular file)`;
   }
   if (stat.size > maxBytes) {
     return `### ${relativePath}\n(skipped: ${stat.size} bytes exceeds ${maxBytes} byte limit)`;
@@ -215,11 +221,11 @@ function formatUntrackedFile(cwd, relativePath, maxBytes = MAX_UNTRACKED_BYTES) 
   let buffer;
   let fd = null;
   try {
-    fd = fs.openSync(absolutePath, "r");
+    fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     const sample = Buffer.alloc(Math.min(stat.size, 4096));
     fs.readSync(fd, sample, 0, sample.length, 0);
     if (!isProbablyText(sample)) return `### ${relativePath}\n(skipped: binary file)`;
-    buffer = fs.readFileSync(absolutePath);
+    buffer = fs.readFileSync(fd);
   } catch {
     return `### ${relativePath}\n(skipped: broken symlink or unreadable file)`;
   } finally {
@@ -311,9 +317,9 @@ function measureUntrackedTextBytes(cwd, files, maxBytes) {
     const absolutePath = path.join(cwd, relativePath);
     let fd = null;
     try {
-      const stat = fs.statSync(absolutePath);
+      const stat = fs.lstatSync(absolutePath);
       if (!stat.isFile()) continue;
-      fd = fs.openSync(absolutePath, "r");
+      fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
       const sample = Buffer.alloc(Math.min(stat.size, 4096));
       fs.readSync(fd, sample, 0, sample.length, 0);
       if (isProbablyText(sample)) total += stat.size;

@@ -4,6 +4,8 @@ import { heldMessage, evidenceKey, countHeld, grokSessionMessages } from "./hist
 // Grok's ACP protocol, isolated from the worker's message and process accounting.
 import fs from "node:fs";
 import path from "node:path";
+import { runCommand } from "../../util/process.mjs";
+import { realpathOr, userDir } from "../setup.mjs";
 import { partialLineNote, SpawnedServerClient } from "../transport/stdio-rpc.mjs";
 
 export function resolveGrokBinary(env = process.env) {
@@ -21,7 +23,7 @@ export function resolveGrokBinary(env = process.env) {
 }
 
 // Grok shows the model 20,000 bytes of an MCP result, from its start, and saves the rest to a file,
-// so a job gets a larger budget unless the environment or the home's `[mcp] max_output_bytes` names
+// so a job gets a larger budget unless the environment, home or project configuration names
 // one: a quarter of its 256k-token window at four bytes per token.
 const GROK_MCP_OUTPUT_BYTES = 262144;
 
@@ -167,12 +169,19 @@ function inlineTableSetsMcpOutput(value) {
   });
 }
 
-function grokHomeSetsMcpOutput(grokHome) {
+function configSetsMcpOutput(directory) {
   let text;
+  let fd;
   try {
-    text = fs.readFileSync(path.join(grokHome, "config.toml"), "utf8");
+    fd = fs.openSync(path.join(directory, "config.toml"), fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(fd);
+    // Leave unusual configs to Grok instead of blocking or allocating an unbounded buffer.
+    if (!stat.isFile() || stat.size > 1024 * 1024) return true;
+    text = fs.readFileSync(fd, "utf8");
   } catch {
     return false;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
   /** @type {string[] | null} */
   let table = [];
@@ -193,13 +202,35 @@ function grokHomeSetsMcpOutput(grokHome) {
   return false;
 }
 
+// Grok resolves trust and precedence. Leave its environment unset when it can find a project
+// cap between the job directory and the checkout root, including a linked worktree's root.
+function projectSetsMcpOutput(cwd, env) {
+  const directory = realpathOr(cwd);
+  const git = runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: directory });
+  const top = git.stdout.replace(/\r?\n$/, "");
+  // Grok treats a Git checkout rooted at the user’s home as outside a project.
+  const root = git.status === 0 && top && top !== realpathOr(userDir(env)) ? top : directory;
+  const relative = path.relative(root, directory);
+  // A caller's Git environment can point at a different checkout.
+  if (relative.startsWith(".." + path.sep) || relative === ".." || path.isAbsolute(relative)) {
+    return configSetsMcpOutput(path.join(directory, ".grok"));
+  }
+  let current = directory;
+  while (true) {
+    if (configSetsMcpOutput(path.join(current, ".grok"))) return true;
+    if (current === root) return false;
+    current = path.dirname(current);
+  }
+}
+
 export function grokEnvironment(request, env = process.env) {
   /** @type {NodeJS.ProcessEnv} */
   const result = { ...env, GROK_HOME: request.grokHome, GROK_MEMORY: "0" };
   for (const source of ["CLAUDE", "CURSOR"]) {
     for (const kind of ["HOOKS", "SKILLS", "MCPS", "RULES", "AGENTS", "SESSIONS"]) result[`GROK_${source}_${kind}_ENABLED`] = "0";
   }
-  if (env.GROK_MAX_MCP_OUTPUT_BYTES == null && env.MAX_MCP_OUTPUT_BYTES == null && !grokHomeSetsMcpOutput(request.grokHome)) {
+  if (env.GROK_MAX_MCP_OUTPUT_BYTES == null && env.MAX_MCP_OUTPUT_BYTES == null &&
+      !configSetsMcpOutput(request.grokHome) && !projectSetsMcpOutput(request.cwd, env)) {
     result.GROK_MAX_MCP_OUTPUT_BYTES = String(GROK_MCP_OUTPUT_BYTES);
   }
   delete result.GROK_SANDBOX;

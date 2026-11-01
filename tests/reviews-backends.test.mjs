@@ -384,15 +384,11 @@ test("the inline limit is exact: any number of files within 256 KiB passes, one 
   // A binary untracked file is named, not inlined; its size, here above the byte limit, does
   // not count, since nothing of it reaches the prompt.
   const binary = zcode(t, { answer: JSON.stringify(VERDICT) }, undefined, { "src/blob.bin": Buffer.concat([Buffer.from([0, 1, 2, 0]), Buffer.alloc(300 * 1024, 7)]) });
-  let binaryReads = 0;
-  const readBinary = fs.readFileSync;
-  t.mock.method(fs, "readFileSync", (file, ...args) => {
-    if (String(file).endsWith("src/blob.bin")) binaryReads += 1;
-    return readBinary(file, ...args);
-  });
+  const binaryReads = t.mock.method(fs, "readFileSync");
   const binaryContext = collectReviewContext(binary.work, { mode: "working-tree", label: "working tree diff" }, { untrackedInFull: true, maxInlineFiles: Infinity });
   assert.match(binaryContext.content, /### src\/blob\.bin\n\(skipped: binary file\)/);
-  assert.equal(binaryReads, 0, "the binary sample is enough; the whole file is never read");
+  assert.equal(binaryReads.mock.callCount(), 0, "the binary sample is enough; the whole file is never read");
+  binaryReads.mock.restore();
   assert.equal(companion(binary, ["adversarial-review", "--backend", "zcode"]).status, 0);
   assert.match(binary.zcode().turns[0].text, /### src\/blob\.bin\n\(skipped: binary file\)/);
   assert.equal(binary.zcode().starts.length, 1);
@@ -440,15 +436,11 @@ test("the inline limit is exact: any number of files within 256 KiB passes, one 
 
   // A file already known to be over the limit is named in the lightweight context, never read.
   const large = grok(t, {}, {}, { "src/large.txt": sized(300 * 1024, "MUST_NOT_BE_READ") });
-  let largeReads = 0;
-  const readFile = fs.readFileSync;
-  t.mock.method(fs, "readFileSync", (file, ...args) => {
-    if (String(file).endsWith("src/large.txt")) largeReads += 1;
-    return readFile(file, ...args);
-  });
+  const largeReads = t.mock.method(fs, "readFileSync");
   const lightweight = inlineContext(large.work);
   assert.equal(lightweight.inputMode, "self-collect");
-  assert.equal(largeReads, 0);
+  assert.equal(largeReads.mock.callCount(), 0);
+  largeReads.mock.restore();
   assert.doesNotMatch(lightweight.content, /MUST_NOT_BE_READ/);
 
   // A non-ASCII name is read, not skipped as unreadable: Git would quote it without `-z`.

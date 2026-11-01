@@ -100,7 +100,8 @@ the same way, with no model call, so setup can report it.
 Sources: [changelog](https://x.ai/changelog/build),
 [mcp_truncate.rs](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-tools/src/util/mcp_truncate.rs),
 [read_file](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-tools/src/implementations/grok_build/read_file/mod.rs),
-[configuration guide](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md).
+[configuration guide](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md),
+[MCP cap precedence](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/07-mcp-servers.md#configuration).
 
 ## ZCode
 
@@ -148,8 +149,8 @@ Sources: [configuration files](https://www.kimi.com/code/docs/en/kimi-code-cli/c
 - **Codex:** every job gets a budget, and developer instructions name the budget, the pragma and line
   ranges.
 - **Grok MCP results:** a job's environment sets `GROK_MAX_MCP_OUTPUT_BYTES` to 262,144, a quarter of the
-  256k window at four bytes per token, unless the environment or the home's `[mcp] max_output_bytes`
-  names a value. The variable is read from Grok's source; a live check could not reach an MCP server
+  256k window at four bytes per token, unless the environment, home or a project config between the job directory and the Git root
+  names an MCP budget. Grok decides whether to trust the project setting. The variable is read from Grok's source; a live check could not reach an MCP server
   from a job, so its effect has not been measured.
 - **Reviews on Grok, ZCode and Kimi:** the serialized repository context goes inline in the prompt, up
   to 256 KiB including Git's rendered names and decoded file contents; above that the review is
