@@ -7,7 +7,6 @@ import { formatCommandFailure, runCommand, runCommandChecked } from "../util/pro
 const MAX_UNTRACKED_BYTES = 24 * 1024;
 const DEFAULT_INLINE_DIFF_MAX_FILES = 2;
 export const DEFAULT_INLINE_DIFF_MAX_BYTES = 256 * 1024;
-const UNTRACKED_ENTRY_BYTES = 32; // what surrounds a name: status code, heading, the note or fence
 
 // Repository-derived arguments must reach Git literally, without shell expansion.
 function git(cwd, args, options = {}) {
@@ -313,7 +312,9 @@ function measureUntrackedTextBytes(cwd, files, maxBytes) {
   let total = 0;
   for (const relativePath of files) {
     if (total > maxBytes) break;
-    total += 2 * Buffer.byteLength(relativePath) + UNTRACKED_ENTRY_BYTES;
+    // Section overhead varies. Charging a guessed amount can refuse a context that fits.
+    // The caller checks the rendered size, including status codes, fences and headings.
+    total += 2 * Buffer.byteLength(relativePath);
     const absolutePath = path.join(cwd, relativePath);
     let fd = null;
     try {

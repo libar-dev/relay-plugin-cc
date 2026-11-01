@@ -411,6 +411,15 @@ test("the inline limit is exact: any number of files within 256 KiB passes, one 
   assert.equal(jobDirs(bytes).length, 1);
   assert.equal(bytes.grok().starts.length, 1);
 
+  // Per-file formatting varies. Empty files and one text file can fill the exact serialized
+  // limit even when a fixed allowance per entry would reject the review.
+  const smallNames = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`empty${i}`, ""]));
+  const many = grok(t, {}, {}, { ...smallNames, payload: "x" });
+  const space = LIMIT - Buffer.byteLength(inlineContext(many.work).content);
+  fs.writeFileSync(path.join(many.work, "payload"), "x".repeat(space + 1));
+  assert.equal(Buffer.byteLength(inlineContext(many.work).content), LIMIT);
+  assert.equal(companion(many, ["review", "--backend", "grok"]).status, 0);
+
   // File names alone can pass the limit: many empty or binary files are refused, not sent.
   const names = Object.fromEntries(Array.from({ length: 1400 }, (_, index) => [`src/${"long-file-name-".repeat(6)}${index}.txt`, ""]));
   const empties = grok(t, {}, {}, names);

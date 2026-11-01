@@ -105,3 +105,7 @@ actual transcript origins were checked, not only the Claude sessions' final pros
 - An untracked symbolic link included the contents of its external target in a working-tree
   review. The collector now names the link and skips its contents in both review modes. The
   regression uses a synthetic marker outside the repository and checks the serialized context.
+- A near-limit fixture with 100 empty files and one text file was refused even though its
+  serialized context was 262,037 bytes. Removing the guessed overhead per file leaves the
+  final UTF-8 byte check authoritative for headings and fences. The regression verifies a
+  multi-file context of exactly 262,144 bytes reaches the backend.
