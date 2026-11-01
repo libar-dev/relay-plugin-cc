@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { runCommand } from "../../util/process.mjs";
 import { realpathOr, userDir } from "../setup.mjs";
+import { resolveGrokHome } from "./request.mjs";
 import { partialLineNote, SpawnedServerClient } from "../transport/stdio-rpc.mjs";
 
 export function resolveGrokBinary(env = process.env) {
@@ -224,14 +225,15 @@ function projectSetsMcpOutput(cwd, env) {
 }
 
 export function grokEnvironment(request, env = process.env) {
+  const home = request.grokHome ?? resolveGrokHome("default", env);
   /** @type {NodeJS.ProcessEnv} */
-  const result = { ...env, GROK_HOME: request.grokHome, GROK_MEMORY: "0" };
+  const result = { ...env, GROK_HOME: home, GROK_MEMORY: "0" };
   for (const source of ["CLAUDE", "CURSOR"]) {
     for (const kind of ["HOOKS", "SKILLS", "MCPS", "RULES", "AGENTS", "SESSIONS"]) result[`GROK_${source}_${kind}_ENABLED`] = "0";
   }
   if (env.GROK_MAX_MCP_OUTPUT_BYTES == null && env.MAX_MCP_OUTPUT_BYTES == null &&
-      !configSetsMcpOutput(path.join(request.grokHome, "config.toml")) &&
-      !configSetsMcpOutput(path.join(request.grokHome, "managed_config.toml")) &&
+      !configSetsMcpOutput(path.join(home, "config.toml")) &&
+      !configSetsMcpOutput(path.join(home, "managed_config.toml")) &&
       !configSetsMcpOutput("/etc/grok/managed_config.toml") && !projectSetsMcpOutput(request.cwd, env)) {
     result.GROK_MAX_MCP_OUTPUT_BYTES = String(GROK_MCP_OUTPUT_BYTES);
   }
