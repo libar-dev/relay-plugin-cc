@@ -26,5 +26,4 @@ tests, fixtures, docs, skills, CHANGELOG entries, commit messages and pull reque
 ## Release maintenance
 
 The supported 2.x line receives maintenance fixes. Validate its integration in Claude Code after
-harness upgrades. See [the Mods plan](docs/mods/plan.md#current-project-direction) for the status
-of the prerelease work.
+harness upgrades.
