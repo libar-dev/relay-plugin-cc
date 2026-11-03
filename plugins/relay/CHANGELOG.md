@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.3 (2026-11-03)
+
+- The `relay:jobs` skill says up front that a running job can be steered. Its description, which
+  Claude sees before loading the skill, and its first lines say that `SendMessage` joins the running
+  turn (on Kimi, the next turn), continues the same session after the job ends, and that the message
+  `cancel` cancels it. This was documented only in a table near the end of the skill, so agents
+  using relay often did not know a job could be steered.
+
 ## 2.2.2 (2026-11-03)
 
 2.x is the final Relay line and takes bug fixes only.
