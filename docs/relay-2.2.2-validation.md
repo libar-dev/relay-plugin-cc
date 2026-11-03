@@ -5,8 +5,8 @@ the independent follow-up review, the defects that review found, and the live ch
 fixtures were synthetic. Session ids, job ids, local paths, credentials and private logs are deliberately
 not part of this record.
 
-The evidence below was collected on 31 October 2026 unless otherwise dated. This document does not claim approval from the final Opus and
-Astra reviews reserved for the next review sequence.
+The evidence below was collected on 31 October 2026 unless otherwise dated. The last section records
+the final check of the release candidate.
 
 ## Review provenance
 
@@ -112,3 +112,23 @@ actual transcript origins were checked, not only the Claude sessions' final pros
 - A home-managed MCP cap of 4,000 bytes also produced a Relay override of 262,144. The launcher
   now checks `managed_config.toml` in the Grok home and the system config directory. The tests
   exercise both layers without modifying machine policy.
+
+## Final candidate check on 3 November 2026
+
+The code that changed after the earlier live runs (Grok cap detection and untracked-file collection
+for reviews) was read again in full. Every caller of the Grok launch environment passes the working
+directory that the project-config walk needs.
+
+The final candidate then ran live on macOS with Claude Code 2.1.317, Codex CLI 0.166.0, Grok Build
+1.0.70, ZCode 3.16.2 and Kimi Code 2.4.1. The plugin was loaded with `--plugin-dir` through a symbolic
+link to its folder, the case 2.2.1 fails, with the installed copy disabled, a private jobs home and a
+synthetic Git repository. Inherited `CLAUDE*` and `RELAY_COMPANION_*` variables were cleared, so no job
+could attach to an outer session.
+
+| Path | Result |
+| --- | --- |
+| Four `relay:job` agents in parallel, one per backend, read-only: `gpt-6-luna`, `grok-4.7-build-fast`, `glm-5.3-flash`, `kimi-code/kimi-for-coding` | All four completed with their exact tokens and one recorded hand-back each. Every job record names version 2.2.2. No backend process remained. |
+| Grok inline review of a working tree with one tracked edit, two untracked files and an untracked symbolic link to a file outside the repository | Accepted (2.2.1 refused a third file) and found the planted defect. The link appeared as `(skipped: symbolic link)`; a marker in its target appears nowhere in the stored job files. |
+
+Typed human messages in the terminal UI, a real Grok MCP result above 20,000 bytes and Codex's use of
+the output pragma remain as described under "Evidence that remains limited".

@@ -1,8 +1,8 @@
 # Changelog
 
-## 2.2.2 (2026-10-31)
+## 2.2.2 (2026-11-03)
 
-The stable 2.x line, maintained for current users.
+2.x is the final Relay line and takes bug fixes only.
 
 - Relay jobs work when the plugin is reached through a symlinked folder. Node gives the hook its real
   path, so the guard never ran and every `relay:job` failed with `The hook did not run`.

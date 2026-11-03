@@ -14,6 +14,8 @@ with a state block that says what happened.
 1.0.6. [NOTICE](NOTICE) keeps the attribution and license terms. [docs/design.md](docs/design.md)
 explains the design.
 
+2.x is the final Relay line and takes bug fixes only.
+
 ## Backends
 
 A backend is named by its harness. The model family goes in `model:`.
@@ -35,8 +37,8 @@ Requirements:
 - Claude Code 2.1.271 or later, for hooks on `SubagentHandback`.
 - Node.js 22 or later.
 - macOS or Linux. The process sweep reads the process table with `ps`.
-- At least one backend CLI, signed in: the Codex CLI, Grok Build, ZCode or Kimi Code. Release 2.1.2
-  was checked live with Codex 0.163.0, Grok Build 1.0.60, ZCode 3.15.3 and Kimi Code 2.2.0.
+- At least one backend CLI, signed in: the Codex CLI, Grok Build, ZCode or Kimi Code. Release 2.2.2
+  was checked live with Codex 0.166.0, Grok Build 1.0.70, ZCode 3.16.2 and Kimi Code 2.4.1.
 
 ```bash
 claude plugin marketplace add libar-dev/relay-plugin-cc

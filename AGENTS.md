@@ -25,5 +25,5 @@ tests, fixtures, docs, skills, CHANGELOG entries, commit messages and pull reque
 
 ## Release maintenance
 
-The supported 2.x line receives maintenance fixes. Validate its integration in Claude Code after
-harness upgrades.
+2.x is the final Relay line and takes bug fixes only: no new features. Validate its integration in
+Claude Code after harness upgrades.
