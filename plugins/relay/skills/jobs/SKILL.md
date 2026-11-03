@@ -1,6 +1,6 @@
 ---
 name: jobs
-description: "Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents, as a `relay:job` agent or from a workflow script. Load it before launching or messaging such an agent, and before running `companion` commands yourself."
+description: "Run jobs on Codex, Grok Build, ZCode and Kimi Code from Claude Code like Claude agents, as a `relay:job` agent or from a workflow script. A running job can be steered: `SendMessage` to its agent joins the running turn (on Kimi, the next turn), continues the same session after the job ends, and the message `cancel` cancels it. Load it before launching or messaging such an agent, and before running `companion` commands yourself."
 ---
 
 # Job agents
@@ -10,6 +10,8 @@ A `relay:job` agent runs one job and returns the job report verbatim. Launch it 
 ```
 Agent({ subagent_type: "relay:job", description: "<3-5 words>", prompt: "<header>\n---\n<brief>", run_in_background: true })
 ```
+
+Steer it while it works, as you would a Claude agent. `SendMessage` to the agent joins the job's running turn (on Kimi it becomes the next turn). After the job ends, a message starts a new turn on the same session and the agent returns the new report. The message `cancel` cancels the job. To change a job's direction, message it rather than stopping it and starting another. [Talking to a running or finished job](#talking-to-a-running-or-finished-job) has the details.
 
 ## Relay or a T3 Code delegate
 
