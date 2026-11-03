@@ -23,7 +23,7 @@ function listUniqueFiles(...groups) {
 
 function normalizeMaxInlineFiles(value) {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  if (Number.isNaN(parsed) || parsed < 0) {
     return DEFAULT_INLINE_DIFF_MAX_FILES;
   }
   return Math.floor(parsed);
@@ -122,7 +122,8 @@ function getCurrentBranch(cwd) {
 function getWorkingTreeState(cwd) {
   const staged = gitChecked(cwd, ["diff", "--cached", "--name-only"]).stdout.trim().split("\n").filter(Boolean);
   const unstaged = gitChecked(cwd, ["diff", "--name-only"]).stdout.trim().split("\n").filter(Boolean);
-  const untracked = gitChecked(cwd, ["ls-files", "--others", "--exclude-standard"]).stdout.trim().split("\n").filter(Boolean);
+  // `-z`: without it Git quotes a non-ASCII name, and the file could not be read for the review.
+  const untracked = gitChecked(cwd, ["ls-files", "-z", "--others", "--exclude-standard"]).stdout.split("\0").filter(Boolean);
 
   return {
     staged,
@@ -199,22 +200,35 @@ function formatUntrackedFile(cwd, relativePath, maxBytes = MAX_UNTRACKED_BYTES) 
   const absolutePath = path.join(cwd, relativePath);
   let stat;
   try {
-    stat = fs.statSync(absolutePath);
+    stat = fs.lstatSync(absolutePath);
   } catch {
     return `### ${relativePath}\n(skipped: broken symlink or unreadable file)`;
   }
   if (stat.isDirectory()) {
     return `### ${relativePath}\n(skipped: directory)`;
   }
+  if (stat.isSymbolicLink()) {
+    return `### ${relativePath}\n(skipped: symbolic link)`;
+  }
+  if (!stat.isFile()) {
+    return `### ${relativePath}\n(skipped: not a regular file)`;
+  }
   if (stat.size > maxBytes) {
     return `### ${relativePath}\n(skipped: ${stat.size} bytes exceeds ${maxBytes} byte limit)`;
   }
 
   let buffer;
+  let fd = null;
   try {
-    buffer = fs.readFileSync(absolutePath);
+    fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const sample = Buffer.alloc(Math.min(stat.size, 4096));
+    fs.readSync(fd, sample, 0, sample.length, 0);
+    if (!isProbablyText(sample)) return `### ${relativePath}\n(skipped: binary file)`;
+    buffer = fs.readFileSync(fd);
   } catch {
     return `### ${relativePath}\n(skipped: broken symlink or unreadable file)`;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
   }
   if (!isProbablyText(buffer)) {
     return `### ${relativePath}\n(skipped: binary file)`;
@@ -290,19 +304,23 @@ function collectBranchContext(cwd, baseRef, options = {}) {
   };
 }
 
-// The bytes an inline context adds for untracked files: each readable text file's size. A
-// directory, an unreadable file or a binary file is named, not inlined, and adds nothing.
-// Stops counting once the total passes `maxBytes`.
+// The bytes an inline context adds for untracked files: every file's name, in Git's status and in
+// its own heading, plus each readable text file's size. A directory, an unreadable file or a
+// binary file is named, not inlined, so only its name counts. Stops counting once the total
+// passes `maxBytes`.
 function measureUntrackedTextBytes(cwd, files, maxBytes) {
   let total = 0;
   for (const relativePath of files) {
     if (total > maxBytes) break;
+    // Section overhead varies. Charging a guessed amount can refuse a context that fits.
+    // The caller checks the rendered size, including status codes, fences and headings.
+    total += 2 * Buffer.byteLength(relativePath);
     const absolutePath = path.join(cwd, relativePath);
     let fd = null;
     try {
-      const stat = fs.statSync(absolutePath);
+      const stat = fs.lstatSync(absolutePath);
       if (!stat.isFile()) continue;
-      fd = fs.openSync(absolutePath, "r");
+      fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
       const sample = Buffer.alloc(Math.min(stat.size, 4096));
       fs.readSync(fd, sample, 0, sample.length, 0);
       if (isProbablyText(sample)) total += stat.size;
@@ -351,7 +369,11 @@ export function collectReviewContext(cwd, target, options = {}) {
       options.includeDiff ??
       (listUniqueFiles(state.staged, state.unstaged, state.untracked).length <= maxInlineFiles &&
         diffBytes <= maxInlineDiffBytes);
-    details = collectWorkingTreeContext(repoRoot, state, { includeDiff, untrackedMaxBytes: options.untrackedInFull ? Infinity : MAX_UNTRACKED_BYTES });
+    details = collectWorkingTreeContext(repoRoot, state, {
+      includeDiff,
+      // A refused inline review names its untracked files without reading them.
+      untrackedMaxBytes: options.untrackedInFull ? (includeDiff ? Infinity : 0) : MAX_UNTRACKED_BYTES
+    });
   } else {
     const comparison = buildBranchComparison(repoRoot, target.baseRef);
     const fileCount = gitChecked(repoRoot, ["diff", "--name-only", comparison.commitRange]).stdout.trim().split("\n").filter(Boolean).length;

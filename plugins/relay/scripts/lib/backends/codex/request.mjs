@@ -86,7 +86,7 @@ const CODE_MODE_DEFAULT_TOKENS = 10000;
 
 function developerInstructionsFor(limit, config) {
   if (!(limit > CODE_MODE_DEFAULT_TOKENS)) return null;
-  const relay = `Tool output: this job keeps up to ${limit} tokens of each tool result. In code mode, \`exec\` and \`wait\` return only ${CODE_MODE_DEFAULT_TOKENS} tokens of output by default and cut the middle. When a command can print more (a diff, a log, a whole file), start the exec input with \`// @exec: {"max_output_tokens": ${limit}}\`, or pass \`max_tokens: ${limit}\` to \`wait\`, rather than working from a truncated result.`;
+  const relay = `Tool output: this job keeps up to ${limit} tokens of each tool result. In code mode, \`exec\` and \`wait\` return only ${CODE_MODE_DEFAULT_TOKENS} tokens of output by default and cut the middle, and \`max_output_tokens\` on a nested \`exec_command\` alone does not change that. When a command can print more (a diff, a log, a whole file), start the exec input with \`// @exec: {"max_output_tokens": ${limit}}\` and pass the same value to the nested \`exec_command\`, or pass \`max_tokens: ${limit}\` to \`wait\`. A result that large fills much of the context, so read a large file or diff by line range where you can. When a result says it was truncated, read the omitted part before relying on it.`;
   return [typeof config.developer_instructions === "string" ? config.developer_instructions : null, relay].filter(Boolean).join("\n\n");
 }
 

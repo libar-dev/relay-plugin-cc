@@ -16,7 +16,7 @@ Codex home (`~/.codex` or `CODEX_HOME`), `~/.grok` and every `~/.grok-<name>`, Z
 `--grok-home H` selects a Grok home and `--kimi-home H` a Kimi home, and the command
 exits non-zero when that backend is not ready. Setup makes no
 model call: Codex answers `account/read`, `config/read` and `model/list` on an app-server it stops
-afterwards, Grok answers `--version` and `grok models`, and for ZCode setup reads `--version`,
+afterwards, Grok answers `--version` and `grok models`, and `grok models` again under its read-only profile, so a refused profile shows as a warning, and for ZCode setup reads `--version`,
 whether the credentials file from `zcode login` is a regular file of more than two bytes (the file
 is never opened) and the default model, then asks one `zcode app-server` for every model the
 sign-in serves: it creates a draft session, reads its model list (what ZCode's model picker

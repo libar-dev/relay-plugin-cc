@@ -62,6 +62,14 @@ import { SCHEMA_SENTENCE } from "../lib/harness/workflow.mjs";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "../..");
 const COMPANION = path.join(SCRIPT_DIR, "..", "companion.mjs");
+
+/**
+ * A path with its symlinks resolved. Node gives this module its real path, while Claude Code may run the hook and
+ * the relay may name the companion through a symlinked plugin folder; paths are compared resolved.
+ */
+function realPath(file) {
+  try { return fs.realpathSync(file); } catch { return path.resolve(file); }
+}
 const SUBCOMMANDS = new Set(["start", "wait", "result", "status", "cancel"]);
 const JOB_ID = /^[0-9A-Za-z][0-9A-Za-z._-]*$/;
 const SHOWN = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs"';
@@ -112,7 +120,7 @@ export function parseCompanionCommand(command) {
     return null;
   }
   const script = tokens[1].replace("${CLAUDE_PLUGIN_ROOT}", PLUGIN_ROOT);
-  if (path.resolve(script) !== COMPANION) {
+  if (realPath(script) !== realPath(COMPANION)) {
     return null;
   }
   const subcommand = tokens[2];
@@ -465,7 +473,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realPath(process.argv[1]) === realPath(fileURLToPath(import.meta.url))) {
   main().catch((error) => {
     // Fail open: a broken hook must never trap the relay or any other agent.
     process.stderr.write(`relay guard: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);

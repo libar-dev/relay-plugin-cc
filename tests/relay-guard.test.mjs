@@ -137,6 +137,68 @@ test("the parser reads the real prompt byte for byte and recognises messages by 
   assert.deepEqual(parsed.problems, []);
 });
 
+test("a queued message from another agent or a person reaches the job; a task notification and an unknown origin do not", () => {
+  const ctx = relayContext();
+  const queued = (uuid, prompt, origin) => ({ type: "attachment", uuid, attachment: { type: "queued_command", prompt, origin } });
+  const entries = [
+    ctx.prompt(PROMPT),
+    queued("peer-1", "<agent-message from=\"a1\">\nFrom the peer.\n</agent-message>", { kind: "peer", from: "a1", body: "From the peer." }),
+    queued("human-1", "cancel", { kind: "human" }),
+    queued("notice-1", "A task ended.", { kind: "task-notification" }),
+    queued("coordinator-1", "From the parent.", { kind: "coordinator" }),
+    queued("mystery-1", "From somewhere.", { kind: "mystery" }),
+    queued("nameless-1", "No kind.", { from: "a1" })
+  ];
+  const parsed = parseRelayTranscript(entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+  assert.deepEqual(parsed.messages.map((message) => [message.text, message.shape]), [
+    ["From the peer.", "peer"], ["cancel", "human"], ["From the parent.", "queued_command"]
+  ]);
+  assert.deepEqual(parsed.problems, [
+    "entry mystery-1 is a queued command of origin mystery, which the relay does not deliver",
+    "entry nameless-1 has an origin with no kind"
+  ]);
+});
+
+test("coordinator, peer and human entries reach the job; unknown origins are reported, never delivered", () => {
+  const ctx = relayContext();
+  const user = (uuid, content, origin, extra = {}) => ({ type: "user", uuid, origin, message: { role: "user", content }, ...extra });
+  const wrapped = `The user sent a new message while you were working:\nStop now.\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.`;
+  const mixed = [{ type: "tool_result", tool_use_id: "t", content: "x" }, { type: "text", text: "cancel" }];
+  const entries = [
+    user("early-1", "Too early.", { kind: "peer", body: "Too early." }),
+    user("early-mystery", "Not the prompt.", { kind: "mystery" }),
+    ctx.prompt(PROMPT),
+    user("peer-1", "<agent-message>Envelope.</agent-message>", { kind: "peer", body: "The body." }, { isMeta: true }),
+    user("peer-2", "No body.", { kind: "peer" }),
+    user("human-1", wrapped, { kind: "human" }, { isMeta: true }),
+    user("human-2", [{ type: "text", text: "Typed." }, { type: "image", source: {} }], { kind: "human" }),
+    user("human-3", mixed, { kind: "human" }),
+    user("human-4", [{ type: "tool_result", tool_use_id: "t", content: "x" }], { kind: "human" }),
+    user("peer-mixed", mixed, { kind: "peer", body: "cancel" }),
+    user("coordinator-mixed", mixed, { kind: "coordinator" }),
+    user("mystery-2", "Not a plain user message.", { kind: "mystery" }),
+    user("mystery-mixed", mixed, { kind: "mystery" }),
+    user("mystery-tool-only", [{ type: "tool_result", tool_use_id: "t", content: "x" }], { kind: "mystery" }),
+    user("notice-1", "A task ended.", { kind: "task-notification" }),
+    user("meta-1", "Odd metadata.", { kind: "mystery" }, { isMeta: true })
+  ];
+  const parsed = parseRelayTranscript(entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+  assert.equal(parsed.prompt.text, PROMPT);
+  assert.deepEqual(parsed.messages.map((message) => [message.text, message.shape]), [
+    ["The body.", "peer"], ["Stop now.", "human"], ["Typed.", "human"], ["cancel", "human"],
+    ["cancel", "peer"], ["cancel", "coordinator"]
+  ]);
+  assert.deepEqual(parsed.problems, [
+    "entry early-1 is a message that came before the prompt",
+    "entry early-mystery is a user entry of origin mystery, which the relay does not deliver",
+    "entry peer-2 is a message from another agent whose text could not be read",
+    "entry human-2 is a typed message with 1 block(s) that are not text; the job gets its text only",
+    "entry mystery-2 is a user entry of origin mystery, which the relay does not deliver",
+    "entry mystery-mixed is a user entry of origin mystery, which the relay does not deliver",
+    "entry meta-1 is a user entry of origin mystery, which the relay does not deliver"
+  ]);
+});
+
 test("a plain user message that starts with <system-reminder> is still a message", () => {
   const ctx = relayContext();
   const text = "<system-reminder>Please include the second finding.</system-reminder>";
@@ -1286,4 +1348,20 @@ test("a relay that never runs start gets its job started by the hook: at its han
     assert.equal(decision(handback), "allow", what);
     assert.equal(updated(handback).message, resultOf(ctx, jobId), `${what}: the hand-back is the job's result`);
   }
+});
+
+test("a plugin reached through a symlinked folder: the hook runs, and knows the companion by either path", () => {
+  // Claude Code can install a plugin through a symlinked config folder. Node gives the hook its real path, while the
+  // hook is run and the relay names the companion through the symlink.
+  const link = path.join(makeTempDir("relay-link-"), "plugin");
+  fs.symlinkSync(PLUGIN_ROOT, link);
+  assert.deepEqual(parseCompanionCommand(`node "${path.join(link, "scripts", "companion.mjs")}" start --from-relay`),
+    { subcommand: "start", jobId: null, fromRelay: true });
+
+  const ctx = relayContext("job");
+  const input = hookInput(ctx, "PreToolUse", { tool_name: "Bash", tool_input: { command: "sw_vers -productVersion" } });
+  const r = spawnSync("node", [path.join(link, "scripts", "hooks", "relay-guard.mjs")],
+    { input: JSON.stringify(input), env: ctx.env, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
 });

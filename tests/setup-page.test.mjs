@@ -100,8 +100,8 @@ test("the overview shows shared backend fields and Codex budget metadata, ready,
   const codexState = ctx.fakeState();
   assert.deepEqual(codexState.requests ?? [], []);
   assert.deepEqual(codexState.spawnHomes, [path.join(ctx.user, ".codex")]);
-  assert.deepEqual(ctx.grok().invocations.map(call => call.args.join(" ")).sort(), ["--version", "models", "models"]);
-  assert.deepEqual(ctx.grok().invocations.filter(call => call.args[0] === "models").map(call => call.env.GROK_HOME).sort(), [path.join(ctx.user, ".grok"), path.join(ctx.user, ".grok-jobs")]);
+  assert.deepEqual(ctx.grok().invocations.map(call => call.args.join(" ")).sort(), ["--version", "models", "models", "models", "models"]);
+  assert.deepEqual(ctx.grok().invocations.filter(call => call.args[0] === "models").map(call => call.env.GROK_HOME).sort(), [path.join(ctx.user, ".grok"), path.join(ctx.user, ".grok"), path.join(ctx.user, ".grok-jobs"), path.join(ctx.user, ".grok-jobs")]);
   assert.equal(ctx.grok().starts.length, 0);
   assert.deepEqual(ctx.zcode().invocations.map(call => call.args.join(" ")).sort(), ["--version", "app-server"]);
   assert.deepEqual(ctx.zcode().requests.filter(r => r.method).map(r => r.method), ["runtime/capabilities", "session/create", "session/close"]);
@@ -280,7 +280,8 @@ test("every home's check runs at once with the others, and setup ends what each 
   const grokPids = wrapBinary(ctx, "grok", { barrier, gate: "models", parties: 3 });
   const { status, page: report } = page(ctx, [], { RELAY_SETUP_SERVER_MS: "8000", RELAY_SETUP_COMMAND_MS: "8000" });
   assert.equal(status, 0);
-  assert.equal(fs.readdirSync(barrier).length, 3);
+  // The three checks that met at the barrier, and each Grok home's read-only check after it.
+  assert.equal(fs.readdirSync(barrier).length, 5);
   assert.deepEqual(report.backends.map(block => [block.backend, block.selector, block.ready, block.error]), [
     ["codex", null, true, null], ["grok", null, true, null], ["grok", "jobs", true, null], ["zcode", null, true, null], ["kimi", null, true, null]
   ]);

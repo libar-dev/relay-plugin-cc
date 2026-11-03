@@ -417,7 +417,7 @@ if (BEHAVIOR === "home-probe") {
 }
 
 const rl = readline.createInterface({ input: process.stdin });
-// The client closes the server by ending its stdin, and sends SIGTERM 50 ms later if it still
+// The client closes the server by ending its stdin, and escalates through SIGTERM and SIGKILL if it still
 // runs, which a loaded machine can cause. An idle server, with no turn or timer pending, exits 0
 // either way, through process.exit: a natural exit drops the SIGTERM handler before it ends. A
 // server with work pending keeps running when stdin ends, and SIGTERM kills it, as before.
@@ -791,7 +791,7 @@ rl.on("line", (line) => {
               const end = () => {
                 if (deathKind === "kill") process.kill(process.pid, "SIGKILL");
                 else if (deathKind === "partial") {
-                  // With stdout ended, the client closes stdin and sends SIGTERM 50 ms later if this
+                  // With stdout ended, the client closes stdin and escalates through SIGTERM and SIGKILL if this
                   // process still runs, which a loaded machine can cause. It exits 0 either way,
                   // through process.exit: a natural exit drops the SIGTERM handler before it ends.
                   process.on("SIGTERM", () => process.exit(0));

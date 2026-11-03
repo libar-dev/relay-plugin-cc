@@ -132,7 +132,7 @@ test("collectReviewContext skips untracked directories in working tree review", 
   assert.match(context.content, /### \.claude\/worktrees\/agent-test\/\n\(skipped: directory\)/);
 });
 
-test("collectReviewContext skips broken untracked symlinks instead of crashing", () => {
+test("collectReviewContext names untracked symlinks without reading their targets", () => {
   const cwd = makeTempDir();
   initGitRepo(cwd);
   fs.writeFileSync(path.join(cwd, "app.js"), "console.log('v1');\n");
@@ -140,12 +140,16 @@ test("collectReviewContext skips broken untracked symlinks instead of crashing",
   run("git", ["commit", "-m", "init"], { cwd });
   fs.symlinkSync("missing-target", path.join(cwd, "broken-link"));
 
+  const external = path.join(makeTempDir(), "external");
+  fs.writeFileSync(external, "OUTSIDE_CONTENT");
+  fs.symlinkSync(external, path.join(cwd, "external-link"));
   const target = resolveReviewTarget(cwd, {});
-  const context = collectReviewContext(cwd, target);
-
-  assert.equal(target.mode, "working-tree");
-  assert.match(context.content, /### broken-link/);
-  assert.match(context.content, /skipped: broken symlink or unreadable file/i);
+  for (const options of [{}, { untrackedInFull: true, maxInlineFiles: Infinity }]) {
+    const context = collectReviewContext(cwd, target, options);
+    assert.match(context.content, /### broken-link\n\(skipped: symbolic link\)/);
+    assert.match(context.content, /### external-link\n\(skipped: symbolic link\)/);
+    assert.doesNotMatch(context.content, /OUTSIDE_CONTENT/);
+  }
 });
 
 test("collectReviewContext falls back to lightweight context for larger adversarial reviews", () => {

@@ -14,6 +14,8 @@ with a state block that says what happened.
 1.0.6. [NOTICE](NOTICE) keeps the attribution and license terms. [docs/design.md](docs/design.md)
 explains the design.
 
+2.x is the final Relay line and takes bug fixes only.
+
 ## Backends
 
 A backend is named by its harness. The model family goes in `model:`.
@@ -35,8 +37,8 @@ Requirements:
 - Claude Code 2.1.271 or later, for hooks on `SubagentHandback`.
 - Node.js 22 or later.
 - macOS or Linux. The process sweep reads the process table with `ps`.
-- At least one backend CLI, signed in: the Codex CLI, Grok Build, ZCode or Kimi Code. Release 2.1.2
-  was checked live with Codex 0.163.0, Grok Build 1.0.60, ZCode 3.15.3 and Kimi Code 2.2.0.
+- At least one backend CLI, signed in: the Codex CLI, Grok Build, ZCode or Kimi Code. Release 2.2.2
+  was checked live with Codex 0.166.0, Grok Build 1.0.70, ZCode 3.16.2 and Kimi Code 2.4.1.
 
 ```bash
 claude plugin marketplace add libar-dev/relay-plugin-cc
@@ -218,8 +220,8 @@ is recorded as a job, so `/relay:status` lists it.
 | `--wait`, `--background` | run in the foreground, or as a Claude background task; without either, a review you type asks, and a review Claude starts runs in the foreground |
 | `[focus]` | text after the flags; `/relay:adversarial-review` only |
 
-Grok, ZCode and Kimi read only the diff inlined in their prompt, so they refuse a change above two files
-or 256 KiB before anything starts. An adversarial answer that does not match the review schema
+Grok, ZCode and Kimi read only the diff inlined in their prompt, so they refuse a change above 256 KiB
+before anything starts. An adversarial answer that does not match the review schema
 fails the review with the raw answer in the report.
 
 ### The stop-time review gate
@@ -319,7 +321,7 @@ runs on command hooks and the transcript.
 
 ## Development
 
-`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.2.0. It is private and
+`package.json` names the package `@libar-dev/relay-plugin-cc`, version 2.2.2. It is private and
 not published to npm. Clone the repository and run:
 
 ```bash
@@ -347,6 +349,8 @@ them); the version named above in this section is set by hand.
 
 Read [docs/architecture.md](docs/architecture.md) for the code layout and module rules,
 [docs/backends.md](docs/backends.md) for the backend contract,
-[docs/design.md](docs/design.md) for the behavior and the reasons behind it, and
-[docs/kimi.md](docs/kimi.md) for what the Kimi backend rests on and how to check a new Kimi version, and
-[docs/thread-surveys.md](docs/thread-surveys.md) for the surveys of real use that fixes came from.
+[docs/design.md](docs/design.md) for the behavior and the reasons behind it,
+[docs/kimi.md](docs/kimi.md) for what the Kimi backend rests on and how to check a new Kimi version,
+[docs/thread-surveys.md](docs/thread-surveys.md) for the surveys of real use that fixes came from, and
+[docs/relay-2.2.2-validation.md](docs/relay-2.2.2-validation.md) for this release's review findings,
+regressions and live-validation evidence.

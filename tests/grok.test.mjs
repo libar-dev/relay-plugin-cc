@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { resolveGrokHome } from "../plugins/relay/scripts/lib/backends/grok/request.mjs";
 import { buildLaunchRequest, parseHeaderPrompt } from "../plugins/relay/scripts/lib/jobs/request.mjs";
-import { grokEventRecorder } from "../plugins/relay/scripts/lib/backends/grok/connection.mjs";
+import { grokEnvironment, grokEventRecorder } from "../plugins/relay/scripts/lib/backends/grok/connection.mjs";
 import { companion, finishJob, jobDir, promptFile, readJob, setup, startJob, waitFor } from "./support/job-helpers.mjs";
 import { initGitRepo, run } from './support/helpers.mjs';
 import { installFakeGrok } from "./fakes/grok.mjs";
@@ -160,9 +160,105 @@ test('setup checks version and models without opening a session', t => {
   const [block] = JSON.parse(result.stdout).backends;
   assert.equal(block.ready, true); assert.equal(block.version, 'grok 1.0.fake');
   assert.equal(block.home, path.join(ctx.user, '.grok-jobs'));
-  assert.deepEqual(ctx.grok().invocations.map(call => call.args).sort(), [['--version'], ['models']]);
+  assert.deepEqual(ctx.grok().invocations.map(call => call.args).sort(), [['--version'], ['models'], ['models']]);
+  assert.deepEqual(ctx.grok().invocations.filter(call => call.args[0] === 'models').map(call => call.env.GROK_SANDBOX ?? null).sort(), ['read-only', null].sort());
   assert.equal(ctx.grok().invocations.find(call => call.args[0] === 'models').env.GROK_HOME, block.home);
   assert.equal(ctx.grok().requests.length, 0);
+  assert.deepEqual(block.warnings.filter(warning => /read-only profile/.test(warning)), []);
+});
+
+test('setup warns when Grok refuses its read-only profile, and stays ready; another failure under it is no warning', t => {
+  const refused = fixture(t, { refuseReadOnly: true });
+  const result = companion(refused, ['setup', '--backend', 'grok', '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const [block] = JSON.parse(result.stdout).backends;
+  assert.equal(block.ready, true);
+  const warnings = block.warnings.filter(warning => /read-only profile/.test(warning));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /refuses its read-only profile.*every Grok review fail.*sandbox profile resolve failed/);
+  assert.doesNotMatch(warnings[0], /write/);
+  const other = fixture(t, { networkFailsUnderReadOnly: true });
+  assert.deepEqual(JSON.parse(companion(other, ['setup', '--backend', 'grok', '--json']).stdout).backends[0].warnings.filter(warning => /read-only profile/.test(warning)), []);
+});
+
+test('a Grok job gets a larger MCP budget, unless the environment or a config layer names one', async t => {
+  // Exercise both managed layers without reading or writing the host's policy.
+  const systemConfig = path.join(fixture(t).root, 'managed_config.toml');
+  const open = fs.openSync;
+  t.mock.method(fs, 'openSync', (file, ...args) =>
+    open(file === '/etc/grok/managed_config.toml' ? systemConfig : file, ...args));
+  const budget = (prepare) => {
+    const ctx = fixture(t);
+    delete ctx.env.GROK_MAX_MCP_OUTPUT_BYTES;
+    delete ctx.env.MAX_MCP_OUTPUT_BYTES;
+    prepare?.(ctx);
+    return grokEnvironment({ cwd: ctx.work, grokHome: path.join(ctx.user, '.grok'), mode: 'yolo' }, ctx.env);
+  };
+  assert.equal(budget().GROK_MAX_MCP_OUTPUT_BYTES, '262144');
+  assert.equal(budget(ctx => { ctx.env.GROK_MAX_MCP_OUTPUT_BYTES = '1000'; }).GROK_MAX_MCP_OUTPUT_BYTES, '1000');
+  assert.equal(budget(ctx => { ctx.env.MAX_MCP_OUTPUT_BYTES = '2000'; }).GROK_MAX_MCP_OUTPUT_BYTES, undefined);
+  const configured = budget(ctx => {
+    fs.mkdirSync(path.join(ctx.user, '.grok'), { recursive: true });
+    fs.writeFileSync(path.join(ctx.user, '.grok', 'config.toml'), '[mcp]\nmax_output_bytes = 3000\n');
+  });
+  assert.equal(configured.GROK_MAX_MCP_OUTPUT_BYTES, undefined);
+  const managed = budget(ctx => {
+    fs.mkdirSync(path.join(ctx.user, '.grok'));
+    fs.writeFileSync(path.join(ctx.user, '.grok', 'managed_config.toml'), '[mcp]\nmax_output_bytes = 4000\n');
+  });
+  assert.equal(managed.GROK_MAX_MCP_OUTPUT_BYTES, undefined);
+  fs.writeFileSync(systemConfig, 'mcp.max_output_bytes = 5000\n');
+  assert.equal(budget().GROK_MAX_MCP_OUTPUT_BYTES, undefined);
+  fs.unlinkSync(systemConfig);
+  // A job in a subdirectory inherits the project cap. A config above its checkout is unrelated.
+  const projectConfig = (ctx, directory) => {
+    initGitRepo(ctx.work);
+    fs.mkdirSync(path.join(directory, '.grok'), { recursive: true });
+    fs.writeFileSync(path.join(directory, '.grok', 'config.toml'), '[mcp]\nmax_output_bytes = 4000\n');
+    ctx.work = path.join(ctx.work, 'nested');
+    fs.mkdirSync(ctx.work);
+  };
+  assert.equal(budget(ctx => projectConfig(ctx, ctx.work)).GROK_MAX_MCP_OUTPUT_BYTES, undefined);
+  assert.equal(budget(ctx => projectConfig(ctx, ctx.root)).GROK_MAX_MCP_OUTPUT_BYTES, '262144');
+  const nested = fixture(t);
+  projectConfig(nested, nested.work);
+  const { id } = startJob(nested, HEADER, '[quick] Project budget.');
+  await finishJob(nested, id);
+  assert.equal(nested.grok().starts[0].env.GROK_MAX_MCP_OUTPUT_BYTES, undefined);
+  const elsewhere = budget(ctx => {
+    fs.mkdirSync(path.join(ctx.user, '.grok'), { recursive: true });
+    fs.writeFileSync(path.join(ctx.user, '.grok', 'config.toml'), '[other]\nmax_output_bytes = 3000\n');
+  });
+  assert.equal(elsewhere.GROK_MAX_MCP_OUTPUT_BYTES, '262144');
+  const withConfig = text => budget(ctx => {
+    fs.mkdirSync(path.join(ctx.user, '.grok'), { recursive: true });
+    fs.writeFileSync(path.join(ctx.user, '.grok', 'config.toml'), text);
+  });
+  for (const text of [
+    '[mcp] # budget\nmax_output_bytes = 3000\n',
+    '[ mcp ]\n"max_output_bytes" = 3000\n',
+    '[mcp]\n\'max_output_bytes\' = 3000\n',
+    '["mcp"]\r\nmax_output_bytes=3000\r\n',
+    'mcp.max_output_bytes = 3000\n',
+    '"mcp"."max_output_bytes" = 3000\n',
+    '"m\\u0063p".max_output_bytes = 3000\n',
+    'mcp = { max_output_bytes = 3000 }\n',
+    'mcp = { note = "x", "max_output_bytes" = 3000 }\n'
+  ]) {
+    assert.equal(withConfig(text).GROK_MAX_MCP_OUTPUT_BYTES, undefined, text);
+  }
+  for (const text of [
+    '[mcp]\n# max_output_bytes = 3000\n',
+    '[mcp.server]\nmax_output_bytes = 3000\n',
+    '[mcp]\ntimeout = 1\n[other]\nmax_output_bytes = 3000\n',
+    '[other]\ntext = """\n[mcp]\nmax_output_bytes = 3000\n"""\n',
+    "[other]\ntext = '''\n[mcp]\nmax_output_bytes = 3000\n'''\n",
+    'mcp = { note = "max_output_bytes = 3000" }\n',
+    '"mcp.max_output_bytes" = 3000\n',
+    '"m c p".max_output_bytes = 3000\n'
+  ]) {
+    assert.equal(withConfig(text).GROK_MAX_MCP_OUTPUT_BYTES, '262144', text);
+  }
 });
 
 for (const home of ['default', 'jobs']) test(`Workflow retry adopts the same Grok job with ${home} home and returns its state block`, async () => {

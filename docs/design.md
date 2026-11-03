@@ -238,8 +238,10 @@ server that dies during initialization leaves an identity, and records its end: 
 signal, an unfinished last line, the last 4096 bytes of stderr. `server.stderr.log` keeps at most
 1 MiB. JSONL lines have no size cap, so multi-megabyte results reach `events.jsonl` intact, and an
 unfinished last line is never parsed. A server that relay closes gets its stdin ended, then
-SIGTERM 50 ms later if it still runs, so a closed server's end record can show SIGTERM; that is
-relay's own close, not a crash, and the job's state was settled before it. When the server exits
+SIGTERM after 50 ms and SIGKILL after another 4,950 ms if it still runs. A process that survives
+SIGKILL for another five seconds is abandoned: its pipes close, its process is unreferenced, and its
+server record stays open for the next worker's sweep. Its late exit does not write to a job another
+worker may own. A close timeout is reported as such, not as an observed exit. When the server exits
 while a child of it holds a pipe, the client reads for 200 ms more, then closes the pipes, so the
 end is recorded and every pending request settles; a request to a server that has exited fails at
 once.
@@ -334,9 +336,11 @@ Before every relay tool call and at SubagentStop, the hook reads the transcript 
 received message not yet delivered, in order: steered while the job runs, continued once it ended.
 
 - A message is recognised by its entry type and origin, never by its text: a `queued_command`
-  attachment from the coordinator (a `SendMessage` while the relay works), a `user` entry from the
-  coordinator (a message after the hand-back, taken out of the harness's fixed wrapper), or a plain
-  `user` turn after the prompt that is neither metadata (`isMeta`) nor a tool result.
+  attachment or `user` entry from the coordinator, a peer or a person, or a plain `user` turn after
+  the prompt that is neither metadata nor a tool result. Peer text comes from `origin.body`; the
+  coordinator's and person's fixed wrappers are removed. Text from any of those origins survives a
+  shared text/tool-result entry, while a tool-result-only entry stays out. A task notification stays
+  out too, and an entry of any other origin is reported as a violation rather than delivered.
 - A message that arrives before the job exists is delivered by `start` once the job exists.
 - Each delivery is recorded in `inbox/relay/<transcript entry uuid>.json` under the relay lock, with
   the inbox message id chosen before posting. A hook cut off half way posts again under the same
@@ -704,12 +708,13 @@ or `adversarial-review`, so `status` lists it. A Codex review turns off the job 
   ZCode and Kimi, which have no schema parameter, get it in the prompt. A Grok review always runs
   under Grok's `read-only` profile, and a Kimi review refuses the file writes and terminal
   commands Kimi sends through the client, which is not an OS sandbox (Known limits, Kimi).
-- **Inline limits.** A Grok, ZCode or Kimi review reads only the inlined change (read-only ZCode and
-  Kimi have no shell to run git), so it sees the whole change or does not start. Untracked files count toward
-  the limits and are inlined whole, and a binary file is named and counts as a file. Above two files
-  or 256 KiB, the review is refused before any job or process exists, with a message naming
-  `--base`, `--scope` and Codex. A Codex adversarial review above the limits gets a summary and
-  reads the diff itself with read-only git commands; untracked files there are cut at 24 KiB each.
+- **Inline limit.** A Grok, ZCode or Kimi review reads only the inlined change (read-only ZCode and
+  Kimi have no shell to run git), so it sees the whole change or does not start. The actual serialized
+  repository context, including Git's rendered names and decoded file contents, must fit 256 KiB.
+  Above that, the review is refused before any job or process exists, with a message naming `--base`,
+  `--scope` and Codex. A file already known to be oversized is named without being read. A Codex
+  adversarial review above two files or 256 KiB gets a summary and reads the diff itself with
+  read-only git commands; untracked files there are cut at 24 KiB each.
 - **The schema.** An adversarial answer counts only if it matches
   `schemas/review-output.schema.json`: types, enums, required fields, ranges, array items and no
   extra properties. One JSON code fence around the whole answer is unwrapped. Anything else fails
